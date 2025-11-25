@@ -1,208 +1,48 @@
-// src-tauri/src/marihydro/infra/error.rs
+// src-tauri/src/marihydro/io/loaders/raster.rs
 
-use serde::{Serialize, Serializer};
-use std::path::PathBuf;
-use thiserror::Error;
+use super::RasterLoader;
+use crate::marihydro::infra::error::{MhError, MhResult};
+use ndarray::Array2;
+use std::path::Path;
 
-pub type MhResult<T> = Result<T, MhError>;
+/// 标准栅格加载器
+pub struct StandardRasterLoader;
 
-#[derive(Error, Debug)]
-pub enum MhError {
-    // ========================================================================
-    // 1. 基础设施层
-    // ========================================================================
-    #[error("[System] IO错误: {context}")]
-    Io {
-        context: String,
-        #[source]
-        source: std::io::Error,
-    },
+impl RasterLoader for StandardRasterLoader {
+    fn load_array(
+        &self,
+        file_path: &str,
+        target_shape: (usize, usize),
+        _target_bounds: Option<(f64, f64, f64, f64)>,
+    ) -> MhResult<Array2<f64>> {
+        let path = Path::new(file_path);
 
-    #[error("[System] 数据库错误: {0}")]
-    Database(String),
+        if !path.exists() {
+            return Err(MhError::Io {
+                context: format!("文件不存在: {}", file_path),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("文件不存在: {}", file_path),
+                ),
+            });
+        }
 
-    #[error("[System] 序列化失败: {0}")]
-    Serialization(String),
+        // TODO: [工程化接入点] 集成 gdal crate
+        // 目前阶段为了不破坏编译环境 (GDAL 需要系统库支持)，
+        // 我们暂时返回一个 Mock 的数据，或者简单的 ASC 读取器。
 
-    #[error("[Config] 配置无效: {0}")]
-    Config(String),
+        // 真正的逻辑应该是：
+        // 1. let dataset = gdal::Dataset::open(path)?;
+        // 2. dataset.rasterband(1)?.read_as_array(...)
+        // 3. 执行重采样算法 (Bilinear/Cubic) 匹配 target_shape
 
-    #[error("[Config] 配置字段无效: {field} - {message}")]
-    ConfigError { field: String, message: String },
+        println!("(WARN) 使用模拟加载器读取: {}", file_path);
 
-    #[error("[Config] 时区错误: {0}")]
-    Timezone(String),
+        // 模拟返回一个平坦地形 (用于测试)
+        let (nx, ny) = target_shape;
+        let array = Array2::from_elem((ny, nx), -10.0); // 水深 10m
 
-    #[error("[Input] 用户输入无效: {0}")]
-    InvalidInput(String),
-
-    // ========================================================================
-    // 2. 数据层
-    // ========================================================================
-    #[error("[Data] 数据源加载失败: {file} - {message}")]
-    DataLoad { file: String, message: String },
-
-    #[error("[Data] NetCDF操作失败: {0}")]
-    NetCdf(String),
-
-    #[error("[Geo] 坐标投影变换失败: {0}")]
-    Projection(String),
-
-    #[error("[Geo] 不支持的格式或特性: {0}")]
-    Unsupported(String),
-
-    // ========================================================================
-    // 3. 领域与物理层
-    // ========================================================================
-    #[error("[Mesh] 网格无效: {message}")]
-    InvalidMesh { message: String },
-
-    #[error("[Config] 配置无效: {field} - {message}")]
-    InvalidConfig { field: String, message: String },
-
-    #[error("[Physics] 数值计算不稳定性: {message} (T={time:.2}s)")]
-    NumericalInstability {
-        message: String,
-        time: f64,
-        location: Option<(usize, usize)>,
-    },
-
-    #[error("[Workflow] 任务执行错误: {0}")]
-    Workflow(String),
-
-    // ========================================================================
-    // 4. 内部错误
-    // ========================================================================
-    #[error("[Internal] 内部错误: {0}")]
-    InternalError(String),
-
-    #[error("[Runtime] 运行时错误: {0}")]
-    Runtime(String),
-
-    #[error("[Unknown] 未知错误: {0}")]
-    Unknown(String),
-}
-
-// ==================== 序列化实现 ====================
-
-impl Serialize for MhError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("MhError", 3)?;
-
-        let code = match self {
-            MhError::Io { .. } => "ERR_IO",
-            MhError::Database(_) => "ERR_DB",
-            MhError::Serialization(_) => "ERR_SER",
-            MhError::Config(_) => "ERR_CONFIG",
-            MhError::ConfigError { .. } => "ERR_CONFIG",
-            MhError::Timezone(_) => "ERR_CONFIG_TIMEZONE",
-            MhError::InvalidInput(_) => "ERR_INPUT_INVALID",
-            MhError::DataLoad { .. } => "ERR_DATA_LOAD",
-            MhError::NetCdf(_) => "ERR_NETCDF",
-            MhError::Projection(_) => "ERR_PROJ",
-            MhError::Unsupported(_) => "ERR_UNSUPPORTED",
-            MhError::InvalidMesh { .. } => "ERR_MESH",
-            MhError::InvalidConfig { .. } => "ERR_CONFIG",
-            MhError::NumericalInstability { .. } => "ERR_PHYSICS_NAN",
-            MhError::Workflow(_) => "ERR_WORKFLOW",
-            MhError::InternalError(_) => "ERR_INTERNAL",
-            MhError::Runtime(_) => "ERR_RUNTIME",
-            MhError::Unknown(_) => "ERR_UNKNOWN",
-        };
-
-        state.serialize_field("code", code)?;
-        state.serialize_field("message", &self.to_string())?;
-        state.serialize_field("details", &format!("{:?}", self))?;
-
-        state.end()
-    }
-}
-
-// ==================== 外部错误转换 ====================
-
-impl From<proj::ProjError> for MhError {
-    fn from(err: proj::ProjError) -> Self {
-        MhError::Projection(err.to_string())
-    }
-}
-
-impl From<serde_json::Error> for MhError {
-    fn from(err: serde_json::Error) -> Self {
-        MhError::Serialization(err.to_string())
-    }
-}
-
-#[cfg(feature = "netcdf")]
-impl From<netcdf::error::Error> for MhError {
-    fn from(err: netcdf::error::Error) -> Self {
-        MhError::NetCdf(err.to_string())
-    }
-}
-
-impl From<Box<bincode::ErrorKind>> for MhError {
-    fn from(err: Box<bincode::ErrorKind>) -> Self {
-        MhError::Serialization(err.to_string())
-    }
-}
-
-// ==================== 上下文扩展 ====================
-
-pub trait MhContext<T, E> {
-    fn context<C>(self, context: C) -> Result<T, MhError>
-    where
-        C: std::fmt::Display + Send + Sync + 'static;
-
-    fn with_file_context<P>(self, path: P) -> Result<T, MhError>
-    where
-        P: Into<PathBuf>;
-}
-
-impl<T> MhContext<T, std::io::Error> for Result<T, std::io::Error> {
-    fn context<C>(self, context: C) -> Result<T, MhError>
-    where
-        C: std::fmt::Display + Send + Sync + 'static,
-    {
-        self.map_err(|e| MhError::Io {
-            context: context.to_string(),
-            source: e,
-        })
-    }
-
-    fn with_file_context<P>(self, path: P) -> Result<T, MhError>
-    where
-        P: Into<PathBuf>,
-    {
-        let path_str = path.into().to_string_lossy().to_string();
-        self.map_err(|e| MhError::DataLoad {
-            file: path_str.clone(),
-            message: format!("IO Error: {}", e),
-        })
-    }
-}
-
-#[cfg(feature = "netcdf")]
-impl<T> MhContext<T, netcdf::error::Error> for Result<T, netcdf::error::Error> {
-    fn context<C>(self, context: C) -> Result<T, MhError>
-    where
-        C: std::fmt::Display + Send + Sync + 'static,
-    {
-        self.map_err(|e| MhError::NetCdf(format!("{}: {}", context, e)))
-    }
-
-    fn with_file_context<P>(self, path: P) -> Result<T, MhError>
-    where
-        P: Into<PathBuf>,
-    {
-        let path_str = path.into().to_string_lossy().to_string();
-        self.map_err(|e| MhError::DataLoad {
-            file: path_str,
-            message: format!("NetCDF Error: {}", e),
-        })
+        Ok(array)
     }
 }
 
@@ -210,21 +50,142 @@ impl<T> MhContext<T, netcdf::error::Error> for Result<T, netcdf::error::Error> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_error_serialization() {
-        let err = MhError::InvalidMesh {
-            message: "测试错误".into(),
-        };
-        let json = serde_json::to_string(&err).unwrap();
-        assert!(json.contains("ERR_MESH"));
-        assert!(json.contains("测试错误"));
+    struct MockRasterLoader {
+        shape: (usize, usize),
+        fill_value: f64,
+        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        should_fail: bool,
+    }
+
+    struct MockRasterLoaderBuilder {
+        shape: (usize, usize),
+        fill_value: f64,
+        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        should_fail: bool,
+    }
+
+    impl MockRasterLoader {
+        fn new() -> MockRasterLoaderBuilder {
+            MockRasterLoaderBuilder {
+                shape: (10, 10),
+                fill_value: 0.0,
+                value_generator: None,
+                should_fail: false,
+            }
+        }
+    }
+
+    impl MockRasterLoaderBuilder {
+        fn shape(mut self, shape: (usize, usize)) -> Self {
+            self.shape = shape;
+            self
+        }
+
+        fn fill_value(mut self, value: f64) -> Self {
+            self.fill_value = value;
+            self
+        }
+
+        fn with_generator<F>(mut self, func: F) -> Self
+        where
+            F: Fn(usize, usize, usize, usize) -> f64 + 'static,
+        {
+            self.value_generator = Some(Box::new(func));
+            self
+        }
+
+        fn should_fail(mut self, fail: bool) -> Self {
+            self.should_fail = fail;
+            self
+        }
+
+        fn build(self) -> MockRasterLoader {
+            MockRasterLoader {
+                shape: self.shape,
+                fill_value: self.fill_value,
+                value_generator: self.value_generator,
+                should_fail: self.should_fail,
+            }
+        }
+    }
+
+    impl RasterLoader for MockRasterLoader {
+        fn load_array(
+            &self,
+            _file_path: &str,
+            _target_shape: (usize, usize),
+            _target_bounds: Option<(f64, f64, f64, f64)>,
+        ) -> MhResult<Array2<f64>> {
+            if self.should_fail {
+                return Err(MhError::Io {
+                    context: "Mock I/O error".to_string(),
+                    source: std::io::Error::new(std::io::ErrorKind::Other, "test error"),
+                });
+            }
+
+            let (ny, nx) = self.shape;
+            let mut array = Array2::from_elem((ny, nx), self.fill_value);
+
+            if let Some(ref func) = self.value_generator {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        array[[j, i]] = func(i, j, nx, ny);
+                    }
+                }
+            }
+
+            Ok(array)
+        }
     }
 
     #[test]
-    fn test_error_context() {
-        let result: Result<(), std::io::Error> =
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "test"));
-        let converted = result.context("加载文件失败");
-        assert!(matches!(converted, Err(MhError::Io { .. })));
+    fn test_mock_loader_returns_configured_shape() {
+        let loader = MockRasterLoader::new()
+            .shape((50, 20)) // ny=50, nx=20
+            .fill_value(-10.0)
+            .build();
+
+        let result = loader.load_array("dummy_path.tif", (20, 50), None).unwrap();
+
+        assert_eq!(result.dim(), (50, 20));
+        assert_eq!(result[[0, 0]], -10.0);
+        assert_eq!(result[[49, 19]], -10.0);
+    }
+
+    #[test]
+    fn test_mock_loader_with_variable_shape() {
+        let shapes = vec![(10, 10), (100, 50), (1, 1)];
+
+        for (ny, nx) in shapes {
+            let loader = MockRasterLoader::new().shape((ny, nx)).build();
+
+            let result = loader.load_array("test.tif", (nx, ny), None).unwrap();
+            assert_eq!(result.dim(), (ny, nx));
+        }
+    }
+
+    #[test]
+    fn test_mock_loader_error_handling() {
+        let loader = MockRasterLoader::new().should_fail(true).build();
+
+        let result = loader.load_array("test.tif", (10, 10), None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), MhError::Io { .. }));
+    }
+
+    #[test]
+    fn test_mock_loader_with_gradient_field() {
+        let loader = MockRasterLoader::new()
+            .shape((100, 100))
+            .with_generator(|i, _j, nx, _ny| {
+                let denom = nx.saturating_sub(1).max(1) as f64;
+                -10.0 + 20.0 * (i as f64 / denom)
+            })
+            .build();
+
+        let result = loader.load_array("gradient.tif", (100, 100), None).unwrap();
+
+        assert!(result[[0, 0]] < result[[0, 50]]);
+        assert!(result[[0, 50]] < result[[0, 99]]);
     }
 }

@@ -18,10 +18,13 @@ impl RasterLoader for StandardRasterLoader {
         let path = Path::new(file_path);
 
         if !path.exists() {
-            return Err(MhError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("文件不存在: {}", file_path),
-            )));
+            return Err(MhError::Io {
+                context: format!("文件不存在: {}", file_path),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("文件不存在: {}", file_path),
+                ),
+            });
         }
 
         // TODO: [工程化接入点] 集成 gdal crate
@@ -46,19 +49,18 @@ impl RasterLoader for StandardRasterLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{Array, Ix2};
 
     struct MockRasterLoader {
         shape: (usize, usize),
         fill_value: f64,
-        generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
         should_fail: bool,
     }
 
     struct MockRasterLoaderBuilder {
         shape: (usize, usize),
         fill_value: f64,
-        generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
         should_fail: bool,
     }
 
@@ -67,7 +69,7 @@ mod tests {
             MockRasterLoaderBuilder {
                 shape: (10, 10),
                 fill_value: 0.0,
-                generator: None,
+                value_generator: None,
                 should_fail: false,
             }
         }
@@ -84,11 +86,11 @@ mod tests {
             self
         }
 
-        fn generator<F>(mut self, generator: F) -> Self
+        fn with_generator<F>(mut self, func: F) -> Self
         where
             F: Fn(usize, usize, usize, usize) -> f64 + 'static,
         {
-            self.generator = Some(Box::new(generator));
+            self.value_generator = Some(Box::new(func));
             self
         }
 
@@ -101,7 +103,7 @@ mod tests {
             MockRasterLoader {
                 shape: self.shape,
                 fill_value: self.fill_value,
-                generator: self.generator,
+                value_generator: self.value_generator,
                 should_fail: self.should_fail,
             }
         }
@@ -124,10 +126,10 @@ mod tests {
             let (ny, nx) = self.shape;
             let mut array = Array2::from_elem((ny, nx), self.fill_value);
 
-            if let Some(gen) = &self.generator {
+            if let Some(ref func) = self.value_generator {
                 for j in 0..ny {
                     for i in 0..nx {
-                        array[[j, i]] = gen(i, j, nx, ny);
+                        array[[j, i]] = func(i, j, nx, ny);
                     }
                 }
             }
@@ -175,7 +177,10 @@ mod tests {
     fn test_mock_loader_with_gradient_field() {
         let loader = MockRasterLoader::new()
             .shape((100, 100))
-            .generator(|i, _j, nx, _ny| -10.0 + 20.0 * (i as f64 / (nx.saturating_sub(1)) as f64))
+            .with_generator(|i, _j, nx, _ny| {
+                let denom = nx.saturating_sub(1).max(1) as f64;
+                -10.0 + 20.0 * (i as f64 / denom)
+            })
             .build();
 
         let result = loader.load_array("gradient.tif", (100, 100), None).unwrap();
