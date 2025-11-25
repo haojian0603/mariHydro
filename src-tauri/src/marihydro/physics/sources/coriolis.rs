@@ -76,7 +76,7 @@ mod tests {
     fn test_small_angle_approximation() {
         let (u_approx, v_approx) = apply_coriolis_exact(1.0, 0.0, 1e-4, 1.0);
 
-        let theta = 1e-4;
+        let theta: f64 = 1e-4;
         let (sin_exact, cos_exact) = theta.sin_cos();
         let u_exact = cos_exact;
         let v_exact = -sin_exact;

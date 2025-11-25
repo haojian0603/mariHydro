@@ -153,6 +153,18 @@ impl ForcingContext {
         let vec_mem = self.river_discharge.capacity() * std::mem::size_of::<RiverSource>();
         arrays_mem + vec_mem + std::mem::size_of::<Self>()
     }
+
+    pub fn new_empty() -> Self {
+        Self {
+            wind_u: Array2::zeros((0, 0)),
+            wind_v: Array2::zeros((0, 0)),
+            pressure_anomaly: Array2::zeros((0, 0)),
+            river_discharge: Vec::new(),
+            pressure_ref: 101325.0,
+            viscosity: 0.0,
+            current_time: 0.0,
+        }
+    }
 }
 
 #[cfg(test)]

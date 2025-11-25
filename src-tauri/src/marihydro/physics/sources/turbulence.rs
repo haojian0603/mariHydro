@@ -1,6 +1,6 @@
 //! 湍流闭合模型
 
-use ndarray::Array2;
+use ndarray::{Array2, Axis};
 use rayon::prelude::*;
 
 use crate::marihydro::domain::mesh::Mesh;
@@ -51,41 +51,45 @@ impl SmagorinskyModel {
         let v_slice = v.as_slice_memory_order().ok_or_else(|| {
             crate::marihydro::infra::error::MhError::InternalError("v数组内存非连续".into())
         })?;
-        let nu_t_slice = nu_t.as_slice_memory_order_mut().ok_or_else(|| {
-            crate::marihydro::infra::error::MhError::InternalError("nu_t内存非连续".into())
-        })?;
 
         let stride = total_nx;
 
-        mesh.active_indices.par_iter().for_each(|(j, i)| {
-            let idx = j * stride + i;
+        nu_t.axis_iter_mut(Axis(0))
+            .into_par_iter()
+            .enumerate()
+            .for_each(|(j, mut row)| {
+                if j == 0 || j == total_ny - 1 {
+                    return;
+                }
+                for i in 1..total_nx - 1 {
+                    let idx = j * stride + i;
+                    unsafe {
+                        let u_e = *u_slice.get_unchecked(idx + 1);
+                        let u_w = *u_slice.get_unchecked(idx - 1);
+                        let u_n = *u_slice.get_unchecked(idx + stride);
+                        let u_s = *u_slice.get_unchecked(idx - stride);
 
-            unsafe {
-                let u_e = *u_slice.get_unchecked(idx + 1);
-                let u_w = *u_slice.get_unchecked(idx - 1);
-                let u_n = *u_slice.get_unchecked(idx + stride);
-                let u_s = *u_slice.get_unchecked(idx - stride);
+                        let v_e = *v_slice.get_unchecked(idx + 1);
+                        let v_w = *v_slice.get_unchecked(idx - 1);
+                        let v_n = *v_slice.get_unchecked(idx + stride);
+                        let v_s = *v_slice.get_unchecked(idx - stride);
 
-                let v_e = *v_slice.get_unchecked(idx + 1);
-                let v_w = *v_slice.get_unchecked(idx - 1);
-                let v_n = *v_slice.get_unchecked(idx + stride);
-                let v_s = *v_slice.get_unchecked(idx - stride);
+                        let dudx = (u_e - u_w) * inv_2dx;
+                        let dudy = (u_n - u_s) * inv_2dy;
+                        let dvdx = (v_e - v_w) * inv_2dx;
+                        let dvdy = (v_n - v_s) * inv_2dy;
 
-                let dudx = (u_e - u_w) * inv_2dx;
-                let dudy = (u_n - u_s) * inv_2dy;
-                let dvdx = (v_e - v_w) * inv_2dx;
-                let dvdy = (v_n - v_s) * inv_2dy;
+                        let s_xx = dudx;
+                        let s_yy = dvdy;
+                        let s_xy = 0.5 * (dudy + dvdx);
 
-                let s_xx = dudx;
-                let s_yy = dvdy;
-                let s_xy = 0.5 * (dudy + dvdx);
+                        let s_mag_sq = s_xx.powi(2) + s_yy.powi(2) + 2.0 * s_xy.powi(2);
+                        let s_mag = (2.0 * s_mag_sq).sqrt();
 
-                let s_mag_sq = s_xx.powi(2) + s_yy.powi(2) + 2.0 * s_xy.powi(2);
-                let s_mag = (2.0 * s_mag_sq).sqrt();
-
-                *nu_t_slice.get_unchecked_mut(idx) = cs_delta_sq * s_mag;
-            }
-        });
+                        row[i] = cs_delta_sq * s_mag;
+                    }
+                }
+            });
 
         Ok(nu_t)
     }

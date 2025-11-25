@@ -443,6 +443,12 @@ fn default_crs() -> String {
     "EPSG:32651".into() // UTM Zone 51N
 }
 
+impl Default for ProjectManifest {
+    fn default() -> Self {
+        Self::new("Default Project")
+    }
+}
+
 impl ProjectManifest {
     /// 创建一个新的空白工程模板
     pub fn new(name: impl Into<String>) -> Self {
@@ -833,5 +839,28 @@ mod tests {
         let mapping = VariableMapping::new("pressure", "msl").with_transform(0.01, -1013.25); // Pa to hPa
 
         assert_eq!(mapping.apply_transform(101325.0), 0.0);
+    }
+
+    #[test]
+    fn test_manifest_deserialization_with_defaults() {
+        let json_str = r#"
+        {
+            "id": "a4c6a46b-97f1-4f48-a9e3-a1b63e1a0b9d",
+            "meta": { "name": "Minimal Project" },
+            "start_time": "2024-01-01T00:00:00Z",
+            "end_time": "2024-01-01T01:00:00Z",
+            "grid_nx": 100,
+            "grid_ny": 100,
+            "grid_dx": 50.0,
+            "grid_dy": 50.0
+        }
+        "#;
+
+        let manifest: ProjectManifest = serde_json::from_str(json_str).unwrap();
+
+        assert_eq!(manifest.name(), "Minimal Project");
+        assert_eq!(manifest.dt, 0.0); // Should use default
+        assert_eq!(manifest.physics.gravity, 9.81); // Should use default
+        assert!(manifest.sources.is_empty()); // Should use default
     }
 }

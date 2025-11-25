@@ -51,9 +51,9 @@ struct BufferedFrame {
 
 impl BufferedFrame {
     fn new(time: DateTime<Utc>, ny: usize, nx: usize) -> MhResult<Self> {
-        let total_size = ny
-            .checked_mul(nx)
-            .ok_or_else(|| MhError::InvalidMesh(format!("网格维度溢出: {} × {}", ny, nx)))?;
+        let total_size = ny.checked_mul(nx).ok_or_else(|| MhError::InvalidMesh {
+            message: format!("网格维度溢出: {} × {}", ny, nx),
+        })?;
 
         let u = Array2::zeros((ny, nx));
         let v = Array2::zeros((ny, nx));
@@ -225,7 +225,9 @@ impl WindProvider {
         info!("[WindProvider] 初始化风场源: {}", source.name);
 
         if mesh.active_indices.is_empty() {
-            return Err(MhError::InvalidMesh("活动单元格为空".into()));
+            return Err(MhError::InvalidMesh {
+                message: "活动单元格为空".into(),
+            });
         }
 
         Self::validate_mappings(source)?;
@@ -246,7 +248,7 @@ impl WindProvider {
         let loader = NetCdfLoader;
         let src_meta = loader.read_metadata(&source.file_path)?;
         let interpolator = SpatialInterpolator::new(mesh, &manifest.crs_wkt, &src_meta)?;
-        let mesh_indices = mesh.active_indices.clone();
+        let mesh_indices: Vec<(usize, usize)> = mesh.active_indices.iter().collect();
 
         info!(
             "[WindProvider] 插值器就绪 ({} 活动单元, 覆盖率 {:.1}%)",
@@ -316,23 +318,25 @@ impl WindProvider {
     /// 更新风场到指定时刻（零分配热路径）
     ///
     /// 警告：禁止在 rayon 线程池内调用，会导致死锁！
-    pub fn update_wind_at(
+    pub fn get_wind_at(
         &mut self,
         time: DateTime<Utc>,
         out_u: &mut ArrayViewMut2<f64>,
         out_v: &mut ArrayViewMut2<f64>,
     ) -> MhResult<()> {
-        trace!("[WindProvider] update_wind_at: {}", time);
+        trace!("[WindProvider] get_wind_at: {}", time);
         self.stats.record_query();
 
         if out_u.dim() != (self.ny, self.nx) || out_v.dim() != (self.ny, self.nx) {
-            return Err(MhError::InvalidMesh(format!(
-                "输出缓冲区维度不匹配: 期望 ({}, {}), 实际 u={:?}, v={:?}",
-                self.ny,
-                self.nx,
-                out_u.dim(),
-                out_v.dim()
-            )));
+            return Err(MhError::InvalidMesh {
+                message: format!(
+                    "输出缓冲区维度不匹配: 期望 ({}, {}), 实际 u={:?}, v={:?}",
+                    self.ny,
+                    self.nx,
+                    out_u.dim(),
+                    out_v.dim()
+                ),
+            });
         }
 
         // 快速路径：数据耗尽
@@ -693,8 +697,8 @@ impl WindProvider {
             .get("nodata_strategy")
             .and_then(|s| match s.to_lowercase().as_str() {
                 "zero" => Some(NoDataStrategy::for_wind()),
-                "nearest" => Some(NoDataStrategy::NearestNeighbor),
-                "error" | "fail" => Some(NoDataStrategy::Error),
+                "nearest" => Some(NoDataStrategy::KeepOriginal),
+                "error" | "fail" => Some(NoDataStrategy::SetNaN),
                 _ => None,
             })
             .unwrap_or_else(NoDataStrategy::for_wind)
@@ -704,7 +708,7 @@ impl WindProvider {
         time_axis: &[DateTime<Utc>],
         manifest: &ProjectManifest,
     ) -> MhResult<usize> {
-        let start_time = if let Some(time_str) = manifest.metadata.get("start_time") {
+        let start_time = if let Some(time_str) = manifest.meta.get("start_time") {
             DateTime::parse_from_rfc3339(time_str)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|_| {

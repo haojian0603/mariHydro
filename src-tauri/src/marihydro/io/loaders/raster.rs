@@ -37,8 +37,150 @@ impl RasterLoader for StandardRasterLoader {
 
         // 模拟返回一个平坦地形 (用于测试)
         let (nx, ny) = target_shape;
-        let array = Array2::from_elem((nx, ny), -10.0); // 水深 10m
+        let array = Array2::from_elem((ny, nx), -10.0); // 水深 10m
 
         Ok(array)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array, Ix2};
+
+    struct MockRasterLoader {
+        shape: (usize, usize),
+        fill_value: f64,
+        generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        should_fail: bool,
+    }
+
+    struct MockRasterLoaderBuilder {
+        shape: (usize, usize),
+        fill_value: f64,
+        generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
+        should_fail: bool,
+    }
+
+    impl MockRasterLoader {
+        fn new() -> MockRasterLoaderBuilder {
+            MockRasterLoaderBuilder {
+                shape: (10, 10),
+                fill_value: 0.0,
+                generator: None,
+                should_fail: false,
+            }
+        }
+    }
+
+    impl MockRasterLoaderBuilder {
+        fn shape(mut self, shape: (usize, usize)) -> Self {
+            self.shape = shape;
+            self
+        }
+
+        fn fill_value(mut self, value: f64) -> Self {
+            self.fill_value = value;
+            self
+        }
+
+        fn generator<F>(mut self, generator: F) -> Self
+        where
+            F: Fn(usize, usize, usize, usize) -> f64 + 'static,
+        {
+            self.generator = Some(Box::new(generator));
+            self
+        }
+
+        fn should_fail(mut self, fail: bool) -> Self {
+            self.should_fail = fail;
+            self
+        }
+
+        fn build(self) -> MockRasterLoader {
+            MockRasterLoader {
+                shape: self.shape,
+                fill_value: self.fill_value,
+                generator: self.generator,
+                should_fail: self.should_fail,
+            }
+        }
+    }
+
+    impl RasterLoader for MockRasterLoader {
+        fn load_array(
+            &self,
+            _file_path: &str,
+            _target_shape: (usize, usize),
+            _target_bounds: Option<(f64, f64, f64, f64)>,
+        ) -> MhResult<Array2<f64>> {
+            if self.should_fail {
+                return Err(MhError::Io {
+                    context: "Mock I/O error".to_string(),
+                    source: std::io::Error::new(std::io::ErrorKind::Other, "test error"),
+                });
+            }
+
+            let (ny, nx) = self.shape;
+            let mut array = Array2::from_elem((ny, nx), self.fill_value);
+
+            if let Some(gen) = &self.generator {
+                for j in 0..ny {
+                    for i in 0..nx {
+                        array[[j, i]] = gen(i, j, nx, ny);
+                    }
+                }
+            }
+
+            Ok(array)
+        }
+    }
+
+    #[test]
+    fn test_mock_loader_returns_configured_shape() {
+        let loader = MockRasterLoader::new()
+            .shape((50, 20)) // ny=50, nx=20
+            .fill_value(-10.0)
+            .build();
+
+        let result = loader.load_array("dummy_path.tif", (20, 50), None).unwrap();
+
+        assert_eq!(result.dim(), (50, 20));
+        assert_eq!(result[[0, 0]], -10.0);
+        assert_eq!(result[[49, 19]], -10.0);
+    }
+
+    #[test]
+    fn test_mock_loader_with_variable_shape() {
+        let shapes = vec![(10, 10), (100, 50), (1, 1)];
+
+        for (ny, nx) in shapes {
+            let loader = MockRasterLoader::new().shape((ny, nx)).build();
+
+            let result = loader.load_array("test.tif", (nx, ny), None).unwrap();
+            assert_eq!(result.dim(), (ny, nx));
+        }
+    }
+
+    #[test]
+    fn test_mock_loader_error_handling() {
+        let loader = MockRasterLoader::new().should_fail(true).build();
+
+        let result = loader.load_array("test.tif", (10, 10), None);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), MhError::Io { .. }));
+    }
+
+    #[test]
+    fn test_mock_loader_with_gradient_field() {
+        let loader = MockRasterLoader::new()
+            .shape((100, 100))
+            .generator(|i, _j, nx, _ny| -10.0 + 20.0 * (i as f64 / (nx.saturating_sub(1)) as f64))
+            .build();
+
+        let result = loader.load_array("gradient.tif", (100, 100), None).unwrap();
+
+        assert!(result[[0, 0]] < result[[0, 50]]);
+        assert!(result[[0, 50]] < result[[0, 99]]);
     }
 }

@@ -220,16 +220,16 @@ impl BoundaryManager {
         let (ny, nx) = (mesh.ny, mesh.nx);
         let stride = nx + 2 * ng;
 
-        let get_bc_type = |keywords: &[&str]| -> BoundaryMode {
+        let get_bc_type = |keywords: &[&str]| -> BcKind {
             for feat in &manifest.features {
                 if let FeatureType::Boundary { mode, .. } = &feat.feature_type {
                     let name = feat.name.to_lowercase();
                     if keywords.iter().any(|k| name.contains(k)) {
-                        return *mode;
+                        return (*mode).into();
                     }
                 }
             }
-            BoundaryMode::Wall
+            BcKind::Wall
         };
 
         let offset_y = ny * (nx + 1);
@@ -265,22 +265,16 @@ impl BoundaryManager {
         }
     }
 
-    fn add_face(
-        &mut self,
-        mode: BoundaryMode,
-        face_idx: usize,
-        cell_idx: usize,
-        normal: (f64, f64),
-    ) {
+    fn add_face(&mut self, mode: BcKind, face_idx: usize, cell_idx: usize, normal: (f64, f64)) {
         let info = BoundaryFaceInfo {
             face_idx,
             cell_idx,
             normal,
         };
         match mode {
-            BoundaryMode::Wall => self.walls.push(info),
-            BoundaryMode::Flow | BoundaryMode::Open => self.open_flows.push(info),
-            BoundaryMode::Tide | BoundaryMode::Radiation => self.flathers.push(info),
+            BcKind::Wall => self.walls.push(info),
+            BcKind::Flow | BcKind::Open => self.open_flows.push(info),
+            BcKind::Tide | BcKind::Radiation => self.flathers.push(info),
         }
     }
 
@@ -399,7 +393,7 @@ impl BoundaryManager {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BoundaryMode {
+pub enum BcKind {
     Wall,
     Flow,
     Open,
@@ -424,5 +418,44 @@ impl BoundaryManager {
         _forcing: &BoundaryForcing,
     ) {
         self.fill_ghost_cells(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wall_boundary_flux() {
+        let wall = WallBoundary;
+        let params = BoundaryParams {
+            gravity: 9.81,
+            h_min: 0.01,
+            sqrt_g: 9.81f64.sqrt(),
+        };
+        let interior = PrimitiveVars {
+            h: 1.0,
+            u: 10.0, // Strong flow towards the wall
+            v: 0.0,
+            c: 0.0,
+            z: 0.0,
+            eta: 1.0,
+        };
+        let external = ExternalForcing::default();
+        let normal = (-1.0, 0.0); // Wall on the right, flow from the left
+
+        let flux = wall.compute_flux(&interior, &external, normal, &params);
+
+        assert_eq!(flux.mass, 0.0, "Wall should block mass flux");
+
+        let pressure_force = 0.5 * params.gravity * interior.h * interior.h * normal.0;
+        assert!(
+            (flux.x_mom - pressure_force).abs() < 1e-9,
+            "Wall x-momentum should only be pressure"
+        );
+        assert!(
+            flux.y_mom.abs() < 1e-9,
+            "No y-momentum should be generated for x-normal wall"
+        );
     }
 }

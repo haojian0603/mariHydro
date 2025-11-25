@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
 
+use crate::marihydro::domain::boundary::BcKind;
+
 /// 边界条件行为模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoundaryMode {
@@ -11,6 +13,7 @@ pub enum BoundaryMode {
     Flow,
     Radiation,
     Wall,
+    Open,
 }
 
 impl fmt::Display for BoundaryMode {
@@ -20,6 +23,19 @@ impl fmt::Display for BoundaryMode {
             Self::Flow => write!(f, "Flow"),
             Self::Radiation => write!(f, "Radiation"),
             Self::Wall => write!(f, "Wall"),
+            Self::Open => write!(f, "Open"),
+        }
+    }
+}
+
+impl From<BoundaryMode> for BcKind {
+    fn from(mode: BoundaryMode) -> Self {
+        match mode {
+            BoundaryMode::Tide => BcKind::Tide,
+            BoundaryMode::Flow => BcKind::Flow,
+            BoundaryMode::Radiation => BcKind::Radiation,
+            BoundaryMode::Wall => BcKind::Wall,
+            BoundaryMode::Open => BcKind::Open,
         }
     }
 }

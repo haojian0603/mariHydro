@@ -32,6 +32,7 @@ Desktop.ini
 *.key
 *.pem
 
+CLAUDE.md
 # 调试和分析文件
 *.prof
 *.profraw

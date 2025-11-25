@@ -44,13 +44,13 @@ impl NumericalConstants {
         let min_dx = dx.min(dy);
 
         let max_depth = mesh
-            .zb
+            .zb()
             .iter()
-            .map(|&z| if z < 0.0 { -z } else { 0.0 })
+            .map(|z| if *z < 0.0 { -*z } else { 0.0 })
             .fold(0.0, f64::max)
             .max(10.0);
 
-        let machine_eps_dt = (min_dx / (params.gravity * max_depth).sqrt()) * 1e-6;
+        let machine_eps_dt = (min_dx / (params.gravity * max_depth).sqrt()) * 1e-6_f64;
 
         log::debug!(
             "数值常量: 最大水深={:.1}m, 机器精度dt={:.3e}s",
@@ -329,11 +329,11 @@ impl SimulationEngine {
             time,
             flux_x,
             flux_y,
+            sqrt_g: params.gravity.sqrt(),
             params,
             metrics: SimulationMetrics::default(),
             constants,
             rho_ratio: 1.225 / 1025.0,
-            sqrt_g: params.gravity.sqrt(),
             cfl_factor: 0.9,
             tile_size: 32,
             ghost_cells_valid: false,
@@ -377,29 +377,39 @@ impl SimulationEngine {
         self.ghost_cells_valid = true;
         log::trace!("Ghost单元已更新");
 
-        let dt = {
+        let dt_cfl = {
             let ctx =
                 unsafe { StepContext::new(self).map_err(|e| MhError::InternalError(e.into()))? };
-
-            let dt_cfl = self.compute_cfl_dt(&ctx);
-            let dt = target_dt.min(dt_cfl).max(self.constants.machine_eps_dt);
-            self.metrics.avg_cfl_dt = dt_cfl;
-            log::trace!("CFL步长: {:.4}s, 实际: {:.4}s", dt_cfl, dt);
-
-            let t0 = Instant::now();
-            self.compute_fluxes(&ctx);
-            self.metrics.flux_compute_ms = t0.elapsed().as_millis() as u64;
-
-            let t1 = Instant::now();
-            self.update_cells(&ctx, dt);
-            self.metrics.cell_update_ms = t1.elapsed().as_millis() as u64;
-
-            let t2 = Instant::now();
-            self.apply_sources(&ctx, dt);
-            self.metrics.source_apply_ms = t2.elapsed().as_millis() as u64;
-
-            dt
+            self.compute_cfl_dt(&ctx)
         };
+
+        let dt = target_dt.min(dt_cfl).max(self.constants.machine_eps_dt);
+        self.metrics.avg_cfl_dt = dt_cfl;
+        log::trace!("CFL步长: {:.4}s, 实际: {:.4}s", dt_cfl, dt);
+
+        let t0 = Instant::now();
+        {
+            let ctx =
+                unsafe { StepContext::new(self).map_err(|e| MhError::InternalError(e.into()))? };
+            self.compute_fluxes(&ctx);
+        }
+        self.metrics.flux_compute_ms = t0.elapsed().as_millis() as u64;
+
+        let t1 = Instant::now();
+        {
+            let ctx =
+                unsafe { StepContext::new(self).map_err(|e| MhError::InternalError(e.into()))? };
+            self.update_cells(&ctx, dt);
+        }
+        self.metrics.cell_update_ms = t1.elapsed().as_millis() as u64;
+
+        let t2 = Instant::now();
+        {
+            let ctx =
+                unsafe { StepContext::new(self).map_err(|e| MhError::InternalError(e.into()))? };
+            self.apply_sources(&ctx, dt);
+        }
+        self.metrics.source_apply_ms = t2.elapsed().as_millis() as u64;
 
         if let Err(_) = self.next_state.validate(self.time.elapsed_seconds()) {
             self.metrics.numerical_errors += 1;
@@ -481,7 +491,7 @@ impl SimulationEngine {
         let max_speed = self
             .mesh
             .active_indices
-            .par_iter()
+            .iter()
             .map(|&(j, i)| {
                 let idx = j * ctx.stride + i;
 
@@ -499,7 +509,7 @@ impl SimulationEngine {
                     vel_mag + c
                 }
             })
-            .reduce(|| 0.0, f64::max);
+            .fold(0.0, f64::max);
 
         self.metrics.max_wave_speed = max_speed;
 
@@ -572,7 +582,7 @@ impl SimulationEngine {
         let ng = ctx.ng;
         let h_min = self.params.h_min;
 
-        self.mesh.active_indices.par_iter().for_each(|&(j, i)| {
+        self.mesh.active_indices.iter().for_each(|&(j, i)| {
             let idx = j * ctx.stride + i;
 
             let (h_old, u_old, v_old, c_old, z) = unsafe {
@@ -620,7 +630,7 @@ impl SimulationEngine {
         let g = self.params.gravity;
         let h_min = self.params.h_min;
 
-        self.mesh.active_indices.par_iter().for_each(|&(j, i)| {
+        self.mesh.active_indices.iter().for_each(|&(j, i)| {
             let idx = j * ctx.stride + i;
 
             unsafe {
@@ -682,7 +692,7 @@ mod tests {
         let dx = 10.0;
         let g = 9.81;
         let h_max = 100.0;
-        let eps = (dx / (g * h_max).sqrt()) * 1e-6;
+        let eps = (dx / (g * h_max).sqrt()) * 1e-6f64;
         assert!(eps > 1e-10 && eps < 1e-3);
     }
 
@@ -694,5 +704,56 @@ mod tests {
 
         let w_sq_valid = 1e-10;
         assert!(!(w_sq_valid > threshold));
+    }
+
+    // Helper to create a minimal manifest for testing
+    fn create_test_manifest(nx: usize, ny: usize) -> ProjectManifest {
+        ProjectManifest {
+            grid_nx: nx,
+            grid_ny: ny,
+            grid_dx: 100.0,
+            grid_dy: 100.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_engine_dry_bed_stability() {
+        let manifest = create_test_manifest(10, 10);
+        let mut engine = SimulationEngine::init(&manifest).unwrap();
+
+        engine.state.set_all_cells_dry();
+
+        for _ in 0..10 {
+            engine.step(1.0).unwrap();
+            engine.state.validate(0.0).unwrap();
+        }
+
+        for &h in engine.state.physical_h().iter() {
+            assert!(h >= 0.0, "干河床不应产生负水深: h={}", h);
+        }
+    }
+
+    #[test]
+    fn test_engine_smoke_pipeline() {
+        let manifest = create_test_manifest(20, 20);
+        let mut engine = SimulationEngine::init(&manifest).expect("Engine 初始化失败");
+
+        let initial_mass = engine.state.total_water_mass();
+
+        let dt = engine.step(1.0).expect("单步计算崩溃");
+        assert!(dt > 0.0);
+
+        engine.state.validate(1.0).expect("状态包含 NaN/Inf");
+
+        let final_mass = engine.state.total_water_mass();
+        if initial_mass > 1e-6 {
+            let mass_error = (final_mass - initial_mass).abs() / initial_mass.abs();
+            assert!(
+                mass_error < 0.01,
+                "质量不守恒: 误差 {:.2}%",
+                mass_error * 100.0
+            );
+        }
     }
 }

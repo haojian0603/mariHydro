@@ -100,32 +100,20 @@ impl GeoTransformer {
 
     /// 批量正向转换
     pub fn transform_points(&self, points: &[(f64, f64)]) -> MhResult<Vec<(f64, f64)>> {
-        if points.len() >= PARALLEL_THRESHOLD {
-            points
-                .par_iter()
-                .map(|&(x, y)| self.transform_point(x, y))
-                .collect()
-        } else {
-            points
-                .iter()
-                .map(|&(x, y)| self.transform_point(x, y))
-                .collect()
-        }
+        // TODO: Optimize Proj thread-safety later
+        points
+            .iter()
+            .map(|&(x, y)| self.transform_point(x, y))
+            .collect()
     }
 
     /// 批量反向转换
     pub fn inverse_transform_points(&self, points: &[(f64, f64)]) -> MhResult<Vec<(f64, f64)>> {
-        if points.len() >= PARALLEL_THRESHOLD {
-            points
-                .par_iter()
-                .map(|&(x, y)| self.inverse_transform_point(x, y))
-                .collect()
-        } else {
-            points
-                .iter()
-                .map(|&(x, y)| self.inverse_transform_point(x, y))
-                .collect()
-        }
+        // TODO: Optimize Proj thread-safety later
+        points
+            .iter()
+            .map(|&(x, y)| self.inverse_transform_point(x, y))
+            .collect()
     }
 
     // --- 收敛角计算 ---
@@ -185,17 +173,11 @@ impl GeoTransformer {
 
     /// 批量计算收敛角
     pub fn calculate_convergence_angles(&self, points: &[(f64, f64)]) -> MhResult<Vec<f32>> {
-        if points.len() >= PARALLEL_THRESHOLD {
-            points
-                .par_iter()
-                .map(|&(x, y)| self.calculate_convergence_angle(x, y).map(|a| a as f32))
-                .collect()
-        } else {
-            points
-                .iter()
-                .map(|&(x, y)| self.calculate_convergence_angle(x, y).map(|a| a as f32))
-                .collect()
-        }
+        // TODO: Optimize Proj thread-safety later
+        points
+            .iter()
+            .map(|&(x, y)| self.calculate_convergence_angle(x, y).map(|a| a as f32))
+            .collect()
     }
 
     // --- 矢量旋转 ---
@@ -220,20 +202,18 @@ impl GeoTransformer {
     ) -> MhResult<()> {
         // 维度检查
         if u.len() != v.len() || u.len() != angles.len() {
-            return Err(MhError::InvalidMesh(format!(
-                "矢量旋转维度不匹配: u={}, v={}, angles={}",
-                u.len(),
-                v.len(),
-                angles.len()
-            )));
+            return Err(MhError::InvalidMesh {
+                message: format!(
+                    "矢量旋转维度不匹配: u={}, v={}, angles={}",
+                    u.len(),
+                    v.len(),
+                    angles.len()
+                ),
+            });
         }
 
-        if u.len() >= PARALLEL_THRESHOLD {
-            self.rotate_vectors_parallel(u, v, angles);
-        } else {
-            self.rotate_vectors_serial(u, v, angles);
-        }
-
+        // TODO: Optimize Proj thread-safety later
+        self.rotate_vectors_serial(u, v, angles);
         Ok(())
     }
 
@@ -259,26 +239,6 @@ impl GeoTransformer {
             u[i] = u_old * cos_a - v_old * sin_a;
             v[i] = u_old * sin_a + v_old * cos_a;
         }
-    }
-
-    fn rotate_vectors_parallel(&self, u: &mut [f64], v: &mut [f64], angles: &[f32]) {
-        u.par_iter_mut()
-            .zip(v.par_iter_mut())
-            .zip(angles.par_iter())
-            .for_each(|((u_val, v_val), &angle)| {
-                let angle = angle as f64;
-
-                if angle.abs() < ANGLE_THRESHOLD || u_val.is_nan() || v_val.is_nan() {
-                    return;
-                }
-
-                let (sin_a, cos_a) = angle.sin_cos();
-                let u_old = *u_val;
-                let v_old = *v_val;
-
-                *u_val = u_old * cos_a - v_old * sin_a;
-                *v_val = u_old * sin_a + v_old * cos_a;
-            });
     }
 
     /// 创建旋转后的新矢量（非原位）

@@ -4,7 +4,6 @@ Rust代码收集器 - 将项目中的所有Rust代码收集到codelog文件夹�
 使用方法: python collect_code.py [路径] [输出文件名]
 """
 
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -82,14 +81,13 @@ class RustCodeCollector:
             except ValueError:
                 # 如果文件不在root_path下（极少数情况），使用文件名
                 rel_path = Path(file_path.name)
-                
+
             dir_name = rel_path.parent
             if dir_name not in files_by_dir:
                 files_by_dir[dir_name] = []
             files_by_dir[dir_name].append(rel_path.name)
 
         # 生成树形结构
-        current_root = None
         for dir_path in sorted(files_by_dir.keys()):
             # 根目录处理
             if str(dir_path) == ".":
@@ -100,18 +98,14 @@ class RustCodeCollector:
                 dir_parts = str(dir_path).split("/")
                 for i, part in enumerate(dir_parts):
                     indent = "│   " * i + "├── "
-                    # 简单的去重逻辑，防止重复打印父目录
-                    check_path = "/".join(dir_parts[: i + 1])
-                    # 这里简化处理，每次遇到新目录段都打印（实际树生成可能需要更复杂的状态维护，但这对于扁平列表够用了）
-                    # 为了更好的视觉效果，这里其实可以简化：
-                    pass 
-                
+                    pass
+
                 # 简单起见，直接打印完整相对路径的目录头（稍微修改一下原逻辑以适应复杂层级）
                 tree_lines.append(f"├── {dir_path}/")
-                
+
                 # 目录下的文件
                 for filename in sorted(files_by_dir[dir_path]):
-                    indent = "│   " + "    " # 简单缩进
+                    indent = "│   " + "    "  # 简单缩进
                     tree_lines.append(f"{indent}├── {filename}")
 
         tree_lines.extend(["", "=" * 50, ""])
@@ -160,7 +154,7 @@ class RustCodeCollector:
 
                     # 写入文件头
                     f.write(f"# File: {display_path}\n\n")
-                    f.write(f"```rust\n")
+                    f.write("```rust\n")
 
                     # 如果文件为空，添加提示
                     if not content.strip():
@@ -170,7 +164,7 @@ class RustCodeCollector:
                         content = content.rstrip()
                         f.write(content)
 
-                    f.write(f"\n```\n\n")
+                    f.write("\n```\n\n")
 
                     print(f"  ✓ 已记录: {display_path}")
 

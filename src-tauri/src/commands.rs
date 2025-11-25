@@ -3,9 +3,8 @@
 use crate::simulation::config::{Config, SlopeLimiterType};
 use crate::simulation::grid::Grid;
 use crate::simulation::solver::Solver;
-use tauri::{Emitter, State, Window};
-// use crate::db::DbPool; // 如果启用数据库，请取消注释
 use std::time::Instant;
+use tauri::{Emitter, Window};
 use tokio::task; // 用于将繁重的计算任务移出异步主线程
 
 // 定义发回给前端的进度事件数据结构
@@ -104,12 +103,11 @@ pub async fn run_simulation(window: Window, config: Config) -> Result<String, St
 /// API: 保存实验记录 (预留)
 #[tauri::command]
 pub async fn save_simulation_record(
-    // pool: State<'_, DbPool>, // 需要在 main.rs 中 manage(pool)
     name: String,
     description: String,
 ) -> Result<String, String> {
-    // 示例逻辑
-    println!("保存记录: {} - {}", name, description);
-    // sqlx::query!...
-    Ok("记录已保存".to_string())
+    // 桩代码：仅打印日志
+    println!("(Stub) 保存记录: {} - {}", name, description);
+    // 在这里可以实现写入本地 JSON 文件等逻辑
+    Ok("记录已保存 (Mock)".to_string())
 }

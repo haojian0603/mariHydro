@@ -32,8 +32,8 @@ pub fn compute_pressure_gradient_field(
     u_acc: &mut Array2<f64>,
     v_acc: &mut Array2<f64>,
 ) {
-    let dx = mesh.transform.dx.abs();
-    let dy = mesh.transform.dy.abs();
+    let dx = mesh.transform.0[1].abs();
+    let dy = mesh.transform.0[5].abs();
 
     let ng = mesh.ng;
     let ny = mesh.ny;

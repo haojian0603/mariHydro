@@ -1,9 +1,11 @@
 // src-tauri/src/marihydro/infra/context.rs
+use anyhow::Context;
 
 use crate::marihydro::geo::crs::{CrsStrategy, ResolvedCrs};
 use crate::marihydro::infra::config::ProjectConfig;
-use crate::marihydro::infra::error::{Context, MhError, MhResult};
+use crate::marihydro::infra::error::{MhError, MhResult};
 use crate::marihydro::infra::time::TimeManager;
+
 
 /// 模拟运行时上下文
 /// 包含所有已经初始化、已经验证过的对象
@@ -23,9 +25,10 @@ pub struct SimContext {
 impl SimContext {
     /// 从用户配置构建上下文
     /// 注意：如果策略是 FromFirstFile，需要传入 optional 的 file_crs_def
-    pub fn from_config(cfg: &ProjectConfig, detected_file_crs: Option<&str>) -> MhResult<Self> {
+    pub fn from_config(cfg: &ProjectConfig, detected_file_crs: Option<&str>) -> anyhow::Result<Self> {
         // 1. 初始化时间
         let timer = TimeManager::new(&cfg.start_time_iso, cfg.timezone.clone())
+            .map_err(|e| anyhow::anyhow!(e))
             .context("初始化时间管理器失败")?;
 
         // 2. 解析坐标系 (核心逻辑)
@@ -38,7 +41,8 @@ impl SimContext {
                     None => {
                         return Err(MhError::Config(
                             "CRS策略为'FromFirstFile'，但未提供参考文件的坐标定义".into(),
-                        ))
+                        )
+                        .into())
                     }
                 }
             }

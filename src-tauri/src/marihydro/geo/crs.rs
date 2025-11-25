@@ -21,7 +21,7 @@ pub enum CrsStrategy {
 
 /// 运行时确定的坐标参考系统
 /// 这是 SimulationContext 中持有的对象
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ResolvedCrs {
     /// 标准化后的定义字符串 (WKT)
     pub wkt: String,

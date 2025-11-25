@@ -141,7 +141,7 @@ impl SpatialInterpolator {
         let results: Vec<(Vec<Weight>, f32)> = if should_parallel {
             mesh.active_indices
                 .par_iter()
-                .map(|&(j, i)| {
+                .map(|(j, i)| {
                     Self::compute_point_weights(
                         mesh,
                         j,
@@ -161,7 +161,7 @@ impl SpatialInterpolator {
         } else {
             mesh.active_indices
                 .iter()
-                .map(|&(j, i)| {
+                .map(|(j, i)| {
                     Self::compute_point_weights(
                         mesh,
                         j,
@@ -369,16 +369,21 @@ impl SpatialInterpolator {
 
         let expected_points = self.offsets.len() - 1;
         if active_indices.len() != expected_points {
-            return Err(MhError::InvalidMesh(format!(
-                "索引数量不匹配: 期望 {}, 实际 {}",
-                expected_points,
-                active_indices.len()
-            )));
+            return Err(MhError::InvalidMesh {
+                message: format!(
+                    "索引数量不匹配: 期望 {}, 实际 {}",
+                    expected_points,
+                    active_indices.len()
+                ),
+            });
         }
 
-        let src_slice = source_data
-            .as_slice_memory_order()
-            .ok_or_else(|| MhError::InvalidMesh("源数据内存不连续".into()))?;
+        let src_slice =
+            source_data
+                .as_slice_memory_order()
+                .ok_or_else(|| MhError::InvalidMesh {
+                    message: "源数据内存不连续".into(),
+                })?;
 
         let threshold = self
             .config
@@ -509,9 +514,9 @@ impl SpatialInterpolator {
         strategies: &[NoDataStrategy],
     ) -> MhResult<()> {
         if sources.len() != targets.len() || sources.len() != strategies.len() {
-            return Err(MhError::InvalidMesh(
-                "源数据、目标数据和策略数量不匹配".into(),
-            ));
+            return Err(MhError::InvalidMesh {
+                message: "源数据、目标数据和策略数量不匹配".into(),
+            });
         }
 
         for ((source, target), &strategy) in sources

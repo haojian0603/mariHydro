@@ -1,10 +1,5 @@
-pub mod domain;
-pub mod forcing;
-pub mod geo;
-pub mod infra;
-pub mod io;
-pub mod physics;
-pub mod types;
+// src-tauri/src/marihydro/physics/mod.rs
 
-#[cfg(test)]
-pub mod tests;
+pub mod engine;
+pub mod schemes;
+pub mod sources;

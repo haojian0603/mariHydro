@@ -272,13 +272,19 @@ impl Mesh {
 
     fn validate_grid_parameters(manifest: &ProjectManifest, ng: usize) -> MhResult<()> {
         if manifest.grid_nx == 0 || manifest.grid_ny == 0 {
-            return Err(MhError::InvalidMesh("网格尺寸无效".into()));
+            return Err(MhError::InvalidMesh {
+                message: "网格尺寸无效".into(),
+            });
         }
         if manifest.grid_dx <= 0.0 || manifest.grid_dy <= 0.0 {
-            return Err(MhError::InvalidMesh("网格分辨率无效".into()));
+            return Err(MhError::InvalidMesh {
+                message: "网格分辨率无效".into(),
+            });
         }
         if ng == 0 {
-            return Err(MhError::InvalidMesh("幽灵层宽度必须>0".into()));
+            return Err(MhError::InvalidMesh {
+                message: "幽灵层宽度必须>0".into(),
+            });
         }
 
         let total_cells = (manifest.grid_nx + 2 * ng) * (manifest.grid_ny + 2 * ng);
@@ -316,7 +322,10 @@ impl Mesh {
         let transformer_res = GeoTransformer::new(&Crs::from_string(crs_wkt), &Crs::wgs84());
         match transformer_res {
             Ok(transformer) => {
-                Zip::from(&mut field).indexed_par_for_each(|(j, i), val| {
+                let (total_ny, total_nx) = field.dim();
+                (0..total_ny * total_nx).into_par_iter().for_each(|idx| {
+                    let j = idx / total_nx;
+                    let i = idx % total_nx;
                     let px = i as f64 - ng as f64;
                     let py = j as f64 - ng as f64;
                     let (mx, my) = transform.pixel_to_world(px, py);
@@ -324,7 +333,7 @@ impl Mesh {
                         .transform_point(mx, my)
                         .map(|(_, lat)| lat)
                         .unwrap_or(lat_ref);
-                    *val = 2.0 * physics::EARTH_ROTATION_RATE_RAD * lat.to_radians().sin();
+                    field[[j, i]] = 2.0 * physics::EARTH_ROTATION_RATE_RAD * lat.to_radians().sin();
                 });
             }
             Err(_) => {
@@ -481,7 +490,7 @@ impl Mesh {
         ng: usize,
         total_nx: usize,
     ) -> (IndexStorage, MeshStats) {
-        let estimated_capacity = (nx * ny as f64 * PREALLOCATE_FACTOR) as usize;
+        let estimated_capacity = ((nx * ny) as f64 * PREALLOCATE_FACTOR) as usize;
         let mut indices = Vec::with_capacity(estimated_capacity);
         let mut active_count = 0;
         let mut inactive_count = 0;
@@ -521,7 +530,9 @@ impl Mesh {
         ng: usize,
     ) -> MhResult<()> {
         if active_indices.is_empty() {
-            return Err(MhError::InvalidMesh("有效网格数量为0".into()));
+            return Err(MhError::InvalidMesh {
+                message: "有效网格数量为0".into(),
+            });
         }
         if stats.active_ratio() < MIN_ACTIVE_RATIO {
             warn!("网格激活率过低 ({:.2}%)", stats.active_ratio() * 100.0);
@@ -615,5 +626,64 @@ mod tests {
         };
         assert_eq!(storage.len(), 3);
         assert_eq!(storage.get_2d(0), (2, 5));
+    }
+
+    #[test]
+    fn test_default_terrain_is_uniform() {
+        let manifest = ProjectManifest {
+            grid_nx: 10,
+            grid_ny: 10,
+            grid_dx: 10.0,
+            grid_dy: 10.0,
+            sources: vec![], // 空数据源
+            ..Default::default()
+        };
+
+        let mesh = Mesh::init(&manifest).expect("Mesh 初始化失败");
+
+        let zb = mesh.physical_domain();
+        for &z in zb.iter() {
+            assert!((z - defaults::ELEVATION).abs() < 1e-10);
+        }
+
+        assert_eq!(mesh.active_indices.len(), 100);
+    }
+
+    #[test]
+    fn test_mesh_with_single_cell() {
+        let manifest = ProjectManifest {
+            grid_nx: 1,
+            grid_ny: 1,
+            grid_dx: 1.0,
+            grid_dy: 1.0,
+            sources: vec![],
+            ..Default::default()
+        };
+
+        let mesh = Mesh::init(&manifest).unwrap();
+        assert_eq!(mesh.nx, 1);
+        assert_eq!(mesh.ny, 1);
+
+        assert_eq!(mesh.active_indices.len(), 1);
+    }
+
+    #[test]
+    fn test_mesh_with_ghost_cells() {
+        let manifest = ProjectManifest {
+            grid_nx: 10,
+            grid_ny: 10,
+            grid_dx: 10.0,
+            grid_dy: 10.0,
+            ..Default::default()
+        };
+
+        let mesh = Mesh::init_with_ghost_width(&manifest, 2).unwrap();
+
+        assert_eq!(mesh.nx, 10);
+        assert_eq!(mesh.ny, 10);
+        assert_eq!(mesh.ng, 2);
+        assert_eq!(mesh.total_size(), (14, 14));
+
+        assert_eq!(mesh.active_indices.len(), 100);
     }
 }

@@ -314,6 +314,36 @@ impl State {
 
         Ok(())
     }
+
+    pub fn total_water_mass(&self) -> f64 {
+        self.physical_h().iter().sum()
+    }
+
+    pub fn total_momentum(&self) -> (f64, f64) {
+        let hu: f64 = self
+            .physical_u()
+            .iter()
+            .zip(self.physical_h().iter())
+            .map(|(u, h)| u * h)
+            .sum();
+        let hv: f64 = self
+            .physical_v()
+            .iter()
+            .zip(self.physical_h().iter())
+            .map(|(v, h)| v * h)
+            .sum();
+        (hu, hv)
+    }
+
+    pub fn set_all_cells_dry(&mut self) {
+        self.h.fill(0.0);
+        self.u.fill(0.0);
+        self.v.fill(0.0);
+    }
+
+    pub fn zb(&self) -> &Arc<Array2<f64>> {
+        &self.zb
+    }
 }
 
 #[cfg(test)]

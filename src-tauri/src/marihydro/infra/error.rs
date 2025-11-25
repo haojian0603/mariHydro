@@ -30,6 +30,12 @@ pub enum MhError {
     #[error("[Config] 配置字段无效: {field} - {message}")]
     ConfigError { field: String, message: String },
 
+    #[error("[Config] 时区错误: {0}")]
+    Timezone(String),
+
+    #[error("[Input] 用户输入无效: {0}")]
+    InvalidInput(String),
+
     // ========================================================================
     // 2. 数据层
     // ========================================================================
@@ -70,6 +76,9 @@ pub enum MhError {
     #[error("[Internal] 内部错误: {0}")]
     InternalError(String),
 
+    #[error("[Runtime] 运行时错误: {0}")]
+    Runtime(String),
+
     #[error("[Unknown] 未知错误: {0}")]
     Unknown(String),
 }
@@ -91,6 +100,8 @@ impl Serialize for MhError {
             MhError::Serialization(_) => "ERR_SER",
             MhError::Config(_) => "ERR_CONFIG",
             MhError::ConfigError { .. } => "ERR_CONFIG",
+            MhError::Timezone(_) => "ERR_CONFIG_TIMEZONE",
+            MhError::InvalidInput(_) => "ERR_INPUT_INVALID",
             MhError::DataLoad { .. } => "ERR_DATA_LOAD",
             MhError::NetCdf(_) => "ERR_NETCDF",
             MhError::Projection(_) => "ERR_PROJ",
@@ -100,6 +111,7 @@ impl Serialize for MhError {
             MhError::NumericalInstability { .. } => "ERR_PHYSICS_NAN",
             MhError::Workflow(_) => "ERR_WORKFLOW",
             MhError::InternalError(_) => "ERR_INTERNAL",
+            MhError::Runtime(_) => "ERR_RUNTIME",
             MhError::Unknown(_) => "ERR_UNKNOWN",
         };
 
@@ -129,12 +141,6 @@ impl From<serde_json::Error> for MhError {
 impl From<netcdf::error::Error> for MhError {
     fn from(err: netcdf::error::Error) -> Self {
         MhError::NetCdf(err.to_string())
-    }
-}
-
-impl From<sqlx::Error> for MhError {
-    fn from(err: sqlx::Error) -> Self {
-        MhError::Database(err.to_string())
     }
 }
 

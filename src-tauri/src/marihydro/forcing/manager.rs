@@ -19,7 +19,7 @@ pub struct ForcingManager {
 impl ForcingManager {
     pub fn init(manifest: &ProjectManifest, mesh: &Mesh) -> MhResult<Self> {
         // 初始化空上下文
-        let context = ForcingContext::new_empty(mesh.ny, mesh.nx);
+        let context = ForcingContext::new(mesh.nx, mesh.ny, mesh.ng, 0.0, 101325.0);
 
         // 初始化风场
         let wind_src = manifest
@@ -51,10 +51,11 @@ impl ForcingManager {
     pub fn update(&mut self, time: DateTime<Utc>, _mesh: &Mesh) -> MhResult<()> {
         // 1. 更新风场
         if let Some(wp) = &mut self.wind_provider {
-            let (u, v) = wp.get_wind_at(time)?;
-            // 使用 assign 避免重新分配内存
-            self.context.wind_u.assign(&u);
-            self.context.wind_v.assign(&v);
+            wp.get_wind_at(
+                time,
+                &mut self.context.wind_u.view_mut(),
+                &mut self.context.wind_v.view_mut(),
+            )?;
         }
 
         // 2. 更新潮位边界
