@@ -1,0 +1,22 @@
+[package]
+name = "swe_model"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+ndarray = "0.15"
+
+netcdf = "0.7"
+
+
+rayon = "1.10"
+ndarray-parallel = "0.9"
+
+vkt = "0.7"
+
+chrono = "0.4"
+
+
+proj = { version = "0.27", features = ["network"] }
+
+kdtree = "0.3"
