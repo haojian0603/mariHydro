@@ -1,27 +1,25 @@
-// src\marihydro\forcing\manager.rs
+// src-tauri/src/marihydro/forcing/manager.rs
+
 use super::context::ForcingContext;
-use super::tide::{ConstantTide, TideProvider};
+use super::tide::TideProvider;
 use super::wind::WindProvider;
-use crate::marihydro::domain::boundary::BoundaryForcing;
-use crate::marihydro::domain::mesh::Mesh;
+use crate::marihydro::domain::boundary::{BoundaryDataProvider, ExternalForcing};
+use crate::marihydro::domain::mesh::indices::FaceId;
+use crate::marihydro::domain::mesh::unstructured::UnstructuredMesh;
 use crate::marihydro::infra::error::MhResult;
 use crate::marihydro::infra::manifest::ProjectManifest;
-use chrono::{DateTime, Utc}; // 实际项目中应根据配置加载 HarmonicTide 或 TPXO
+use chrono::{DateTime, Utc};
 
 pub struct ForcingManager {
     context: ForcingContext,
-    boundary_forcing: BoundaryForcing,
-
     wind_provider: Option<WindProvider>,
-    tide_provider: Box<dyn TideProvider>,
+    tide_level: f64,
 }
 
 impl ForcingManager {
-    pub fn init(manifest: &ProjectManifest, mesh: &Mesh) -> MhResult<Self> {
-        // 初始化空上下文
-        let context = ForcingContext::new(mesh.nx, mesh.ny, mesh.ng, 0.0, 101325.0);
+    pub fn init(manifest: &ProjectManifest, mesh: &UnstructuredMesh) -> MhResult<Self> {
+        let context = ForcingContext::new(mesh.n_cells, manifest.physics.eddy_viscosity, 101325.0);
 
-        // 初始化风场
         let wind_src = manifest
             .sources
             .iter()
@@ -33,47 +31,40 @@ impl ForcingManager {
             None
         };
 
-        // 初始化潮汐
-        // 根据 Manifest 配置选择 Tide Provider
-        // 此处暂时硬编码为 ConstantTide(0.0) 作为基础实现
-        // 生产环境应解析 manifest.features 中的 Boundary 定义
-        let tide_provider = Box::new(ConstantTide { level: 0.0 });
-
         Ok(Self {
             context,
-            boundary_forcing: BoundaryForcing::default(),
             wind_provider,
-            tide_provider,
+            tide_level: 0.0,
         })
     }
 
-    /// 更新所有环境场到指定时刻
-    pub fn update(&mut self, time: DateTime<Utc>, _mesh: &Mesh) -> MhResult<()> {
-        // 1. 更新风场
+    pub fn update(&mut self, time: DateTime<Utc>, _mesh: &UnstructuredMesh) -> MhResult<()> {
         if let Some(wp) = &mut self.wind_provider {
-            wp.get_wind_at(
-                time,
-                &mut self.context.wind_u.view_mut(),
-                &mut self.context.wind_v.view_mut(),
-            )?;
+            wp.get_wind_at(time, &mut self.context.wind_u, &mut self.context.wind_v)?;
         }
-
-        // 2. 更新潮位边界
-        self.boundary_forcing = self.tide_provider.get_forcing(time)?;
-
-        // 3. 重置源项累加器 (例如河流流量是每步刷新的还是持续的？)
-        // 对于 ForcingContext 中的 source_mass_flux，通常在 Engine 内部根据 RiverProvider 计算
-        // 这里仅作重置，防止上一时刻的残留
         self.context.reset_sources();
-
         Ok(())
+    }
+
+    pub fn set_tide_level(&mut self, level: f64) {
+        self.tide_level = level;
     }
 
     pub fn get_context(&self) -> &ForcingContext {
         &self.context
     }
 
-    pub fn get_boundary_forcing(&self) -> &BoundaryForcing {
-        &self.boundary_forcing
+    pub fn get_context_mut(&mut self) -> &mut ForcingContext {
+        &mut self.context
+    }
+}
+
+impl BoundaryDataProvider for ForcingManager {
+    fn get_forcing(&self, _face_id: FaceId, _t: f64) -> MhResult<ExternalForcing> {
+        Ok(ExternalForcing {
+            eta: self.tide_level,
+            u: 0.0,
+            v: 0.0,
+        })
     }
 }

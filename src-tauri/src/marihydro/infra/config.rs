@@ -4,40 +4,16 @@ use crate::marihydro::geo::crs::CrsStrategy;
 use crate::marihydro::infra::time::TimezoneConfig;
 use serde::{Deserialize, Serialize};
 
-/// 项目配置 (持久化层)
-/// 对应前端的 "Project Settings" 页面
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
-    // --- 元数据 ---
     pub project_name: String,
-    pub version: String, // 配置文件版本
-
-    // --- 核心策略 (Core Strategies) ---
-    /// 坐标系策略：手动 / 自动
+    pub version: String,
     pub crs_strategy: CrsStrategy,
-    /// 时间显示策略：本地 / UTC / 指定
     pub timezone: TimezoneConfig,
-
-    // --- 空间范围 (Domain Scope) ---
-    /// 期望的网格尺寸
-    pub nx: usize,
-    pub ny: usize,
-    /// 期望的网格分辨率 (米)
-    pub dx: f64,
-    pub dy: f64,
-
-    // --- 时间控制 (Temporal Control) ---
-    /// ISO8601 格式起始时间
     pub start_time_iso: String,
-    /// 模拟总秒数
     pub duration_seconds: f64,
-    /// 结果输出间隔 (秒)
     pub output_interval: f64,
-
-    // --- 物理默认值 (Physics Defaults) ---
-    /// 默认曼宁系数 (当没有糙率文件时使用)
     pub default_roughness: f64,
-    /// 最小水深 (干湿边界)
     pub min_depth: f64,
 }
 
@@ -45,23 +21,76 @@ impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
             project_name: "Untitled_Project".into(),
-            version: "1.0".into(),
-            // 默认不做假设，要求用户明确或自动推导
+            version: "2.0".into(),
             crs_strategy: CrsStrategy::FromFirstFile,
-            // 默认跟随用户系统时区
             timezone: TimezoneConfig::Local,
-
-            nx: 200,
-            ny: 200,
-            dx: 50.0,
-            dy: 50.0,
-
             start_time_iso: "2024-01-01T00:00:00Z".into(),
             duration_seconds: 86400.0,
             output_interval: 3600.0,
-
             default_roughness: 0.025,
             min_depth: 0.05,
         }
+    }
+}
+
+impl ProjectConfig {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            project_name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_duration(mut self, seconds: f64) -> Self {
+        self.duration_seconds = seconds;
+        self
+    }
+
+    pub fn with_output_interval(mut self, seconds: f64) -> Self {
+        self.output_interval = seconds;
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.duration_seconds <= 0.0 {
+            return Err("模拟时长必须为正数".into());
+        }
+        if self.output_interval <= 0.0 {
+            return Err("输出间隔必须为正数".into());
+        }
+        if self.min_depth < 0.0 {
+            return Err("最小水深不能为负数".into());
+        }
+        if self.default_roughness < 0.0 || self.default_roughness > 1.0 {
+            return Err("曼宁糙率系数应在 [0, 1] 范围内".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = ProjectConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_builder_pattern() {
+        let config = ProjectConfig::new("Test")
+            .with_duration(3600.0)
+            .with_output_interval(60.0);
+        assert_eq!(config.duration_seconds, 3600.0);
+        assert_eq!(config.output_interval, 60.0);
+    }
+
+    #[test]
+    fn test_validation_failure() {
+        let mut config = ProjectConfig::default();
+        config.duration_seconds = -100.0;
+        assert!(config.validate().is_err());
     }
 }

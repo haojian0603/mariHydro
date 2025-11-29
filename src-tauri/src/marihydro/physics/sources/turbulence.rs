@@ -1,9 +1,10 @@
-//! 湍流闭合模型
+// src-tauri/src/marihydro/physics/sources/turbulence.rs
 
-use ndarray::{Array2, Axis};
+use glam::DVec2;
 use rayon::prelude::*;
 
-use crate::marihydro::domain::mesh::Mesh;
+use crate::marihydro::domain::mesh::unstructured::UnstructuredMesh;
+use crate::marihydro::domain::state::ConservedState;
 use crate::marihydro::infra::error::MhResult;
 
 #[derive(Debug, Clone, Copy)]
@@ -24,75 +25,114 @@ impl SmagorinskyModel {
 
     pub fn compute_eddy_viscosity(
         &self,
-        u: &Array2<f64>,
-        v: &Array2<f64>,
-        mesh: &Mesh,
-    ) -> MhResult<Array2<f64>> {
-        let (dx, dy) = mesh.transform.resolution();
-        let delta = (dx * dy).sqrt();
-        let cs_delta_sq = (self.cs * delta).powi(2);
+        state: &ConservedState,
+        mesh: &UnstructuredMesh,
+        h_min: f64,
+    ) -> MhResult<Vec<f64>> {
+        let n_cells = mesh.n_cells;
 
-        let (total_ny, total_nx) = mesh.total_size();
+        let velocities: Vec<DVec2> = (0..n_cells).map(|i| state.velocity(i, h_min)).collect();
 
-        if u.dim() != (total_ny, total_nx) || v.dim() != (total_ny, total_nx) {
-            return Err(crate::marihydro::infra::error::MhError::InvalidInput(
-                "速度场尺寸与网格不匹配".into(),
-            ));
-        }
+        let (grad_u, grad_v) = self.compute_velocity_gradients(mesh, &velocities);
 
-        let mut nu_t = Array2::zeros((total_ny, total_nx));
-
-        let inv_2dx = 0.5 / dx;
-        let inv_2dy = 0.5 / dy;
-
-        let u_slice = u.as_slice_memory_order().ok_or_else(|| {
-            crate::marihydro::infra::error::MhError::InternalError("u数组内存非连续".into())
-        })?;
-        let v_slice = v.as_slice_memory_order().ok_or_else(|| {
-            crate::marihydro::infra::error::MhError::InternalError("v数组内存非连续".into())
-        })?;
-
-        let stride = total_nx;
-
-        nu_t.axis_iter_mut(Axis(0))
+        let nu_t: Vec<f64> = (0..n_cells)
             .into_par_iter()
-            .enumerate()
-            .for_each(|(j, mut row)| {
-                if j == 0 || j == total_ny - 1 {
-                    return;
-                }
-                for i in 1..total_nx - 1 {
-                    let idx = j * stride + i;
-                    unsafe {
-                        let u_e = *u_slice.get_unchecked(idx + 1);
-                        let u_w = *u_slice.get_unchecked(idx - 1);
-                        let u_n = *u_slice.get_unchecked(idx + stride);
-                        let u_s = *u_slice.get_unchecked(idx - stride);
+            .map(|i| {
+                let area = mesh.cell_area[i];
+                let delta = area.sqrt();
+                let cs_delta_sq = (self.cs * delta).powi(2);
 
-                        let v_e = *v_slice.get_unchecked(idx + 1);
-                        let v_w = *v_slice.get_unchecked(idx - 1);
-                        let v_n = *v_slice.get_unchecked(idx + stride);
-                        let v_s = *v_slice.get_unchecked(idx - stride);
+                let dudx = grad_u[i].x;
+                let dudy = grad_u[i].y;
+                let dvdx = grad_v[i].x;
+                let dvdy = grad_v[i].y;
 
-                        let dudx = (u_e - u_w) * inv_2dx;
-                        let dudy = (u_n - u_s) * inv_2dy;
-                        let dvdx = (v_e - v_w) * inv_2dx;
-                        let dvdy = (v_n - v_s) * inv_2dy;
+                let s_xx = dudx;
+                let s_yy = dvdy;
+                let s_xy = 0.5 * (dudy + dvdx);
 
-                        let s_xx = dudx;
-                        let s_yy = dvdy;
-                        let s_xy = 0.5 * (dudy + dvdx);
+                let s_mag_sq = s_xx.powi(2) + s_yy.powi(2) + 2.0 * s_xy.powi(2);
+                let s_mag = (2.0 * s_mag_sq).sqrt();
 
-                        let s_mag_sq = s_xx.powi(2) + s_yy.powi(2) + 2.0 * s_xy.powi(2);
-                        let s_mag = (2.0 * s_mag_sq).sqrt();
-
-                        row[i] = cs_delta_sq * s_mag;
-                    }
-                }
-            });
+                cs_delta_sq * s_mag
+            })
+            .collect();
 
         Ok(nu_t)
     }
+
+    fn compute_velocity_gradients(
+        &self,
+        mesh: &UnstructuredMesh,
+        velocities: &[DVec2],
+    ) -> (Vec<DVec2>, Vec<DVec2>) {
+        let n_cells = mesh.n_cells;
+        let mut grad_u = vec![DVec2::ZERO; n_cells];
+        let mut grad_v = vec![DVec2::ZERO; n_cells];
+
+        for face_idx in 0..mesh.n_faces {
+            let owner = mesh.face_owner[face_idx];
+            let neighbor = mesh.face_neighbor[face_idx];
+
+            let normal = mesh.face_normal[face_idx];
+            let length = mesh.face_length[face_idx];
+            let ds = normal * length;
+
+            let vel_face = if neighbor != usize::MAX {
+                (velocities[owner] + velocities[neighbor]) * 0.5
+            } else {
+                velocities[owner]
+            };
+
+            grad_u[owner] += ds * vel_face.x;
+            grad_v[owner] += ds * vel_face.y;
+
+            if neighbor != usize::MAX {
+                grad_u[neighbor] -= ds * vel_face.x;
+                grad_v[neighbor] -= ds * vel_face.y;
+            }
+        }
+
+        for i in 0..n_cells {
+            let inv_area = 1.0 / mesh.cell_area[i];
+            grad_u[i] *= inv_area;
+            grad_v[i] *= inv_area;
+        }
+
+        (grad_u, grad_v)
+    }
+}
+
+pub fn compute_gradient_field(field: &[f64], mesh: &UnstructuredMesh) -> Vec<DVec2> {
+    let n_cells = mesh.n_cells;
+    let mut grad = vec![DVec2::ZERO; n_cells];
+
+    for face_idx in 0..mesh.n_faces {
+        let owner = mesh.face_owner[face_idx];
+        let neighbor = mesh.face_neighbor[face_idx];
+
+        let normal = mesh.face_normal[face_idx];
+        let length = mesh.face_length[face_idx];
+        let ds = normal * length;
+
+        let phi_face = if neighbor != usize::MAX {
+            0.5 * (field[owner] + field[neighbor])
+        } else {
+            field[owner]
+        };
+
+        grad[owner] += ds * phi_face;
+
+        if neighbor != usize::MAX {
+            grad[neighbor] -= ds * phi_face;
+        }
+    }
+
+    for i in 0..n_cells {
+        grad[i] /= mesh.cell_area[i];
+    }
+
+    grad
 }
 
 #[cfg(test)]
