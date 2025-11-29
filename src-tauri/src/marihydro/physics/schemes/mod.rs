@@ -1,42 +1,49 @@
 // src-tauri/src/marihydro/physics/schemes/mod.rs
 
-// pub mod friction;
 pub mod hllc;
+pub mod hydrostatic;
 pub mod muscl;
 
 use std::ops::{Add, Mul, Sub};
 
-/// 物理状态微元 (Conservative Variables)
-/// 用于内核计算，不涉及内存分配
+// 导出非结构化网格核心类型
+pub use hllc::{solve_hllc, solve_hllc_simple, HllcResult};
+pub use hydrostatic::{
+    compute_bed_slope_source, hydrostatic_reconstruction, muscl_reconstruct, BedSlopeSource,
+    HydrostaticFaceState, ReconstructedState, SlopeLimiter,
+};
+
+// 导出结构化网格类型（可选使用）
+pub use muscl::{reconstruct_interface, SlopeLimiterType};
+
+/// 守恒变量微元
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConservedVars {
-    pub h: f64,  // 水深
-    pub hu: f64, // 单宽流量 X
-    pub hv: f64, // 单宽流量 Y
-    pub hc: f64, // 泥沙质量/浓度积
+    pub h: f64,
+    pub hu: f64,
+    pub hv: f64,
+    pub hc: f64,
 }
 
-/// 原始变量微元 (Primitive Variables)
+/// 原始变量微元
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PrimitiveVars {
     pub h: f64,
     pub u: f64,
     pub v: f64,
     pub c: f64,
-    pub z: f64,   // 地形高程 (Bed Elevation)
-    pub eta: f64, // 水位 (h + z)
+    pub z: f64,
+    pub eta: f64,
 }
 
-/// 通量微元 (Flux)
+/// 通量微元
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FluxVars {
-    pub mass: f64,  // 质量通量
-    pub x_mom: f64, // X动量通量
-    pub y_mom: f64, // Y动量通量
-    pub sed: f64,   // 泥沙通量
+    pub mass: f64,
+    pub x_mom: f64,
+    pub y_mom: f64,
+    pub sed: f64,
 }
-
-// --- 运算符重载 (方便公式编写) ---
 
 impl Add for ConservedVars {
     type Output = Self;
@@ -75,7 +82,6 @@ impl Mul<f64> for ConservedVars {
 }
 
 impl ConservedVars {
-    /// 转换为原始变量 (去奇异化)
     #[inline(always)]
     pub fn to_primitive(&self, z: f64, h_min: f64) -> PrimitiveVars {
         if self.h < h_min {
@@ -88,7 +94,6 @@ impl ConservedVars {
                 eta: self.h + z,
             }
         } else {
-            // 这里的 1.0/h 是热点，编译器通常会自动优化为乘法逆元
             let inv_h = 1.0 / self.h;
             PrimitiveVars {
                 h: self.h,
@@ -101,7 +106,6 @@ impl ConservedVars {
         }
     }
 
-    /// 从原始变量构建
     #[inline(always)]
     pub fn from_primitive(p: &PrimitiveVars) -> Self {
         Self {

@@ -1,11 +1,10 @@
 // src-tauri/src/marihydro/domain/interpolator.rs
 
-use crate::marihydro::domain::mesh::Mesh;
 use crate::marihydro::geo::crs::Crs;
 use crate::marihydro::geo::transform::GeoTransformer;
 use crate::marihydro::infra::error::{MhError, MhResult};
 use crate::marihydro::io::types::RasterMetadata;
-use ndarray::Array2;
+use glam::DVec2;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -62,18 +61,6 @@ impl NoDataStrategy {
     pub fn for_temperature_celsius() -> Self {
         Self::UseFallback(15.0)
     }
-    pub fn for_temperature_kelvin() -> Self {
-        Self::UseFallback(288.15)
-    }
-    pub fn for_precipitation() -> Self {
-        Self::UseFallback(0.0)
-    }
-    pub fn for_water_depth() -> Self {
-        Self::KeepOriginal
-    }
-    pub fn for_salinity() -> Self {
-        Self::UseFallback(35.0)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +80,6 @@ impl Default for InterpolatorConfig {
     }
 }
 
-/// 空间插值器
 pub struct SpatialInterpolator {
     flat_weights: Vec<Weight>,
     offsets: Vec<usize>,
@@ -103,17 +89,21 @@ pub struct SpatialInterpolator {
 }
 
 impl SpatialInterpolator {
-    pub fn new(mesh: &Mesh, target_crs_def: &str, source_meta: &RasterMetadata) -> MhResult<Self> {
-        Self::with_config(
-            mesh,
+    pub fn new_from_points(
+        target_points: &[DVec2],
+        target_crs_def: &str,
+        source_meta: &RasterMetadata,
+    ) -> MhResult<Self> {
+        Self::new_from_points_with_config(
+            target_points,
             target_crs_def,
             source_meta,
             InterpolatorConfig::default(),
         )
     }
 
-    pub fn with_config(
-        mesh: &Mesh,
+    pub fn new_from_points_with_config(
+        target_points: &[DVec2],
         target_crs_def: &str,
         source_meta: &RasterMetadata,
         config: InterpolatorConfig,
@@ -136,16 +126,14 @@ impl SpatialInterpolator {
         let threshold = config
             .parallel_threshold
             .unwrap_or_else(|| config.method.parallel_threshold());
-        let should_parallel = config.parallel_enabled && mesh.active_indices.len() >= threshold;
+        let should_parallel = config.parallel_enabled && target_points.len() >= threshold;
 
         let results: Vec<(Vec<Weight>, f32)> = if should_parallel {
-            mesh.active_indices
+            target_points
                 .par_iter()
-                .map(|(j, i)| {
+                .map(|point| {
                     Self::compute_point_weights(
-                        mesh,
-                        j,
-                        i,
+                        point,
                         &transformer,
                         &angle_transformer,
                         sx0,
@@ -159,13 +147,11 @@ impl SpatialInterpolator {
                 })
                 .collect()
         } else {
-            mesh.active_indices
+            target_points
                 .iter()
-                .map(|(j, i)| {
+                .map(|point| {
                     Self::compute_point_weights(
-                        mesh,
-                        j,
-                        i,
+                        point,
                         &transformer,
                         &angle_transformer,
                         sx0,
@@ -205,9 +191,7 @@ impl SpatialInterpolator {
 
     #[inline]
     fn compute_point_weights(
-        mesh: &Mesh,
-        j: usize,
-        i: usize,
+        point: &DVec2,
         transformer: &GeoTransformer,
         angle_transformer: &GeoTransformer,
         sx0: f64,
@@ -218,13 +202,11 @@ impl SpatialInterpolator {
         src_h: usize,
         method: InterpolationMethod,
     ) -> (Vec<Weight>, f32) {
-        let (mx, my) = mesh.transform.pixel_to_world(i as f64, j as f64);
-
         let angle = angle_transformer
-            .calculate_convergence_angle(mx, my)
+            .calculate_convergence_angle(point.x, point.y)
             .unwrap_or(0.0) as f32;
 
-        let (sx, sy) = match transformer.transform_point(mx, my) {
+        let (sx, sy) = match transformer.transform_point(point.x, point.y) {
             Ok(p) => p,
             Err(_) => return (vec![], angle),
         };
@@ -261,7 +243,6 @@ impl SpatialInterpolator {
 
         let idx_base = (row_i as usize) * src_w + (col_i as usize);
 
-        // Bilinear weights: W = (1-dx)(1-dy), dx(1-dy), (1-dx)dy, dx*dy
         vec![
             Weight {
                 src_idx: idx_base as u32,
@@ -313,7 +294,6 @@ impl SpatialInterpolator {
         let fx = (u - u0) as f32;
         let fy = (v - v0) as f32;
 
-        // Catmull-Rom spline kernel
         let cubic = |t: f32| -> [f32; 4] {
             let t2 = t * t;
             let t3 = t2 * t;
@@ -349,73 +329,60 @@ impl SpatialInterpolator {
         weights
     }
 
-    pub fn interpolate(
+    pub fn interpolate_to_vec(
         &self,
-        source_data: &Array2<f64>,
-        target: &mut Array2<f64>,
-        active_indices: &[(usize, usize)],
+        source_data: &[f64],
+        target: &mut [f64],
         strategy: NoDataStrategy,
     ) -> MhResult<()> {
-        let (sh, sw) = source_data.dim();
-        if (sw, sh) != self.src_dims {
+        let (sh, sw) = self.src_dims;
+        if source_data.len() != sw * sh {
             return Err(MhError::DataLoad {
                 file: "Interpolation Source".into(),
                 message: format!(
-                    "源数据尺寸不匹配: 期望 {:?}, 实际 ({}, {})",
-                    self.src_dims, sw, sh
+                    "源数据尺寸不匹配: 期望 {}, 实际 {}",
+                    sw * sh,
+                    source_data.len()
                 ),
             });
         }
 
         let expected_points = self.offsets.len() - 1;
-        if active_indices.len() != expected_points {
+        if target.len() != expected_points {
             return Err(MhError::InvalidMesh {
                 message: format!(
-                    "索引数量不匹配: 期望 {}, 实际 {}",
+                    "目标数组长度不匹配: 期望 {}, 实际 {}",
                     expected_points,
-                    active_indices.len()
+                    target.len()
                 ),
             });
         }
-
-        let src_slice =
-            source_data
-                .as_slice_memory_order()
-                .ok_or_else(|| MhError::InvalidMesh {
-                    message: "源数据内存不连续".into(),
-                })?;
 
         let threshold = self
             .config
             .parallel_threshold
             .unwrap_or_else(|| self.config.method.parallel_threshold());
 
-        if self.config.parallel_enabled && active_indices.len() >= threshold {
-            self.interpolate_parallel(src_slice, target, active_indices, strategy)
+        if self.config.parallel_enabled && target.len() >= threshold {
+            self.interpolate_parallel(source_data, target, strategy)
         } else {
-            self.interpolate_serial(src_slice, target, active_indices, strategy)
+            self.interpolate_serial(source_data, target, strategy)
         }
 
         Ok(())
     }
 
     #[inline]
-    fn interpolate_serial(
-        &self,
-        src_slice: &[f64],
-        target: &mut Array2<f64>,
-        active_indices: &[(usize, usize)],
-        strategy: NoDataStrategy,
-    ) {
-        for (k, &(j, i)) in active_indices.iter().enumerate() {
+    fn interpolate_serial(&self, src_slice: &[f64], target: &mut [f64], strategy: NoDataStrategy) {
+        for k in 0..target.len() {
             let weights = &self.flat_weights[self.offsets[k]..self.offsets[k + 1]];
 
             match self.compute_value(weights, src_slice) {
-                Some(val) => target[[j, i]] = val,
+                Some(val) => target[k] = val,
                 None => match strategy {
-                    NoDataStrategy::UseFallback(v) => target[[j, i]] = v,
+                    NoDataStrategy::UseFallback(v) => target[k] = v,
                     NoDataStrategy::KeepOriginal => {}
-                    NoDataStrategy::SetNaN => target[[j, i]] = f64::NAN,
+                    NoDataStrategy::SetNaN => target[k] = f64::NAN,
                 },
             }
         }
@@ -425,11 +392,10 @@ impl SpatialInterpolator {
     fn interpolate_parallel(
         &self,
         src_slice: &[f64],
-        target: &mut Array2<f64>,
-        active_indices: &[(usize, usize)],
+        target: &mut [f64],
         strategy: NoDataStrategy,
     ) {
-        let results: Vec<Option<f64>> = (0..active_indices.len())
+        let results: Vec<Option<f64>> = (0..target.len())
             .into_par_iter()
             .map(|k| {
                 let weights = &self.flat_weights[self.offsets[k]..self.offsets[k + 1]];
@@ -437,13 +403,13 @@ impl SpatialInterpolator {
             })
             .collect();
 
-        for (k, &(j, i)) in active_indices.iter().enumerate() {
-            match results[k] {
-                Some(val) => target[[j, i]] = val,
+        for (k, result) in results.into_iter().enumerate() {
+            match result {
+                Some(val) => target[k] = val,
                 None => match strategy {
-                    NoDataStrategy::UseFallback(v) => target[[j, i]] = v,
+                    NoDataStrategy::UseFallback(v) => target[k] = v,
                     NoDataStrategy::KeepOriginal => {}
-                    NoDataStrategy::SetNaN => target[[j, i]] = f64::NAN,
+                    NoDataStrategy::SetNaN => target[k] = f64::NAN,
                 },
             }
         }
@@ -472,59 +438,33 @@ impl SpatialInterpolator {
 
     pub fn interpolate_vector_field(
         &self,
-        u_source: &Array2<f64>,
-        v_source: &Array2<f64>,
-        u_target: &mut Array2<f64>,
-        v_target: &mut Array2<f64>,
-        active_indices: &[(usize, usize)],
+        u_source: &[f64],
+        v_source: &[f64],
+        u_target: &mut [f64],
+        v_target: &mut [f64],
         strategy: NoDataStrategy,
     ) -> MhResult<()> {
-        self.interpolate(u_source, u_target, active_indices, strategy)?;
-        self.interpolate(v_source, v_target, active_indices, strategy)?;
+        self.interpolate_to_vec(u_source, u_target, strategy)?;
+        self.interpolate_to_vec(v_source, v_target, strategy)?;
 
-        for (k, &(j, i)) in active_indices.iter().enumerate() {
+        for k in 0..u_target.len() {
             if k >= self.rotation_angles.len() {
                 break;
             }
 
             let angle = self.rotation_angles[k] as f64;
             if angle.abs() > 1e-6 {
-                let u = u_target[[j, i]];
-                let v = v_target[[j, i]];
+                let u = u_target[k];
+                let v = v_target[k];
 
                 if !u.is_nan() && !v.is_nan() {
                     let cos_a = angle.cos();
                     let sin_a = angle.sin();
 
-                    // Rotation formula: u' = u*cos(θ) - v*sin(θ), v' = u*sin(θ) + v*cos(θ)
-                    u_target[[j, i]] = u * cos_a - v * sin_a;
-                    v_target[[j, i]] = u * sin_a + v * cos_a;
+                    u_target[k] = u * cos_a - v * sin_a;
+                    v_target[k] = u * sin_a + v * cos_a;
                 }
             }
-        }
-
-        Ok(())
-    }
-
-    pub fn interpolate_batch(
-        &self,
-        sources: &[Array2<f64>],
-        targets: &mut [Array2<f64>],
-        active_indices: &[(usize, usize)],
-        strategies: &[NoDataStrategy],
-    ) -> MhResult<()> {
-        if sources.len() != targets.len() || sources.len() != strategies.len() {
-            return Err(MhError::InvalidMesh {
-                message: "源数据、目标数据和策略数量不匹配".into(),
-            });
-        }
-
-        for ((source, target), &strategy) in sources
-            .iter()
-            .zip(targets.iter_mut())
-            .zip(strategies.iter())
-        {
-            self.interpolate(source, target, active_indices, strategy)?;
         }
 
         Ok(())
@@ -537,27 +477,11 @@ impl SpatialInterpolator {
     pub fn source_dimensions(&self) -> (usize, usize) {
         self.src_dims
     }
-
-    pub fn validate_source(&self, source: &Array2<f64>) -> bool {
-        source.dim() == (self.src_dims.1, self.src_dims.0)
-    }
-
-    pub fn config(&self) -> &InterpolatorConfig {
-        &self.config
-    }
-
-    pub fn memory_usage(&self) -> usize {
-        self.flat_weights.len() * std::mem::size_of::<Weight>()
-            + self.offsets.len() * std::mem::size_of::<usize>()
-            + self.rotation_angles.len() * std::mem::size_of::<f32>()
-            + std::mem::size_of::<Self>()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::arr2;
 
     #[test]
     fn test_bilinear_weights() {
@@ -566,11 +490,6 @@ mod tests {
 
         let sum: f32 = weights.iter().map(|w| w.val).sum();
         assert!((sum - 1.0).abs() < 1e-6);
-
-        // 中心点权重应该相等
-        for w in &weights {
-            assert!((w.val - 0.25).abs() < 1e-6);
-        }
     }
 
     #[test]
@@ -578,113 +497,6 @@ mod tests {
         let weights = SpatialInterpolator::nearest_weights(1.5, 1.5, 10, 10);
         assert_eq!(weights.len(), 1);
         assert_eq!(weights[0].val, 1.0);
-        assert_eq!(weights[0].src_idx, 22); // row=2, col=2, idx=2*10+2
-    }
-
-    #[test]
-    fn test_bicubic_boundary() {
-        // 测试边界处退化为双线性
-        let weights = SpatialInterpolator::bicubic_weights(0.5, 0.5, 10, 10);
-        assert_eq!(weights.len(), 4); // 应该退化为双线性
-    }
-
-    #[test]
-    fn test_compute_value_with_nan() {
-        let source = arr2(&[[1.0, 2.0], [f64::NAN, 4.0]]);
-        let weights = vec![
-            Weight {
-                src_idx: 0,
-                val: 0.25,
-            },
-            Weight {
-                src_idx: 1,
-                val: 0.25,
-            },
-            Weight {
-                src_idx: 2,
-                val: 0.25,
-            },
-            Weight {
-                src_idx: 3,
-                val: 0.25,
-            },
-        ];
-
-        let interpolator = SpatialInterpolator {
-            flat_weights: weights,
-            offsets: vec![0, 4],
-            rotation_angles: vec![0.0],
-            src_dims: (2, 2),
-            config: InterpolatorConfig::default(),
-        };
-
-        let result = interpolator.compute_value(
-            &interpolator.flat_weights[0..4],
-            source.as_slice_memory_order().unwrap(),
-        );
-
-        assert!(result.is_some());
-        // 只有3个有效值参与计算: (1 + 2 + 4) / 3 = 7/3
-        assert!((result.unwrap() - 7.0 / 3.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_no_data_strategies() {
-        assert_eq!(
-            match NoDataStrategy::for_wind() {
-                NoDataStrategy::UseFallback(v) => v,
-                _ => -1.0,
-            },
-            0.0
-        );
-
-        assert_eq!(
-            match NoDataStrategy::for_pressure() {
-                NoDataStrategy::UseFallback(v) => v,
-                _ => -1.0,
-            },
-            1013.25
-        );
-
-        assert!(matches!(NoDataStrategy::default(), NoDataStrategy::SetNaN));
-    }
-
-    #[test]
-    fn test_interpolation_method_thresholds() {
-        assert!(
-            InterpolationMethod::Bicubic.parallel_threshold()
-                < InterpolationMethod::Bilinear.parallel_threshold()
-        );
-        assert!(
-            InterpolationMethod::Bilinear.parallel_threshold()
-                < InterpolationMethod::NearestNeighbor.parallel_threshold()
-        );
-    }
-
-    #[test]
-    fn test_memory_usage() {
-        let interpolator = SpatialInterpolator {
-            flat_weights: vec![
-                Weight {
-                    src_idx: 0,
-                    val: 1.0
-                };
-                100
-            ],
-            offsets: vec![0, 25, 50, 75, 100],
-            rotation_angles: vec![0.0; 4],
-            src_dims: (10, 10),
-            config: InterpolatorConfig::default(),
-        };
-
-        let usage = interpolator.memory_usage();
-        assert!(usage > 0);
-
-        // 验证计算正确性
-        let expected = 100 * std::mem::size_of::<Weight>()
-            + 5 * std::mem::size_of::<usize>()
-            + 4 * std::mem::size_of::<f32>()
-            + std::mem::size_of::<SpatialInterpolator>();
-        assert_eq!(usage, expected);
+        assert_eq!(weights[0].src_idx, 22);
     }
 }

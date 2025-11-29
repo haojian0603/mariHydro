@@ -1,243 +1,236 @@
-use super::{ConservedVars, FluxVars};
-use crate::marihydro::physics::schemes::hllc::ComputeAxis::{X, Y};
+// src-tauri/src/marihydro/physics/schemes/hllc.rs
 
-#[derive(Clone, Copy)]
-pub enum ComputeAxis {
-    X,
-    Y,
+use crate::marihydro::domain::state::Flux;
+use crate::marihydro::physics::flux_calculator::{FluxCalculator, RotatedFlux}; // ✅ 使用公共模块
+use glam::DVec2;
+
+#[derive(Debug, Clone, Copy)]
+pub struct HllcResult {
+    pub flux: Flux,
+    pub max_wave_speed: f64,
 }
 
-/// 1D 计算辅助结构
-struct State1D {
-    h: f64,
-    u_n: f64, // 法向速度
-    u_t: f64, // 切向速度
-    c: f64,
-}
+const ENTROPY_FIX_EPSILON: f64 = 1e-2;
 
-/// HLLC 求解器（包含Toro干湿边界处理）
-///
-/// # 算法
-/// 1. 检查干湿状态：双干/左干/右干/双湿
-/// 2. 双湿情况：标准HLLC三波模型
-/// 3. 干湿界面：Toro单侧稀疏波解析解
+/// ✅ HLLC 求解器（使用 FluxCalculator）
+#[inline]
 pub fn solve_hllc(
-    u_l: &ConservedVars,
-    u_r: &ConservedVars,
-    axis: ComputeAxis,
-    g: f64,
-    h_min: f64,
-) -> FluxVars {
-    // === 干湿边界处理（Toro） ===
+    h_l: f64,
+    vel_l: DVec2,
+    h_r: f64,
+    vel_r: DVec2,
+    normal: DVec2,
+    flux_calc: &FluxCalculator, // ✅ 传入计算器
+) -> HllcResult {
+    let g = flux_calc.gravity();
+    let eps = flux_calc.h_min();
 
-    // 1. 双干：无通量
-    if u_l.h < h_min && u_r.h < h_min {
-        return FluxVars::default();
-    }
-
-    // 2. 左干右湿
-    if u_l.h < h_min && u_r.h >= h_min {
-        return solve_dry_wet_interface(u_r, axis, g, h_min, true);
-    }
-
-    // 3. 左湿右干
-    if u_l.h >= h_min && u_r.h < h_min {
-        return solve_dry_wet_interface(u_l, axis, g, h_min, false);
-    }
-
-    // === 双湿：标准HLLC ===
-
-    // 4. 旋转坐标系 -> 1D
-    let to_1d = |u: &ConservedVars| -> State1D {
-        let inv_h = 1.0 / u.h;
-        match axis {
-            X => State1D {
-                h: u.h,
-                u_n: u.hu * inv_h,
-                u_t: u.hv * inv_h,
-                c: u.hc * inv_h,
-            },
-            Y => State1D {
-                h: u.h,
-                u_n: u.hv * inv_h,
-                u_t: u.hu * inv_h,
-                c: u.hc * inv_h,
-            },
-        }
-    };
-
-    let s_l = to_1d(u_l);
-    let s_r = to_1d(u_r);
-
-    // 5. 波速估计（Einfeldt）
-    let a_l = (g * s_l.h).sqrt();
-    let a_r = (g * s_r.h).sqrt();
-    let u_l_n = s_l.u_n;
-    let u_r_n = s_r.u_n;
-
-    let sl = (u_l_n - a_l).min(u_r_n - a_r);
-    let sr = (u_l_n + a_l).max(u_r_n + a_r);
-
-    // 6. 计算通量（1D HLLC）
-    let flux_1d = if sl >= 0.0 {
-        physical_flux(&s_l, g)
-    } else if sr <= 0.0 {
-        physical_flux(&s_r, g)
-    } else {
-        // 星区（接触间断）
-        let h_l = s_l.h;
-        let h_r = s_r.h;
-
-        // 接触波速度 S*
-        let num = u_r_n * h_r * (sr - u_r_n) - u_l_n * h_l * (sl - u_l_n)
-            + 0.5 * g * (h_l * h_l - h_r * h_r);
-        let den = h_r * (sr - u_r_n) - h_l * (sl - u_l_n);
-        let s_star = if den.abs() < 1e-10 { 0.0 } else { num / den };
-
-        // 选择K侧（左或右）
-        let (sk, state_k, flux_k) = if s_star >= 0.0 {
-            (sl, &s_l, physical_flux(&s_l, g))
-        } else {
-            (sr, &s_r, physical_flux(&s_r, g))
+    if flux_calc.is_dry(h_l) && flux_calc.is_dry(h_r) {
+        return HllcResult {
+            flux: Flux::default(),
+            max_wave_speed: 0.0,
         };
+    }
 
-        // HLLC通量公式: F* = F_K + S_K * (U*_K - U_K)
-        let factor = state_k.h * (sk - state_k.u_n) / (sk - s_star);
+    if flux_calc.is_dry(h_l) {
+        return solve_dry_left(h_r, vel_r, normal, flux_calc);
+    }
+    if flux_calc.is_dry(h_r) {
+        return solve_dry_right(h_l, vel_l, normal, flux_calc);
+    }
 
-        let ds_h = factor - state_k.h;
-        let ds_mom_n = factor * s_star - state_k.h * state_k.u_n;
-        let ds_mom_t = factor * state_k.u_t - state_k.h * state_k.u_t;
-        let ds_sed = factor * state_k.c - state_k.h * state_k.c;
+    let un_l = vel_l.dot(normal);
+    let un_r = vel_r.dot(normal);
 
-        FluxVars {
-            mass: flux_k.mass + sk * ds_h,
-            x_mom: flux_k.x_mom + sk * ds_mom_n,
-            y_mom: flux_k.y_mom + sk * ds_mom_t,
-            sed: flux_k.sed + sk * ds_sed,
-        }
+    let c_l = (g * h_l).sqrt();
+    let c_r = (g * h_r).sqrt();
+
+    // ✅ 修正：使用标准 Einfeldt 波速估计（不使用 2.0 因子）
+    let s_l = (un_l - c_l).min(un_r - c_r);
+    let s_r = (un_l + c_l).max(un_r + c_r);
+
+    let max_speed = s_l.abs().max(s_r.abs());
+
+    // ✅ 使用 FluxCalculator 计算物理通量
+    let flux_l = flux_calc.compute_rotated_flux(h_l, vel_l, normal);
+    let flux_r = flux_calc.compute_rotated_flux(h_r, vel_r, normal);
+
+    let result_flux = if s_l >= 0.0 {
+        flux_l
+    } else if s_r <= 0.0 {
+        flux_r
+    } else {
+        hllc_star_region(h_l, un_l, h_r, un_r, s_l, s_r, flux_l, flux_r, g, eps)
     };
 
-    // 7. 反向旋转（1D -> 2D）
-    match axis {
-        X => flux_1d,
-        Y => FluxVars {
-            mass: flux_1d.mass,
-            x_mom: flux_1d.y_mom,
-            y_mom: flux_1d.x_mom,
-            sed: flux_1d.sed,
+    // ✅ 旋转回全局坐标系
+    let euler_flux = result_flux.rotate_back(normal);
+
+    HllcResult {
+        flux: Flux {
+            mass: euler_flux.mass,
+            mom_x: euler_flux.momentum_x,
+            mom_y: euler_flux.momentum_y,
         },
+        max_wave_speed: max_speed,
     }
 }
 
-/// Toro干湿界面求解器
-///
-/// # 参数
-/// - `u_wet`: 湿侧守恒变量
-/// - `axis`: 计算方向
-/// - `g`: 重力加速度
-/// - `h_min`: 最小水深
-/// - `wet_on_right`: true=湿在右，false=湿在左
-fn solve_dry_wet_interface(
-    u_wet: &ConservedVars,
-    axis: ComputeAxis,
+#[inline]
+fn hllc_star_region(
+    h_l: f64,
+    un_l: f64,
+    h_r: f64,
+    un_r: f64,
+    s_l: f64,
+    s_r: f64,
+    flux_l: RotatedFlux,
+    flux_r: RotatedFlux,
     g: f64,
-    h_min: f64,
-    wet_on_right: bool,
-) -> FluxVars {
-    // 提取1D状态
-    let (h, u_n, u_t, c) = match axis {
-        X => {
-            let inv_h = 1.0 / u_wet.h.max(h_min);
-            (
-                u_wet.h,
-                u_wet.hu * inv_h,
-                u_wet.hv * inv_h,
-                u_wet.hc * inv_h,
-            )
-        }
-        Y => {
-            let inv_h = 1.0 / u_wet.h.max(h_min);
-            (
-                u_wet.h,
-                u_wet.hv * inv_h,
-                u_wet.hu * inv_h,
-                u_wet.hc * inv_h,
-            )
-        }
+    eps: f64,
+) -> RotatedFlux {
+    let q_l = h_l * (s_l - un_l);
+    let q_r = h_r * (s_r - un_r);
+    let denom = q_r - q_l;
+
+    if denom.abs() < eps {
+        let inv_ds = 1.0 / (s_r - s_l).max(eps);
+        return RotatedFlux {
+            mass: (s_r * flux_l.mass - s_l * flux_r.mass + s_l * s_r * (h_r - h_l)) * inv_ds,
+            momentum_n: (s_r * flux_l.momentum_n - s_l * flux_r.momentum_n
+                + s_l * s_r * (h_r * un_r - h_l * un_l))
+                * inv_ds,
+            momentum_t: (s_r * flux_l.momentum_t - s_l * flux_r.momentum_t) * inv_ds,
+        };
+    }
+
+    let s_star = (q_l * un_l - q_r * un_r + flux_r.momentum_n - flux_l.momentum_n) / denom;
+
+    let s_star_fixed = if s_star.abs() < ENTROPY_FIX_EPSILON {
+        s_star.signum() * ENTROPY_FIX_EPSILON
+    } else {
+        s_star
     };
 
-    let c_wave = (g * h).sqrt();
-
-    // Toro稀疏波解析解
-    let flux_1d = if wet_on_right {
-        // 右侧湿，左侧干，稀疏波向左传播
-        let s_head = u_n - 2.0 * c_wave; // 稀疏波波头
-        let s_tail = u_n + c_wave; // 稀疏波波尾
-
-        if s_head >= 0.0 {
-            // 稀疏波完全在界面右侧，界面处为干底
-            FluxVars::default()
-        } else if s_tail <= 0.0 {
-            // 稀疏波完全在界面左侧，使用湿侧通量
-            physical_flux_components(h, u_n, u_t, c, g)
-        } else {
-            // 界面在稀疏波内部，计算星区状态
-            // 星区速度: u* = (1/3)(u_R - 2c_R)（向干侧传播）
-            let u_star = (u_n - 2.0 * c_wave) / 3.0;
-
-            // 星区水深: h* = (1/g) * ((u* + c_R)/2)²
-            let h_star = ((u_star + c_wave) / 2.0).powi(2) / g;
-
-            // 星区通量（标量保持湿侧值）
-            physical_flux_components(h_star, u_star, u_t, c, g)
+    if s_star_fixed >= 0.0 {
+        let h_star = q_l / (s_l - s_star_fixed);
+        RotatedFlux {
+            mass: flux_l.mass + s_l * (h_star - h_l),
+            momentum_n: flux_l.momentum_n + s_l * (h_star * s_star_fixed - h_l * un_l),
+            momentum_t: flux_l.momentum_t,
         }
     } else {
-        // 左侧湿，右侧干，稀疏波向右传播
-        let s_head = u_n + 2.0 * c_wave;
-        let s_tail = u_n - c_wave;
-
-        if s_head <= 0.0 {
-            FluxVars::default()
-        } else if s_tail >= 0.0 {
-            physical_flux_components(h, u_n, u_t, c, g)
-        } else {
-            let u_star = (u_n + 2.0 * c_wave) / 3.0;
-            let h_star = ((c_wave - u_star) / 2.0).powi(2) / g;
-
-            physical_flux_components(h_star, u_star, u_t, c, g)
+        let h_star = q_r / (s_r - s_star_fixed);
+        RotatedFlux {
+            mass: flux_r.mass + s_r * (h_star - h_r),
+            momentum_n: flux_r.momentum_n + s_r * (h_star * s_star_fixed - h_r * un_r),
+            momentum_t: flux_r.momentum_t,
         }
+    }
+}
+
+#[inline]
+fn solve_dry_left(h_r: f64, vel_r: DVec2, normal: DVec2, flux_calc: &FluxCalculator) -> HllcResult {
+    let g = flux_calc.gravity();
+    let un_r = vel_r.dot(normal);
+    let c_r = (g * h_r).sqrt();
+
+    let s_head_r = un_r - c_r;
+    let s_tail_r = un_r + 2.0 * c_r;
+
+    let result_flux = if s_head_r >= 0.0 {
+        flux_calc.compute_rotated_flux(h_r, vel_r, normal)
+    } else if s_tail_r <= 0.0 {
+        RotatedFlux {
+            mass: 0.0,
+            momentum_n: 0.0,
+            momentum_t: 0.0,
+        }
+    } else {
+        let u_star = 2.0 * (c_r + un_r) / 3.0;
+        let c_star = u_star - un_r + c_r;
+        let h_star = (c_star * c_star / g).max(flux_calc.h_min());
+        let vel_star = DVec2::new(u_star, 0.0); // 简化
+        flux_calc.compute_rotated_flux(h_star, vel_star, normal)
     };
 
-    // 旋转回2D
-    match axis {
-        X => flux_1d,
-        Y => FluxVars {
-            mass: flux_1d.mass,
-            x_mom: flux_1d.y_mom,
-            y_mom: flux_1d.x_mom,
-            sed: flux_1d.sed,
+    let euler_flux = result_flux.rotate_back(normal);
+
+    HllcResult {
+        flux: Flux {
+            mass: euler_flux.mass,
+            mom_x: euler_flux.momentum_x,
+            mom_y: euler_flux.momentum_y,
         },
+        max_wave_speed: s_tail_r.abs().max(s_head_r.abs()),
     }
 }
 
-#[inline(always)]
-fn physical_flux(s: &State1D, g: f64) -> FluxVars {
-    let qn = s.h * s.u_n;
-    FluxVars {
-        mass: qn,
-        x_mom: qn * s.u_n + 0.5 * g * s.h * s.h,
-        y_mom: qn * s.u_t,
-        sed: qn * s.c,
+#[inline]
+fn solve_dry_right(
+    h_l: f64,
+    vel_l: DVec2,
+    normal: DVec2,
+    flux_calc: &FluxCalculator,
+) -> HllcResult {
+    let g = flux_calc.gravity();
+    let un_l = vel_l.dot(normal);
+    let c_l = (g * h_l).sqrt();
+
+    let s_head_l = un_l + c_l;
+    let s_tail_l = un_l - 2.0 * c_l;
+
+    let result_flux = if s_head_l <= 0.0 {
+        RotatedFlux {
+            mass: 0.0,
+            momentum_n: 0.0,
+            momentum_t: 0.0,
+        }
+    } else if s_tail_l >= 0.0 {
+        flux_calc.compute_rotated_flux(h_l, vel_l, normal)
+    } else {
+        let u_star = 2.0 * (c_l - un_l) / 3.0;
+        let c_star = c_l + un_l - u_star;
+        let h_star = (c_star * c_star / g).max(flux_calc.h_min());
+        let vel_star = DVec2::new(u_star, 0.0);
+        flux_calc.compute_rotated_flux(h_star, vel_star, normal)
+    };
+
+    let euler_flux = result_flux.rotate_back(normal);
+
+    HllcResult {
+        flux: Flux {
+            mass: euler_flux.mass,
+            mom_x: euler_flux.momentum_x,
+            mom_y: euler_flux.momentum_y,
+        },
+        max_wave_speed: s_tail_l.abs().max(s_head_l.abs()),
     }
 }
 
-#[inline(always)]
-fn physical_flux_components(h: f64, u_n: f64, u_t: f64, c: f64, g: f64) -> FluxVars {
-    let qn = h * u_n;
-    FluxVars {
-        mass: qn,
-        x_mom: qn * u_n + 0.5 * g * h * h,
-        y_mom: qn * u_t,
-        sed: qn * c,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dry_bed() {
+        let flux_calc = FluxCalculator::new(9.81, 1e-6);
+        let normal = DVec2::new(1.0, 0.0);
+        let result = solve_hllc(0.0, DVec2::ZERO, 0.0, DVec2::ZERO, normal, &flux_calc);
+
+        assert_eq!(result.flux.mass, 0.0);
+        assert_eq!(result.max_wave_speed, 0.0);
+    }
+
+    #[test]
+    fn test_still_water() {
+        let flux_calc = FluxCalculator::new(9.81, 1e-6);
+        let normal = DVec2::new(1.0, 0.0);
+        let h = 10.0;
+        let vel = DVec2::ZERO;
+
+        let result = solve_hllc(h, vel, h, vel, normal, &flux_calc);
+
+        assert!(result.flux.mass.abs() < 1e-10);
     }
 }

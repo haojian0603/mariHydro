@@ -1,348 +1,327 @@
-// src-tauri/src/marihydro/domain/state.rs
+//! 守恒量场
 
-use ndarray::{s, Array2, ArrayView2};
+use glam::DVec2;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::marihydro::infra::error::{MhError, MhResult};
-use crate::marihydro::physics::schemes::PrimitiveVars;
 
-/// 物理状态 (带Ghost层)
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct State {
-    pub nx: usize,
-    pub ny: usize,
-    pub ng: usize,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConservedState {
+    pub n_cells: usize,
 
-    pub h: Array2<f64>,
-    pub u: Array2<f64>,
-    pub v: Array2<f64>,
-    pub c: Array2<f64>,
+    pub h: Vec<f64>,
+    pub hu: Vec<f64>,
+    pub hv: Vec<f64>,
 
-    #[serde(skip)]
-    zb: Arc<Array2<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hc: Option<Vec<f64>>,
 }
 
-/// 安全可变切片
-pub struct StateSlicesMut<'a> {
-    pub h: &'a mut [f64],
-    pub u: &'a mut [f64],
-    pub v: &'a mut [f64],
-    pub c: &'a mut [f64],
+#[derive(Debug, Clone)]
+pub struct GradientState {
+    pub grad_h: Vec<DVec2>,
+    pub grad_hu: Vec<DVec2>,
+    pub grad_hv: Vec<DVec2>,
 }
 
-/// 安全只读切片
-pub struct StateSlices<'a> {
-    pub h: &'a [f64],
-    pub u: &'a [f64],
-    pub v: &'a [f64],
-    pub c: &'a [f64],
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Flux {
+    pub mass: f64,
+    pub mom_x: f64,
+    pub mom_y: f64,
 }
 
-impl State {
-    /// 冷启动
-    pub fn cold_start(
-        nx: usize,
-        ny: usize,
-        ng: usize,
-        initial_eta: f64,
-        zb: Arc<Array2<f64>>,
-    ) -> MhResult<Self> {
-        let total_nx = nx + 2 * ng;
-        let total_ny = ny + 2 * ng;
+impl Flux {
+    #[inline(always)]
+    pub const fn new(mass: f64, mom_x: f64, mom_y: f64) -> Self {
+        Self { mass, mom_x, mom_y }
+    }
 
-        if zb.dim() != (total_ny, total_nx) {
+    #[inline(always)]
+    pub fn scale(self, factor: f64) -> Self {
+        Self {
+            mass: self.mass * factor,
+            mom_x: self.mom_x * factor,
+            mom_y: self.mom_y * factor,
+        }
+    }
+
+    #[inline(always)]
+    pub fn magnitude(&self) -> f64 {
+        (self.mass * self.mass + self.mom_x * self.mom_x + self.mom_y * self.mom_y).sqrt()
+    }
+}
+
+impl std::ops::AddAssign for Flux {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        self.mass += rhs.mass;
+        self.mom_x += rhs.mom_x;
+        self.mom_y += rhs.mom_y;
+    }
+}
+
+impl std::ops::SubAssign for Flux {
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.mass -= rhs.mass;
+        self.mom_x -= rhs.mom_x;
+        self.mom_y -= rhs.mom_y;
+    }
+}
+
+impl std::ops::Add for Flux {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            mass: self.mass + rhs.mass,
+            mom_x: self.mom_x + rhs.mom_x,
+            mom_y: self.mom_y + rhs.mom_y,
+        }
+    }
+}
+
+impl std::ops::Sub for Flux {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            mass: self.mass - rhs.mass,
+            mom_x: self.mom_x - rhs.mom_x,
+            mom_y: self.mom_y - rhs.mom_y,
+        }
+    }
+}
+
+impl std::ops::Neg for Flux {
+    type Output = Self;
+    #[inline(always)]
+    fn neg(self) -> Self {
+        Self {
+            mass: -self.mass,
+            mom_x: -self.mom_x,
+            mom_y: -self.mom_y,
+        }
+    }
+}
+
+impl std::ops::Mul<f64> for Flux {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: f64) -> Self {
+        self.scale(rhs)
+    }
+}
+
+impl std::ops::Mul<Flux> for f64 {
+    type Output = Flux;
+    #[inline(always)]
+    fn mul(self, rhs: Flux) -> Flux {
+        rhs.scale(self)
+    }
+}
+
+impl ConservedState {
+    pub fn new(n_cells: usize) -> Self {
+        Self {
+            n_cells,
+            h: vec![0.0; n_cells],
+            hu: vec![0.0; n_cells],
+            hv: vec![0.0; n_cells],
+            hc: None,
+        }
+    }
+
+    pub fn with_scalar(n_cells: usize) -> Self {
+        Self {
+            n_cells,
+            h: vec![0.0; n_cells],
+            hu: vec![0.0; n_cells],
+            hv: vec![0.0; n_cells],
+            hc: Some(vec![0.0; n_cells]),
+        }
+    }
+
+    pub fn cold_start(n_cells: usize, initial_eta: f64, z_bed: &[f64]) -> MhResult<Self> {
+        if z_bed.len() != n_cells {
             return Err(MhError::InvalidMesh {
-                message: format!(
-                    "地形尺寸{:?}与状态({},{})不匹配",
-                    zb.dim(),
-                    total_ny,
-                    total_nx
-                ),
+                message: format!("底高程数组长度 {} 与单元数 {} 不匹配", z_bed.len(), n_cells),
             });
         }
 
-        let mut h = Array2::zeros((total_ny, total_nx));
-        for j in 0..total_ny {
-            for i in 0..total_nx {
-                h[[j, i]] = (initial_eta - zb[[j, i]]).max(0.0);
-            }
-        }
+        let h: Vec<f64> = z_bed.iter().map(|&z| (initial_eta - z).max(0.0)).collect();
 
-        let state = Self {
-            nx,
-            ny,
-            ng,
+        Ok(Self {
+            n_cells,
             h,
-            u: Array2::zeros((total_ny, total_nx)),
-            v: Array2::zeros((total_ny, total_nx)),
-            c: Array2::zeros((total_ny, total_nx)),
-            zb,
-        };
-
-        if !state.is_standard_layout() {
-            return Err(MhError::InternalError(
-                "State数组必须是C-Contiguous布局".into(),
-            ));
-        }
-
-        Ok(state)
+            hu: vec![0.0; n_cells],
+            hv: vec![0.0; n_cells],
+            hc: None,
+        })
     }
 
-    /// 克隆结构 (用于双缓冲)
     pub fn clone_structure(&self) -> Self {
         Self {
-            nx: self.nx,
-            ny: self.ny,
-            ng: self.ng,
-            h: Array2::zeros(self.h.dim()),
-            u: Array2::zeros(self.u.dim()),
-            v: Array2::zeros(self.v.dim()),
-            c: Array2::zeros(self.c.dim()),
-            zb: Arc::clone(&self.zb),
+            n_cells: self.n_cells,
+            h: vec![0.0; self.n_cells],
+            hu: vec![0.0; self.n_cells],
+            hv: vec![0.0; self.n_cells],
+            hc: self.hc.as_ref().map(|_| vec![0.0; self.n_cells]),
         }
     }
 
-    /// 获取可变切片 (消除UB)
-    pub fn as_slices_mut(&mut self) -> MhResult<StateSlicesMut<'_>> {
-        Ok(StateSlicesMut {
-            h: self
-                .h
-                .as_slice_mut()
-                .ok_or_else(|| MhError::InternalError("h非标准布局".into()))?,
-            u: self
-                .u
-                .as_slice_mut()
-                .ok_or_else(|| MhError::InternalError("u非标准布局".into()))?,
-            v: self
-                .v
-                .as_slice_mut()
-                .ok_or_else(|| MhError::InternalError("v非标准布局".into()))?,
-            c: self
-                .c
-                .as_slice_mut()
-                .ok_or_else(|| MhError::InternalError("c非标准布局".into()))?,
-        })
-    }
-
-    /// 获取只读切片
-    pub fn as_slices(&self) -> MhResult<StateSlices<'_>> {
-        Ok(StateSlices {
-            h: self
-                .h
-                .as_slice()
-                .ok_or_else(|| MhError::InternalError("h非标准布局".into()))?,
-            u: self
-                .u
-                .as_slice()
-                .ok_or_else(|| MhError::InternalError("u非标准布局".into()))?,
-            v: self
-                .v
-                .as_slice()
-                .ok_or_else(|| MhError::InternalError("v非标准布局".into()))?,
-            c: self
-                .c
-                .as_slice()
-                .ok_or_else(|| MhError::InternalError("c非标准布局".into()))?,
-        })
-    }
-
-    /// 获取原始变量 (含地形)
     #[inline(always)]
-    pub fn get_primitive(&self, idx: usize) -> PrimitiveVars {
-        debug_assert!(idx < self.h.len(), "索引越界: {}", idx);
-        unsafe { self.get_primitive_unchecked(idx) }
-    }
-
-    #[inline(always)]
-    pub unsafe fn get_primitive_unchecked(&self, idx: usize) -> PrimitiveVars {
-        let h = *self
-            .h
-            .as_slice_memory_order()
-            .unwrap_unchecked()
-            .get_unchecked(idx);
-        let u = *self
-            .u
-            .as_slice_memory_order()
-            .unwrap_unchecked()
-            .get_unchecked(idx);
-        let v = *self
-            .v
-            .as_slice_memory_order()
-            .unwrap_unchecked()
-            .get_unchecked(idx);
-        let c = *self
-            .c
-            .as_slice_memory_order()
-            .unwrap_unchecked()
-            .get_unchecked(idx);
-        let z = *self
-            .zb
-            .as_slice_memory_order()
-            .unwrap_unchecked()
-            .get_unchecked(idx);
-
-        PrimitiveVars {
-            h,
-            u,
-            v,
-            c,
-            z,
-            eta: h + z,
+    pub fn primitive(&self, idx: usize, eps: f64) -> (f64, f64, f64) {
+        let h = self.h[idx];
+        if h > eps {
+            (h, self.hu[idx] / h, self.hv[idx] / h)
+        } else {
+            (h, 0.0, 0.0)
         }
     }
 
-    /// Ghost单元拷贝
-    #[inline]
-    pub unsafe fn copy_cell_unchecked(&mut self, dst: usize, src: usize) {
-        let slices = self.as_slices_mut().unwrap_unchecked();
-        *slices.h.get_unchecked_mut(dst) = *slices.h.get_unchecked(src);
-        *slices.u.get_unchecked_mut(dst) = *slices.u.get_unchecked(src);
-        *slices.v.get_unchecked_mut(dst) = *slices.v.get_unchecked(src);
-        *slices.c.get_unchecked_mut(dst) = *slices.c.get_unchecked(src);
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn copy_cell(&mut self, dst: usize, src: usize) {
-        assert!(dst < self.h.len() && src < self.h.len());
-        unsafe { self.copy_cell_unchecked(dst, src) }
-    }
-
-    #[cfg(not(debug_assertions))]
     #[inline(always)]
-    pub fn copy_cell(&mut self, dst: usize, src: usize) {
-        unsafe { self.copy_cell_unchecked(dst, src) }
-    }
-
-    /// 网格拓扑
-    #[inline(always)]
-    pub fn total_shape(&self) -> (usize, usize) {
-        (self.ny + 2 * self.ng, self.nx + 2 * self.ng)
+    pub fn velocity(&self, idx: usize, eps: f64) -> DVec2 {
+        let h = self.h[idx];
+        if h > eps {
+            DVec2::new(self.hu[idx] / h, self.hv[idx] / h)
+        } else {
+            DVec2::ZERO
+        }
     }
 
     #[inline(always)]
-    pub fn physical_shape(&self) -> (usize, usize) {
-        (self.ny, self.nx)
+    pub fn water_level(&self, idx: usize, z_bed: f64) -> f64 {
+        self.h[idx] + z_bed
     }
 
     #[inline(always)]
-    pub fn total_cells(&self) -> usize {
-        let (ny, nx) = self.total_shape();
-        ny * nx
+    pub fn set(&mut self, idx: usize, h: f64, hu: f64, hv: f64) {
+        self.h[idx] = h;
+        self.hu[idx] = hu;
+        self.hv[idx] = hv;
     }
 
     #[inline(always)]
-    pub fn flat_index(&self, j: usize, i: usize) -> usize {
-        let (_, nx_total) = self.total_shape();
-        j * nx_total + i
+    pub fn set_from_primitive(&mut self, idx: usize, h: f64, u: f64, v: f64) {
+        self.h[idx] = h;
+        self.hu[idx] = h * u;
+        self.hv[idx] = h * v;
     }
 
-    /// 物理区域视图
-    pub fn physical_h(&self) -> ArrayView2<f64> {
-        let ng = self.ng;
-        self.h.slice(s![ng..ng + self.ny, ng..ng + self.nx])
+    pub fn reset(&mut self) {
+        self.h.iter_mut().for_each(|x| *x = 0.0);
+        self.hu.iter_mut().for_each(|x| *x = 0.0);
+        self.hv.iter_mut().for_each(|x| *x = 0.0);
+        if let Some(ref mut hc) = self.hc {
+            hc.iter_mut().for_each(|x| *x = 0.0);
+        }
     }
 
-    pub fn physical_u(&self) -> ArrayView2<f64> {
-        let ng = self.ng;
-        self.u.slice(s![ng..ng + self.ny, ng..ng + self.nx])
+    pub fn total_mass(&self, cell_areas: &[f64]) -> f64 {
+        self.h.iter().zip(cell_areas).map(|(h, a)| h * a).sum()
     }
 
-    pub fn physical_v(&self) -> ArrayView2<f64> {
-        let ng = self.ng;
-        self.v.slice(s![ng..ng + self.ny, ng..ng + self.nx])
+    pub fn total_momentum(&self, cell_areas: &[f64]) -> DVec2 {
+        let hux: f64 = self.hu.iter().zip(cell_areas).map(|(hu, a)| hu * a).sum();
+        let hvx: f64 = self.hv.iter().zip(cell_areas).map(|(hv, a)| hv * a).sum();
+        DVec2::new(hux, hvx)
     }
 
-    #[inline]
-    pub fn is_standard_layout(&self) -> bool {
-        self.h.is_standard_layout()
-            && self.u.is_standard_layout()
-            && self.v.is_standard_layout()
-            && self.c.is_standard_layout()
-    }
-
-    /// 数值健康检查
     pub fn validate(&self, time: f64) -> MhResult<()> {
-        const MAX_DEPTH: f64 = 15_000.0;
-        const MAX_VELOCITY: f64 = 100.0;
+        self.validate_with_limits(time, 15000.0, 100.0)
+    }
 
-        let h = self.physical_h();
-        let u = self.physical_u();
-        let v = self.physical_v();
-
-        for (idx, ((&val_h, &val_u), &val_v)) in h.iter().zip(u.iter()).zip(v.iter()).enumerate() {
-            if val_h.is_nan() || val_u.is_nan() || val_v.is_nan() {
-                let j = idx / self.nx;
-                let i = idx % self.nx;
+    pub fn validate_with_limits(
+        &self,
+        time: f64,
+        max_depth: f64,
+        max_velocity: f64,
+    ) -> MhResult<()> {
+        for (idx, &h) in self.h.iter().enumerate() {
+            if h.is_nan() || h.is_infinite() {
                 return Err(MhError::NumericalInstability {
-                    message: format!("检测到NaN at ({},{})", j, i),
+                    message: format!("水深异常 (NaN/Inf) 在单元 {}", idx),
                     time,
-                    location: Some((j, i)),
+                    location: None,
                 });
             }
 
-            if val_h.is_infinite() || val_u.is_infinite() || val_v.is_infinite() {
-                let j = idx / self.nx;
-                let i = idx % self.nx;
+            if h < 0.0 {
                 return Err(MhError::NumericalInstability {
-                    message: format!("检测到Inf at ({},{})", j, i),
+                    message: format!("水深为负 {:.6} m 在单元 {}", h, idx),
                     time,
-                    location: Some((j, i)),
+                    location: None,
                 });
             }
 
-            if val_h > MAX_DEPTH {
-                let j = idx / self.nx;
-                let i = idx % self.nx;
+            if h > max_depth {
                 return Err(MhError::NumericalInstability {
-                    message: format!("水深异常: {:.2}m at ({},{})", val_h, j, i),
+                    message: format!("水深过大: {:.2} m 在单元 {}", h, idx),
                     time,
-                    location: Some((j, i)),
+                    location: None,
                 });
             }
 
-            if val_u.abs() > MAX_VELOCITY || val_v.abs() > MAX_VELOCITY {
-                let j = idx / self.nx;
-                let i = idx % self.nx;
+            let hu = self.hu[idx];
+            let hv = self.hv[idx];
+
+            if hu.is_nan() || hu.is_infinite() {
                 return Err(MhError::NumericalInstability {
-                    message: format!("流速异常: ({:.2},{:.2}) m/s at ({},{})", val_u, val_v, j, i),
+                    message: format!("x 方向动量异常 (NaN/Inf) 在单元 {}", idx),
                     time,
-                    location: Some((j, i)),
+                    location: None,
                 });
+            }
+
+            if hv.is_nan() || hv.is_infinite() {
+                return Err(MhError::NumericalInstability {
+                    message: format!("y 方向动量异常 (NaN/Inf) 在单元 {}", idx),
+                    time,
+                    location: None,
+                });
+            }
+
+            if h > 1e-6 {
+                let u = hu / h;
+                let v = hv / h;
+
+                if u.abs() > max_velocity {
+                    return Err(MhError::NumericalInstability {
+                        message: format!("x 方向流速过大: {:.2} m/s 在单元 {}", u, idx),
+                        time,
+                        location: None,
+                    });
+                }
+
+                if v.abs() > max_velocity {
+                    return Err(MhError::NumericalInstability {
+                        message: format!("y 方向流速过大: {:.2} m/s 在单元 {}", v, idx),
+                        time,
+                        location: None,
+                    });
+                }
             }
         }
 
         Ok(())
     }
+}
 
-    pub fn total_water_mass(&self) -> f64 {
-        self.physical_h().iter().sum()
+impl GradientState {
+    pub fn new(n_cells: usize) -> Self {
+        Self {
+            grad_h: vec![DVec2::ZERO; n_cells],
+            grad_hu: vec![DVec2::ZERO; n_cells],
+            grad_hv: vec![DVec2::ZERO; n_cells],
+        }
     }
 
-    pub fn total_momentum(&self) -> (f64, f64) {
-        let hu: f64 = self
-            .physical_u()
-            .iter()
-            .zip(self.physical_h().iter())
-            .map(|(u, h)| u * h)
-            .sum();
-        let hv: f64 = self
-            .physical_v()
-            .iter()
-            .zip(self.physical_h().iter())
-            .map(|(v, h)| v * h)
-            .sum();
-        (hu, hv)
-    }
-
-    pub fn set_all_cells_dry(&mut self) {
-        self.h.fill(0.0);
-        self.u.fill(0.0);
-        self.v.fill(0.0);
-    }
-
-    pub fn zb(&self) -> &Arc<Array2<f64>> {
-        &self.zb
+    pub fn reset(&mut self) {
+        self.grad_h.iter_mut().for_each(|v| *v = DVec2::ZERO);
+        self.grad_hu.iter_mut().for_each(|v| *v = DVec2::ZERO);
+        self.grad_hv.iter_mut().for_each(|v| *v = DVec2::ZERO);
     }
 }
 
@@ -351,37 +330,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_arc_zb_zero_copy() {
-        let zb = Arc::new(Array2::zeros((6, 6)));
-        let state1 = State::cold_start(4, 4, 1, 0.0, Arc::clone(&zb)).unwrap();
-        let state2 = state1.clone_structure();
-
-        assert_eq!(Arc::strong_count(&zb), 3);
+    fn test_conserved_state_creation() {
+        let state = ConservedState::new(100);
+        assert_eq!(state.n_cells, 100);
+        assert_eq!(state.h.len(), 100);
+        assert!(state.hc.is_none());
     }
 
     #[test]
-    fn test_get_primitive_with_zb() {
-        let zb = Arc::new(Array2::from_elem((6, 6), 5.0));
-        let state = State::cold_start(4, 4, 1, 10.0, zb).unwrap();
+    fn test_cold_start() {
+        let z_bed = vec![-10.0, -5.0, 0.0, 5.0];
+        let state = ConservedState::cold_start(4, 0.0, &z_bed).unwrap();
 
-        let idx = state.flat_index(2, 2);
-        let prim = state.get_primitive(idx);
-
-        assert_eq!(prim.z, 5.0);
-        assert_eq!(prim.h, 5.0);
-        assert_eq!(prim.eta, 10.0);
+        assert_eq!(state.h[0], 10.0);
+        assert_eq!(state.h[1], 5.0);
+        assert_eq!(state.h[2], 0.0);
+        assert_eq!(state.h[3], 0.0);
     }
 
     #[test]
-    fn test_slices_mut_no_ub() {
-        let zb = Arc::new(Array2::zeros((6, 6)));
-        let mut state = State::cold_start(4, 4, 1, 0.0, zb).unwrap();
+    fn test_primitive_extraction() {
+        let mut state = ConservedState::new(1);
+        state.h[0] = 2.0;
+        state.hu[0] = 4.0;
+        state.hv[0] = 6.0;
 
-        let slices = state.as_slices_mut().unwrap();
-        slices.h[0] = 1.0;
-        slices.u[0] = 2.0;
+        let (h, u, v) = state.primitive(0, 1e-6);
+        assert_eq!(h, 2.0);
+        assert_eq!(u, 2.0);
+        assert_eq!(v, 3.0);
+    }
 
-        assert_eq!(state.h.as_slice().unwrap()[0], 1.0);
-        assert_eq!(state.u.as_slice().unwrap()[0], 2.0);
+    #[test]
+    fn test_flux_operations() {
+        let f1 = Flux::new(1.0, 2.0, 3.0);
+        let f2 = Flux::new(0.5, 1.0, 1.5);
+
+        let sum = f1 + f2;
+        assert_eq!(sum.mass, 1.5);
+
+        let scaled = f1 * 2.0;
+        assert_eq!(scaled.mass, 2.0);
+
+        let scaled2 = 2.0 * f1;
+        assert_eq!(scaled2.mass, 2.0);
+    }
+
+    #[test]
+    fn test_total_momentum() {
+        let mut state = ConservedState::new(2);
+        state.hu[0] = 1.0;
+        state.hv[0] = 2.0;
+        state.hu[1] = 3.0;
+        state.hv[1] = 4.0;
+
+        let areas = vec![1.0, 1.0];
+        let mom = state.total_momentum(&areas);
+
+        assert_eq!(mom.x, 4.0);
+        assert_eq!(mom.y, 6.0);
+    }
+
+    #[test]
+    fn test_validation_nan() {
+        let mut state = ConservedState::new(1);
+        state.h[0] = f64::NAN;
+
+        assert!(state.validate(0.0).is_err());
+    }
+
+    #[test]
+    fn test_validation_negative_depth() {
+        let mut state = ConservedState::new(1);
+        state.h[0] = -1.0;
+
+        assert!(state.validate(0.0).is_err());
     }
 }

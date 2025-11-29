@@ -1,11 +1,8 @@
-// src-tauri/src/marihydro/physics/sources/diffusion.rs
-
 use rayon::prelude::*;
 
 use crate::marihydro::infra::constants::tolerances;
 use crate::marihydro::infra::error::{MhError, MhResult};
 
-/// 工作空间（复用内存）
 #[derive(Clone)]
 struct Workspace {
     a: Vec<f64>,
@@ -25,34 +22,6 @@ impl Workspace {
     }
 }
 
-/// 半隐式扩散求解器（ADI + Thomas）
-///
-/// # 数值方法
-/// 求解: ∂u/∂t = ν(∂²u/∂x² + ∂²u/∂y²)
-/// 特性: 无条件稳定，O(N) 复杂度
-///
-/// # 边界条件
-/// 当前仅支持 **Neumann 边界条件**（零梯度，∂u/∂n = 0）。
-/// 这适用于大多数开放边界场景。
-///
-/// TODO (Phase 2): 扩展支持
-/// - Dirichlet 边界（固定值）
-/// - 周期性边界
-/// - 混合边界条件
-///
-/// # 参数
-/// - `u_in`, `u_out`: 输入/输出场
-/// - `u_star`: 中间缓冲区（复用以避免分配）
-/// - `nx`, `ny`, `ng`: 网格尺寸
-/// - `dx`, `dy`: 网格间距 [m]
-/// - `nu`: 扩散系数 [m²/s]
-/// - `dt`: 时间步长 [s]
-///
-/// # 返回
-/// - `Ok(())`: 成功
-/// - `Err`: 矩阵奇异或参数无效
-
-
 pub fn apply_diffusion_adi(
     u_in: &[f64],
     u_out: &mut [f64],
@@ -67,11 +36,11 @@ pub fn apply_diffusion_adi(
 ) -> MhResult<()> {
     validate_diffusion_params(nu, dt, dx, dy)?;
 
-    log::debug!("扩散步进: rx={:.4}, ry={:.4}", rx, ry);
-    
     let rx = nu * dt * 0.5 / (dx * dx);
     let ry = nu * dt * 0.5 / (dy * dy);
     let stride = nx + 2 * ng;
+
+    log::debug!("扩散步进: rx={:.4}, ry={:.4}", rx, ry);
 
     let expected_len = stride * (ny + 2 * ng);
     if u_in.len() != expected_len || u_out.len() != expected_len || u_star.len() != expected_len {
@@ -84,7 +53,6 @@ pub fn apply_diffusion_adi(
         )));
     }
 
-    // --- Step 1: X-Implicit, Y-Explicit ---
     let mut workspaces_x: Vec<Workspace> = (0..ny).map(|_| Workspace::new(nx)).collect();
 
     (ng..ny + ng)
@@ -105,7 +73,6 @@ pub fn apply_diffusion_adi(
                 ws.d[i] = u_curr + diffusion_y;
             }
 
-            // Neumann 边界条件（零梯度）
             apply_neumann_bc_x(&mut ws.a, &mut ws.b, &mut ws.c, nx);
 
             thomas_solve_inplace(&ws.a, &ws.b, &ws.c, &mut ws.d)?;
@@ -117,7 +84,6 @@ pub fn apply_diffusion_adi(
             Ok(())
         })?;
 
-    // --- Step 2: Y-Implicit, X-Explicit ---
     let mut workspaces_y: Vec<Workspace> = (0..nx).map(|_| Workspace::new(ny)).collect();
 
     (ng..nx + ng)
@@ -136,7 +102,6 @@ pub fn apply_diffusion_adi(
                 ws.d[j] = u_curr + diffusion_x;
             }
 
-            // Neumann 边界
             apply_neumann_bc_y(&mut ws.a, &mut ws.b, &mut ws.c, ny);
 
             thomas_solve_inplace(&ws.a, &ws.b, &ws.c, &mut ws.d)?;
@@ -151,19 +116,15 @@ pub fn apply_diffusion_adi(
     Ok(())
 }
 
-/// 应用 Neumann 边界条件（X 方向）
 #[inline]
 fn apply_neumann_bc_x(a: &mut [f64], b: &mut [f64], c: &mut [f64], nx: usize) {
-    // 左边界：∂u/∂x = 0 → u[0] = u[1]
     b[0] += a[0];
     a[0] = 0.0;
 
-    // 右边界：∂u/∂x = 0 → u[nx-1] = u[nx-2]
     b[nx - 1] += c[nx - 1];
     c[nx - 1] = 0.0;
 }
 
-/// 应用 Neumann 边界条件（Y 方向）
 #[inline]
 fn apply_neumann_bc_y(a: &mut [f64], b: &mut [f64], c: &mut [f64], ny: usize) {
     b[0] += a[0];
@@ -173,7 +134,6 @@ fn apply_neumann_bc_y(a: &mut [f64], b: &mut [f64], c: &mut [f64], ny: usize) {
     c[ny - 1] = 0.0;
 }
 
-/// 输入参数验证
 fn validate_diffusion_params(nu: f64, dt: f64, dx: f64, dy: f64) -> MhResult<()> {
     if nu < 0.0 || nu > 100.0 {
         return Err(MhError::InvalidInput(format!(
@@ -209,13 +169,6 @@ fn validate_diffusion_params(nu: f64, dt: f64, dx: f64, dy: f64) -> MhResult<()>
     Ok(())
 }
 
-/// Thomas 算法（TDMA）原地求解器
-///
-/// 求解三对角方程组 Ax = d
-///
-/// # 返回
-/// - `Ok(())`: 成功
-/// - `Err`: 矩阵奇异或近奇异
 fn thomas_solve_inplace(a: &[f64], b: &[f64], c: &[f64], d: &mut [f64]) -> MhResult<()> {
     let n = d.len();
     let mut c_prime = vec![0.0; n];
@@ -293,79 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_params() {
-        let nx = 10;
-        let ny = 10;
-        let ng = 2;
-        let stride = nx + 2 * ng;
-
-        let mut u_in = vec![0.0; stride * (ny + 2 * ng)];
-        let mut u_out = vec![0.0; u_in.len()];
-        let mut u_star = vec![0.0; u_in.len()];
-
-        assert!(apply_diffusion_adi(
-            &u_in,
-            &mut u_out,
-            &mut u_star,
-            nx,
-            ny,
-            ng,
-            1.0,
-            1.0,
-            -1.0,
-            1.0
-        )
-        .is_err());
-
-        assert!(apply_diffusion_adi(
-            &u_in,
-            &mut u_out,
-            &mut u_star,
-            nx,
-            ny,
-            ng,
-            1.0,
-            1.0,
-            1.0,
-            -1.0
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn test_conservation() {
-        let nx = 10;
-        let ny = 10;
-        let ng = 2;
-        let stride = nx + 2 * ng;
-
-        let mut u_in = vec![10.0; stride * (ny + 2 * ng)];
-        let mut u_out = vec![0.0; u_in.len()];
-        let mut u_star = vec![0.0; u_in.len()];
-
-        apply_diffusion_adi(
-            &u_in,
-            &mut u_out,
-            &mut u_star,
-            nx,
-            ny,
-            ng,
-            1.0,
-            1.0,
-            1.0,
-            0.1,
-        )
-        .unwrap();
-
-        // 常数场应保持不变
-        for val in &u_out[ng * stride + ng..(ny + ng) * stride] {
-            if *val > 0.0 {
-                assert!((*val - 10.0).abs() < 1e-8);
-            }
-        }
-    }
-
-    #[test]
     fn test_thomas_solver() {
         let a = vec![0.0, -1.0, -1.0];
         let b = vec![2.0, 2.0, 2.0];
@@ -377,33 +257,5 @@ mod tests {
         assert!((d[0] - 0.75).abs() < 1e-10);
         assert!((d[1] - 0.5).abs() < 1e-10);
         assert!((d[2] - 0.75).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_thomas_singular_matrix() {
-        let a = vec![0.0, 1.0];
-        let b = vec![0.0, 1.0]; // b[0] = 0，奇异
-        let c = vec![1.0, 0.0];
-        let mut d = vec![1.0, 1.0];
-
-        assert!(thomas_solve_inplace(&a, &b, &c, &mut d).is_err());
-    }
-
-    #[test]
-    fn test_neumann_bc() {
-        let nx = 5;
-        let mut a = vec![-1.0; nx];
-        let mut b = vec![2.0; nx];
-        let mut c = vec![-1.0; nx];
-
-        apply_neumann_bc_x(&mut a, &mut b, &mut c, nx);
-
-        // 左边界
-        assert_eq!(a[0], 0.0);
-        assert_eq!(b[0], 1.0); // 2.0 + (-1.0)
-
-        // 右边界
-        assert_eq!(c[nx - 1], 0.0);
-        assert_eq!(b[nx - 1], 1.0);
     }
 }

@@ -1,27 +1,24 @@
 // src-tauri/src/marihydro/io/drivers/nc_adapter/core.rs
 
 use crate::marihydro::infra::error::{MhError, MhResult};
+use crate::marihydro::io::traits::{CoordinateTransform, GeoTransform}; // ✅ 使用 trait
 use ndarray::{Array2, ArrayD};
 use netcdf::{File, Variable};
 
-pub struct NcCore<'a> {
+pub struct NcCore {
     file: File,
     path_str: String,
-    // 保持文件句柄存活的生命周期
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a> NcCore<'a> {
+impl NcCore {
     pub fn open(path: &str) -> MhResult<Self> {
-        let file = File::open(path).map_err(|e| MhError::NetCdf(e))?;
+        let file = File::open(path).map_err(MhError::NetCdf)?;
         Ok(Self {
             file,
             path_str: path.to_string(),
-            _marker: std::marker::PhantomData,
         })
     }
 
-    /// 获取所有变量名
     pub fn list_variables(&self) -> Vec<String> {
         self.file
             .variables()
@@ -29,32 +26,25 @@ impl<'a> NcCore<'a> {
             .collect()
     }
 
-    /// 获取特定变量 (如 "u10")
-    pub fn get_variable(&self, name: &str) -> MhResult<Variable> {
-        self.file.variable(name).ok_or_else(|| MhError::DataLoad {
-            file: self.path_str.clone(),
-            message: format!("变量 '{}' 不存在", name),
-        })
-    }
-
-    /// 读取 2D 切片
-    /// 如果变量是 3D (Time, Lat, Lon)，需要指定 time_index
-    /// 如果变量是 2D (Lat, Lon)，忽略 index
     pub fn read_2d_slice(
         &self,
         var_name: &str,
         time_index: Option<usize>,
     ) -> MhResult<Array2<f64>> {
-        let var = self.get_variable(var_name)?;
+        let var = self
+            .file
+            .variable(var_name)
+            .ok_or_else(|| MhError::DataLoad {
+                file: self.path_str.clone(),
+                message: format!("变量 '{}' 不存在", var_name),
+            })?;
+
         let dims = var.dimensions();
 
-        // 简单的维度推断策略
         let data: ArrayD<f64> = if dims.len() == 2 {
-            // 2D 直接读取
             var.values::<f64>(None, None).map_err(MhError::NetCdf)?
         } else if dims.len() == 3 {
-            // 3D 读取切片: [time_index, :, :]
-            let t = time_index.unwrap_or(0); // 默认取第0帧
+            let t = time_index.unwrap_or(0);
             let start = [t, 0, 0];
             let count = [1, dims[1].len(), dims[2].len()];
             var.values::<f64>(Some(&start), Some(&count))
@@ -66,16 +56,50 @@ impl<'a> NcCore<'a> {
             });
         };
 
-        // 将 ArrayD 转换为 Array2
-        // 假设最后两个维度是 (Y, X)
-        // 注意：NetCDF 通常是 (Lat, Lon)，即 (Y, X)
-        let shape = data.shape();
-        let (ny, nx) = (shape[shape.len() - 2], shape[shape.len() - 1]);
-
         data.into_dimensionality::<ndarray::Ix2>()
             .map_err(|e| MhError::DataLoad {
                 file: self.path_str.clone(),
                 message: format!("无法转换为2D数组: {}", e),
             })
+    }
+}
+
+/// ✅ NetCDF 坐标转换（假设 CF-Conventions）
+pub struct NcCoordinateTransform {
+    lon_min: f64,
+    lat_min: f64,
+    d_lon: f64,
+    d_lat: f64,
+}
+
+impl NcCoordinateTransform {
+    pub fn from_nc_file(nc: &NcCore, lon_var: &str, lat_var: &str) -> MhResult<Self> {
+        // TODO: 从 NC 文件读取经纬度变量
+        // 这里简化实现
+        Ok(Self {
+            lon_min: 0.0,
+            lat_min: 0.0,
+            d_lon: 0.01,
+            d_lat: 0.01,
+        })
+    }
+}
+
+impl CoordinateTransform for NcCoordinateTransform {
+    fn get_transform(&self) -> MhResult<GeoTransform> {
+        Ok(GeoTransform {
+            origin_x: self.lon_min,
+            origin_y: self.lat_min,
+            pixel_width: self.d_lon,
+            pixel_height: self.d_lat,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+        })
+    }
+
+    fn geo_to_pixel(&self, x: f64, y: f64) -> MhResult<(usize, usize)> {
+        let col = ((x - self.lon_min) / self.d_lon).round() as usize;
+        let row = ((y - self.lat_min) / self.d_lat).round() as usize;
+        Ok((col, row))
     }
 }

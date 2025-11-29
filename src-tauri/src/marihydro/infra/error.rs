@@ -1,48 +1,115 @@
-// src-tauri/src/marihydro/io/loaders/raster.rs
+use std::path::PathBuf;
+use thiserror::Error;
 
-use super::RasterLoader;
-use crate::marihydro::infra::error::{MhError, MhResult};
-use ndarray::Array2;
-use std::path::Path;
+pub type MhResult<T> = Result<T, MhError>;
 
-/// 标准栅格加载器
-pub struct StandardRasterLoader;
+#[derive(Debug, Error)]
+pub enum MhError {
+    #[error("IO 错误 ({context}): {source}")]
+    Io {
+        context: String,
+        #[source]
+        source: std::io::Error,
+    },
 
-impl RasterLoader for StandardRasterLoader {
-    fn load_array(
-        &self,
-        file_path: &str,
-        target_shape: (usize, usize),
-        _target_bounds: Option<(f64, f64, f64, f64)>,
-    ) -> MhResult<Array2<f64>> {
-        let path = Path::new(file_path);
+    #[error("配置错误: {0}")]
+    Config(String),
 
-        if !path.exists() {
-            return Err(MhError::Io {
-                context: format!("文件不存在: {}", file_path),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("文件不存在: {}", file_path),
-                ),
-            });
+    #[error("数据加载失败 ({file}): {message}")]
+    DataLoad { file: String, message: String },
+
+    #[error("投影错误: {0}")]
+    Projection(String),
+
+    #[error("时区错误: {0}")]
+    Timezone(String),
+
+    #[error("网格错误: {message}")]
+    InvalidMesh { message: String },
+
+    #[error("边界条件错误: {message}")]
+    BoundaryCondition { message: String },
+
+    #[error("数值不稳定 (t={time:.4}s): {message}")]
+    NumericalInstability {
+        message: String,
+        time: f64,
+        location: Option<(f64, f64)>,
+    },
+
+    #[error("验证失败: {0}")]
+    Validation(String),
+
+    #[error("未实现: {0}")]
+    NotImplemented(String),
+
+    #[error("工作流错误: {0}")]
+    Workflow(String),
+
+    #[error("输入参数错误: {0}")]
+    InvalidInput(String),
+
+    #[error("运行时错误: {0}")]
+    Runtime(String),
+
+    #[error("内部错误: {0}")]
+    InternalError(String),
+
+    #[error("NetCDF 错误: {0}")]
+    NetCdf(#[from] netcdf::error::Error),
+}
+
+impl MhError {
+    pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::Io {
+            context: context.into(),
+            source,
         }
+    }
 
-        // TODO: [工程化接入点] 集成 gdal crate
-        // 目前阶段为了不破坏编译环境 (GDAL 需要系统库支持)，
-        // 我们暂时返回一个 Mock 的数据，或者简单的 ASC 读取器。
+    pub fn io_not_found(path: &str) -> Self {
+        Self::Io {
+            context: format!("文件不存在: {}", path),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("文件不存在: {}", path),
+            ),
+        }
+    }
 
-        // 真正的逻辑应该是：
-        // 1. let dataset = gdal::Dataset::open(path)?;
-        // 2. dataset.rasterband(1)?.read_as_array(...)
-        // 3. 执行重采样算法 (Bilinear/Cubic) 匹配 target_shape
+    pub fn config(msg: impl Into<String>) -> Self {
+        Self::Config(msg.into())
+    }
 
-        println!("(WARN) 使用模拟加载器读取: {}", file_path);
+    pub fn invalid_mesh(msg: impl Into<String>) -> Self {
+        Self::InvalidMesh {
+            message: msg.into(),
+        }
+    }
 
-        // 模拟返回一个平坦地形 (用于测试)
-        let (nx, ny) = target_shape;
-        let array = Array2::from_elem((ny, nx), -10.0); // 水深 10m
+    pub fn numerical_instability(msg: impl Into<String>, time: f64) -> Self {
+        Self::NumericalInstability {
+            message: msg.into(),
+            time,
+            location: None,
+        }
+    }
 
-        Ok(array)
+    pub fn numerical_instability_at(msg: impl Into<String>, time: f64, x: f64, y: f64) -> Self {
+        Self::NumericalInstability {
+            message: msg.into(),
+            time,
+            location: Some((x, y)),
+        }
+    }
+}
+
+impl From<std::io::Error> for MhError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io {
+            context: "IO 操作".into(),
+            source: e,
+        }
     }
 }
 
@@ -50,142 +117,24 @@ impl RasterLoader for StandardRasterLoader {
 mod tests {
     use super::*;
 
-    struct MockRasterLoader {
-        shape: (usize, usize),
-        fill_value: f64,
-        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
-        should_fail: bool,
-    }
-
-    struct MockRasterLoaderBuilder {
-        shape: (usize, usize),
-        fill_value: f64,
-        value_generator: Option<Box<dyn Fn(usize, usize, usize, usize) -> f64>>,
-        should_fail: bool,
-    }
-
-    impl MockRasterLoader {
-        fn new() -> MockRasterLoaderBuilder {
-            MockRasterLoaderBuilder {
-                shape: (10, 10),
-                fill_value: 0.0,
-                value_generator: None,
-                should_fail: false,
-            }
-        }
-    }
-
-    impl MockRasterLoaderBuilder {
-        fn shape(mut self, shape: (usize, usize)) -> Self {
-            self.shape = shape;
-            self
-        }
-
-        fn fill_value(mut self, value: f64) -> Self {
-            self.fill_value = value;
-            self
-        }
-
-        fn with_generator<F>(mut self, func: F) -> Self
-        where
-            F: Fn(usize, usize, usize, usize) -> f64 + 'static,
-        {
-            self.value_generator = Some(Box::new(func));
-            self
-        }
-
-        fn should_fail(mut self, fail: bool) -> Self {
-            self.should_fail = fail;
-            self
-        }
-
-        fn build(self) -> MockRasterLoader {
-            MockRasterLoader {
-                shape: self.shape,
-                fill_value: self.fill_value,
-                value_generator: self.value_generator,
-                should_fail: self.should_fail,
-            }
-        }
-    }
-
-    impl RasterLoader for MockRasterLoader {
-        fn load_array(
-            &self,
-            _file_path: &str,
-            _target_shape: (usize, usize),
-            _target_bounds: Option<(f64, f64, f64, f64)>,
-        ) -> MhResult<Array2<f64>> {
-            if self.should_fail {
-                return Err(MhError::Io {
-                    context: "Mock I/O error".to_string(),
-                    source: std::io::Error::new(std::io::ErrorKind::Other, "test error"),
-                });
-            }
-
-            let (ny, nx) = self.shape;
-            let mut array = Array2::from_elem((ny, nx), self.fill_value);
-
-            if let Some(ref func) = self.value_generator {
-                for j in 0..ny {
-                    for i in 0..nx {
-                        array[[j, i]] = func(i, j, nx, ny);
-                    }
-                }
-            }
-
-            Ok(array)
-        }
+    #[test]
+    fn test_error_display() {
+        let err = MhError::config("测试配置错误");
+        assert!(err.to_string().contains("配置错误"));
     }
 
     #[test]
-    fn test_mock_loader_returns_configured_shape() {
-        let loader = MockRasterLoader::new()
-            .shape((50, 20)) // ny=50, nx=20
-            .fill_value(-10.0)
-            .build();
-
-        let result = loader.load_array("dummy_path.tif", (20, 50), None).unwrap();
-
-        assert_eq!(result.dim(), (50, 20));
-        assert_eq!(result[[0, 0]], -10.0);
-        assert_eq!(result[[49, 19]], -10.0);
+    fn test_numerical_instability() {
+        let err = MhError::numerical_instability("水深异常", 10.5);
+        let msg = err.to_string();
+        assert!(msg.contains("10.5"));
+        assert!(msg.contains("水深异常"));
     }
 
     #[test]
-    fn test_mock_loader_with_variable_shape() {
-        let shapes = vec![(10, 10), (100, 50), (1, 1)];
-
-        for (ny, nx) in shapes {
-            let loader = MockRasterLoader::new().shape((ny, nx)).build();
-
-            let result = loader.load_array("test.tif", (nx, ny), None).unwrap();
-            assert_eq!(result.dim(), (ny, nx));
-        }
-    }
-
-    #[test]
-    fn test_mock_loader_error_handling() {
-        let loader = MockRasterLoader::new().should_fail(true).build();
-
-        let result = loader.load_array("test.tif", (10, 10), None);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), MhError::Io { .. }));
-    }
-
-    #[test]
-    fn test_mock_loader_with_gradient_field() {
-        let loader = MockRasterLoader::new()
-            .shape((100, 100))
-            .with_generator(|i, _j, nx, _ny| {
-                let denom = nx.saturating_sub(1).max(1) as f64;
-                -10.0 + 20.0 * (i as f64 / denom)
-            })
-            .build();
-
-        let result = loader.load_array("gradient.tif", (100, 100), None).unwrap();
-
-        assert!(result[[0, 0]] < result[[0, 50]]);
-        assert!(result[[0, 50]] < result[[0, 99]]);
+    fn test_io_error_conversion() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
+        let mh_err: MhError = io_err.into();
+        assert!(matches!(mh_err, MhError::Io { .. }));
     }
 }
