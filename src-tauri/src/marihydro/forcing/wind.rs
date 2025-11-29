@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::mem;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,7 +20,7 @@ use crate::marihydro::io::drivers::nc_adapter::{
     time::{calculate_utc_time, parse_cf_time_units},
 };
 use crate::marihydro::io::drivers::nc_loader::NetCdfLoader;
-use crate::marihydro::io::traits::RasterLoader;
+use crate::marihydro::io::traits::RasterDriver;
 
 const MIN_TIME_STEPS: usize = 2;
 const TIME_EPSILON: f64 = 1e-6;
@@ -185,10 +186,10 @@ impl WindProvider {
         );
 
         let loader = NetCdfLoader;
-        let src_meta = loader.read_metadata(&source.file_path)?;
+        let src_meta = loader.read_metadata(Path::new(&source.file_path))?;
         let src_dims = (src_meta.width, src_meta.height);
 
-        let target_points: Vec<_> = mesh.cell_center.iter().map(|c| *c).collect();
+        let target_points: Vec<_> = mesh.cell_center.iter().copied().collect();
         let interpolator =
             SpatialInterpolator::new_from_points(&target_points, &manifest.crs_wkt, &src_meta)?;
 
@@ -226,10 +227,12 @@ impl WindProvider {
             src_dims,
         };
 
-        rayon::join(
+        let (r1, r2) = rayon::join(
             || Self::load_into_buffer(&context, start_idx, &mut frame_curr),
             || Self::load_into_buffer(&context, start_idx + 1, &mut frame_next),
         );
+        r1?;
+        r2?;
 
         info!(
             "[WindProvider] 就绪 (预加载耗时 {} ms)",
@@ -466,8 +469,8 @@ impl WindProvider {
 
         target.reset();
 
-        let raw_u_flat: Vec<f64> = raw_u.into_iter().collect();
-        let raw_v_flat: Vec<f64> = raw_v.into_iter().collect();
+        let raw_u_flat = Self::array2_to_vec(raw_u);
+        let raw_v_flat = Self::array2_to_vec(raw_v);
 
         context.interpolator.interpolate_vector_field(
             &raw_u_flat,
@@ -481,6 +484,15 @@ impl WindProvider {
             .stats
             .record_load(load_start.elapsed().as_millis() as u64);
         Ok(())
+    }
+
+    #[inline]
+    fn array2_to_vec(arr: ndarray::Array2<f64>) -> Vec<f64> {
+        if arr.is_standard_layout() {
+            arr.into_raw_vec()
+        } else {
+            arr.iter().copied().collect()
+        }
     }
 
     fn apply_transform(data: &mut ndarray::Array2<f64>, scale: f64, offset: f64) -> usize {

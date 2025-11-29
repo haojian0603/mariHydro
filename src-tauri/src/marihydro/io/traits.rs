@@ -93,9 +93,9 @@ impl RasterMetadata {
 }
 
 pub trait RasterDriver: Send + Sync {
-    fn read_metadata(&self, path: &str) -> MhResult<RasterMetadata>;
-    fn read_band(&self, path: &str, band: usize) -> MhResult<Vec<f64>>;
-    fn read_band_to_slice(&self, path: &str, band: usize, output: &mut [f64]) -> MhResult<()>;
+    fn read_metadata(&self, path: &Path) -> MhResult<RasterMetadata>;
+    fn read_band(&self, path: &Path, band: usize) -> MhResult<Vec<f64>>;
+    fn read_band_to_slice(&self, path: &Path, band: usize, output: &mut [f64]) -> MhResult<()>;
 }
 
 pub trait MeshLoader: Send + Sync {

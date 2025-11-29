@@ -1,5 +1,4 @@
-//! 守恒量场
-
+// src-tauri\src\marihydro\domain\state.rs
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
