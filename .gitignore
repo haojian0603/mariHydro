@@ -1,6 +1,10 @@
 codelog/
 target/
 **/*.rs.bk
+*.md
+*.txt
+优化代码补丁/
+*.py
 
 ## VS Code
 .vscode/

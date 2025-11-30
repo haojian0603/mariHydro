@@ -53,13 +53,14 @@ approx = "0.5"
 tempfile = "3.10"
 test-case = "3.3"
 
-[[bench]]
-name = "physics_bench"
-harness = false
+# TODO: 添加 bench 目录后启用
+# [[bench]]
+# name = "physics_bench"
+# harness = false
 
-[[bench]]
-name = "gradient_bench"
-harness = false
+# [[bench]]
+# name = "gradient_bench"
+# harness = false
 
 [profile.release]
 lto = true
