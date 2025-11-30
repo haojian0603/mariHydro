@@ -6,8 +6,7 @@ use std::collections::HashMap;
 
 use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::marihydro::core::error::{MhError, MhResult};
-use crate::marihydro::core::types::NumericalParams;
-use crate::marihydro::domain::mesh::indices::{CellId, FaceId};
+use crate::marihydro::core::types::{CellId, FaceId, NumericalParams};
 
 /// 边界面信息
 #[derive(Debug, Clone, Copy)]

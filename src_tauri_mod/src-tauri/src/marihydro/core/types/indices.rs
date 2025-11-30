@@ -8,12 +8,6 @@
 //! 1. 类型安全：编译期区分 Cell/Face/Node 索引
 //! 2. 零开销：与 usize 完全相同的内存布局
 //! 3. 安全转换：提供安全的切片重解释函数
-//!
-//! # 与 domain/mesh/indices.rs 的关系
-//!
-//! 本模块是新的统一索引类型定义。`domain/mesh/indices.rs` 中的
-//! `CellId`、`FaceId`、`NodeId` 已被标记为 deprecated，
-//! 建议使用本模块中的类型。
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

@@ -93,35 +93,6 @@ pub trait GradientLimiter: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
-/// 旧的 NoLimiter（兼容性）
-pub struct OldNoLimiter;
-
-impl GradientLimiter for OldNoLimiter {
-    fn limit<M: MeshAccess>(
-        &self,
-        _: &[f64],
-        _: &mut ScalarGradientStorage,
-        _: &M,
-    ) -> MhResult<()> {
-        Ok(())
-    }
-
-    fn compute_limiters<M: MeshAccess>(
-        &self,
-        _: &[f64],
-        _: &ScalarGradientStorage,
-        mesh: &M,
-        output: &mut [f64],
-    ) -> MhResult<()> {
-        output[..mesh.n_cells()].fill(1.0);
-        Ok(())
-    }
-
-    fn name(&self) -> &'static str {
-        "None"
-    }
-}
-
 /// 创建限制器实例
 pub fn create_limiter(limiter_type: LimiterType) -> Box<dyn Limiter> {
     match limiter_type {
