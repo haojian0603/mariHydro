@@ -1,6 +1,30 @@
 // src-tauri/src/marihydro/physics/schemes/dry_wet.rs
 
-//! 统一干湿处理 - 消除 DUP-003
+//! 统一干湿处理（已废弃）
+//!
+//! ⚠️ **此模块已废弃**，请使用 `wetting_drying` 模块替代。
+//!
+//! 迁移指南：
+//! ```rust,ignore
+//! // 旧代码
+//! use crate::marihydro::physics::schemes::dry_wet::{DryWetHandler, WetDryState};
+//!
+//! // 新代码
+//! use crate::marihydro::physics::schemes::wetting_drying::{
+//!     WettingDryingHandler, WetState, MomentumCorrector
+//! };
+//! ```
+//!
+//! 新模块提供：
+//! - 更完整的干湿状态处理
+//! - 多种过渡函数选择
+//! - 动量守恒修正
+//! - 并行批量处理支持
+
+#![deprecated(
+    since = "0.3.0",
+    note = "请使用 physics::schemes::wetting_drying 模块替代"
+)]
 
 use crate::marihydro::core::types::NumericalParams;
 use glam::DVec2;

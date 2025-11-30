@@ -2,7 +2,15 @@
 
 //! 网格索引类型
 //!
-//! 提供类型安全的网格索引，防止混淆单元、面、节点索引。
+//! **已废弃**: 此模块已迁移至 `core/types/indices.rs`。
+//! 请使用 `crate::core::types::{CellIndex, FaceIndex, NodeIndex, CellId, FaceId, NodeId}` 替代。
+//!
+//! 为保持向后兼容性，本模块仍然可用，但建议迁移到新位置。
+
+#![deprecated(
+    since = "0.3.0",
+    note = "此模块已迁移至 core/types/indices.rs，请使用 crate::core::types::{CellId, FaceId, NodeId} 替代"
+)]
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

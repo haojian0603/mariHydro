@@ -1,16 +1,24 @@
 // src-tauri/src/marihydro/physics/sources/mod.rs
 
+//! 源项模块
+//!
+//! 包含各种物理源项的实现：摩擦、扩散、科氏力、大气压等。
+
 pub mod atmosphere;
 pub mod baroclinic;
 pub mod coriolis;
 pub mod diffusion;
 pub mod dry_wet;
 pub mod friction;
+pub mod implicit;
 pub mod inflow;
 pub mod tracer_transport;
 pub mod turbulence;
 pub mod turbulence_ke;
 pub mod vegetation;
+
+// 基础模块（包含 SourceTerm trait 实现）
+pub mod base;
 
 pub use atmosphere::{
     compute_pressure_gradient, compute_wind_acceleration, compute_wind_acceleration_field,
@@ -46,3 +54,10 @@ pub use vegetation::{
     VegetationDrag, VegetationField, VegetationProperties, VegetationType,
     equivalent_manning, vegetation_turbulence_production,
 };
+
+// 新的隐式处理导出
+pub use implicit::{
+    ChezyDamping, DampingCoefficient, ImplicitConfig, ImplicitDiffusion,
+    ImplicitMethod, ImplicitMomentumDecay, ManningDamping,
+};
+

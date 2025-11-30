@@ -79,7 +79,9 @@ impl TracerProperties {
         }
     }
 
-    /// 创建悬浮泥沙属性
+    /// 创建悬浮泥沙属性（使用 Stokes 公式）
+    /// 
+    /// 适用于细颗粒（d < 0.1mm）
     pub fn suspended_sediment(d50_mm: f64) -> Self {
         // 使用 Stokes 沉降公式估算沉降速度
         // ws = (ρs - ρw) * g * d² / (18 * μ)
@@ -99,6 +101,56 @@ impl TracerProperties {
             ..Default::default()
         }
     }
+    
+    /// 创建悬浮泥沙属性（使用 Ferguson-Church 公式）
+    /// 
+    /// Ferguson, R.I. and Church, M. (2004). A simple universal equation for grain settling velocity.
+    /// Journal of Sedimentary Research, 74(6), 933-937.
+    /// 
+    /// 适用于全粒径范围（粉砂到卵石），自动处理层流到紊流过渡
+    /// 
+    /// # 参数
+    /// - `d50_m`: 中值粒径 [m]
+    /// - `rho_s`: 泥沙密度 [kg/m³]，默认2650（石英）
+    /// - `rho_w`: 水密度 [kg/m³]，默认1000（淡水）
+    /// - `nu`: 运动粘度 [m²/s]，默认1e-6（20°C淡水）
+    pub fn suspended_sediment_ferguson_church(
+        d50_m: f64,
+        rho_s: Option<f64>,
+        rho_w: Option<f64>,
+        nu: Option<f64>,
+    ) -> Self {
+        let rho_s = rho_s.unwrap_or(2650.0);
+        let rho_w = rho_w.unwrap_or(1000.0);
+        let nu = nu.unwrap_or(1e-6);
+        
+        let ws = SettlingVelocity::ferguson_church(d50_m, rho_s, rho_w, nu);
+        
+        Self {
+            diffusivity: 1e-6,
+            settling_velocity: ws,
+            tracer_type: TracerType::Settling,
+            min_concentration: 0.0,
+            ..Default::default()
+        }
+    }
+    
+    /// 创建悬浮泥沙属性（使用 van Rijn 公式）
+    /// 
+    /// van Rijn, L.C. (1984). Sediment transport, part II: suspended load transport.
+    /// 
+    /// 适用于 0.1mm < d < 1mm 范围
+    pub fn suspended_sediment_van_rijn(d50_m: f64) -> Self {
+        let ws = SettlingVelocity::van_rijn(d50_m);
+        
+        Self {
+            diffusivity: 1e-6,
+            settling_velocity: ws,
+            tracer_type: TracerType::Settling,
+            min_concentration: 0.0,
+            ..Default::default()
+        }
+    }
 
     /// 创建细菌/大肠杆菌属性
     pub fn bacteria(t90_hours: f64) -> Self {
@@ -112,6 +164,130 @@ impl TracerProperties {
             min_concentration: 0.0,
             ..Default::default()
         }
+    }
+}
+
+/// 沉速计算工具
+/// 
+/// 提供多种沉速公式实现
+pub struct SettlingVelocity;
+
+impl SettlingVelocity {
+    /// Ferguson-Church 通用沉速公式
+    /// 
+    /// w_s = R * g * d² / (C1 * ν + sqrt(0.75 * C2 * R * g * d³))
+    /// 
+    /// 其中 R = (ρs - ρw) / ρw 为相对密度
+    /// 
+    /// # 参数
+    /// - `d`: 粒径 [m]
+    /// - `rho_s`: 泥沙密度 [kg/m³]
+    /// - `rho_w`: 水密度 [kg/m³]
+    /// - `nu`: 运动粘度 [m²/s]
+    pub fn ferguson_church(d: f64, rho_s: f64, rho_w: f64, nu: f64) -> f64 {
+        use crate::marihydro::infra::constants::physics::{
+            STANDARD_GRAVITY, FERGUSON_CHURCH_C1, FERGUSON_CHURCH_C2,
+        };
+        
+        let g = STANDARD_GRAVITY;
+        let c1 = FERGUSON_CHURCH_C1;
+        let c2 = FERGUSON_CHURCH_C2;
+        
+        let r = (rho_s - rho_w) / rho_w;  // 相对密度
+        
+        let numerator = r * g * d * d;
+        let term1 = c1 * nu;
+        let term2 = (0.75 * c2 * r * g * d * d * d).sqrt();
+        
+        let ws = numerator / (term1 + term2);
+        
+        // 限制在合理范围内
+        ws.clamp(0.0, 1.0)
+    }
+    
+    /// Ferguson-Church 公式（光滑球形颗粒）
+    pub fn ferguson_church_smooth(d: f64, rho_s: f64, rho_w: f64, nu: f64) -> f64 {
+        use crate::marihydro::infra::constants::physics::{
+            STANDARD_GRAVITY, FERGUSON_CHURCH_C1, FERGUSON_CHURCH_C2_SMOOTH,
+        };
+        
+        let g = STANDARD_GRAVITY;
+        let c1 = FERGUSON_CHURCH_C1;
+        let c2 = FERGUSON_CHURCH_C2_SMOOTH;
+        
+        let r = (rho_s - rho_w) / rho_w;
+        
+        let numerator = r * g * d * d;
+        let term1 = c1 * nu;
+        let term2 = (0.75 * c2 * r * g * d * d * d).sqrt();
+        
+        (numerator / (term1 + term2)).clamp(0.0, 1.0)
+    }
+    
+    /// Stokes 沉速公式
+    /// 
+    /// 适用于细颗粒（Re < 0.1）层流条件
+    /// w_s = (ρs - ρw) * g * d² / (18 * μ)
+    pub fn stokes(d: f64, rho_s: f64, rho_w: f64, nu: f64) -> f64 {
+        use crate::marihydro::infra::constants::physics::STANDARD_GRAVITY;
+        
+        let g = STANDARD_GRAVITY;
+        let mu = nu * rho_w;  // 动力粘度
+        
+        let ws = (rho_s - rho_w) * g * d * d / (18.0 * mu);
+        ws.clamp(0.0, 1.0)
+    }
+    
+    /// van Rijn 沉速公式
+    /// 
+    /// 适用于 0.1mm < d < 1mm
+    /// 分段公式，自动处理不同粒径范围
+    pub fn van_rijn(d: f64) -> f64 {
+        use crate::marihydro::infra::constants::physics::STANDARD_GRAVITY;
+        
+        let g = STANDARD_GRAVITY;
+        let nu = 1e-6;  // 标准运动粘度
+        let s = 2.65;   // 相对密度（石英）
+        
+        let d_star = d * ((s - 1.0) * g / (nu * nu)).powf(1.0 / 3.0);
+        
+        let ws = if d_star <= 10.0 {
+            // 细颗粒（Stokes 区域）
+            (s - 1.0) * g * d * d / (18.0 * nu)
+        } else if d_star <= 1000.0 {
+            // 过渡区域
+            10.0 * nu / d * (((1.0 + 0.01 * d_star.powi(3)).sqrt() - 1.0))
+        } else {
+            // 粗颗粒（惯性区域）
+            1.1 * ((s - 1.0) * g * d).sqrt()
+        };
+        
+        ws.clamp(0.0, 1.0)
+    }
+    
+    /// Dietrich 沉速公式
+    /// 
+    /// 基于无量纲粒径和沉速的经验关系
+    pub fn dietrich(d: f64, rho_s: f64, rho_w: f64, nu: f64) -> f64 {
+        use crate::marihydro::infra::constants::physics::STANDARD_GRAVITY;
+        
+        let g = STANDARD_GRAVITY;
+        let r = (rho_s - rho_w) / rho_w;
+        
+        // 无量纲粒径
+        let d_star = d * (r * g / (nu * nu)).powf(1.0 / 3.0);
+        
+        // Dietrich 经验公式
+        let r1 = -3.76715 + 1.92944 * d_star.ln() 
+            - 0.09815 * d_star.ln().powi(2)
+            - 0.00575 * d_star.ln().powi(3)
+            + 0.00056 * d_star.ln().powi(4);
+        
+        let w_star = r1.exp();
+        
+        // 转换回有量纲
+        let ws = w_star * (r * g * nu).powf(1.0 / 3.0);
+        ws.clamp(0.0, 1.0)
     }
 }
 

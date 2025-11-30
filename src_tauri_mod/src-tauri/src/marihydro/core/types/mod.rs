@@ -18,6 +18,7 @@
 
 pub mod field_types;
 pub mod geo_transform;
+pub mod indices;
 pub mod numerical_params;
 pub mod physical_constants;
 pub mod safe_types;
@@ -25,9 +26,12 @@ pub mod safe_types;
 // 重导出常用类型
 pub use field_types::{FieldStats, ScalarField, VectorField};
 pub use geo_transform::GeoTransform;
+pub use indices::{
+    reinterpret_cell_ids, reinterpret_cell_indices, reinterpret_face_ids,
+    reinterpret_face_indices, reinterpret_node_ids, reinterpret_node_indices,
+    usize_slice_as_cell_indices, usize_slice_as_face_indices, usize_slice_as_node_indices,
+    BoundaryIndex, CellId, CellIndex, FaceId, FaceIndex, NodeId, NodeIndex, INVALID_INDEX,
+};
 pub use numerical_params::{NumericalParams, NumericalParamsBuilder, ParamsValidationError};
 pub use physical_constants::PhysicalConstants;
-pub use safe_types::{
-    BoundaryIndex, CellIndex, FaceIndex, FiniteF64, NodeIndex, NonFiniteError, SafeDepth,
-    SafeVelocity,
-};
+pub use safe_types::{FiniteF64, NonFiniteError, SafeDepth, SafeVelocity};

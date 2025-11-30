@@ -1,5 +1,27 @@
-//! HLLC 近似 Riemann 求解器
+//! HLLC 近似 Riemann 求解器（已废弃）
+//!
+//! ⚠️ **此模块已废弃**，请使用 `riemann` 模块替代。
+//!
+//! 迁移指南：
+//! ```rust,ignore
+//! // 旧代码
+//! use crate::marihydro::physics::schemes::hllc::HllcSolver;
+//!
+//! // 新代码
+//! use crate::marihydro::physics::schemes::riemann::{HllcSolver, RiemannSolver};
+//! ```
+//!
+//! 新模块提供：
+//! - 统一的 `RiemannSolver` trait
+//! - 多种求解器实现（HLLC, Rusanov, Adaptive）
+//! - 自适应求解器选择
 
+#![deprecated(
+    since = "0.3.0",
+    note = "请使用 physics::schemes::riemann 模块替代"
+)]
+
+#[allow(deprecated)]
 use super::dry_wet::{DryWetHandler, WetDryState};
 use super::flux_utils::{physical_flux_1d, InterfaceFlux, RotatedFlux};
 use crate::marihydro::core::error::{MhError, MhResult};

@@ -1,12 +1,31 @@
 // src-tauri/src/marihydro/core/workspace.rs
 
-//! 预分配缓冲区池
+//! 预分配缓冲区池（已废弃）
 //!
-//! 提供零分配的热路径内存管理
+//! ⚠️ **此模块已废弃**，请使用 `core::memory` 模块替代。
+//!
+//! 迁移指南：
+//! ```rust
+//! // 旧代码
+//! use crate::marihydro::core::workspace::{Workspace, BufferPool};
+//!
+//! // 新代码
+//! use crate::marihydro::core::memory::{Workspace, BufferPool, WorkspaceBuilder};
+//! ```
+//!
+//! 新的 `memory` 模块提供：
+//! - 统一的内存管理子系统
+//! - `WorkspaceBuilder` 构建器模式
+//! - 增强的 `prepare_for_step()` 方法用于时间步间缓冲区管理
+//! - 与 `BufferPool` 更好的集成
+
+#![deprecated(
+    since = "0.3.0",
+    note = "请使用 core::memory 模块替代。此模块将在 0.4.0 版本移除。"
+)]
 
 use glam::DVec2;
 use parking_lot::Mutex;
-use std::cell::RefCell;
 
 // ============================================================
 // 缓冲区池（线程安全）

@@ -4,6 +4,7 @@ target/
 *.md
 *.txt
 优化代码补丁/
+杂项/
 *.py
 
 ## VS Code

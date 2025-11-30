@@ -4,6 +4,7 @@ pub mod constants;
 pub mod db;
 pub mod logger;
 pub mod perf;
+pub mod storage;
 pub mod time;
 
 pub use config::ProjectConfig;
@@ -14,4 +15,5 @@ pub use perf::{
     PerfStats, PerfTimer, ChunkIter, CACHE_BLOCK_SIZE, PARALLEL_THRESHOLD,
     parallel_max, parallel_min, parallel_sum, should_parallelize,
 };
+pub use storage::{MemoryStorage, WorkflowStorage};
 pub use time::{TimeManager, TimezoneConfig};

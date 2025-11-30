@@ -8,14 +8,26 @@
 //! - 类型级安全包装
 //! - 预分配缓冲区管理
 //! - 运行时验证工具
+//! - 数值安全子系统
+//! - 并行策略子系统
+//! - 内存管理子系统
 
 pub mod error;
+pub mod memory;
+pub mod numerical;
+pub mod parallel;
 pub mod traits;
 pub mod types;
 pub mod validation;
+
+// 废弃的模块 - 已迁移到 memory 子模块
+#[deprecated(since = "0.3.0", note = "请使用 core::memory::Workspace 替代")]
 pub mod workspace;
 
 // 重导出常用类型
 pub use error::{MhError, MhResult};
+pub use memory::{BufferPool, PooledBuffer, Workspace, WorkspaceBuilder};
+pub use numerical::{AtomicF64, SafeF64};
+pub use parallel::{ParallelConfig, ParallelStrategy, StrategySelector};
 pub use types::{NumericalParams, PhysicalConstants};
-pub use workspace::Workspace;
+
