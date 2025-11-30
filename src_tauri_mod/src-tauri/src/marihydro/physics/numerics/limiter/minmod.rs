@@ -40,7 +40,7 @@ impl MinmodLimiter {
 
     /// Minmod 函数
     ///
-    /// 返回三个数中模最小的，如果符号不同则返回 0
+    /// 返回两个数中模最小的，如果符号不同则返回 0
     #[inline]
     fn minmod(a: f64, b: f64) -> f64 {
         if a * b <= 0.0 {
@@ -53,6 +53,10 @@ impl MinmodLimiter {
     }
 
     /// 三参数 minmod
+    ///
+    /// 返回三个数中模最小的，如果任意两个符号不同则返回 0
+    /// 保留供 TVD 重构等场景使用
+    #[allow(dead_code)]
     #[inline]
     fn minmod3(a: f64, b: f64, c: f64) -> f64 {
         Self::minmod(a, Self::minmod(b, c))

@@ -106,7 +106,14 @@ impl SmagorinskyTurbulence {
             let v_n = if params.is_dry(h_n) { 0.0 } else { state.hv(neighbor.0) / h_n };
             let dist = (mesh.cell_centroid(neighbor) - mesh.cell_centroid(owner)).length();
             if dist < 1e-14 { continue; }
-            let nu_face = 0.5 * (workspace.nu_t[owner.0] + workspace.nu_t[neighbor.0]);
+            // 调和平均涡粘系数（保证正定性，物理上更合理）
+            let nu_o = workspace.nu_t[owner.0];
+            let nu_n = workspace.nu_t[neighbor.0];
+            let nu_face = if nu_o + nu_n > 1e-14 {
+                2.0 * nu_o * nu_n / (nu_o + nu_n)
+            } else {
+                0.0
+            };
             let h_face = 0.5 * (h_o + h_n);
             let length = mesh.face_length(face);
             let flux_u = nu_face * h_face * (u_n - u_o) / dist * length;

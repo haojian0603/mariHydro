@@ -2,7 +2,57 @@
 //! 辐射应力计算
 //!
 //! 实现波浪辐射应力及其对水流的驱动力计算。
-//! 参考：Longuet-Higgins & Stewart (1964), Dean & Dalrymple (1991)
+//!
+//! ## 理论背景
+//!
+//! 辐射应力（Radiation Stress）是由波浪运动产生的超额动量通量，
+//! 由 Longuet-Higgins 和 Stewart (1964) 首次系统阐述。
+//!
+//! ### 定义
+//!
+//! 辐射应力张量定义为：
+//!
+//! $$ S_{ij} = \overline{\rho u_i u_j + p \delta_{ij}} - \rho g \frac{h^2}{2} \delta_{ij} $$
+//!
+//! 其中上划线表示波周期平均，$u_i$ 是波浪引起的质点速度。
+//!
+//! ### 浅水近似下的辐射应力
+//!
+//! 对于近似单色波，辐射应力分量为：
+//!
+//! $$ S_{xx} = E \left( n \cos^2\theta + n - \frac{1}{2} \right) $$
+//! $$ S_{yy} = E \left( n \sin^2\theta + n - \frac{1}{2} \right) $$
+//! $$ S_{xy} = E n \sin\theta \cos\theta $$
+//!
+//! 其中：
+//! - $E = \rho g H^2 / 8$ 是波浪能量密度
+//! - $n = c_g / c$ 是群速与相速之比（深水 n=0.5，浅水 n→1）
+//! - $\theta$ 是波向角
+//!
+//! ### 波浪驱动力
+//!
+//! 辐射应力的空间梯度产生对水流的驱动力：
+//!
+//! $$ F_x = -\frac{1}{\rho h} \left( \frac{\partial S_{xx}}{\partial x} + \frac{\partial S_{xy}}{\partial y} \right) $$
+//! $$ F_y = -\frac{1}{\rho h} \left( \frac{\partial S_{xy}}{\partial x} + \frac{\partial S_{yy}}{\partial y} \right) $$
+//!
+//! ### 近岸效应
+//!
+//! - **波浪增水（Setup）**: 破波带内向岸的辐射应力梯度导致水位升高
+//! - **沿岸流（Longshore Current）**: 斜向入射波浪的 Sxy 分量驱动平行于岸线的水流
+//! - **裂流（Rip Current）**: 沿岸波高变化导致的离岸流
+//!
+//! ## 参考文献
+//!
+//! 1. Longuet-Higgins, M. S., & Stewart, R. W. (1964). Radiation stresses in
+//!    water waves; a physical discussion with applications. Deep Sea Research,
+//!    11(4), 529-562.
+//!
+//! 2. Dean, R. G., & Dalrymple, R. A. (1991). Water Wave Mechanics for Engineers
+//!    and Scientists. World Scientific.
+//!
+//! 3. Svendsen, I. A. (2006). Introduction to Nearshore Hydrodynamics.
+//!    World Scientific.
 
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::types::{CellIndex, NumericalParams};

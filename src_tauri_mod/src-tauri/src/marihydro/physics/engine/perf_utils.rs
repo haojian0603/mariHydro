@@ -5,10 +5,127 @@
 //! - 并行归约操作
 //! - SmallVec 优化
 //! - 缓存友好的遍历模式
+//!
+//! ## 并行阈值
+//! 
+//! 默认并行阈值为 1000，可通过 `ParallelConfig` 配置。
+//! 对于小规模计算，串行执行通常更快（避免线程调度开销）。
 
 use glam::DVec2;
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+/// 并行配置
+///
+/// 控制并行执行的阈值和参数
+#[derive(Debug, Clone, Copy)]
+pub struct ParallelConfig {
+    /// 基础阈值（元素数量低于此值使用串行）
+    pub base_threshold: usize,
+    /// 每线程额外阈值
+    pub per_thread: usize,
+}
+
+impl Default for ParallelConfig {
+    fn default() -> Self {
+        Self {
+            base_threshold: 500,
+            per_thread: 200,
+        }
+    }
+}
+
+impl ParallelConfig {
+    /// 创建自定义配置
+    pub fn new(base_threshold: usize, per_thread: usize) -> Self {
+        Self {
+            base_threshold,
+            per_thread,
+        }
+    }
+
+    /// 保守配置（更倾向于并行）
+    pub fn aggressive() -> Self {
+        Self {
+            base_threshold: 200,
+            per_thread: 100,
+        }
+    }
+
+    /// 保守配置（更倾向于串行）
+    pub fn conservative() -> Self {
+        Self {
+            base_threshold: 2000,
+            per_thread: 500,
+        }
+    }
+
+    /// 计算当前有效阈值
+    ///
+    /// 根据可用线程数动态调整
+    pub fn threshold(&self) -> usize {
+        let threads = rayon::current_num_threads();
+        self.base_threshold + self.per_thread * threads
+    }
+
+    /// 判断是否应使用并行
+    #[inline]
+    pub fn should_parallelize(&self, n: usize) -> bool {
+        n >= self.threshold()
+    }
+}
+
+/// 全局默认并行阈值
+///
+/// 简单情况下使用固定阈值 1000
+pub const DEFAULT_PARALLEL_THRESHOLD: usize = 1000;
+
+/// 原子方式更新 f64 最大值
+///
+/// 使用 CAS 循环正确比较 f64 值（而非位模式）
+/// P2-005 修复: fetch_max 对 f64 位模式比较不正确
+#[inline]
+fn atomic_f64_max(atomic: &AtomicU64, new_val: f64) {
+    let mut old_bits = atomic.load(Ordering::Relaxed);
+    loop {
+        let old_val = f64::from_bits(old_bits);
+        if new_val <= old_val {
+            break;
+        }
+        match atomic.compare_exchange_weak(
+            old_bits,
+            new_val.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(x) => old_bits = x,
+        }
+    }
+}
+
+/// 原子方式更新 f64 最小值
+///
+/// 使用 CAS 循环正确比较 f64 值
+#[inline]
+fn atomic_f64_min(atomic: &AtomicU64, new_val: f64) {
+    let mut old_bits = atomic.load(Ordering::Relaxed);
+    loop {
+        let old_val = f64::from_bits(old_bits);
+        if new_val >= old_val {
+            break;
+        }
+        match atomic.compare_exchange_weak(
+            old_bits,
+            new_val.to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(x) => old_bits = x,
+        }
+    }
+}
 
 /// 并行计算最大值
 #[inline]
@@ -18,7 +135,7 @@ pub fn parallel_max(values: &[f64]) -> f64 {
     } else {
         let max = AtomicU64::new(f64::NEG_INFINITY.to_bits());
         values.par_iter().for_each(|&v| {
-            max.fetch_max(v.to_bits(), Ordering::Relaxed);
+            atomic_f64_max(&max, v);
         });
         f64::from_bits(max.load(Ordering::Relaxed))
     }
@@ -32,7 +149,7 @@ pub fn parallel_min(values: &[f64]) -> f64 {
     } else {
         let min = AtomicU64::new(f64::INFINITY.to_bits());
         values.par_iter().for_each(|&v| {
-            min.fetch_min(v.to_bits(), Ordering::Relaxed);
+            atomic_f64_min(&min, v);
         });
         f64::from_bits(min.load(Ordering::Relaxed))
     }
@@ -41,7 +158,45 @@ pub fn parallel_min(values: &[f64]) -> f64 {
 /// 并行计算总和
 #[inline]
 pub fn parallel_sum(values: &[f64]) -> f64 {
-    if values.len() < 1000 {
+    if values.len() < DEFAULT_PARALLEL_THRESHOLD {
+        values.iter().sum()
+    } else {
+        values.par_iter().sum()
+    }
+}
+
+/// 带配置的并行计算最大值
+#[inline]
+pub fn parallel_max_with_config(values: &[f64], config: &ParallelConfig) -> f64 {
+    if !config.should_parallelize(values.len()) {
+        values.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+    } else {
+        let max = AtomicU64::new(f64::NEG_INFINITY.to_bits());
+        values.par_iter().for_each(|&v| {
+            atomic_f64_max(&max, v);
+        });
+        f64::from_bits(max.load(Ordering::Relaxed))
+    }
+}
+
+/// 带配置的并行计算最小值
+#[inline]
+pub fn parallel_min_with_config(values: &[f64], config: &ParallelConfig) -> f64 {
+    if !config.should_parallelize(values.len()) {
+        values.iter().cloned().fold(f64::INFINITY, f64::min)
+    } else {
+        let min = AtomicU64::new(f64::INFINITY.to_bits());
+        values.par_iter().for_each(|&v| {
+            atomic_f64_min(&min, v);
+        });
+        f64::from_bits(min.load(Ordering::Relaxed))
+    }
+}
+
+/// 带配置的并行计算总和
+#[inline]
+pub fn parallel_sum_with_config(values: &[f64], config: &ParallelConfig) -> f64 {
+    if !config.should_parallelize(values.len()) {
         values.iter().sum()
     } else {
         values.par_iter().sum()
@@ -71,7 +226,7 @@ pub fn parallel_max_velocity(hu: &[f64], hv: &[f64], h: &[f64], h_dry: f64) -> f
             let u = hu[i] / h[i];
             let v = hv[i] / h[i];
             let speed = (u * u + v * v).sqrt();
-            max.fetch_max(speed.to_bits(), Ordering::Relaxed);
+            atomic_f64_max(&max, speed);
         });
         f64::from_bits(max.load(Ordering::Relaxed))
     }
@@ -102,7 +257,7 @@ pub fn parallel_max_wave_speed(hu: &[f64], hv: &[f64], h: &[f64], g: f64, h_dry:
             let v = hv[i] / h[i];
             let speed = (u * u + v * v).sqrt();
             let c = (g * h[i]).sqrt();
-            max.fetch_max((speed + c).to_bits(), Ordering::Relaxed);
+            atomic_f64_max(&max, speed + c);
         });
         f64::from_bits(max.load(Ordering::Relaxed))
     }

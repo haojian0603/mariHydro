@@ -77,35 +77,98 @@ impl EquationOfState {
     }
 
     /// 计算密度对盐度的偏导数 ∂ρ/∂S
+    ///
+    /// 对于 UNESCO-1981，使用解析导数：
+    /// ρ = ρ_w + A*S + B*S^1.5 + C*S^2
+    /// ∂ρ/∂S = A + 1.5*B*S^0.5 + 2*C*S
     pub fn drho_ds(&self, salinity: f64, temperature: f64) -> f64 {
         match *self {
             Self::Linear { rho_0, beta_s, .. } => {
                 rho_0 * beta_s
             }
-            Self::Unesco1981 | Self::Teos10Simplified => {
-                // 数值微分
-                let ds = 0.01;
-                let rho_p = self.density(salinity + ds, temperature);
-                let rho_m = self.density(salinity - ds, temperature);
-                (rho_p - rho_m) / (2.0 * ds)
+            Self::Unesco1981 => {
+                self.unesco_drho_ds(salinity, temperature)
+            }
+            Self::Teos10Simplified => {
+                // TEOS-10 简化版: ρ = 1028 + ... + 0.78*(S-35)
+                // ∂ρ/∂S = 0.78
+                0.78
             }
         }
     }
 
     /// 计算密度对温度的偏导数 ∂ρ/∂T
+    ///
+    /// 对于 UNESCO-1981，使用解析导数
     pub fn drho_dt(&self, salinity: f64, temperature: f64) -> f64 {
         match *self {
             Self::Linear { rho_0, beta_t, .. } => {
                 rho_0 * beta_t
             }
-            Self::Unesco1981 | Self::Teos10Simplified => {
-                // 数值微分
-                let dt = 0.01;
-                let rho_p = self.density(salinity, temperature + dt);
-                let rho_m = self.density(salinity, temperature - dt);
-                (rho_p - rho_m) / (2.0 * dt)
+            Self::Unesco1981 => {
+                self.unesco_drho_dt(salinity, temperature)
+            }
+            Self::Teos10Simplified => {
+                // TEOS-10 简化版: ρ = 1028 - 0.20*(T-10) - 0.003*(T-10)^2 + ...
+                // ∂ρ/∂T = -0.20 - 0.006*(T-10)
+                -0.20 - 0.006 * (temperature - 10.0)
             }
         }
+    }
+
+    /// UNESCO-1981 密度对盐度的解析导数
+    ///
+    /// ρ = ρ_w + A*S + B*S^1.5 + C*S^2
+    /// ∂ρ/∂S = A + 1.5*B*S^0.5 + 2*C*S
+    fn unesco_drho_ds(&self, s: f64, t: f64) -> f64 {
+        // A(T)
+        let a = 8.24493e-1
+            - 4.0899e-3 * t
+            + 7.6438e-5 * t.powi(2)
+            - 8.2467e-7 * t.powi(3)
+            + 5.3875e-9 * t.powi(4);
+
+        // B(T)
+        let b = -5.72466e-3
+            + 1.0227e-4 * t
+            - 1.6546e-6 * t.powi(2);
+
+        // C (常数)
+        let c = 4.8314e-4;
+
+        // ∂ρ/∂S = A + 1.5*B*S^0.5 + 2*C*S
+        if s > 1e-10 {
+            a + 1.5 * b * s.sqrt() + 2.0 * c * s
+        } else {
+            // S → 0 时，S^0.5 项的导数趋于无穷
+            // 使用小盐度近似
+            a + 2.0 * c * s
+        }
+    }
+
+    /// UNESCO-1981 密度对温度的解析导数
+    ///
+    /// ρ = ρ_w(T) + A(T)*S + B(T)*S^1.5 + C*S^2
+    fn unesco_drho_dt(&self, s: f64, t: f64) -> f64 {
+        // ∂ρ_w/∂T
+        let drho_w_dt = 6.793952e-2
+            - 2.0 * 9.095290e-3 * t
+            + 3.0 * 1.001685e-4 * t.powi(2)
+            - 4.0 * 1.120083e-6 * t.powi(3)
+            + 5.0 * 6.536336e-9 * t.powi(4);
+
+        // ∂A/∂T
+        let da_dt = -4.0899e-3
+            + 2.0 * 7.6438e-5 * t
+            - 3.0 * 8.2467e-7 * t.powi(2)
+            + 4.0 * 5.3875e-9 * t.powi(3);
+
+        // ∂B/∂T
+        let db_dt = 1.0227e-4
+            - 2.0 * 1.6546e-6 * t;
+
+        // ∂ρ/∂T = ∂ρ_w/∂T + ∂A/∂T * S + ∂B/∂T * S^1.5
+        drho_w_dt + da_dt * s + db_dt * s.powf(1.5)
     }
 
     /// UNESCO (1981) 海水状态方程

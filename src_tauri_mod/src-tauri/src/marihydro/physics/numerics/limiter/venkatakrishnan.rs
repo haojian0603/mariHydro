@@ -1,6 +1,16 @@
 // src-tauri/src/marihydro/physics/numerics/limiter/venkatakrishnan.rs
 
 //! Venkatakrishnan 限制器（更平滑）
+//!
+//! 参数 k 控制限制器的行为：
+//! - 较小的 k (0.1-0.3): 更保守，适合激波/强梯度区域
+//! - 中等的 k (0.3-0.5): 平衡选择，适合一般情况
+//! - 较大的 k (0.5-1.0): 更精确，适合平滑流动
+//!
+//! 参考值:
+//! - 水力激波、溃坝: k ≈ 0.2
+//! - 一般河流流动: k ≈ 0.3-0.5
+//! - 平静水面、潮汐: k ≈ 0.5-0.7
 
 use super::{GradientLimiter, ScalarGradientStorage};
 use crate::marihydro::core::error::MhResult;
@@ -20,8 +30,63 @@ impl Default for VenkatakrishnanLimiter {
 }
 
 impl VenkatakrishnanLimiter {
+    /// 创建自定义参数的限制器
+    ///
+    /// # 参数
+    /// - `k`: 限制器参数，推荐范围 [0.1, 1.0]
     pub fn new(k: f64) -> Self {
+        Self { k: k.clamp(0.01, 2.0) }
+    }
+
+    /// 保守模式：适用于激波、溃坝等强梯度流动
+    ///
+    /// k = 0.2，产生较多耗散但更稳定
+    pub fn conservative() -> Self {
+        Self { k: 0.2 }
+    }
+
+    /// 标准模式：适用于一般河流流动
+    ///
+    /// k = 0.3，平衡稳定性和精度
+    pub fn standard() -> Self {
+        Self::default()
+    }
+
+    /// 精确模式：适用于平滑流动，如潮汐、缓流
+    ///
+    /// k = 0.5，较少耗散，更高精度
+    pub fn accurate() -> Self {
+        Self { k: 0.5 }
+    }
+
+    /// 高精度模式：适用于非常平滑的流动
+    ///
+    /// k = 0.7，最少耗散，需要确保流场平滑
+    pub fn high_accuracy() -> Self {
+        Self { k: 0.7 }
+    }
+
+    /// 根据弗劳德数自适应选择参数
+    ///
+    /// - Fr > 1 (超临界流): 使用保守参数
+    /// - Fr ≈ 1 (临界流): 使用标准参数
+    /// - Fr < 1 (亚临界流): 使用精确参数
+    pub fn adaptive(froude_number: f64) -> Self {
+        let k = if froude_number > 1.5 {
+            0.2  // 强超临界流，保守
+        } else if froude_number > 1.0 {
+            0.25 // 弱超临界流
+        } else if froude_number > 0.5 {
+            0.35 // 中等亚临界流
+        } else {
+            0.5  // 平缓流动，精确
+        };
         Self { k }
+    }
+
+    /// 获取当前参数值
+    pub fn k(&self) -> f64 {
+        self.k
     }
 
     #[inline]

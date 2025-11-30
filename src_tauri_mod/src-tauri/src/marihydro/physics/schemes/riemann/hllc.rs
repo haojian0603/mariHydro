@@ -178,12 +178,25 @@ impl HllcSolver {
         };
 
         // 确定使用左侧还是右侧状态
+        // P0-001 修复: 添加分母保护，避免 s_l ≈ s_star 或 s_r ≈ s_star 时除零
         let (h_star, ut) = if s_star >= 0.0 {
-            let h_s = h_l * (s_l - un_l) / (s_l - s_star);
-            (h_s.max(0.0), ut_l)
+            let denom_l = s_l - s_star;
+            if denom_l.abs() < threshold {
+                // 分母过小，回退到左状态
+                (h_l, ut_l)
+            } else {
+                let h_s = h_l * (s_l - un_l) / denom_l;
+                (h_s.max(0.0), ut_l)
+            }
         } else {
-            let h_s = h_r * (s_r - un_r) / (s_r - s_star);
-            (h_s.max(0.0), ut_r)
+            let denom_r = s_r - s_star;
+            if denom_r.abs() < threshold {
+                // 分母过小，回退到右状态
+                (h_r, ut_r)
+            } else {
+                let h_s = h_r * (s_r - un_r) / denom_r;
+                (h_s.max(0.0), ut_r)
+            }
         };
 
         Ok((

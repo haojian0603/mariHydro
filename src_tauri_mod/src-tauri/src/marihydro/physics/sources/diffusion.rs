@@ -5,6 +5,62 @@ use rayon::prelude::*;
 use crate::marihydro::domain::mesh::unstructured::{BoundaryKind, UnstructuredMesh};
 use crate::marihydro::infra::error::{MhError, MhResult};
 
+/// 扩散边界条件类型
+#[derive(Debug, Clone, Copy)]
+pub enum DiffusionBC {
+    /// 零通量 (Neumann): ∂φ/∂n = 0
+    ZeroFlux,
+    /// 固定值 (Dirichlet): φ = value
+    FixedValue(f64),
+    /// 辐射边界: flux = α*(φ - φ_∞)
+    Radiation {
+        /// 传递系数 [1/s 或 m/s 取决于场类型]
+        alpha: f64,
+        /// 远场值
+        phi_inf: f64,
+    },
+    /// 指定通量: flux = value
+    SpecifiedFlux(f64),
+}
+
+impl Default for DiffusionBC {
+    fn default() -> Self {
+        Self::ZeroFlux
+    }
+}
+
+impl DiffusionBC {
+    /// 计算边界通量贡献
+    ///
+    /// # 参数
+    /// - `phi_cell`: 边界单元的场值
+    /// - `nu`: 扩散系数
+    /// - `d`: 单元中心到边界的距离
+    /// - `length`: 边界面长度
+    ///
+    /// # 返回
+    /// 边界通量（正值表示进入单元）
+    #[inline]
+    pub fn compute_flux(&self, phi_cell: f64, nu: f64, d: f64, length: f64) -> f64 {
+        match *self {
+            Self::ZeroFlux => 0.0,
+            Self::FixedValue(phi_bc) => {
+                // Dirichlet: F = -ν * (φ_cell - φ_bc) / d * L
+                // 使用单侧差分
+                -nu * (phi_cell - phi_bc) / d * length
+            }
+            Self::Radiation { alpha, phi_inf } => {
+                // 辐射: F = α * (φ_∞ - φ_cell) * L
+                alpha * (phi_inf - phi_cell) * length
+            }
+            Self::SpecifiedFlux(flux) => {
+                // 直接指定通量
+                flux * length
+            }
+        }
+    }
+}
+
 /// 显式扩散求解器（非结构化网格 Face-based 方法）
 pub fn apply_diffusion_explicit(
     field: &[f64],
@@ -87,6 +143,101 @@ fn compute_diffusion_fluxes(field: &[f64], mesh: &UnstructuredMesh, nu: f64) -> 
     }
 
     flux_sum
+}
+
+/// 带自定义边界条件的扩散通量计算
+///
+/// # 参数
+/// - `field`: 场值数组
+/// - `mesh`: 网格
+/// - `nu`: 扩散系数
+/// - `boundary_conditions`: 边界条件映射（边界索引 -> 边界条件）
+pub fn compute_diffusion_fluxes_with_bc(
+    field: &[f64],
+    mesh: &UnstructuredMesh,
+    nu: f64,
+    boundary_conditions: &[DiffusionBC],
+) -> Vec<f64> {
+    let mut flux_sum = vec![0.0; mesh.n_cells];
+
+    // 内部面
+    for face_idx in mesh.interior_faces() {
+        let owner = mesh.face_owner[face_idx];
+        let neighbor = mesh.face_neighbor[face_idx];
+
+        let d = mesh.face_dist_o2n[face_idx];
+        if d < 1e-14 {
+            continue;
+        }
+
+        let length = mesh.face_length[face_idx];
+        let phi_o = field[owner];
+        let phi_n = field[neighbor];
+
+        let flux = -nu * (phi_n - phi_o) / d * length;
+
+        flux_sum[owner] += flux;
+        flux_sum[neighbor] -= flux;
+    }
+
+    // 边界面处理
+    for face_idx in mesh.boundary_faces() {
+        let owner = mesh.face_owner[face_idx];
+        let bc_idx = mesh.boundary_index(face_idx);
+        
+        // 获取边界条件（使用默认值如果索引越界）
+        let bc = boundary_conditions
+            .get(bc_idx)
+            .copied()
+            .unwrap_or_default();
+
+        // 计算到边界的距离（使用半面距离近似）
+        let d = mesh.face_dist_o2n[face_idx].max(1e-14);
+        let length = mesh.face_length[face_idx];
+        let phi_cell = field[owner];
+
+        let flux = bc.compute_flux(phi_cell, nu, d, length);
+        flux_sum[owner] += flux;
+    }
+
+    flux_sum
+}
+
+/// 带自定义边界条件的显式扩散求解
+pub fn apply_diffusion_explicit_with_bc(
+    field: &[f64],
+    field_out: &mut [f64],
+    mesh: &UnstructuredMesh,
+    nu: f64,
+    dt: f64,
+    boundary_conditions: &[DiffusionBC],
+) -> MhResult<()> {
+    validate_diffusion_params(nu, dt)?;
+
+    if field.len() != mesh.n_cells || field_out.len() != mesh.n_cells {
+        return Err(MhError::InvalidInput(format!(
+            "场数组尺寸不匹配: 期望 {}, 实际 in={}, out={}",
+            mesh.n_cells,
+            field.len(),
+            field_out.len()
+        )));
+    }
+
+    let flux_sum = compute_diffusion_fluxes_with_bc(field, mesh, nu, boundary_conditions);
+
+    field_out
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(i, phi_out)| {
+            let area = mesh.cell_area[i];
+            if area > 1e-14 {
+                *phi_out = field[i] + dt * flux_sum[i] / area;
+            } else {
+                *phi_out = field[i];
+            }
+        });
+
+    Ok(())
 }
 
 /// 可变扩散系数版本

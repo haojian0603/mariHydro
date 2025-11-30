@@ -1,4 +1,52 @@
 // src_tauri_mod\src-tauri\src\marihydro\physics\schemes\hydrostatic.rs
+//! 静水重构与底坡源项处理
+//!
+//! 实现 Audusse 等人提出的静水重构方法，保证浅水方程在静止状态下的
+//! well-balanced 性质。
+//!
+//! ## 理论背景
+//!
+//! 浅水方程的动量方程包含压力梯度项和底坡源项：
+//!
+//! $$ \frac{\partial (hu)}{\partial t} + \cdots = -gh\frac{\partial h}{\partial x} - gh\frac{\partial z_b}{\partial x} $$
+//!
+//! 在静止状态下（$u = v = 0$, $\eta = h + z_b = \text{const}$），这两项应精确抵消。
+//! 然而，直接离散化会产生数值不平衡，导致虚假流动。
+//!
+//! ## Audusse 方法
+//!
+//! Audusse 等人 (2004) 提出的方法关键思想：
+//!
+//! 1. **界面高程取最大值**: $z_f = \max(z_L, z_R)$
+//! 2. **修正界面水深**: $h^*_L = \max(0, \eta_L - z_f)$, $h^*_R = \max(0, \eta_R - z_f)$
+//! 3. **底坡源项与通量修正配对**
+//!
+//! ### Well-balanced 性质
+//!
+//! 在静止水面条件下 ($\eta = const$, $u = v = 0$):
+//! - 界面通量精确为零（因为 $h^*_L = h^*_R$, $u = 0$）
+//! - 底坡源项精确抵消压力梯度
+//!
+//! ### 正性保持
+//!
+//! 修正后的水深保证非负，这对于干湿边界处理至关重要。
+//!
+//! ## 数值优势
+//!
+//! - 避免 $\eta - z$ 大数相减带来的精度损失
+//! - 自然处理干湿边界
+//! - 与任意黎曼求解器兼容
+//!
+//! ## 参考文献
+//!
+//! 1. Audusse, E., Bouchut, F., Bristeau, M.-O., Klein, R., & Perthame, B. (2004).
+//!    A fast and stable well-balanced scheme with hydrostatic reconstruction for
+//!    shallow water flows. SIAM Journal on Scientific Computing, 25(6), 2050-2065.
+//!
+//! 2. Kurganov, A., & Petrova, G. (2007). A second-order well-balanced positivity
+//!    preserving central-upwind scheme for the Saint-Venant system.
+//!    Communications in Mathematical Sciences, 5(1), 133-160.
+
 use crate::marihydro::core::types::NumericalParams;
 use glam::DVec2;
 

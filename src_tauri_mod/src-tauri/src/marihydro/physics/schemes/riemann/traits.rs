@@ -188,6 +188,46 @@ pub trait RiemannSolver: Send + Sync {
         }
         Ok(())
     }
+
+    /// 并行批量求解（适用于大规模网格）
+    ///
+    /// 当状态数量超过阈值时使用并行迭代器。
+    /// 默认实现使用 Rayon 并行化，具体求解器可以覆盖此方法以提供更优化的实现。
+    ///
+    /// # 参数
+    /// - `states`: 界面状态数组
+    /// - `fluxes`: 输出通量数组（与 states 等长）
+    /// - `parallel_threshold`: 并行阈值，低于此值使用串行
+    fn solve_batch_parallel(
+        &self,
+        states: &[InterfaceState],
+        fluxes: &mut [RiemannFlux],
+        parallel_threshold: usize,
+    ) -> MhResult<()>
+    where
+        Self: Sized,
+    {
+        use rayon::prelude::*;
+
+        debug_assert_eq!(states.len(), fluxes.len());
+
+        if states.len() < parallel_threshold {
+            // 小规模使用串行
+            self.solve_batch(states, fluxes)
+        } else {
+            // 大规模使用并行
+            // 注意：这里不能直接使用 ? 操作符，需要收集错误
+            let results: Vec<MhResult<RiemannFlux>> = states
+                .par_iter()
+                .map(|state| self.solve_state(state))
+                .collect();
+
+            for (i, result) in results.into_iter().enumerate() {
+                fluxes[i] = result?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// 可配置的求解器参数

@@ -53,6 +53,66 @@ impl Default for SelectorConfig {
     }
 }
 
+impl SelectorConfig {
+    /// 保守配置：更多使用 Rusanov（稳定性优先）
+    ///
+    /// 适用于：
+    /// - 溃坝问题
+    /// - 强激波
+    /// - 干湿边界频繁变化
+    pub fn conservative() -> Self {
+        Self {
+            criterion: SelectionCriterion::FroudeNumber,
+            froude_threshold: 0.5,       // 更低的阈值
+            depth_ratio_threshold: 5.0,   // 更低的阈值
+            velocity_gradient_threshold: 3.0,
+        }
+    }
+
+    /// 精确配置：更多使用 HLLC（精度优先）
+    ///
+    /// 适用于：
+    /// - 潮汐流动
+    /// - 平缓河流
+    /// - 长期稳定模拟
+    pub fn accurate() -> Self {
+        Self {
+            criterion: SelectionCriterion::FroudeNumber,
+            froude_threshold: 1.2,        // 更高的阈值
+            depth_ratio_threshold: 20.0,  // 更高的阈值
+            velocity_gradient_threshold: 8.0,
+        }
+    }
+
+    /// 混合配置：同时考虑多个标准
+    ///
+    /// 使用 Froude 数作为主要标准，但会被水深比覆盖
+    pub fn hybrid() -> Self {
+        Self {
+            criterion: SelectionCriterion::FroudeNumber,
+            froude_threshold: 0.8,
+            depth_ratio_threshold: 15.0,
+            velocity_gradient_threshold: 6.0,
+        }
+    }
+
+    /// 仅 HLLC（用于性能测试）
+    pub fn hllc_only() -> Self {
+        Self {
+            criterion: SelectionCriterion::AlwaysHllc,
+            ..Default::default()
+        }
+    }
+
+    /// 仅 Rusanov（用于对比测试）
+    pub fn rusanov_only() -> Self {
+        Self {
+            criterion: SelectionCriterion::AlwaysRusanov,
+            ..Default::default()
+        }
+    }
+}
+
 /// 求解器选择器
 #[derive(Debug)]
 pub struct SolverSelector {

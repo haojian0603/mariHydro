@@ -1,4 +1,14 @@
 // src-tauri/src/marihydro/physics/numerics/reconstruction/muscl.rs
+//! MUSCL 重构模块
+//!
+//! 实现 MUSCL (Monotonic Upstream-centered Scheme for Conservation Laws) 重构方法。
+//! 使用 TVD (Total Variation Diminishing) 通量限制器来控制振荡。
+//!
+//! # 注意
+//! 本模块中的 `FluxLimiter` trait 与 `limiter/` 模块中的 `Limiter` trait 不同：
+//! - `FluxLimiter`: TVD 通量限制器，输入斜率比 r，输出 φ(r) ∈ [0, 2]
+//! - `limiter::Limiter`: 梯度限制器，基于网格邻居信息计算限制因子 α ∈ [0, 1]
+
 use crate::marihydro::core::error::MhResult;
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::types::{CellIndex, FaceIndex};
@@ -6,22 +16,50 @@ use crate::marihydro::physics::numerics::gradient::{GradientMethod, GreenGaussGr
 use glam::DVec2;
 use rayon::prelude::*;
 
-pub trait Limiter: Send + Sync {
+/// TVD 通量限制器 trait
+///
+/// 实现 TVD 条件下的通量限制函数 φ(r)，其中 r 是连续单元间的斜率比。
+/// 所有实现必须满足 TVD 条件：φ(r) ∈ [0, 2] 且 φ(1) = 1
+pub trait FluxLimiter: Send + Sync {
+    /// 计算限制因子 φ(r)
+    ///
+    /// # Arguments
+    /// * `r` - 斜率比 (连续单元间梯度的比值)
+    ///
+    /// # Returns
+    /// 限制因子，通常在 [0, 2] 范围内
     fn limit(&self, r: f64) -> f64;
+    
+    /// 限制器名称
     fn name(&self) -> &'static str;
 }
 
+// 为向后兼容保留别名
+pub use FluxLimiter as Limiter;
+
+/// Minmod 限制器 (TVD, 最保守)
+///
+/// φ(r) = max(0, min(1, r))
+///
+/// 最保守的限制器，数值耗散大但稳定性好。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MinmodLimiter;
-impl Limiter for MinmodLimiter {
+
+impl FluxLimiter for MinmodLimiter {
     #[inline]
     fn limit(&self, r: f64) -> f64 { r.max(0.0).min(1.0) }
     fn name(&self) -> &'static str { "Minmod" }
 }
 
+/// Van Leer 限制器 (TVD, 平滑)
+///
+/// φ(r) = (r + |r|) / (1 + |r|)
+///
+/// 平滑的二阶限制器，在 TVD 区域内接近二阶精度。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VanLeerLimiter;
-impl Limiter for VanLeerLimiter {
+
+impl FluxLimiter for VanLeerLimiter {
     #[inline]
     fn limit(&self, r: f64) -> f64 {
         if r <= 0.0 { 0.0 } else { (r + r.abs()) / (1.0 + r.abs()) }
@@ -29,9 +67,15 @@ impl Limiter for VanLeerLimiter {
     fn name(&self) -> &'static str { "VanLeer" }
 }
 
+/// Van Albada 限制器 (TVD, 平滑)
+///
+/// φ(r) = (r² + r) / (r² + 1)
+///
+/// 另一种平滑的二阶限制器。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VanAlbadaLimiter;
-impl Limiter for VanAlbadaLimiter {
+
+impl FluxLimiter for VanAlbadaLimiter {
     #[inline]
     fn limit(&self, r: f64) -> f64 {
         if r <= 0.0 { 0.0 } else { (r * r + r) / (r * r + 1.0) }
@@ -39,9 +83,15 @@ impl Limiter for VanAlbadaLimiter {
     fn name(&self) -> &'static str { "VanAlbada" }
 }
 
+/// Superbee 限制器 (TVD, 激进)
+///
+/// φ(r) = max(0, min(2r, 1), min(r, 2))
+///
+/// 最激进的限制器，保留最多梯度信息，可能产生过冲。
 #[derive(Debug, Clone, Copy)]
 pub struct SuperbeeLimiter;
-impl Limiter for SuperbeeLimiter {
+
+impl FluxLimiter for SuperbeeLimiter {
     #[inline]
     fn limit(&self, r: f64) -> f64 {
         let a = (2.0 * r).min(1.0);
@@ -51,13 +101,14 @@ impl Limiter for SuperbeeLimiter {
     fn name(&self) -> &'static str { "Superbee" }
 }
 
-pub struct MusclReconstructor<L: Limiter = MinmodLimiter> {
+/// MUSCL 重构器
+pub struct MusclReconstructor<L: FluxLimiter = MinmodLimiter> {
     limiter: L,
     grad_storage: ScalarGradientStorage,
     gradient_method: GreenGaussGradient,
 }
 
-impl<L: Limiter> MusclReconstructor<L> {
+impl<L: FluxLimiter> MusclReconstructor<L> {
     pub fn new(n_cells: usize, limiter: L) -> Self {
         Self {
             limiter,

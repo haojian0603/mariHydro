@@ -109,13 +109,16 @@ impl SourceTerm for WindStressSource {
     }
 }
 
+use std::cell::RefCell;
+
 pub struct PressureGradientSource {
     pressure: Vec<f64>,
     rho_water: f64,
     /// 预计算 -1.0 / rho_water
     inv_rho: f64,
     /// 缓存梯度存储，避免重复分配
-    grad_storage: ScalarGradientStorage,
+    /// 使用 RefCell 进行内部可变性，避免 unsafe
+    grad_storage: RefCell<ScalarGradientStorage>,
 }
 
 impl PressureGradientSource {
@@ -124,13 +127,13 @@ impl PressureGradientSource {
             pressure: vec![101325.0; n_cells], 
             rho_water, 
             inv_rho: -1.0 / rho_water,
-            grad_storage: ScalarGradientStorage::new(n_cells),
+            grad_storage: RefCell::new(ScalarGradientStorage::new(n_cells)),
         }
     }
 
     pub fn set_pressure_field(&mut self, p: Vec<f64>) {
         if p.len() != self.pressure.len() {
-            self.grad_storage = ScalarGradientStorage::new(p.len());
+            *self.grad_storage.borrow_mut() = ScalarGradientStorage::new(p.len());
         }
         self.pressure = p;
     }
@@ -156,9 +159,9 @@ impl SourceTerm for PressureGradientSource {
         _output_h: &mut [f64], output_hu: &mut [f64], output_hv: &mut [f64],
     ) -> MhResult<()> {
         let n = mesh.n_cells();
-        // 使用 unsafe 获取可变引用（grad_storage 在此调用期间是独占的）
-        let storage = unsafe { &mut *(&self.grad_storage as *const _ as *mut ScalarGradientStorage) };
-        compute_scalar_gradient_parallel(&self.pressure, mesh, storage);
+        // 使用 RefCell 进行内部可变性借用
+        let mut storage = self.grad_storage.borrow_mut();
+        compute_scalar_gradient_parallel(&self.pressure, mesh, &mut storage);
         let factor = self.inv_rho;
         let h_dry = ctx.params.h_dry;
         for i in 0..n {

@@ -1,8 +1,59 @@
 // File: src-tauri/src/marihydro/physics/engine/time_integrator.rs
 //! SSP Runge-Kutta 时间积分器
-//! 
+//!
 //! 实现强稳定保持 (Strong Stability Preserving) Runge-Kutta 方法，
 //! 用于浅水方程的时间推进。
+//!
+//! ## 理论背景
+//!
+//! SSP-RK 方法是经典 Runge-Kutta 方法的变体，专门设计用于与空间离散化
+//! 中的 TVD (Total Variation Diminishing) 性质兼容。
+//!
+//! ### Shu-Osher 形式
+//!
+//! SSP-RK 方法可以写成 Shu-Osher 形式的凸组合：
+//!
+//! $$ U^{(k)} = \sum_{i=0}^{k-1} \left[ \alpha_{ki} U^{(i)} + \Delta t \, \beta_{ki} L(U^{(i)}) \right] $$
+//!
+//! 其中 $L(U)$ 是空间算子（RHS），$\alpha_{ki} \geq 0$，$\sum_i \alpha_{ki} = 1$。
+//!
+//! ### SSP-RK2 (Heun 方法)
+//!
+//! ```text
+//! U* = U^n + Δt L(U^n)
+//! U^{n+1} = 0.5 U^n + 0.5 (U* + Δt L(U*))
+//! ```
+//!
+//! - SSP 系数: $c = 1.0$
+//! - CFL 条件: $\Delta t \leq c \cdot \Delta t_{FE}$
+//!
+//! ### SSP-RK3 (Shu-Osher)
+//!
+//! ```text
+//! U^{(1)} = U^n + Δt L(U^n)
+//! U^{(2)} = 3/4 U^n + 1/4 (U^{(1)} + Δt L(U^{(1)}))
+//! U^{n+1} = 1/3 U^n + 2/3 (U^{(2)} + Δt L(U^{(2)}))
+//! ```
+//!
+//! - SSP 系数: $c = 1.0$
+//! - 三阶精度，最优 SSP 系数
+//!
+//! ## 稳定性条件
+//!
+//! 时间步长需满足 CFL 条件：
+//!
+//! $$ \Delta t \leq C \cdot \min_i \frac{\Delta x_i}{|u_i| + \sqrt{gh_i}} $$
+//!
+//! 其中 $C$ 通常取 0.4-0.8（取决于空间格式阶数）。
+//!
+//! ## 参考文献
+//!
+//! 1. Gottlieb, S., Shu, C.-W., & Tadmor, E. (2001). Strong stability-preserving
+//!    high-order time discretization methods. SIAM Review, 43(1), 89-112.
+//!
+//! 2. Shu, C.-W., & Osher, S. (1988). Efficient implementation of essentially
+//!    non-oscillatory shock-capturing schemes. Journal of Computational Physics,
+//!    77(2), 439-471.
 
 use crate::marihydro::core::error::MhResult;
 use crate::marihydro::domain::state::ShallowWaterState;
