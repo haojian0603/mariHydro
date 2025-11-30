@@ -2,9 +2,11 @@
 //! 标量示踪剂输运求解器
 //! 实现平流-扩散方程的数值求解
 
+use glam::DVec2;
 use rayon::prelude::*;
 
 use crate::marihydro::core::error::{MhError, MhResult};
+use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::domain::mesh::unstructured::{BoundaryKind, UnstructuredMesh};
 use crate::marihydro::domain::state::tracer::{TracerField, TracerType};
 
@@ -56,6 +58,8 @@ pub struct TracerTransportSolver {
     pub boundary_conditions: Vec<TracerBoundaryCondition>,
     /// 工作数组
     flux_buffer: Vec<f64>,
+    /// 浓度梯度存储（用于高阶格式）
+    concentration_gradient: Vec<DVec2>,
 }
 
 impl TracerTransportSolver {
@@ -66,6 +70,7 @@ impl TracerTransportSolver {
             diffusion_substeps: 1,
             boundary_conditions: Vec::new(),
             flux_buffer: vec![0.0; n_cells],
+            concentration_gradient: vec![DVec2::ZERO; n_cells],
         }
     }
 
@@ -112,6 +117,17 @@ impl TracerTransportSolver {
         if self.flux_buffer.len() != n_cells {
             self.flux_buffer.resize(n_cells, 0.0);
         }
+        if self.concentration_gradient.len() != n_cells {
+            self.concentration_gradient.resize(n_cells, DVec2::ZERO);
+        }
+
+        // 0. 对于高阶格式，先计算浓度梯度
+        if matches!(
+            self.advection_scheme,
+            AdvectionScheme::SecondOrderUpwind | AdvectionScheme::TvdMinmod
+        ) {
+            self.compute_concentration_gradient(&tracer.concentration, mesh);
+        }
 
         // 1. 平流项
         self.apply_advection(tracer, mesh, h, hu, hv, dt)?;
@@ -132,6 +148,76 @@ impl TracerTransportSolver {
         tracer.apply_limiter();
 
         Ok(())
+    }
+
+    /// Minmod 限制器函数
+    /// 
+    /// 返回两个数中模最小的，如果符号不同则返回 0
+    #[inline]
+    fn minmod(a: f64, b: f64) -> f64 {
+        if a * b <= 0.0 {
+            0.0
+        } else if a.abs() < b.abs() {
+            a
+        } else {
+            b
+        }
+    }
+
+    /// 计算浓度梯度（Green-Gauss 方法）
+    /// 
+    /// 使用简化的 Green-Gauss 方法计算单元梯度
+    fn compute_concentration_gradient(&mut self, c: &[f64], mesh: &UnstructuredMesh) {
+        let n_cells = mesh.n_cells;
+        
+        // 初始化梯度为零
+        for grad in self.concentration_gradient.iter_mut() {
+            *grad = DVec2::ZERO;
+        }
+        
+        // 累加内部面贡献
+        for face_idx in mesh.interior_faces() {
+            let owner = mesh.face_owner[face_idx];
+            let neighbor = mesh.face_neighbor[face_idx];
+            
+            // 面平均浓度
+            let c_face = 0.5 * (c[owner] + c[neighbor]);
+            
+            // 面法向和长度
+            let nx = mesh.face_normal_x[face_idx];
+            let ny = mesh.face_normal_y[face_idx];
+            let length = mesh.face_length[face_idx];
+            
+            // 通量贡献
+            let flux = DVec2::new(c_face * nx * length, c_face * ny * length);
+            
+            // 累加到 owner（出流为正），减去 neighbor（入流为负）
+            self.concentration_gradient[owner] += flux;
+            self.concentration_gradient[neighbor] -= flux;
+        }
+        
+        // 累加边界面贡献
+        for face_idx in mesh.boundary_faces() {
+            let owner = mesh.face_owner[face_idx];
+            
+            // 边界面使用内部单元浓度（零梯度近似）
+            let c_face = c[owner];
+            
+            let nx = mesh.face_normal_x[face_idx];
+            let ny = mesh.face_normal_y[face_idx];
+            let length = mesh.face_length[face_idx];
+            
+            let flux = DVec2::new(c_face * nx * length, c_face * ny * length);
+            self.concentration_gradient[owner] += flux;
+        }
+        
+        // 除以单元面积得到梯度
+        for i in 0..n_cells {
+            let area = mesh.cell_area[i];
+            if area > 1e-14 {
+                self.concentration_gradient[i] /= area;
+            }
+        }
     }
 
     /// 计算有效扩散系数
@@ -201,14 +287,48 @@ impl TracerTransportSolver {
                 AdvectionScheme::CentralDifference => {
                     0.5 * (c[owner] + c[neighbor])
                 }
-                AdvectionScheme::SecondOrderUpwind | AdvectionScheme::TvdMinmod => {
-                    // 简化：使用一阶迎风
-                    // TODO: 实现完整的二阶格式
-                    if flux_velocity > 0.0 {
-                        c[owner]
+                AdvectionScheme::SecondOrderUpwind => {
+                    // 二阶迎风格式：使用梯度重构
+                    let (upwind_cell, upwind_grad) = if flux_velocity > 0.0 {
+                        (owner, self.concentration_gradient[owner])
                     } else {
-                        c[neighbor]
-                    }
+                        (neighbor, self.concentration_gradient[neighbor])
+                    };
+                    
+                    // 计算面中心到单元中心的向量
+                    let cell_center = mesh.cell_centroid(upwind_cell.into());
+                    let face_center = mesh.face_centroid(face_idx.into());
+                    let r = face_center - cell_center;
+                    
+                    // 线性重构：c_f = c_c + grad · r
+                    c[upwind_cell] + upwind_grad.dot(r)
+                }
+                AdvectionScheme::TvdMinmod => {
+                    // TVD Minmod 格式：带限制器的二阶重构
+                    let (upwind_cell, downwind_cell) = if flux_velocity > 0.0 {
+                        (owner, neighbor)
+                    } else {
+                        (neighbor, owner)
+                    };
+                    
+                    let c_u = c[upwind_cell];
+                    let c_d = c[downwind_cell];
+                    let grad_u = self.concentration_gradient[upwind_cell];
+                    
+                    // 计算面中心到单元中心的向量
+                    let cell_center = mesh.cell_centroid(upwind_cell.into());
+                    let face_center = mesh.face_centroid(face_idx.into());
+                    let r = face_center - cell_center;
+                    
+                    // 梯度重构增量
+                    let delta_grad = grad_u.dot(r);
+                    // 中心差分增量
+                    let delta_central = c_d - c_u;
+                    
+                    // Minmod 限制器
+                    let delta = Self::minmod(delta_grad, delta_central);
+                    
+                    c_u + 0.5 * delta
                 }
             };
 

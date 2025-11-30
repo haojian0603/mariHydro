@@ -250,6 +250,186 @@ impl HydraulicStructure for Gate {
     }
 }
 
+/// PID 控制器
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PidController {
+    /// 比例系数 Kp
+    pub kp: f64,
+    /// 积分系数 Ki
+    pub ki: f64,
+    /// 微分系数 Kd
+    pub kd: f64,
+    /// 目标水位 [m]
+    pub target_level: f64,
+    /// 积分累积项
+    #[serde(skip)]
+    integral: f64,
+    /// 上一次误差（用于微分）
+    #[serde(skip)]
+    prev_error: f64,
+    /// 输出限制 [0, 1]
+    pub output_min: f64,
+    pub output_max: f64,
+}
+
+impl PidController {
+    /// 创建 PID 控制器
+    pub fn new(kp: f64, ki: f64, kd: f64, target_level: f64) -> Self {
+        Self {
+            kp,
+            ki,
+            kd,
+            target_level,
+            integral: 0.0,
+            prev_error: 0.0,
+            output_min: 0.0,
+            output_max: 1.0,
+        }
+    }
+
+    /// 计算控制输出
+    /// 
+    /// # Arguments
+    /// * `current_level` - 当前水位
+    /// * `dt` - 时间步长
+    /// 
+    /// # Returns
+    /// 归一化控制输出 [0, 1]
+    pub fn compute(&mut self, current_level: f64, dt: f64) -> f64 {
+        let error = self.target_level - current_level;
+        
+        // 积分项（带抗饱和）
+        self.integral += error * dt;
+        // 限制积分项防止 windup
+        let integral_limit = 10.0 / self.ki.max(1e-10);
+        self.integral = self.integral.clamp(-integral_limit, integral_limit);
+        
+        // 微分项
+        let derivative = if dt > 1e-10 {
+            (error - self.prev_error) / dt
+        } else {
+            0.0
+        };
+        self.prev_error = error;
+        
+        // PID 输出
+        let output = self.kp * error + self.ki * self.integral + self.kd * derivative;
+        
+        // 限制输出范围
+        output.clamp(self.output_min, self.output_max)
+    }
+
+    /// 重置控制器状态
+    pub fn reset(&mut self) {
+        self.integral = 0.0;
+        self.prev_error = 0.0;
+    }
+}
+
+/// 泵站特性曲线（H-Q 曲线）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacteristicCurve {
+    /// 扬程点 [m]
+    pub head_points: Vec<f64>,
+    /// 流量点 [m³/s]
+    pub flow_points: Vec<f64>,
+    /// 设计扬程 [m]
+    pub design_head: f64,
+    /// 设计流量 [m³/s]
+    pub design_flow: f64,
+}
+
+impl CharacteristicCurve {
+    /// 创建特性曲线
+    /// 
+    /// # Arguments
+    /// * `head_points` - 扬程点（升序排列）
+    /// * `flow_points` - 对应的流量点
+    pub fn new(head_points: Vec<f64>, flow_points: Vec<f64>) -> Self {
+        assert_eq!(head_points.len(), flow_points.len(), "扬程和流量点数必须相等");
+        assert!(!head_points.is_empty(), "特性曲线不能为空");
+        
+        // 取中点作为设计点
+        let mid = head_points.len() / 2;
+        Self {
+            design_head: head_points[mid],
+            design_flow: flow_points[mid],
+            head_points,
+            flow_points,
+        }
+    }
+
+    /// 从设计点创建二次曲线
+    /// 
+    /// 使用公式: Q = Q0 * sqrt(H / H0)
+    pub fn from_design_point(design_head: f64, design_flow: f64) -> Self {
+        // 生成默认曲线点
+        let n_points = 11;
+        let mut head_points = Vec::with_capacity(n_points);
+        let mut flow_points = Vec::with_capacity(n_points);
+        
+        for i in 0..n_points {
+            let ratio = 0.5 + (i as f64) * 0.1; // 0.5 到 1.5
+            let h = design_head * ratio;
+            let q = design_flow * (ratio).sqrt();
+            head_points.push(h);
+            flow_points.push(q);
+        }
+        
+        Self {
+            head_points,
+            flow_points,
+            design_head,
+            design_flow,
+        }
+    }
+
+    /// 根据扬程查询流量（线性插值）
+    pub fn get_flow(&self, head: f64) -> f64 {
+        if head <= 0.0 {
+            return 0.0;
+        }
+        
+        let n = self.head_points.len();
+        if n == 0 {
+            return 0.0;
+        }
+        
+        // 边界情况
+        if head <= self.head_points[0] {
+            // 外推（使用相似律）
+            let ratio = head / self.head_points[0];
+            return self.flow_points[0] * ratio.sqrt();
+        }
+        if head >= self.head_points[n - 1] {
+            // 外推（使用相似律）
+            let ratio = head / self.head_points[n - 1];
+            return self.flow_points[n - 1] * ratio.sqrt();
+        }
+        
+        // 二分查找插值区间
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while lo < hi - 1 {
+            let mid = (lo + hi) / 2;
+            if self.head_points[mid] <= head {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        
+        // 线性插值
+        let h0 = self.head_points[lo];
+        let h1 = self.head_points[hi];
+        let q0 = self.flow_points[lo];
+        let q1 = self.flow_points[hi];
+        
+        let t = (head - h0) / (h1 - h0);
+        q0 + t * (q1 - q0)
+    }
+}
+
 /// 泵站运行模式
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum PumpMode {
@@ -280,6 +460,15 @@ pub struct PumpStation {
     operating: bool,
     /// 当前流量
     current_discharge: f64,
+    /// 特性曲线（用于 Characteristic 模式）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characteristic_curve: Option<CharacteristicCurve>,
+    /// PID 控制器（用于 LevelControlled 模式）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid_controller: Option<PidController>,
+    /// 上一次计算的时间（用于 PID 微分）
+    #[serde(skip)]
+    last_time: f64,
 }
 
 impl PumpStation {
@@ -300,7 +489,71 @@ impl PumpStation {
             stop_level,
             operating: false,
             current_discharge: 0.0,
+            characteristic_curve: None,
+            pid_controller: None,
+            last_time: 0.0,
         }
+    }
+
+    /// 创建特性曲线控制泵站
+    pub fn with_characteristic(
+        name: &str,
+        design_discharge: f64,
+        design_head: f64,
+        intake_upstream: bool,
+        start_level: f64,
+        stop_level: f64,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            mode: PumpMode::Characteristic,
+            design_discharge,
+            intake_upstream,
+            start_level,
+            stop_level,
+            operating: false,
+            current_discharge: 0.0,
+            characteristic_curve: Some(CharacteristicCurve::from_design_point(design_head, design_discharge)),
+            pid_controller: None,
+            last_time: 0.0,
+        }
+    }
+
+    /// 创建 PID 水位控制泵站
+    pub fn with_pid_control(
+        name: &str,
+        design_discharge: f64,
+        target_level: f64,
+        kp: f64,
+        ki: f64,
+        kd: f64,
+        intake_upstream: bool,
+        start_level: f64,
+        stop_level: f64,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            mode: PumpMode::LevelControlled,
+            design_discharge,
+            intake_upstream,
+            start_level,
+            stop_level,
+            operating: false,
+            current_discharge: 0.0,
+            characteristic_curve: None,
+            pid_controller: Some(PidController::new(kp, ki, kd, target_level)),
+            last_time: 0.0,
+        }
+    }
+
+    /// 设置特性曲线
+    pub fn set_characteristic_curve(&mut self, curve: CharacteristicCurve) {
+        self.characteristic_curve = Some(curve);
+    }
+
+    /// 设置 PID 控制器
+    pub fn set_pid_controller(&mut self, pid: PidController) {
+        self.pid_controller = Some(pid);
     }
 
     /// 更新运行状态
@@ -328,26 +581,63 @@ impl HydraulicStructure for PumpStation {
         &self.name
     }
 
-    fn compute_discharge(&mut self, h_up: f64, h_down: f64, _time: f64) -> f64 {
+    fn compute_discharge(&mut self, h_up: f64, h_down: f64, time: f64) -> f64 {
         let intake_level = if self.intake_upstream { h_up } else { h_down };
         self.update_state(intake_level);
 
         if !self.operating {
             self.current_discharge = 0.0;
+            self.last_time = time;
             return 0.0;
         }
 
         self.current_discharge = match self.mode {
             PumpMode::ConstantFlow => self.design_discharge,
+            
             PumpMode::Characteristic => {
-                // TODO: 实现扬程-流量曲线
-                self.design_discharge
+                // 计算实际扬程
+                let head = (h_up - h_down).abs();
+                
+                // 从特性曲线查询流量
+                if let Some(ref curve) = self.characteristic_curve {
+                    curve.get_flow(head).min(self.design_discharge)
+                } else {
+                    // 无曲线时使用相似律近似：Q = Q0 * sqrt(H/H0)
+                    // 假设设计扬程为 5m
+                    let design_head = 5.0;
+                    let ratio = (head / design_head).sqrt().min(1.5);
+                    self.design_discharge * ratio
+                }
             }
+            
             PumpMode::LevelControlled => {
-                // TODO: 实现PID控制
-                self.design_discharge
+                // 计算时间步长
+                let dt = if self.last_time > 0.0 {
+                    (time - self.last_time).max(0.001)
+                } else {
+                    1.0 // 首次调用假设 1 秒
+                };
+                
+                // PID 控制
+                if let Some(ref mut pid) = self.pid_controller {
+                    let control_output = pid.compute(intake_level, dt);
+                    // 控制输出 [0, 1] 映射到 [0, design_discharge]
+                    self.design_discharge * control_output
+                } else {
+                    // 无 PID 控制器时使用简单比例控制
+                    let error = if self.intake_upstream {
+                        // 排涝：水位越高流量越大
+                        (intake_level - self.stop_level) / (self.start_level - self.stop_level)
+                    } else {
+                        // 引水：水位越低流量越大
+                        (self.stop_level - intake_level) / (self.stop_level - self.start_level)
+                    };
+                    self.design_discharge * error.clamp(0.0, 1.0)
+                }
             }
         };
+
+        self.last_time = time;
 
         // 返回带符号的流量（上游取水为负，下游取水为正）
         if self.intake_upstream {

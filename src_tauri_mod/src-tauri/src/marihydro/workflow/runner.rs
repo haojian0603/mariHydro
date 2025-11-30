@@ -1,6 +1,7 @@
 // src-tauri/src/marihydro/workflow/runner.rs
-use super::manager::WorkflowManager;
+use super::manager_v2::WorkflowManagerV2;
 use crate::marihydro::core::error::{MhError, MhResult};
+use crate::marihydro::infra::storage::MemoryStorage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -11,13 +12,13 @@ pub trait SimulationExecutor: Send + Sync {
 }
 
 pub struct SimulationRunner {
-    manager: Arc<WorkflowManager>,
+    manager: Arc<WorkflowManagerV2<MemoryStorage>>,
     running: Arc<AtomicBool>,
     poll_interval: Duration,
 }
 
 impl SimulationRunner {
-    pub fn new(manager: Arc<WorkflowManager>) -> Self {
+    pub fn new(manager: Arc<WorkflowManagerV2<MemoryStorage>>) -> Self {
         Self { manager, running: Arc::new(AtomicBool::new(false)), poll_interval: Duration::from_millis(500) }
     }
 
