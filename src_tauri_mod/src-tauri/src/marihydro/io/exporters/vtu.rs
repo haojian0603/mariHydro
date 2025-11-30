@@ -6,16 +6,26 @@ use crate::marihydro::core::error::{MhError, MhResult};
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::traits::state::StateAccess;
 use crate::marihydro::core::types::CellIndex;
-use glam::DVec2;
+
+/// VTU导出器的默认干湿阈值（用于速度计算）
+const DEFAULT_VTU_H_DRY: f64 = 1e-6;
 
 pub struct VtuExporter;
 
 impl VtuExporter {
+    /// 使用默认阈值导出
     pub fn export<M: MeshAccess, S: StateAccess>(path: &str, mesh: &M, state: &S, time: f64) -> MhResult<()> {
+        Self::export_with_params(path, mesh, state, time, DEFAULT_VTU_H_DRY)
+    }
+
+    /// 使用自定义阈值导出
+    pub fn export_with_params<M: MeshAccess, S: StateAccess>(
+        path: &str, mesh: &M, state: &S, time: f64, h_dry: f64
+    ) -> MhResult<()> {
         let file = File::create(path).map_err(|e| MhError::Io(format!("Cannot create {}: {}", path, e)))?;
         let mut w = BufWriter::new(file);
         Self::write_header(&mut w, time)?;
-        Self::write_piece(&mut w, mesh, state)?;
+        Self::write_piece(&mut w, mesh, state, h_dry)?;
         Self::write_footer(&mut w)?;
         w.flush().map_err(|e| MhError::Io(e.to_string()))?;
         Ok(())
@@ -60,13 +70,13 @@ impl VtuExporter {
         Ok(())
     }
 
-    fn write_piece<M: MeshAccess, S: StateAccess>(w: &mut BufWriter<File>, mesh: &M, state: &S) -> MhResult<()> {
+    fn write_piece<M: MeshAccess, S: StateAccess>(w: &mut BufWriter<File>, mesh: &M, state: &S, h_dry: f64) -> MhResult<()> {
         let n_nodes = mesh.n_nodes();
         let n_cells = mesh.n_cells();
         writeln!(w, r#"    <Piece NumberOfPoints="{}" NumberOfCells="{}">"#, n_nodes, n_cells).map_err(|e| MhError::Io(e.to_string()))?;
         Self::write_points(w, mesh)?;
         Self::write_cells(w, mesh)?;
-        Self::write_cell_data(w, mesh, state)?;
+        Self::write_cell_data(w, mesh, state, h_dry)?;
         writeln!(w, r#"    </Piece>"#).map_err(|e| MhError::Io(e.to_string()))?;
         Ok(())
     }
@@ -103,14 +113,14 @@ impl VtuExporter {
         Ok(())
     }
 
-    fn write_cell_data<M: MeshAccess, S: StateAccess>(w: &mut BufWriter<File>, mesh: &M, state: &S) -> MhResult<()> {
+    fn write_cell_data<M: MeshAccess, S: StateAccess>(w: &mut BufWriter<File>, mesh: &M, state: &S, h_dry: f64) -> MhResult<()> {
         writeln!(w, r#"      <CellData>"#).map_err(|e| MhError::Io(e.to_string()))?;
         Self::write_scalar_field(w, "h", mesh.n_cells(), |i| state.h(i))?;
         Self::write_scalar_field(w, "eta", mesh.n_cells(), |i| state.h(i) + mesh.cell_bed_elevation(CellIndex(i)))?;
-        Self::write_scalar_field(w, "u", mesh.n_cells(), |i| { let h = state.h(i); if h > 1e-6 { state.hu(i) / h } else { 0.0 } })?;
-        Self::write_scalar_field(w, "v", mesh.n_cells(), |i| { let h = state.h(i); if h > 1e-6 { state.hv(i) / h } else { 0.0 } })?;
+        Self::write_scalar_field(w, "u", mesh.n_cells(), |i| { let h = state.h(i); if h > h_dry { state.hu(i) / h } else { 0.0 } })?;
+        Self::write_scalar_field(w, "v", mesh.n_cells(), |i| { let h = state.h(i); if h > h_dry { state.hv(i) / h } else { 0.0 } })?;
         Self::write_scalar_field(w, "velocity_mag", mesh.n_cells(), |i| {
-            let h = state.h(i); if h > 1e-6 { let u = state.hu(i)/h; let v = state.hv(i)/h; (u*u + v*v).sqrt() } else { 0.0 }
+            let h = state.h(i); if h > h_dry { let u = state.hu(i)/h; let v = state.hv(i)/h; (u*u + v*v).sqrt() } else { 0.0 }
         })?;
         writeln!(w, r#"      </CellData>"#).map_err(|e| MhError::Io(e.to_string()))?;
         Ok(())

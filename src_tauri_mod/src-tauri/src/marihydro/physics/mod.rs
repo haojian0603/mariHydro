@@ -12,6 +12,9 @@
 
 pub mod numerics;
 pub mod schemes;
+pub mod sediment;
+pub mod sources;
+pub mod waves;
 
 // 重导出常用类型
 pub use numerics::gradient::{

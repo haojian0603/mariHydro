@@ -1,13 +1,21 @@
 // src-tauri/src/marihydro/physics/engine/parallel.rs
+//! 并行通量计算模块
+//! 
+//! 提供两种并行策略：
+//! 1. ParallelFluxCalculator - 原子操作累加（简单但有竞争开销）
+//! 2. ColoredFluxCalculator - 基于图着色的无竞争并行（推荐）
+
 use crate::marihydro::core::error::MhResult;
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::types::{CellIndex, FaceIndex, NumericalParams};
 use crate::marihydro::core::Workspace;
+use crate::marihydro::domain::mesh::MeshColoring;
 use crate::marihydro::domain::state::ShallowWaterState;
 use crate::marihydro::physics::schemes::{HllcSolver, HydrostaticReconstruction, InterfaceFlux};
 use glam::DVec2;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub struct ParallelFluxCalculator {
     g: f64,
@@ -158,5 +166,152 @@ impl CellBasedFluxCalculator {
         let (dh, dhu, dhv): (Vec<_>, (Vec<_>, Vec<_>)) = updates.into_iter().map(|(a,b,c)| (a,(b,c))).unzip();
         let (dhu, dhv): (Vec<_>, Vec<_>) = dhu.into_iter().unzip();
         (dh, dhu, dhv, f64::from_bits(max_speed.load(Ordering::Relaxed)))
+    }
+}
+
+/// 基于图着色的并行通量计算器
+/// 
+/// 利用网格着色保证同一颜色组内的面不共享单元，
+/// 从而实现无竞争的并行累加。
+pub struct ColoredFluxCalculator {
+    g: f64,
+    params: NumericalParams,
+    coloring: Arc<MeshColoring>,
+}
+
+impl ColoredFluxCalculator {
+    /// 创建着色通量计算器
+    pub fn new<M: MeshAccess>(g: f64, params: NumericalParams, mesh: &M) -> Self {
+        let coloring = MeshColoring::build(mesh);
+        Self {
+            g,
+            params,
+            coloring: Arc::new(coloring),
+        }
+    }
+    
+    /// 使用预计算的着色创建
+    pub fn with_coloring(g: f64, params: NumericalParams, coloring: Arc<MeshColoring>) -> Self {
+        Self { g, params, coloring }
+    }
+    
+    /// 获取着色信息
+    pub fn coloring(&self) -> &MeshColoring {
+        &self.coloring
+    }
+    
+    /// 计算通量（基于着色的并行）
+    pub fn compute_fluxes<M: MeshAccess + Sync>(
+        &self,
+        state: &ShallowWaterState,
+        mesh: &M,
+        workspace: &mut Workspace,
+    ) -> MhResult<f64> {
+        let hllc = HllcSolver::new(self.params.clone(), self.g);
+        let hydro = HydrostaticReconstruction::new(&self.params, self.g);
+        
+        // 重置工作空间
+        workspace.flux_h.fill(0.0);
+        workspace.flux_hu.fill(0.0);
+        workspace.flux_hv.fill(0.0);
+        workspace.source_hu.fill(0.0);
+        workspace.source_hv.fill(0.0);
+        
+        let mut max_wave_speed: f64 = 0.0;
+        
+        // 按颜色组顺序处理，组内并行
+        for (_, group) in self.coloring.iter_groups() {
+            let group_max_speed = AtomicU64::new(0u64);
+            
+            // 组内面可以安全并行处理
+            group.par_iter().for_each(|&face_idx| {
+                let face = FaceIndex(face_idx);
+                let owner = mesh.face_owner(face);
+                let neighbor = mesh.face_neighbor(face);
+                let normal = mesh.face_normal(face);
+                let length = mesh.face_length(face);
+                
+                // 获取左右状态
+                let h_l = state.h[owner.0];
+                let vel_l = self.params.safe_velocity(state.hu[owner.0], state.hv[owner.0], h_l).to_vec();
+                let z_l = state.z[owner.0];
+                
+                let (h_r, vel_r, z_r) = if neighbor.is_valid() {
+                    let h = state.h[neighbor.0];
+                    let v = self.params.safe_velocity(state.hu[neighbor.0], state.hv[neighbor.0], h).to_vec();
+                    (h, v, state.z[neighbor.0])
+                } else {
+                    // 边界：反射条件
+                    let vn = vel_l.dot(normal);
+                    (h_l, vel_l - 2.0 * vn * normal, z_l)
+                };
+                
+                // 静水重构
+                let recon = hydro.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r);
+                
+                // 计算通量
+                let flux = hllc
+                    .solve(recon.h_left, recon.h_right, recon.vel_left, recon.vel_right, normal)
+                    .unwrap_or(InterfaceFlux::ZERO);
+                
+                // 底坡源项
+                let bed_src = hydro.bed_slope_correction(h_l, h_r, z_l, z_r, normal, length);
+                
+                // 更新最大波速
+                let spd = flux.max_wave_speed.to_bits();
+                group_max_speed.fetch_max(spd, Ordering::Relaxed);
+                
+                // 计算通量贡献
+                let fh = flux.mass * length;
+                let fhu = flux.momentum_x * length;
+                let fhv = flux.momentum_y * length;
+                
+                // 由于同一组内面不共享单元，可以安全地直接访问
+                // 使用 unsafe 进行原子性写入（实际上由于着色保证不会有竞争）
+                unsafe {
+                    let ptr_h = workspace.flux_h.as_ptr() as *mut f64;
+                    let ptr_hu = workspace.flux_hu.as_ptr() as *mut f64;
+                    let ptr_hv = workspace.flux_hv.as_ptr() as *mut f64;
+                    let ptr_shu = workspace.source_hu.as_ptr() as *mut f64;
+                    let ptr_shv = workspace.source_hv.as_ptr() as *mut f64;
+                    
+                    *ptr_h.add(owner.0) -= fh;
+                    *ptr_hu.add(owner.0) -= fhu;
+                    *ptr_hv.add(owner.0) -= fhv;
+                    *ptr_shu.add(owner.0) += bed_src.source_x;
+                    *ptr_shv.add(owner.0) += bed_src.source_y;
+                    
+                    if neighbor.is_valid() {
+                        *ptr_h.add(neighbor.0) += fh;
+                        *ptr_hu.add(neighbor.0) += fhu;
+                        *ptr_hv.add(neighbor.0) += fhv;
+                        *ptr_shu.add(neighbor.0) -= bed_src.source_x;
+                        *ptr_shv.add(neighbor.0) -= bed_src.source_y;
+                    }
+                }
+            });
+            
+            max_wave_speed = max_wave_speed.max(f64::from_bits(group_max_speed.load(Ordering::Relaxed)));
+        }
+        
+        Ok(max_wave_speed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colored_flux_calculator_creation() {
+        // 基本创建测试
+        let params = NumericalParams::default();
+        let coloring = MeshColoring {
+            color_groups: vec![vec![0, 1], vec![2, 3]],
+            face_colors: vec![0, 0, 1, 1],
+            n_colors: 2,
+        };
+        let calc = ColoredFluxCalculator::with_coloring(9.81, params, Arc::new(coloring));
+        assert_eq!(calc.coloring().n_colors, 2);
     }
 }

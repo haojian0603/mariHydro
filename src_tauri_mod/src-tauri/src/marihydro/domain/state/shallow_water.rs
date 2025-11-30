@@ -3,6 +3,7 @@
 //! 浅水方程状态（SoA 布局）
 
 use glam::DVec2;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::marihydro::core::error::{MhError, MhResult};
@@ -195,6 +196,79 @@ impl ShallowWaterState {
         }
 
         Ok(())
+    }
+
+    // ===== 时间积分器所需方法 =====
+
+    /// 从另一个状态复制数据
+    pub fn copy_from(&mut self, other: &Self) {
+        debug_assert_eq!(self.n_cells(), other.n_cells());
+        self.h.copy_from_slice(&other.h);
+        self.hu.copy_from_slice(&other.hu);
+        self.hv.copy_from_slice(&other.hv);
+        if let (Some(ref mut dst), Some(ref src)) = (&mut self.hc, &other.hc) {
+            dst.copy_from_slice(src);
+        }
+    }
+
+    /// 添加缩放的 RHS: self += scale * rhs
+    pub fn add_scaled_rhs(&mut self, rhs: &crate::marihydro::physics::engine::time_integrator::RhsBuffers, scale: f64) {
+        self.h.par_iter_mut()
+            .zip(rhs.dh_dt.par_iter())
+            .for_each(|(h, &dh)| *h += scale * dh);
+        
+        self.hu.par_iter_mut()
+            .zip(rhs.dhu_dt.par_iter())
+            .for_each(|(hu, &dhu)| *hu += scale * dhu);
+        
+        self.hv.par_iter_mut()
+            .zip(rhs.dhv_dt.par_iter())
+            .for_each(|(hv, &dhv)| *hv += scale * dhv);
+        
+        // 注：tracer_rhs 暂不处理，需要时再扩展
+    }
+
+    /// 二元线性组合: self = a*A + b*B
+    pub fn linear_combine(&mut self, a: f64, state_a: &Self, b: f64, state_b: &Self) {
+        debug_assert_eq!(self.n_cells(), state_a.n_cells());
+        debug_assert_eq!(self.n_cells(), state_b.n_cells());
+        
+        self.h.par_iter_mut()
+            .zip(state_a.h.par_iter())
+            .zip(state_b.h.par_iter())
+            .for_each(|((dst, &va), &vb)| *dst = a * va + b * vb);
+        
+        self.hu.par_iter_mut()
+            .zip(state_a.hu.par_iter())
+            .zip(state_b.hu.par_iter())
+            .for_each(|((dst, &va), &vb)| *dst = a * va + b * vb);
+        
+        self.hv.par_iter_mut()
+            .zip(state_a.hv.par_iter())
+            .zip(state_b.hv.par_iter())
+            .for_each(|((dst, &va), &vb)| *dst = a * va + b * vb);
+        
+        if let (Some(ref mut dst), Some(ref src_a), Some(ref src_b)) = 
+            (&mut self.hc, &state_a.hc, &state_b.hc) 
+        {
+            dst.par_iter_mut()
+                .zip(src_a.par_iter())
+                .zip(src_b.par_iter())
+                .for_each(|((d, &va), &vb)| *d = a * va + b * vb);
+        }
+    }
+
+    /// 强制正性约束
+    pub fn enforce_positivity(&mut self) {
+        self.h.par_iter_mut().for_each(|h| {
+            if *h < 0.0 { *h = 0.0; }
+        });
+        
+        if let Some(ref mut hc) = self.hc {
+            hc.par_iter_mut().for_each(|c| {
+                if *c < 0.0 { *c = 0.0; }
+            });
+        }
     }
 }
 
