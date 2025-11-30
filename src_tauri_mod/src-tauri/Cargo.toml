@@ -1,0 +1,93 @@
+# Cargo.toml
+
+[package]
+name = "marihydro"
+version = "0.2.0"
+edition = "2021"
+build = "build.rs"
+
+[features]
+default = []
+# 这些feature永远不应启用，仅用于编译期检查
+mock_db = []
+structured_grid = []
+
+# 可选的IO驱动
+netcdf = ["dep:netcdf"]
+gdal = ["dep:gdal"]
+
+[dependencies]
+# 核心依赖
+glam = { version = "0.27", features = ["serde"] }
+rayon = "1.10"
+parking_lot = "0.12"
+thiserror = "1.0"
+log = "0.4"
+tracing = "0.1"
+
+# 数据库
+rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 地理空间
+proj = "0.27"
+
+# 可选IO驱动
+netcdf = { version = "0.9", optional = true }
+gdal = { version = "0.16", optional = true }
+
+[build-dependencies]
+regex = "1.10"
+chrono = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+approx = "0.5"
+tempfile = "3.10"
+test-case = "3.3"
+
+[[bench]]
+name = "physics_bench"
+harness = false
+
+[[bench]]
+name = "gradient_bench"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+# 禁止危险模式
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# 性能相关
+large_enum_variant = "warn"
+box_collection = "warn"
+redundant_clone = "warn"
+
+# 代码质量
+cognitive_complexity = "warn"
+too_many_arguments = "warn"

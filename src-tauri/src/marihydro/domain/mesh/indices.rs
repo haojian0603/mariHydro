@@ -1,5 +1,4 @@
-//! 类型安全的索引定义
-
+// src-tauri\src\marihydro\domain\mesh\indices.rs
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::Hash;
