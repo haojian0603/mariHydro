@@ -56,7 +56,7 @@ pub mod traits;
 pub use adaptive::{AdaptiveSolver, SolverSelector};
 pub use hllc::HllcSolver;
 pub use rusanov::RusanovSolver;
-pub use traits::{RiemannFlux, RiemannSolver, SolverCapabilities};
+pub use traits::{RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 
 use glam::DVec2;
 

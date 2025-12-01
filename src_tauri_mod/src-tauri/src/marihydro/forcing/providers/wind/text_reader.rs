@@ -105,14 +105,14 @@ impl TextWindReader {
         start_time: DateTime<Utc>,
         config: TextWindConfig,
     ) -> MhResult<Self> {
-        let file = File::open(path).map_err(|e| MhError::Io(e.to_string()))?;
+        let file = File::open(path).map_err(|e| MhError::io(e.to_string()))?;
         let reader = BufReader::new(file);
         
         let mut records = Vec::new();
         let is_spatial = config.x_column.is_some() && config.y_column.is_some();
         
         for (line_no, line_result) in reader.lines().enumerate() {
-            let line = line_result.map_err(|e| MhError::Io(e.to_string()))?;
+            let line = line_result.map_err(|e| MhError::io(e.to_string()))?;
             let line = line.trim();
             
             // 跳过头部和注释行
@@ -130,33 +130,33 @@ impl TextWindReader {
             
             // 解析时间
             let time_str = columns.get(config.time_column)
-                .ok_or_else(|| MhError::Parse(format!("Missing time column at line {}", line_no + 1)))?;
+                .ok_or_else(|| MhError::parse_simple(format!("Missing time column at line {}", line_no + 1)))?;
             let time_seconds = Self::parse_time(time_str, &config.time_format, start_time)?;
             
             // 解析U, V
             let u: f64 = columns.get(config.u_column)
-                .ok_or_else(|| MhError::Parse(format!("Missing U column at line {}", line_no + 1)))?
+                .ok_or_else(|| MhError::parse_simple(format!("Missing U column at line {}", line_no + 1)))?
                 .parse()
-                .map_err(|_| MhError::Parse(format!("Invalid U value at line {}", line_no + 1)))?;
+                .map_err(|_| MhError::parse_simple(format!("Invalid U value at line {}", line_no + 1)))?;;
             
             let v: f64 = columns.get(config.v_column)
-                .ok_or_else(|| MhError::Parse(format!("Missing V column at line {}", line_no + 1)))?
+                .ok_or_else(|| MhError::parse_simple(format!("Missing V column at line {}", line_no + 1)))?
                 .parse()
-                .map_err(|_| MhError::Parse(format!("Invalid V value at line {}", line_no + 1)))?;
+                .map_err(|_| MhError::parse_simple(format!("Invalid V value at line {}", line_no + 1)))?;;
             
             // 解析可选的空间坐标
             let x = if let Some(col) = config.x_column {
                 Some(columns.get(col)
-                    .ok_or_else(|| MhError::Parse(format!("Missing X column at line {}", line_no + 1)))?
+                    .ok_or_else(|| MhError::parse_simple(format!("Missing X column at line {}", line_no + 1)))?
                     .parse()
-                    .map_err(|_| MhError::Parse(format!("Invalid X value at line {}", line_no + 1)))?)
+                    .map_err(|_| MhError::parse_simple(format!("Invalid X value at line {}", line_no + 1)))?)
             } else { None };
             
             let y = if let Some(col) = config.y_column {
                 Some(columns.get(col)
-                    .ok_or_else(|| MhError::Parse(format!("Missing Y column at line {}", line_no + 1)))?
+                    .ok_or_else(|| MhError::parse_simple(format!("Missing Y column at line {}", line_no + 1)))?
                     .parse()
-                    .map_err(|_| MhError::Parse(format!("Invalid Y value at line {}", line_no + 1)))?)
+                    .map_err(|_| MhError::parse_simple(format!("Invalid Y value at line {}", line_no + 1)))?)
             } else { None };
             
             records.push(WindRecord {
@@ -168,7 +168,7 @@ impl TextWindReader {
         }
         
         if records.is_empty() {
-            return Err(MhError::Parse("No valid wind records found in file".into()));
+            return Err(MhError::parse_simple("No valid wind records found in file"));
         }
         
         // 按时间排序
@@ -187,17 +187,17 @@ impl TextWindReader {
         match format {
             TimeFormat::Seconds => {
                 s.parse::<f64>()
-                    .map_err(|_| MhError::Parse(format!("Invalid time value: {}", s)))
+                    .map_err(|_| MhError::parse_simple(format!("Invalid time value: {}", s)))
             }
             TimeFormat::Hours => {
                 s.parse::<f64>()
                     .map(|h| h * 3600.0)
-                    .map_err(|_| MhError::Parse(format!("Invalid time value: {}", s)))
+                    .map_err(|_| MhError::parse_simple(format!("Invalid time value: {}", s)))
             }
             TimeFormat::Iso8601 => {
                 DateTime::parse_from_rfc3339(s)
                     .map(|dt| (dt.with_timezone(&Utc) - start_time).num_seconds() as f64)
-                    .map_err(|_| MhError::Parse(format!("Invalid ISO8601 time: {}", s)))
+                    .map_err(|_| MhError::parse_simple(format!("Invalid ISO8601 time: {}", s)))
             }
             TimeFormat::Custom => {
                 // 尝试常见格式
@@ -212,7 +212,7 @@ impl TextWindReader {
                         return Ok((dt - start_time).num_seconds() as f64);
                     }
                 }
-                Err(MhError::Parse(format!("Unable to parse time: {}", s)))
+                Err(MhError::parse_simple(format!("Unable to parse time: {}", s)))
             }
         }
     }

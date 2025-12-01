@@ -129,7 +129,7 @@ impl VenkatakrishnanLimiter {
         }
         let (dmax, dmin) = (phi_max - phi_c, phi_min - phi_c);
 
-        let mut alpha = 1.0;
+        let mut alpha: f64 = 1.0;
         for &face in mesh.cell_faces(cell) {
             let r = mesh.face_centroid(face) - center;
             let delta = g.dot(r);
@@ -204,7 +204,7 @@ pub mod optimized {
                 }
                 let (dmax, dmin) = (pmax - phi_c, pmin - phi_c);
 
-                let mut a = 1.0;
+                let mut a: f64 = 1.0;
                 for &face in mesh.cell_faces(cell) {
                     let r = mesh.face_centroid(face) - center;
                     let d = g.dot(r);

@@ -96,12 +96,12 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 加载项目
     pub fn load_project(&self, id: &str) -> MhResult<String> {
-        self.storage.load_project(id)
+        self.storage.load_project(id)?.ok_or_else(|| MhError::not_found(format!("Project {} not found", id)))
     }
     
     /// 列出所有项目
     pub fn list_projects(&self) -> Vec<String> {
-        self.storage.list_projects()
+        self.storage.list_project_ids().unwrap_or_default()
     }
     
     /// 删除项目
@@ -137,7 +137,7 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     ) -> MhResult<String> {
         // 检查项目存在
         if !self.project_exists(project_id) {
-            return Err(MhError::Config(format!("Project {} not found", project_id)));
+            return Err(MhError::config(format!("Project {} not found", project_id)));
         }
         
         // 创建作业
@@ -161,22 +161,23 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 获取作业
     pub fn get_job(&self, job_id: &str) -> MhResult<SimulationJob> {
-        self.storage.get_job(job_id)
+        self.storage.get_job(job_id)?
+            .ok_or_else(|| MhError::not_found(format!("Job {}", job_id)))
     }
     
     /// 开始作业
     pub fn start_job(&self, job_id: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         
         if job.status != JobStatus::Pending {
-            return Err(MhError::Config(format!(
+            return Err(MhError::config(format!(
                 "Job {} cannot be started, current status: {:?}",
                 job_id, job.status
             )));
         }
         
         job.start();
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         self.emit_event(WorkflowEvent::JobStarted {
             job_id: job_id.to_string(),
@@ -192,7 +193,7 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
         progress: f64,
         message: Option<&str>,
     ) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         
         // 如果还是 Pending 状态，自动开始
         if job.status == JobStatus::Pending {
@@ -203,7 +204,7 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
         }
         
         job.update_progress(progress, message);
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         self.emit_event(WorkflowEvent::JobProgress {
             job_id: job_id.to_string(),
@@ -216,9 +217,9 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 完成作业
     pub fn complete_job(&self, job_id: &str, result_path: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         job.complete(result_path);
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         self.emit_event(WorkflowEvent::JobCompleted {
             job_id: job_id.to_string(),
@@ -230,9 +231,9 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 失败作业
     pub fn fail_job(&self, job_id: &str, error: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         job.fail(error);
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         self.emit_event(WorkflowEvent::JobFailed {
             job_id: job_id.to_string(),
@@ -244,17 +245,17 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 取消作业
     pub fn cancel_job(&self, job_id: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         
         if job.status.is_terminal() {
-            return Err(MhError::Config(format!(
+            return Err(MhError::config(format!(
                 "Job {} is already terminal: {:?}",
                 job_id, job.status
             )));
         }
         
         job.cancel();
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         self.emit_event(WorkflowEvent::JobCancelled {
             job_id: job_id.to_string(),
@@ -265,10 +266,10 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
     
     /// 暂停作业
     pub fn pause_job(&self, job_id: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         
         if job.status != JobStatus::Running {
-            return Err(MhError::Config(format!(
+            return Err(MhError::config(format!(
                 "Job {} is not running, cannot pause",
                 job_id
             )));
@@ -276,17 +277,17 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
         
         job.status = JobStatus::Paused;
         job.message = Some("Paused".to_string());
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         Ok(())
     }
     
     /// 恢复作业
     pub fn resume_job(&self, job_id: &str) -> MhResult<()> {
-        let mut job = self.storage.get_job(job_id)?;
+        let mut job = self.get_job(job_id)?;
         
         if job.status != JobStatus::Paused {
-            return Err(MhError::Config(format!(
+            return Err(MhError::config(format!(
                 "Job {} is not paused, cannot resume",
                 job_id
             )));
@@ -294,29 +295,30 @@ impl<S: WorkflowStorage> WorkflowManagerV2<S> {
         
         job.status = JobStatus::Running;
         job.message = Some("Resumed".to_string());
-        self.storage.update_job(&job)?;
+        self.storage.save_job(&job)?;
         
         Ok(())
     }
     
     /// 列出项目的所有作业
     pub fn list_jobs(&self, project_id: &str) -> Vec<SimulationJob> {
-        self.storage.list_jobs_by_project(project_id)
+        self.storage.list_jobs(project_id).unwrap_or_default()
     }
     
     /// 列出待处理的作业
     pub fn list_pending_jobs(&self) -> Vec<SimulationJob> {
-        self.storage.list_jobs_by_status(JobStatus::Pending)
+        self.storage.list_jobs_by_status(JobStatus::Pending).unwrap_or_default()
     }
     
     /// 列出运行中的作业
     pub fn list_running_jobs(&self) -> Vec<SimulationJob> {
-        self.storage.list_jobs_by_status(JobStatus::Running)
+        self.storage.list_jobs_by_status(JobStatus::Running).unwrap_or_default()
     }
     
     /// 删除作业
     pub fn delete_job(&self, job_id: &str) -> MhResult<()> {
-        self.storage.delete_job(job_id)
+        self.storage.delete_job(job_id)?;
+        Ok(())
     }
 }
 

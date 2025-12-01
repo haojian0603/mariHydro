@@ -19,12 +19,12 @@ pub struct TimeManager {
 impl TimeManager {
     pub fn new(start_iso: &str, tz_config: TimezoneConfig) -> MhResult<Self> {
         let base_utc = DateTime::parse_from_rfc3339(start_iso)
-            .map_err(|e| MhError::Config(format!("Time format error: {}", e)))?
+            .map_err(|e| MhError::config(format!("Time format error: {}", e)))?
             .with_timezone(&Utc);
         let offset = match &tz_config {
             TimezoneConfig::Fixed(h) => {
                 let secs = h * 3600;
-                if secs.abs() > 86400 { return Err(MhError::Config(format!("Offset {} hours out of range", h))); }
+                if secs.abs() > 86400 { return Err(MhError::config(format!("Offset {} hours out of range", h))); }
                 FixedOffset::east_opt(secs)
             }
             _ => None,

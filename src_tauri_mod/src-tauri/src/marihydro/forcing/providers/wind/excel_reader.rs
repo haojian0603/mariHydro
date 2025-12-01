@@ -84,10 +84,10 @@ impl ExcelWindReader {
         start_time: DateTime<Utc>,
         config: ExcelWindConfig,
     ) -> MhResult<Self> {
-        use calamine::{open_workbook_auto, DataType, Reader};
+        use calamine::{open_workbook_auto, Data, Reader};
 
         let mut workbook = open_workbook_auto(path)
-            .map_err(|e| MhError::Io(format!("Failed to open Excel file: {}", e)))?;
+            .map_err(|e| MhError::io(format!("Failed to open Excel file: {}", e)))?;
 
         // 获取工作表
         let sheet_name = if let Some(name) = &config.sheet_name {
@@ -97,12 +97,12 @@ impl ExcelWindReader {
                 .sheet_names()
                 .first()
                 .cloned()
-                .ok_or_else(|| MhError::Parse("Excel file has no sheets".into()))?
+                .ok_or_else(|| MhError::parse_simple("Excel file has no sheets"))?
         };
 
         let range = workbook
             .worksheet_range(&sheet_name)
-            .map_err(|e| MhError::Parse(format!("Failed to read sheet '{}': {}", sheet_name, e)))?;
+            .map_err(|e| MhError::parse_simple(format!("Failed to read sheet '{}': {}", sheet_name, e)))?;;
 
         let mut records = Vec::new();
 
@@ -119,21 +119,21 @@ impl ExcelWindReader {
 
             // 解析时间
             let time_seconds = match time_cell {
-                Some(DataType::Float(f)) => {
+                Some(Data::Float(f)) => {
                     Self::parse_time_value(*f, &config.time_format, start_time)?
                 }
-                Some(DataType::Int(i)) => {
+                Some(Data::Int(i)) => {
                     Self::parse_time_value(*i as f64, &config.time_format, start_time)?
                 }
-                Some(DataType::String(s)) => Self::parse_time_string(s, start_time)?,
-                Some(DataType::DateTime(dt)) => {
+                Some(Data::String(s)) => Self::parse_time_string(s, start_time)?,
+                Some(Data::DateTime(dt)) => {
                     // calamine DateTime: days since 1899-12-30
-                    Self::excel_datetime_to_seconds(*dt, start_time)?
+                    Self::excel_datetime_to_seconds(dt.as_f64(), start_time)?
                 }
-                Some(DataType::DateTimeIso(s)) => Self::parse_time_string(s, start_time)?,
-                Some(DataType::Empty) | None => continue, // 跳过空行
+                Some(Data::DateTimeIso(s)) => Self::parse_time_string(s, start_time)?,
+                Some(Data::Empty) | None => continue, // 跳过空行
                 _ => {
-                    return Err(MhError::Parse(format!(
+                    return Err(MhError::parse_simple(format!(
                         "Unsupported time format at row {}",
                         row_idx + 1
                     )))
@@ -154,7 +154,7 @@ impl ExcelWindReader {
         }
 
         if records.is_empty() {
-            return Err(MhError::Parse("No valid wind records found in Excel".into()));
+            return Err(MhError::parse_simple("No valid wind records found in Excel"));
         }
 
         // 按时间排序
@@ -168,19 +168,19 @@ impl ExcelWindReader {
     }
 
     fn parse_numeric_cell(
-        cell: Option<&calamine::DataType>,
+        cell: Option<&calamine::Data>,
         row_idx: usize,
         col_name: &str,
     ) -> MhResult<f64> {
-        use calamine::DataType;
+        use calamine::Data;
         match cell {
-            Some(DataType::Float(f)) => Ok(*f),
-            Some(DataType::Int(i)) => Ok(*i as f64),
-            Some(DataType::String(s)) => s
+            Some(Data::Float(f)) => Ok(*f),
+            Some(Data::Int(i)) => Ok(*i as f64),
+            Some(Data::String(s)) => s
                 .parse::<f64>()
-                .map_err(|_| MhError::Parse(format!("Invalid {} value at row {}", col_name, row_idx + 1))),
-            Some(DataType::Empty) | None => Ok(0.0),
-            _ => Err(MhError::Parse(format!(
+                .map_err(|_| MhError::parse_simple(format!("Invalid {} value at row {}", col_name, row_idx + 1))),
+            Some(Data::Empty) | None => Ok(0.0),
+            _ => Err(MhError::parse_simple(format!(
                 "Unsupported {} format at row {}",
                 col_name,
                 row_idx + 1
@@ -200,8 +200,8 @@ impl ExcelWindReader {
             }
             ExcelTimeFormat::Seconds => Ok(value),
             ExcelTimeFormat::Hours => Ok(value * 3600.0),
-            ExcelTimeFormat::TextIso8601 => Err(MhError::Parse(
-                "Expected text format but got numeric".into(),
+            ExcelTimeFormat::TextIso8601 => Err(MhError::parse_simple(
+                "Expected text format but got numeric",
             )),
         }
     }
@@ -242,7 +242,7 @@ impl ExcelWindReader {
             return Ok((dt.with_timezone(&Utc) - start_time).num_seconds() as f64);
         }
 
-        Err(MhError::Parse(format!("Unable to parse time: {}", s)))
+        Err(MhError::parse_simple(format!("Unable to parse time: {}", s)))
     }
 
     /// 时间插值获取风速
@@ -304,7 +304,7 @@ impl ExcelWindConfig {
     }
 
     pub fn with_sheet(mut self, name: &str) -> Self {
-        self.sheet_name = Some(name.into());
+        self.sheet_name = Some(name.to_string());
         self
     }
 

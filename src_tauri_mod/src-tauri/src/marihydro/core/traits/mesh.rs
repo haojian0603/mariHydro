@@ -50,6 +50,9 @@ pub trait MeshAccess: Send + Sync {
     /// 节点坐标
     fn node_position(&self, node: NodeIndex) -> DVec2;
 
+    /// 单元底高程（用于水位计算）
+    fn cell_bed_elevation(&self, cell: CellIndex) -> f64;
+
     // ===== 拓扑查询 =====
 
     /// 面的拥有者单元（总是有效的）

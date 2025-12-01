@@ -1,6 +1,6 @@
 // src-tauri/src/commands.rs
 use serde::{Deserialize, Serialize};
-use tauri::Window;
+use tauri::{Emitter, Window};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SimulationConfig {

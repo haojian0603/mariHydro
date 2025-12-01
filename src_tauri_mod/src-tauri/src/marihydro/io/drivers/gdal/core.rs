@@ -7,9 +7,9 @@ pub struct GdalDriver;
 
 impl RasterDriver for GdalDriver {
     fn read_metadata(&self, _path: &Path) -> MhResult<RasterMetadata> {
-        Err(MhError::Io("GDAL not available".into()))
+        Err(MhError::io("GDAL not available"))
     }
     fn read_band(&self, _path: &Path, _band: usize) -> MhResult<Vec<f64>> {
-        Err(MhError::Io("GDAL not available".into()))
+        Err(MhError::io("GDAL not available"))
     }
 }

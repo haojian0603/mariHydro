@@ -29,7 +29,7 @@ pub struct GmshLoader;
 
 impl GmshLoader {
     pub fn load(path: &str) -> MhResult<GmshMeshData> {
-        let file = File::open(path).map_err(|e| MhError::Io(format!("Cannot open {}: {}", path, e)))?;
+        let file = File::open(path).map_err(|e| MhError::io(format!("Cannot open {}: {}", path, e)))?;
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
         let mut nodes = Vec::new();

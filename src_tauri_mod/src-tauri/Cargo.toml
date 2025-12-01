@@ -12,6 +12,9 @@ default = []
 mock_db = []
 structured_grid = []
 
+# GPU加速支持
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
+
 # 可选的IO驱动
 netcdf = ["dep:netcdf"]
 gdal = ["dep:gdal"]
@@ -25,6 +28,20 @@ thiserror = "1.0"
 log = "0.4"
 tracing = "0.1"
 
+# 空间索引和优化
+rstar = "0.12"
+smallvec = "1.13"
+
+# 工作流管理
+uuid = { version = "1.6", features = ["v4"] }
+
+# 日志
+env_logger = "0.11"
+
+# Tauri 框架
+tauri = { version = "2.0" }
+tauri-plugin-shell = "2.0"
+
 # 数据库
 rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 
@@ -35,12 +52,17 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# 地理空间
-proj = "0.27"
+# 地理空间（纯 Rust 实现，无需 proj/cmake）
+# proj = "0.27"  # 已用纯 Rust 实现替代
 
 # 可选IO驱动
 netcdf = { version = "0.9", optional = true }
 gdal = { version = "0.16", optional = true }
+
+# GPU加速（可选）
+wgpu = { version = "23.0", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
 
 # 风场读取
 csv = "1.3"

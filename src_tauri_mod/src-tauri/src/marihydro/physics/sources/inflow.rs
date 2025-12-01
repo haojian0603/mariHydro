@@ -19,7 +19,7 @@ pub fn apply_river_inflow(
     h: &mut [f64], cell_areas: &[f64], rivers: &[ActiveRiverSource], dt: f64,
 ) -> MhResult<usize> {
     if dt <= 0.0 || dt > 3600.0 {
-        return Err(MhError::InvalidInput(format!("Time step abnormal: dt={:.3}s", dt)));
+        return Err(MhError::invalid_input(format!("Time step abnormal: dt={:.3}s", dt)));
     }
     if rivers.is_empty() { return Ok(0); }
     let mut applied_count = 0;
@@ -43,11 +43,11 @@ pub fn apply_river_inflow_with_momentum(
     river_velocities: &[(f64, f64)], dt: f64,
 ) -> MhResult<usize> {
     if dt <= 0.0 || dt > 3600.0 {
-        return Err(MhError::InvalidInput(format!("Time step abnormal: dt={:.3}s", dt)));
+        return Err(MhError::invalid_input(format!("Time step abnormal: dt={:.3}s", dt)));
     }
     if rivers.is_empty() { return Ok(0); }
     if rivers.len() != river_velocities.len() {
-        return Err(MhError::InvalidInput("River count != velocity count".into()));
+        return Err(MhError::invalid_input("River count != velocity count"));
     }
     let mut applied_count = 0;
     for (river, &(u_river, v_river)) in rivers.iter().zip(river_velocities) {
@@ -88,7 +88,7 @@ impl PointSource {
 pub fn apply_point_sources(
     h: &mut [f64], cell_areas: &[f64], sources: &[PointSource], dt: f64,
 ) -> MhResult<usize> {
-    if dt <= 0.0 { return Err(MhError::InvalidInput("dt must be positive".into())); }
+    if dt <= 0.0 { return Err(MhError::invalid_input("dt must be positive")); }
     let mut count = 0;
     for src in sources {
         let idx = src.cell_id.get();

@@ -9,8 +9,8 @@ pub struct FileInspector;
 impl FileInspector {
     pub fn inspect(path: &str) -> MhResult<FileInfo> {
         let p = Path::new(path);
-        if !p.exists() { return Err(MhError::Io(format!("File not found: {}", path))); }
-        let meta = fs::metadata(p).map_err(|e| MhError::Io(e.to_string()))?;
+        if !p.exists() { return Err(MhError::io(format!("File not found: {}", path))); }
+        let meta = fs::metadata(p).map_err(|e| MhError::io(e.to_string()))?;
         let size = meta.len();
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         let file_type = match ext.as_str() {

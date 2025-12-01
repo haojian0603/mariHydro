@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_job_state_transitions() {
         // Pending -> Running -> Completed
-        let job = TypedJob::<Pending>::new("job1".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job1".into(), "proj1");
         assert_eq!(job.state_name(), "PENDING");
         
         let job = job.start();
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_job_pause_resume() {
-        let job = TypedJob::<Pending>::new("job1".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job1".into(), "proj1");
         let mut job = job.start();
         
         job.update_progress(50.0, Some("Halfway"));
@@ -413,12 +413,12 @@ mod tests {
     #[test]
     fn test_job_cancellation() {
         // 取消 Pending 作业
-        let job = TypedJob::<Pending>::new("job1".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job1".into(), "proj1");
         let job = job.cancel();
         assert_eq!(job.state_name(), "CANCELLED");
         
         // 取消 Running 作业
-        let job = TypedJob::<Pending>::new("job2".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job2".into(), "proj1");
         let job = job.start();
         let job = job.cancel();
         assert_eq!(job.state_name(), "CANCELLED");
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_conversion() {
-        let job = TypedJob::<Pending>::new("job1".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job1".into(), "proj1");
         let dynamic = job.into_dynamic();
         
         assert_eq!(dynamic.state, "PENDING");
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_job_failure() {
-        let job = TypedJob::<Pending>::new("job1".into(), "proj1".into());
+        let job = TypedJob::<Pending>::new("job1".into(), "proj1");
         let job = job.start();
         let job = job.fail("Out of memory");
         

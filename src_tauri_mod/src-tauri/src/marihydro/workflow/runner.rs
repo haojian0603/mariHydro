@@ -66,6 +66,6 @@ impl SimulationExecutor for MockExecutor {
             on_progress((i + 1) as f64 * 10.0, &format!("Step {}/10", i + 1));
             thread::sleep(Duration::from_millis(100));
         }
-        Ok("./output/result.vtu".into())
+        Ok("./output/result.vtu".to_string())
     }
 }

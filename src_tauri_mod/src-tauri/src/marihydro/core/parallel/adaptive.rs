@@ -71,7 +71,7 @@ impl AdaptiveScheduler {
         > = std::collections::HashMap::new();
 
         for record in history.iter().rev().take(20) {
-            let key = ParallelStrategyKey::from(record.strategy);
+            let key = ParallelStrategyKey::from(record.strategy.clone());
             let entry = strategy_stats.entry(key).or_insert((0.0, 0));
             entry.0 += record.speedup;
             entry.1 += 1;
@@ -152,7 +152,7 @@ impl AdaptiveScheduler {
             std::collections::HashMap::new();
         for record in history.iter() {
             *strategy_counts
-                .entry(ParallelStrategyKey::from(record.strategy))
+                .entry(ParallelStrategyKey::from(record.strategy.clone()))
                 .or_insert(0) += 1;
         }
 
@@ -195,6 +195,7 @@ enum ParallelStrategyKey {
     Dynamic,
     WorkStealing,
     Colored,
+    Auto,
 }
 
 impl From<ParallelStrategy> for ParallelStrategyKey {
@@ -205,6 +206,9 @@ impl From<ParallelStrategy> for ParallelStrategyKey {
             ParallelStrategy::Dynamic => ParallelStrategyKey::Dynamic,
             ParallelStrategy::WorkStealing => ParallelStrategyKey::WorkStealing,
             ParallelStrategy::Colored => ParallelStrategyKey::Colored,
+            ParallelStrategy::Auto { .. } => ParallelStrategyKey::Auto,
+            #[cfg(feature = "gpu")]
+            ParallelStrategy::GpuCompute { .. } => ParallelStrategyKey::Dynamic,
         }
     }
 }
@@ -217,6 +221,7 @@ impl ParallelStrategyKey {
             ParallelStrategyKey::Dynamic => ParallelStrategy::Dynamic,
             ParallelStrategyKey::WorkStealing => ParallelStrategy::WorkStealing,
             ParallelStrategyKey::Colored => ParallelStrategy::Colored,
+            ParallelStrategyKey::Auto => ParallelStrategy::auto(),
         }
     }
 }

@@ -174,14 +174,14 @@ mod tests {
         assert_eq!(storage.project_count(), 1);
 
         // Read
-        assert_eq!(storage.load_project("p1").unwrap(), Some("data1".into()));
+        assert_eq!(storage.load_project("p1").unwrap(), Some("data1"));
         assert_eq!(storage.load_project("p2").unwrap(), None);
 
         // Update
         storage.save_project("p1", "data1_updated").unwrap();
         assert_eq!(
             storage.load_project("p1").unwrap(),
-            Some("data1_updated".into())
+            Some("data1_updated")
         );
 
         // Delete
@@ -198,7 +198,7 @@ mod tests {
         storage.save_project("p1", "{}").unwrap();
 
         // 创建作业
-        let job = SimulationJob::new("j1".into(), "p1".into());
+        let job = SimulationJob::new("j1".into(), "p1");
         storage.save_job(&job).unwrap();
         assert_eq!(storage.job_count(), 1);
 
@@ -213,7 +213,7 @@ mod tests {
             .unwrap();
         let updated = storage.get_job("j1").unwrap().unwrap();
         assert_eq!(updated.status, JobStatus::Running);
-        assert_eq!(updated.message, Some("Started".into()));
+        assert_eq!(updated.message, Some("Started"));
 
         // 更新进度
         storage.update_job_progress("j1", 50.0, None).unwrap();
@@ -230,8 +230,8 @@ mod tests {
         let storage = MemoryStorage::new();
         storage.save_project("p1", "{}").unwrap();
 
-        let job1 = SimulationJob::new("j1".into(), "p1".into());
-        let mut job2 = SimulationJob::new("j2".into(), "p1".into());
+        let job1 = SimulationJob::new("j1".into(), "p1");
+        let mut job2 = SimulationJob::new("j2".into(), "p1");
         job2.status = JobStatus::Running;
 
         storage.save_job(&job1).unwrap();
@@ -251,7 +251,7 @@ mod tests {
         let storage = MemoryStorage::new();
         storage.save_project("p1", "{}").unwrap();
 
-        let job = SimulationJob::new("j1".into(), "p1".into());
+        let job = SimulationJob::new("j1".into(), "p1");
         storage.save_job(&job).unwrap();
 
         assert_eq!(storage.job_count(), 1);

@@ -103,8 +103,9 @@ impl BedEvolutionSolver {
             let owner = mesh.face_owner[face_idx];
             let neighbor = mesh.face_neighbor[face_idx];
 
-            let nx = mesh.face_normal_x[face_idx];
-            let ny = mesh.face_normal_y[face_idx];
+            let normal = mesh.face_normal[face_idx];
+            let nx = normal.x;
+            let ny = normal.y;
             let length = mesh.face_length[face_idx];
 
             // 面心插值

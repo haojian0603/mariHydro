@@ -3,6 +3,7 @@ use crate::marihydro::core::error::MhResult;
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::traits::source::{SourceContribution, SourceContext, SourceTerm};
 use crate::marihydro::core::traits::state::StateAccess;
+use crate::marihydro::core::types::CellIndex;
 use std::f64::consts::PI;
 
 pub struct CoriolisSource {
@@ -63,9 +64,9 @@ impl SourceTerm for CoriolisSource {
     fn compute_cell<M: MeshAccess, S: StateAccess>(
         &self, cell_idx: usize, _mesh: &M, state: &S, ctx: &SourceContext,
     ) -> SourceContribution {
-        let hu = state.hu(cell_idx);
-        let hv = state.hv(cell_idx);
-        if ctx.params.is_dry(state.h(cell_idx)) {
+        let hu = state.hu(CellIndex(cell_idx));
+        let hv = state.hv(CellIndex(cell_idx));
+        if ctx.params.is_dry(state.h(CellIndex(cell_idx))) {
             return SourceContribution::ZERO;
         }
         let (hu_new, hv_new) = if self.use_exact_rotation {
@@ -86,9 +87,9 @@ impl SourceTerm for CoriolisSource {
     ) -> MhResult<()> {
         let n = mesh.n_cells();
         for i in 0..n {
-            if ctx.params.is_dry(state.h(i)) { continue; }
-            let hu = state.hu(i);
-            let hv = state.hv(i);
+            if ctx.params.is_dry(state.h(CellIndex(i))) { continue; }
+            let hu = state.hu(CellIndex(i));
+            let hv = state.hv(CellIndex(i));
             let (hu_new, hv_new) = if self.use_exact_rotation {
                 self.apply_exact(hu, hv, ctx.dt)
             } else {

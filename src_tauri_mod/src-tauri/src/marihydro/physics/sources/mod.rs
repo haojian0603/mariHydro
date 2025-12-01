@@ -8,7 +8,6 @@ pub mod atmosphere;
 pub mod baroclinic;
 pub mod coriolis;
 pub mod diffusion;
-pub mod dry_wet;
 pub mod friction;
 pub mod implicit;
 pub mod inflow;
@@ -20,42 +19,54 @@ pub mod vegetation;
 // 基础模块（包含 SourceTerm trait 实现）
 pub mod base;
 
+// atmosphere 模块导出
 pub use atmosphere::{
-    compute_pressure_gradient, compute_wind_acceleration, compute_wind_acceleration_field,
-    compute_wind_stress, wind_drag_coefficient_lp81, wind_drag_coefficient_wu82,
+    wind_drag_coefficient_lp81, wind_drag_coefficient_wu82,
+    WindStressSource, PressureGradientSource,
 };
-pub use coriolis::{apply_coriolis_exact, is_stable, max_stable_dt};
+
+// coriolis 模块导出
+pub use coriolis::CoriolisSource;
+
+// diffusion 模块导出
 pub use diffusion::{
     apply_diffusion_auto_substeps, apply_diffusion_explicit, apply_diffusion_explicit_variable,
     apply_diffusion_inplace, apply_diffusion_substeps, estimate_stable_dt, required_substeps,
+    DiffusionBC,
 };
-pub use dry_wet::{correct_interface_depth, enforce_dry_velocity, is_wet, is_wet_simple};
-pub use friction::{
-    apply_friction_chezy, apply_friction_field, apply_friction_field_chezy,
-    apply_friction_field_scalar, apply_friction_implicit, apply_friction_implicit_conservative,
-    apply_friction_vegetation, compute_chezy_coefficient, compute_manning_coefficient,
-    compute_vegetation_coefficient,
-};
-pub use inflow::{apply_river_inflow, apply_river_inflow_with_momentum};
+
+// friction 模块导出
+pub use friction::{ManningFriction, ChezyFriction};
+
+// inflow 模块导出
+pub use inflow::{apply_river_inflow, apply_river_inflow_with_momentum, ActiveRiverSource, PointSource};
+
+// tracer_transport 模块导出
 pub use tracer_transport::{
     solve_tracer_step, AdvectionScheme, TracerBoundaryCondition, TracerTransportSolver,
 };
-pub use turbulence::{
-    compute_gradient_field, compute_turbulent_kinetic_energy, compute_vorticity, SmagorinskyModel,
-};
+
+// turbulence 模块导出
+pub use turbulence::{compute_vorticity, SmagorinskyTurbulence};
+
+// turbulence_ke 模块导出
 pub use turbulence_ke::{
     KEpsilonBoundary, KEpsilonCoefficients, KEpsilonConfig, KEpsilonSolver, KEpsilonState,
     TurbulenceModel,
 };
+
+// baroclinic 模块导出
 pub use baroclinic::{
     BaroclinicConfig, BaroclinicSolver, DensityField, EquationOfState,
 };
+
+// vegetation 模块导出
 pub use vegetation::{
     VegetationDrag, VegetationField, VegetationProperties, VegetationType,
     equivalent_manning, vegetation_turbulence_production,
 };
 
-// 新的隐式处理导出
+// implicit 模块导出
 pub use implicit::{
     ChezyDamping, DampingCoefficient, ImplicitConfig, ImplicitDiffusion,
     ImplicitMethod, ImplicitMomentumDecay, ManningDamping,

@@ -16,10 +16,10 @@ impl RiverTimeSeries {
     pub fn constant(flow_rate: f64) -> Self { Self { times: vec![0.0], flow_rates: vec![flow_rate] } }
 
     pub fn new(times: Vec<f64>, flow_rates: Vec<f64>) -> MhResult<Self> {
-        if times.len() != flow_rates.len() { return Err(MhError::InvalidInput("Length mismatch".into())); }
-        if times.is_empty() { return Err(MhError::InvalidInput("Empty series".into())); }
+        if times.len() != flow_rates.len() { return Err(MhError::invalid_input("Length mismatch")); }
+        if times.is_empty() { return Err(MhError::invalid_input("Empty series")); }
         for i in 0..times.len().saturating_sub(1) {
-            if times[i] >= times[i + 1] { return Err(MhError::InvalidInput("Not monotonic".into())); }
+            if times[i] >= times[i + 1] { return Err(MhError::invalid_input("Not monotonic")); }
         }
         Ok(Self { times, flow_rates })
     }
@@ -83,7 +83,7 @@ pub struct ConstantRiverProvider {
 impl ConstantRiverProvider {
     pub fn new() -> Self { Self { rivers: Vec::new() } }
     pub fn add(&mut self, cell_id: CellIndex, flow_rate: f64, name: &str) {
-        self.rivers.push((cell_id, flow_rate, name.into()));
+        self.rivers.push((cell_id, flow_rate, name.to_string()));
     }
 }
 

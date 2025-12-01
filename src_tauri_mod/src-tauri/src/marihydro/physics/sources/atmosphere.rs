@@ -82,7 +82,7 @@ impl SourceTerm for WindStressSource {
     fn compute_cell<M: MeshAccess, S: StateAccess>(
         &self, cell_idx: usize, _mesh: &M, state: &S, ctx: &SourceContext,
     ) -> SourceContribution {
-        let h = state.h(cell_idx);
+        let h = state.h(CellIndex(cell_idx));
         if ctx.params.is_dry(h) { return SourceContribution::ZERO; }
         let u = self.wind_u.get(cell_idx).copied().unwrap_or(0.0);
         let v = self.wind_v.get(cell_idx).copied().unwrap_or(0.0);
@@ -97,7 +97,7 @@ impl SourceTerm for WindStressSource {
         let n = mesh.n_cells();
         let h_dry = ctx.params.h_dry;
         for i in 0..n {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             if h < h_dry { continue; }
             let u = self.wind_u.get(i).copied().unwrap_or(0.0);
             let v = self.wind_v.get(i).copied().unwrap_or(0.0);
@@ -165,7 +165,7 @@ impl SourceTerm for PressureGradientSource {
         let factor = self.inv_rho;
         let h_dry = ctx.params.h_dry;
         for i in 0..n {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             if h < h_dry { continue; }
             let gp = storage.get(i);
             output_hu[i] += h * gp.x * factor;

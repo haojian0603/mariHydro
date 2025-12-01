@@ -32,9 +32,9 @@ impl SmagorinskyTurbulence {
         let n = mesh.n_cells();
         // 计算速度场
         for i in 0..n {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             workspace.velocities[i] = if params.is_dry(h) { DVec2::ZERO }
-            else { DVec2::new(state.hu(i) / h, state.hv(i) / h) };
+            else { DVec2::new(state.hu(CellIndex(i)) / h, state.hv(CellIndex(i)) / h) };
         }
         // 计算速度梯度
         self.compute_velocity_gradient_into(mesh, workspace);
@@ -97,13 +97,13 @@ impl SmagorinskyTurbulence {
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
             if !neighbor.is_valid() { continue; }
-            let h_o = state.h(owner.0);
-            let h_n = state.h(neighbor.0);
+            let h_o = state.h(owner);
+            let h_n = state.h(neighbor);
             if params.is_dry(h_o) && params.is_dry(h_n) { continue; }
-            let u_o = if params.is_dry(h_o) { 0.0 } else { state.hu(owner.0) / h_o };
-            let v_o = if params.is_dry(h_o) { 0.0 } else { state.hv(owner.0) / h_o };
-            let u_n = if params.is_dry(h_n) { 0.0 } else { state.hu(neighbor.0) / h_n };
-            let v_n = if params.is_dry(h_n) { 0.0 } else { state.hv(neighbor.0) / h_n };
+            let u_o = if params.is_dry(h_o) { 0.0 } else { state.hu(owner) / h_o };
+            let v_o = if params.is_dry(h_o) { 0.0 } else { state.hv(owner) / h_o };
+            let u_n = if params.is_dry(h_n) { 0.0 } else { state.hu(neighbor) / h_n };
+            let v_n = if params.is_dry(h_n) { 0.0 } else { state.hv(neighbor) / h_n };
             let dist = (mesh.cell_centroid(neighbor) - mesh.cell_centroid(owner)).length();
             if dist < 1e-14 { continue; }
             // 调和平均涡粘系数（保证正定性，物理上更合理）
@@ -153,9 +153,9 @@ pub fn compute_vorticity_into<M: MeshAccess, S: StateAccess>(
 ) {
     let n = mesh.n_cells();
     for i in 0..n {
-        let h = state.h(i);
+        let h = state.h(CellIndex(i));
         workspace.velocities[i] = if params.is_dry(h) { DVec2::ZERO }
-        else { DVec2::new(state.hu(i) / h, state.hv(i) / h) };
+        else { DVec2::new(state.hu(CellIndex(i)) / h, state.hv(CellIndex(i)) / h) };
     }
     for i in 0..n {
         let cell = CellIndex(i);

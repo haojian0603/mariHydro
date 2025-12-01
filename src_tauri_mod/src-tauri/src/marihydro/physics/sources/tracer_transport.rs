@@ -7,7 +7,8 @@ use rayon::prelude::*;
 
 use crate::marihydro::core::error::{MhError, MhResult};
 use crate::marihydro::core::traits::mesh::MeshAccess;
-use crate::marihydro::domain::mesh::unstructured::{BoundaryKind, UnstructuredMesh};
+use crate::marihydro::domain::mesh::unstructured::UnstructuredMesh;
+use crate::marihydro::domain::BoundaryKind;
 use crate::marihydro::domain::state::tracer::{TracerField, TracerType};
 
 /// 平流格式
@@ -110,7 +111,7 @@ impl TracerTransportSolver {
         
         // 验证输入
         if tracer.concentration.len() != n_cells {
-            return Err(MhError::InvalidInput("Tracer size mismatch".into()));
+            return Err(MhError::invalid_input("Tracer size mismatch"));
         }
 
         // 确保工作数组大小正确
@@ -184,8 +185,9 @@ impl TracerTransportSolver {
             let c_face = 0.5 * (c[owner] + c[neighbor]);
             
             // 面法向和长度
-            let nx = mesh.face_normal_x[face_idx];
-            let ny = mesh.face_normal_y[face_idx];
+            let normal = mesh.face_normal[face_idx];
+            let nx = normal.x;
+            let ny = normal.y;
             let length = mesh.face_length[face_idx];
             
             // 通量贡献
@@ -203,8 +205,9 @@ impl TracerTransportSolver {
             // 边界面使用内部单元浓度（零梯度近似）
             let c_face = c[owner];
             
-            let nx = mesh.face_normal_x[face_idx];
-            let ny = mesh.face_normal_y[face_idx];
+            let normal = mesh.face_normal[face_idx];
+            let nx = normal.x;
+            let ny = normal.y;
             let length = mesh.face_length[face_idx];
             
             let flux = DVec2::new(c_face * nx * length, c_face * ny * length);
@@ -266,8 +269,9 @@ impl TracerTransportSolver {
             let neighbor = mesh.face_neighbor[face_idx];
 
             // 面法向通量
-            let nx = mesh.face_normal_x[face_idx];
-            let ny = mesh.face_normal_y[face_idx];
+            let normal = mesh.face_normal[face_idx];
+            let nx = normal.x;
+            let ny = normal.y;
             let length = mesh.face_length[face_idx];
 
             // 计算面速度通量
@@ -375,37 +379,31 @@ impl TracerTransportSolver {
     ) {
         for face_idx in mesh.boundary_faces() {
             let owner = mesh.face_owner[face_idx];
-            let bc_idx = mesh.boundary_index(face_idx);
-            let kind = mesh.bc_kind[bc_idx];
+            let bc_idx = mesh.face_boundary_id[face_idx].unwrap_or(0);
 
-            let nx = mesh.face_normal_x[face_idx];
-            let ny = mesh.face_normal_y[face_idx];
+            let normal = mesh.face_normal[face_idx];
+            let nx = normal.x;
+            let ny = normal.y;
             let length = mesh.face_length[face_idx];
 
             let flux_velocity = (hu[owner] * nx + hv[owner] * ny) * length;
 
-            // 根据边界类型和条件处理
+            // 根据边界条件处理
             let bc = self.boundary_conditions
                 .get(bc_idx)
                 .cloned()
                 .unwrap_or_default();
 
-            let boundary_flux = match (kind, bc, flux_velocity > 0.0) {
+            let boundary_flux = match (bc, flux_velocity > 0.0) {
+                // 入流：使用边界值
+                (TracerBoundaryCondition::Inflow(c_bc), false) |
+                (TracerBoundaryCondition::FixedValue(c_bc), false) => {
+                    flux_velocity * c_bc
+                }
                 // 出流：使用内部值
-                (BoundaryKind::OpenSea | BoundaryKind::Outflow, _, true) => {
+                (_, true) => {
                     flux_velocity * tracer.concentration[owner]
                 }
-                // 入流：使用边界值
-                (_, TracerBoundaryCondition::Inflow(c_bc), false) |
-                (_, TracerBoundaryCondition::FixedValue(c_bc), false) => {
-                    flux_velocity * c_bc
-                }
-                // 河流入流
-                (BoundaryKind::RiverInflow, TracerBoundaryCondition::Inflow(c_bc), _) => {
-                    flux_velocity * c_bc
-                }
-                // 墙边界：零通量
-                (BoundaryKind::Wall | BoundaryKind::Symmetry, _, _) => 0.0,
                 // 默认：零梯度
                 _ => 0.0,
             };

@@ -134,8 +134,8 @@ impl WindReaderFactory {
                 }
                 #[cfg(not(feature = "netcdf"))]
                 {
-                    Err(MhError::Config(
-                        "NetCDF support not enabled. Compile with feature 'netcdf'".into(),
+                    Err(MhError::config(
+                        "NetCDF support not enabled. Compile with feature 'netcdf'",
                     ))
                 }
             }
@@ -147,8 +147,8 @@ impl WindReaderFactory {
                 }
                 #[cfg(not(feature = "grib"))]
                 {
-                    Err(MhError::Config(
-                        "GRIB support not enabled. Compile with feature 'grib'".into(),
+                    Err(MhError::config(
+                        "GRIB support not enabled. Compile with feature 'grib'",
                     ))
                 }
             }
@@ -189,12 +189,12 @@ impl WindReaderFactory {
         use std::fs::File;
         use std::io::{BufRead, BufReader};
 
-        let file = File::open(path).map_err(|e| MhError::Io(e.to_string()))?;
+        let file = File::open(path).map_err(|e| MhError::io(e.to_string()))?;
         let mut reader = BufReader::new(file);
         let mut first_line = String::new();
         reader
             .read_line(&mut first_line)
-            .map_err(|e| MhError::Io(e.to_string()))?;
+            .map_err(|e| MhError::io(e.to_string()))?;
 
         // 检查文件魔数
         let bytes = first_line.as_bytes();

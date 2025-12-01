@@ -24,10 +24,11 @@ pub use perf_utils::{
 };
 
 // 求解器
-pub use solver_v2::{ImprovedSolver, SolverConfig, SolverV2Builder};
+pub use solver_v2::{SolverConfig, UnstructuredSolverV2, SolverBuilderV2};
 
 // 类型别名（向后兼容）
-pub type UnstructuredSolverV2 = solver_v2::UnstructuredSolverV2;
+pub type ImprovedSolver = UnstructuredSolverV2;
+pub type SolverV2Builder = SolverBuilderV2;
 
 // 时间积分器
 pub use time_integrator::{

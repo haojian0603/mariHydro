@@ -99,7 +99,7 @@ impl Limiter for MinmodLimiter {
         }
 
         // 计算各面的限制因子
-        let mut alpha = 1.0;
+        let mut alpha: f64 = 1.0;
         for &face in mesh.cell_faces(cell) {
             let fc = mesh.face_centroid(face);
             let r = fc - center;
@@ -206,7 +206,7 @@ impl Limiter for SuperbeeLimiter {
         }
 
         // 计算各面的限制因子
-        let mut alpha = 1.0;
+        let mut alpha: f64 = 1.0;
         for &face in mesh.cell_faces(cell) {
             let fc = mesh.face_centroid(face);
             let r = fc - center;
@@ -302,7 +302,7 @@ impl Limiter for VanLeerLimiter {
         }
 
         // 计算各面的限制因子
-        let mut alpha = 1.0;
+        let mut alpha: f64 = 1.0;
         for &face in mesh.cell_faces(cell) {
             let fc = mesh.face_centroid(face);
             let r = fc - center;

@@ -6,7 +6,7 @@ use super::config::ParallelConfig;
 use rayon::prelude::*;
 
 /// 并行执行策略
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParallelStrategy {
     /// 串行执行
     Sequential,
@@ -21,12 +21,64 @@ pub enum ParallelStrategy {
     WorkStealing,
     /// 着色并行（用于网格面循环）
     Colored,
+
+    /// GPU计算策略
+    #[cfg(feature = "gpu")]
+    GpuCompute {
+        /// 工作组大小
+        workgroup_size: u32,
+    },
+
+    /// 自动选择策略
+    Auto {
+        /// 是否优先使用GPU
+        prefer_gpu: bool,
+        /// GPU最小问题规模（低于此规模使用CPU）
+        min_gpu_size: usize,
+    },
 }
 
 impl ParallelStrategy {
     /// 判断是否为并行策略
     pub fn is_parallel(&self) -> bool {
         !matches!(self, ParallelStrategy::Sequential)
+    }
+
+    /// 判断是否为GPU策略
+    pub fn is_gpu(&self) -> bool {
+        #[cfg(feature = "gpu")]
+        {
+            matches!(self, ParallelStrategy::GpuCompute { .. })
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            false
+        }
+    }
+
+    /// 判断是否为自动策略
+    pub fn is_auto(&self) -> bool {
+        matches!(self, ParallelStrategy::Auto { .. })
+    }
+
+    /// 创建默认的自动策略
+    pub fn auto() -> Self {
+        ParallelStrategy::Auto {
+            prefer_gpu: true,
+            min_gpu_size: 50_000,
+        }
+    }
+
+    /// 创建GPU策略（如果feature启用）
+    #[cfg(feature = "gpu")]
+    pub fn gpu(workgroup_size: u32) -> Self {
+        ParallelStrategy::GpuCompute { workgroup_size }
+    }
+
+    /// 创建默认GPU策略
+    #[cfg(feature = "gpu")]
+    pub fn gpu_default() -> Self {
+        ParallelStrategy::GpuCompute { workgroup_size: 256 }
     }
 }
 
@@ -154,6 +206,15 @@ where
         ParallelStrategy::Colored => {
             panic!("Colored strategy requires coloring data, use parallel_for_colored");
         }
+        ParallelStrategy::Auto { .. } => {
+            // Auto策略默认使用Dynamic
+            items.par_iter().enumerate().for_each(|(i, item)| f(i, item));
+        }
+        #[cfg(feature = "gpu")]
+        ParallelStrategy::GpuCompute { .. } => {
+            // GPU策略回退到Dynamic
+            items.par_iter().enumerate().for_each(|(i, item)| f(i, item));
+        }
     }
 }
 
@@ -193,6 +254,21 @@ where
         ParallelStrategy::Colored => {
             panic!("Colored strategy requires coloring data, use parallel_for_colored_mut");
         }
+        ParallelStrategy::Auto { .. } => {
+            // Auto策略默认使用Dynamic
+            items
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(i, item)| f(i, item));
+        }
+        #[cfg(feature = "gpu")]
+        ParallelStrategy::GpuCompute { .. } => {
+            // GPU策略回退到Dynamic
+            items
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(i, item)| f(i, item));
+        }
     }
 }
 
@@ -202,8 +278,8 @@ where
     T: Clone + Send + Sync,
     I: IntoParallelIterator,
     I::Item: Send,
-    F: Fn(I::Item) -> T + Sync,
-    R: Fn(T, T) -> T + Sync,
+    F: Fn(I::Item) -> T + Sync + Send,
+    R: Fn(T, T) -> T + Sync + Send,
 {
     items
         .into_par_iter()

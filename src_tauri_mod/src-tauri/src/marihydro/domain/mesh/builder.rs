@@ -7,7 +7,7 @@ use rstar::{RTree, AABB};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-use super::indices::{CellId, FaceId, NodeId, INVALID_CELL};
+use super::{CellId, FaceId, NodeId, INVALID_CELL};
 use super::unstructured::{CellEnvelope, CellFaces, UnstructuredMesh};
 use crate::marihydro::core::error::{MhError, MhResult};
 
@@ -225,7 +225,7 @@ impl MeshBuilder {
 
         mesh.cell_faces = vec![CellFaces::default(); mesh.n_cells];
 
-        let mut interior_faces = Vec::new();
+        let mut interior_faces: Vec<(usize, usize, usize, usize)> = Vec::new();
         let mut boundary_face_list = Vec::new();
 
         // 遍历所有单元的边

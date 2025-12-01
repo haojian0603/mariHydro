@@ -7,7 +7,7 @@
 use crate::marihydro::core::error::{MhError, MhResult};
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::traits::state::StateAccess;
-use crate::marihydro::core::types::CellIndex;
+use crate::marihydro::core::types::{CellIndex, NodeIndex};
 use std::collections::VecDeque;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -61,7 +61,7 @@ impl MeshSnapshot {
         
         let node_positions: Vec<_> = (0..n_nodes)
             .map(|i| {
-                let pos = mesh.node_position(i);
+                let pos = mesh.node_position(NodeIndex(i));
                 (pos.x, pos.y)
             })
             .collect();
@@ -107,9 +107,9 @@ impl StateSnapshot {
     pub fn from_state<S: StateAccess>(state: &S) -> Self {
         let n = state.n_cells();
         Self {
-            h: (0..n).map(|i| state.h(i)).collect(),
-            hu: (0..n).map(|i| state.hu(i)).collect(),
-            hv: (0..n).map(|i| state.hv(i)).collect(),
+            h: (0..n).map(|i| state.h(CellIndex(i))).collect(),
+            hu: (0..n).map(|i| state.hu(CellIndex(i))).collect(),
+            hv: (0..n).map(|i| state.hv(CellIndex(i))).collect(),
         }
     }
 }
@@ -148,7 +148,7 @@ impl IoPipeline {
         
         self.sender
             .send(request)
-            .map_err(|e| MhError::Io(format!("Failed to submit IO request: {}", e)))
+            .map_err(|e| MhError::io(format!("Failed to submit IO request: {}", e)))
     }
     
     /// 获取待处理请求数
@@ -204,7 +204,7 @@ impl IoPipeline {
         use std::fs::File;
         
         let file = File::create(path)
-            .map_err(|e| MhError::Io(format!("Cannot create {}: {}", path.display(), e)))?;
+            .map_err(|e| MhError::io(format!("Cannot create {}: {}", path.display(), e)))?;
         let mut w = BufWriter::new(file);
         
         // Header
@@ -323,7 +323,7 @@ impl IoPipeline {
         use std::fs::File;
         
         let file = File::create(path)
-            .map_err(|e| MhError::Io(format!("Cannot create {}: {}", path.display(), e)))?;
+            .map_err(|e| MhError::io(format!("Cannot create {}: {}", path.display(), e)))?;
         let mut w = BufWriter::new(file);
         
         // 收集所有二进制数据块
@@ -453,7 +453,7 @@ impl IoPipeline {
         use std::fs::File;
         
         let file = File::create(path)
-            .map_err(|e| MhError::Io(format!("Cannot create checkpoint: {}", e)))?;
+            .map_err(|e| MhError::io(format!("Cannot create checkpoint: {}", e)))?;
         let mut w = BufWriter::new(file);
         
         // 简单二进制格式：header + data
@@ -495,12 +495,7 @@ impl Default for IoPipeline {
     }
 }
 
-// 为 std::io::Error 实现转换
-impl From<std::io::Error> for MhError {
-    fn from(e: std::io::Error) -> Self {
-        MhError::Io(e.to_string())
-    }
-}
+// From<std::io::Error> for MhError 已在 core/error.rs 中定义，此处移除以避免重复
 
 #[cfg(test)]
 mod tests {

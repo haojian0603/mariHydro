@@ -179,6 +179,9 @@ pub enum MhError {
 
     #[error("功能未实现: {feature}")]
     NotImplemented { feature: String },
+
+    #[error("资源未找到: {resource}")]
+    NotFound { resource: String },
 }
 
 // ============================================================
@@ -275,6 +278,119 @@ impl MhError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal {
             message: message.into(),
+        }
+    }
+
+    /// 无效输入错误
+    pub fn invalid_input(message: impl Into<String>) -> Self {
+        Self::InvalidInput {
+            message: message.into(),
+        }
+    }
+
+    /// 缺少配置
+    pub fn missing_config(key: impl Into<String>) -> Self {
+        Self::MissingConfig {
+            key: key.into(),
+        }
+    }
+
+    /// 简化版解析错误（仅消息，无文件位置）
+    pub fn parse_simple(message: impl Into<String>) -> Self {
+        Self::ParseError {
+            file: std::path::PathBuf::new(),
+            line: 0,
+            message: message.into(),
+        }
+    }
+
+    /// 数值计算错误
+    pub fn numerical(message: impl Into<String>) -> Self {
+        Self::Numerical {
+            message: message.into(),
+        }
+    }
+
+    /// 运行时错误
+    pub fn runtime(message: impl Into<String>) -> Self {
+        Self::Runtime(message.into())
+    }
+
+    /// 工作流错误
+    pub fn workflow(message: impl Into<String>) -> Self {
+        Self::Workflow(message.into())
+    }
+
+    /// 边界条件错误
+    pub fn boundary_condition(message: impl Into<String>) -> Self {
+        Self::BoundaryCondition {
+            message: message.into(),
+        }
+    }
+
+    /// 功能未实现
+    pub fn not_implemented(feature: impl Into<String>) -> Self {
+        Self::NotImplemented {
+            feature: feature.into(),
+        }
+    }
+
+    /// 数据加载错误
+    pub fn data_load(file: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::DataLoad {
+            file: file.into(),
+            message: message.into(),
+        }
+    }
+
+    /// 序列化错误
+    pub fn serialization(message: impl Into<String>) -> Self {
+        Self::Serialization {
+            message: message.into(),
+        }
+    }
+
+    /// 数据库错误
+    pub fn database(message: impl Into<String>) -> Self {
+        Self::Database {
+            message: message.into(),
+        }
+    }
+
+    /// 投影错误
+    pub fn projection(message: impl Into<String>) -> Self {
+        Self::Projection(message.into())
+    }
+
+    /// 时区错误
+    pub fn timezone(message: impl Into<String>) -> Self {
+        Self::Timezone(message.into())
+    }
+
+    /// 锁错误
+    pub fn lock_error(resource: impl Into<String>) -> Self {
+        Self::LockError {
+            resource: resource.into(),
+        }
+    }
+
+    /// 验证失败
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::Validation(message.into())
+    }
+
+    /// 不支持的格式
+    pub fn unsupported_format(format: impl Into<String>, supported: Vec<String>) -> Self {
+        Self::UnsupportedFormat {
+            format: format.into(),
+            supported,
+        }
+    }
+
+    /// 资源未找到
+    pub fn not_found(resource: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource: resource.into(),
         }
     }
 }

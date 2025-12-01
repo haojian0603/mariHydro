@@ -6,6 +6,7 @@ use crate::marihydro::core::error::MhResult;
 use crate::marihydro::core::traits::mesh::MeshAccess;
 use crate::marihydro::core::traits::source::{SourceContribution, SourceContext, SourceTerm};
 use crate::marihydro::core::traits::state::StateAccess;
+use crate::marihydro::core::types::CellIndex;
 use rayon::prelude::*;
 
 pub struct ManningFriction {
@@ -64,9 +65,9 @@ impl SourceTerm for ManningFriction {
     fn compute_cell<M: MeshAccess, S: StateAccess>(
         &self, cell_idx: usize, _mesh: &M, state: &S, ctx: &SourceContext,
     ) -> SourceContribution {
-        let h = state.h(cell_idx);
-        let hu = state.hu(cell_idx);
-        let hv = state.hv(cell_idx);
+        let h = state.h(CellIndex(cell_idx));
+        let hu = state.hu(CellIndex(cell_idx));
+        let hv = state.hv(CellIndex(cell_idx));
         if ctx.params.is_dry(h) {
             return SourceContribution { s_h: 0.0, s_hu: -hu / ctx.dt, s_hv: -hv / ctx.dt };
         }
@@ -93,9 +94,9 @@ impl SourceTerm for ManningFriction {
         let gn2 = self.precomputed_gn2.unwrap_or(0.0);
         
         for i in 0..n_cells {
-            let h = state.h(i);
-            let hu = state.hu(i);
-            let hv = state.hv(i);
+            let h = state.h(CellIndex(i));
+            let hu = state.hu(CellIndex(i));
+            let hv = state.hv(CellIndex(i));
             if h < h_dry {
                 output_hu[i] -= hu / dt;
                 output_hv[i] -= hv / dt;
@@ -143,9 +144,9 @@ impl SourceTerm for ChezyFriction {
     fn compute_cell<M: MeshAccess, S: StateAccess>(
         &self, cell_idx: usize, _mesh: &M, state: &S, ctx: &SourceContext,
     ) -> SourceContribution {
-        let h = state.h(cell_idx);
-        let hu = state.hu(cell_idx);
-        let hv = state.hv(cell_idx);
+        let h = state.h(CellIndex(cell_idx));
+        let hu = state.hu(CellIndex(cell_idx));
+        let hv = state.hv(CellIndex(cell_idx));
         if ctx.params.is_dry(h) {
             return SourceContribution { s_h: 0.0, s_hu: -hu / ctx.dt, s_hv: -hv / ctx.dt };
         }

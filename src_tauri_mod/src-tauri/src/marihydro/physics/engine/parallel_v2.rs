@@ -17,7 +17,7 @@ use crate::marihydro::core::Workspace;
 use crate::marihydro::domain::mesh::MeshColoring;
 use crate::marihydro::domain::state::ShallowWaterState;
 use crate::marihydro::physics::schemes::{HllcSolver, HydrostaticReconstruction, InterfaceFlux};
-use crate::marihydro::physics::schemes::riemann::{AdaptiveSelector, RiemannSolver};
+use crate::marihydro::physics::schemes::riemann::{AdaptiveSolver, RiemannSolver};
 use crate::marihydro::physics::schemes::wetting_drying::WettingDryingHandler;
 use glam::DVec2;
 use rayon::prelude::*;
@@ -68,8 +68,8 @@ pub struct UnifiedParallelCalculator {
     scheduler: AdaptiveScheduler,
     /// 性能指标
     metrics: PerfMetrics,
-    /// Riemann求解器选择器
-    riemann_selector: Option<AdaptiveSelector>,
+    /// 自适应Riemann求解器
+    riemann_solver: Option<AdaptiveSolver>,
     /// 干湿处理器
     wetting_drying: Option<WettingDryingHandler>,
 }
@@ -77,21 +77,16 @@ pub struct UnifiedParallelCalculator {
 impl UnifiedParallelCalculator {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig) -> Self {
-        let parallel_config = ParallelConfig {
-            enabled: true,
-            min_parallel_size: config.min_parallel_size,
-            preferred_strategy: None,
-            adaptive_scheduling: config.adaptive_scheduling,
-            max_threads: None,
-        };
+        // 获取全局配置的监控窗口大小
+        let window_size = ParallelConfig::global().monitoring_window;
         
         Self {
             config,
             coloring: None,
-            strategy_selector: StrategySelector::new(parallel_config.clone()),
-            scheduler: AdaptiveScheduler::new(parallel_config),
+            strategy_selector: StrategySelector::new(),
+            scheduler: AdaptiveScheduler::new(window_size),
             metrics: PerfMetrics::new(),
-            riemann_selector: None,
+            riemann_solver: None,
             wetting_drying: None,
         }
     }
@@ -103,9 +98,9 @@ impl UnifiedParallelCalculator {
         calc
     }
     
-    /// 设置Riemann求解器选择器
-    pub fn set_riemann_selector(&mut self, selector: AdaptiveSelector) {
-        self.riemann_selector = Some(selector);
+    /// 设置自适应Riemann求解器
+    pub fn set_riemann_solver(&mut self, solver: AdaptiveSolver) {
+        self.riemann_solver = Some(solver);
     }
     
     /// 设置干湿处理器
@@ -144,24 +139,25 @@ impl UnifiedParallelCalculator {
         let n_faces = mesh.n_faces();
         
         // 选择并行策略
-        let strategy = self.strategy_selector.select_strategy(n_faces, true);
+        let has_coloring = self.coloring.is_some();
+        let strategy = self.strategy_selector.for_flux_computation(n_faces, has_coloring);
         
         // 记录开始时间
         let start = Instant::now();
         
-        let result = match strategy {
-            ParallelStrategy::Serial => {
+        let result = match &strategy {
+            ParallelStrategy::Sequential => {
                 self.compute_serial(state, mesh, workspace)
             }
-            ParallelStrategy::SimpleParallel => {
+            ParallelStrategy::Dynamic | ParallelStrategy::WorkStealing | ParallelStrategy::StaticChunks { .. } => {
                 self.compute_simple_parallel(state, mesh, workspace)
             }
-            ParallelStrategy::ColoredParallel => {
+            ParallelStrategy::Colored => {
                 self.init_coloring(mesh);
                 self.compute_colored_parallel(state, mesh, workspace)
             }
-            ParallelStrategy::Hybrid { threshold: _, prefer_colored: _ } => {
-                // Hybrid策略：根据问题规模动态选择
+            ParallelStrategy::Auto { .. } => {
+                // Auto策略：根据问题规模动态选择
                 if n_faces < self.config.min_parallel_size * 2 {
                     self.compute_simple_parallel(state, mesh, workspace)
                 } else {
@@ -169,11 +165,17 @@ impl UnifiedParallelCalculator {
                     self.compute_colored_parallel(state, mesh, workspace)
                 }
             }
+            #[cfg(feature = "gpu")]
+            ParallelStrategy::GpuCompute { .. } => {
+                // GPU策略暂时回退到简单并行
+                self.compute_simple_parallel(state, mesh, workspace)
+            }
         };
         
         // 记录性能指标
         let elapsed = start.elapsed();
-        self.metrics.record_iteration(elapsed.as_secs_f64());
+        let is_parallel = strategy.is_parallel();
+        self.metrics.record(n_faces, is_parallel, elapsed.as_nanos() as u64);
         
         result
     }
@@ -207,14 +209,14 @@ impl UnifiedParallelCalculator {
             let h_l = state.h[owner.0];
             let vel_l = self.config.params.safe_velocity(
                 state.hu[owner.0], state.hv[owner.0], h_l
-            ).to_vec();
+            ).as_dvec2();
             let z_l = state.z[owner.0];
             
             let (h_r, vel_r, z_r) = if neighbor.is_valid() {
                 let h = state.h[neighbor.0];
                 let v = self.config.params.safe_velocity(
                     state.hu[neighbor.0], state.hv[neighbor.0], h
-                ).to_vec();
+                ).as_dvec2();
                 (h, v, state.z[neighbor.0])
             } else {
                 // 边界反射
@@ -285,14 +287,14 @@ impl UnifiedParallelCalculator {
                 let h_l = state.h[owner.0];
                 let vel_l = self.config.params.safe_velocity(
                     state.hu[owner.0], state.hv[owner.0], h_l
-                ).to_vec();
+                ).as_dvec2();
                 let z_l = state.z[owner.0];
                 
                 let (h_r, vel_r, z_r) = if neighbor.is_valid() {
                     let h = state.h[neighbor.0];
                     let v = self.config.params.safe_velocity(
                         state.hu[neighbor.0], state.hv[neighbor.0], h
-                    ).to_vec();
+                    ).as_dvec2();
                     (h, v, state.z[neighbor.0])
                 } else {
                     let vn = vel_l.dot(normal);
@@ -381,14 +383,14 @@ impl UnifiedParallelCalculator {
                 let h_l = state.h[owner.0];
                 let vel_l = self.config.params.safe_velocity(
                     state.hu[owner.0], state.hv[owner.0], h_l
-                ).to_vec();
+                ).as_dvec2();
                 let z_l = state.z[owner.0];
                 
                 let (h_r, vel_r, z_r) = if neighbor.is_valid() {
                     let h = state.h[neighbor.0];
                     let v = self.config.params.safe_velocity(
                         state.hu[neighbor.0], state.hv[neighbor.0], h
-                    ).to_vec();
+                    ).as_dvec2();
                     (h, v, state.z[neighbor.0])
                 } else {
                     let vn = vel_l.dot(normal);
@@ -452,20 +454,9 @@ impl UnifiedParallelCalculator {
         _h_orig_l: f64,
         _h_orig_r: f64,
     ) -> InterfaceFlux {
-        // 如果设置了自适应选择器，使用它
-        if let Some(ref selector) = self.riemann_selector {
-            // 构造InterfaceState
-            use crate::marihydro::physics::schemes::riemann::InterfaceState;
-            let interface = InterfaceState {
-                h_left: h_l,
-                h_right: h_r,
-                vel_left: vel_l,
-                vel_right: vel_r,
-                normal,
-                g: self.config.g,
-            };
-            
-            selector.solve(&interface)
+        // 如果设置了自适应求解器，使用它
+        if let Some(ref solver) = self.riemann_solver {
+            solver.solve(h_l, h_r, vel_l, vel_r, normal)
                 .map(|f| InterfaceFlux {
                     mass: f.mass,
                     momentum_x: f.momentum_x,
@@ -477,6 +468,12 @@ impl UnifiedParallelCalculator {
             // 使用默认HLLC
             let hllc = HllcSolver::new(self.config.params.clone(), self.config.g);
             hllc.solve(h_l, h_r, vel_l, vel_r, normal)
+                .map(|f| InterfaceFlux {
+                    mass: f.mass,
+                    momentum_x: f.momentum_x,
+                    momentum_y: f.momentum_y,
+                    max_wave_speed: f.max_wave_speed,
+                })
                 .unwrap_or(InterfaceFlux::ZERO)
         }
     }
@@ -491,12 +488,20 @@ impl UnifiedParallelCalculator {
             let n_cells = state.h.len();
             
             for i in 0..n_cells {
-                let wet_state = handler.classify(state.h[i], state.z[i]);
+                let wet_state = handler.classify(state.h[i]);
                 
-                // 限制通量
-                workspace.flux_h[i] = handler.limit_flux(workspace.flux_h[i], wet_state);
-                workspace.flux_hu[i] = handler.limit_flux(workspace.flux_hu[i], wet_state);
-                workspace.flux_hv[i] = handler.limit_flux(workspace.flux_hv[i], wet_state);
+                // 对于干区，直接将通量置零
+                if wet_state == crate::marihydro::physics::schemes::wetting_drying::WetState::Dry {
+                    workspace.flux_h[i] = 0.0;
+                    workspace.flux_hu[i] = 0.0;
+                    workspace.flux_hv[i] = 0.0;
+                } else if wet_state == crate::marihydro::physics::schemes::wetting_drying::WetState::PartiallyWet {
+                    // 过渡区平滑衰减
+                    let factor = handler.smoothing_factor(state.h[i]);
+                    workspace.flux_h[i] *= factor;
+                    workspace.flux_hu[i] *= factor;
+                    workspace.flux_hv[i] *= factor;
+                }
             }
         }
     }
@@ -516,7 +521,7 @@ impl UnifiedParallelCalculator {
 pub struct UnifiedParallelCalculatorBuilder {
     config: ParallelFluxConfig,
     coloring: Option<Arc<MeshColoring>>,
-    riemann_selector: Option<AdaptiveSelector>,
+    riemann_solver: Option<AdaptiveSolver>,
     wetting_drying: Option<WettingDryingHandler>,
 }
 
@@ -525,7 +530,7 @@ impl UnifiedParallelCalculatorBuilder {
         Self {
             config: ParallelFluxConfig::default(),
             coloring: None,
-            riemann_selector: None,
+            riemann_solver: None,
             wetting_drying: None,
         }
     }
@@ -550,8 +555,8 @@ impl UnifiedParallelCalculatorBuilder {
         self
     }
     
-    pub fn with_riemann_selector(mut self, selector: AdaptiveSelector) -> Self {
-        self.riemann_selector = Some(selector);
+    pub fn with_riemann_solver(mut self, solver: AdaptiveSolver) -> Self {
+        self.riemann_solver = Some(solver);
         self
     }
     
@@ -577,8 +582,8 @@ impl UnifiedParallelCalculatorBuilder {
             UnifiedParallelCalculator::new(self.config)
         };
         
-        if let Some(selector) = self.riemann_selector {
-            calc.set_riemann_selector(selector);
+        if let Some(solver) = self.riemann_solver {
+            calc.set_riemann_solver(solver);
         }
         
         if let Some(handler) = self.wetting_drying {

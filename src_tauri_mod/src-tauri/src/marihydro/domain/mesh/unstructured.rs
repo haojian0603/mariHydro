@@ -6,7 +6,7 @@ use glam::DVec2;
 use rstar::{RTree, RTreeObject, AABB};
 use smallvec::SmallVec;
 
-use super::indices::{CellId, FaceId, NodeId, INVALID_CELL};
+use super::{CellId, FaceId, NodeId, INVALID_CELL};
 use crate::marihydro::core::error::{MhError, MhResult};
 use crate::marihydro::core::traits::mesh::{CellGeometry, FaceGeometry, MeshAccess, MeshTopology};
 use crate::marihydro::core::types::{BoundaryIndex, CellIndex, FaceIndex, NodeIndex};
@@ -91,48 +91,48 @@ impl rstar::PointDistance for CellEnvelope {
 
 /// 非结构化网格
 ///
-/// 所有字段私有，通过访问器方法和 MeshAccess trait 访问
+/// 字段为 pub 以便直接访问，也提供访问器方法和 MeshAccess trait
 #[derive(Debug)]
 pub struct UnstructuredMesh {
     // ===== 节点数据 =====
-    n_nodes: usize,
-    node_xy: Vec<DVec2>,
-    node_z: Vec<f64>,
+    pub n_nodes: usize,
+    pub node_xy: Vec<DVec2>,
+    pub node_z: Vec<f64>,
 
     // ===== 单元数据 =====
-    n_cells: usize,
-    cell_center: Vec<DVec2>,
-    cell_area: Vec<f64>,
-    cell_z_bed: Vec<f64>,
-    cell_node_ids: Vec<SmallVec<[NodeId; 4]>>,
-    cell_faces: Vec<CellFaces>,
-    cell_neighbors: Vec<SmallVec<[CellId; 6]>>,
+    pub n_cells: usize,
+    pub cell_center: Vec<DVec2>,
+    pub cell_area: Vec<f64>,
+    pub cell_z_bed: Vec<f64>,
+    pub cell_node_ids: Vec<SmallVec<[NodeId; 4]>>,
+    pub cell_faces: Vec<CellFaces>,
+    pub cell_neighbors: Vec<SmallVec<[CellId; 6]>>,
 
     // ===== 面数据 =====
-    n_faces: usize,
-    n_interior_faces: usize,
-    face_center: Vec<DVec2>,
-    face_normal: Vec<DVec2>,
-    face_length: Vec<f64>,
-    face_z_left: Vec<f64>,
-    face_z_right: Vec<f64>,
-    face_owner: Vec<usize>,
-    face_neighbor: Vec<usize>,
-    face_delta_owner: Vec<DVec2>,
-    face_delta_neighbor: Vec<DVec2>,
-    face_dist_o2n: Vec<f64>,
+    pub n_faces: usize,
+    pub n_interior_faces: usize,
+    pub face_center: Vec<DVec2>,
+    pub face_normal: Vec<DVec2>,
+    pub face_length: Vec<f64>,
+    pub face_z_left: Vec<f64>,
+    pub face_z_right: Vec<f64>,
+    pub face_owner: Vec<usize>,
+    pub face_neighbor: Vec<usize>,
+    pub face_delta_owner: Vec<DVec2>,
+    pub face_delta_neighbor: Vec<DVec2>,
+    pub face_dist_o2n: Vec<f64>,
 
     // ===== 边界数据 =====
-    boundary_face_indices: Vec<usize>,
-    boundary_names: Vec<String>,
-    face_boundary_id: Vec<Option<usize>>,
+    pub boundary_face_indices: Vec<usize>,
+    pub boundary_names: Vec<String>,
+    pub face_boundary_id: Vec<Option<usize>>,
 
     // ===== 空间索引 =====
-    spatial_index: RTree<CellEnvelope>,
+    pub spatial_index: RTree<CellEnvelope>,
 
     // ===== 缓存的统计信息 =====
-    min_cell_size: f64,
-    max_cell_size: f64,
+    pub min_cell_size: f64,
+    pub max_cell_size: f64,
 }
 
 impl UnstructuredMesh {
@@ -469,6 +469,10 @@ impl MeshAccess for UnstructuredMesh {
 
     fn node_position(&self, node: NodeIndex) -> DVec2 {
         self.node_xy[node.0]
+    }
+
+    fn cell_bed_elevation(&self, cell: CellIndex) -> f64 {
+        self.cell_z_bed[cell.0]
     }
 
     fn face_owner(&self, face: FaceIndex) -> CellIndex {

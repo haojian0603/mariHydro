@@ -11,7 +11,9 @@
 //! - 数值安全子系统
 //! - 并行策略子系统
 //! - 内存管理子系统
+//! - 计算后端抽象（CPU/GPU）
 
+pub mod compute;
 pub mod error;
 pub mod memory;
 pub mod numerical;
@@ -26,3 +28,6 @@ pub use memory::{BufferPool, PooledBuffer, Workspace, WorkspaceBuilder};
 pub use numerical::{AtomicF64, SafeF64};
 pub use parallel::{ParallelConfig, ParallelStrategy, StrategySelector};
 pub use types::{NumericalParams, PhysicalConstants};
+
+// 计算后端相关
+pub use compute::{ComputeBackend, ComputeOperation, DeviceCapabilities, DeviceType};

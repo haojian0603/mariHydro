@@ -10,6 +10,7 @@
 //! - 依赖 core 和 domain 层
 //! - 禁止依赖 forcing, io, infra, workflow
 
+pub mod engine;
 pub mod numerics;
 pub mod schemes;
 pub mod sediment;
@@ -22,5 +23,9 @@ pub use numerics::gradient::{
 };
 pub use numerics::limiter::{BarthJespersenLimiter, VenkatakrishnanLimiter};
 pub use schemes::{
-    DryWetHandler, HllcSolver, HydrostaticReconstruction, InterfaceFlux, WetDryState,
+    WettingDryingHandler, HllcSolver, HydrostaticReconstruction, InterfaceFlux, WetState,
 };
+
+// 类型别名（向后兼容）
+pub type DryWetHandler = WettingDryingHandler;
+pub type WetDryState = WetState;

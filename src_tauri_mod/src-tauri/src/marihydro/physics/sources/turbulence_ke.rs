@@ -309,11 +309,11 @@ impl KEpsilonSolver {
         params: &NumericalParams,
     ) {
         for i in 0..mesh.n_cells() {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             self.velocities[i] = if params.is_dry(h) {
                 DVec2::ZERO
             } else {
-                DVec2::new(state.hu(i) / h, state.hv(i) / h)
+                DVec2::new(state.hu(CellIndex(i)) / h, state.hv(CellIndex(i)) / h)
             };
         }
     }
@@ -523,7 +523,7 @@ impl KEpsilonSolver {
 
         // 时间推进（显式欧拉）
         for i in 0..mesh.n_cells() {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             if params.is_dry(h) {
                 ke_state.k[i] = self.config.k_min;
                 continue;
@@ -602,7 +602,7 @@ impl KEpsilonSolver {
 
         // 时间推进（显式欧拉）
         for i in 0..mesh.n_cells() {
-            let h = state.h(i);
+            let h = state.h(CellIndex(i));
             if params.is_dry(h) {
                 ke_state.epsilon[i] = self.config.eps_min;
                 continue;

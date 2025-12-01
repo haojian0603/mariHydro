@@ -25,7 +25,7 @@ use crate::marihydro::physics::schemes::{
     HydrostaticReconstruction,
 };
 use crate::marihydro::physics::sources::implicit::{ImplicitConfig, ImplicitMomentumDecay, ManningDamping};
-use super::timestep::TimeStepController;
+use super::timestep_v2::OptimizedTimeStepController;
 use glam::DVec2;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -73,7 +73,7 @@ pub struct UnstructuredSolverV2 {
     implicit_decay: ImplicitMomentumDecay,
 
     // 时间步控制
-    timestep_ctrl: TimeStepController,
+    timestep_ctrl: OptimizedTimeStepController,
 
     // 源项
     source_terms: Vec<Box<dyn SourceTerm>>,
@@ -100,7 +100,7 @@ impl UnstructuredSolverV2 {
             dry_wet: WettingDryingHandler::from_params(&config.params),
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.gravity),
             implicit_decay: ImplicitMomentumDecay::new(ImplicitConfig::default()),
-            timestep_ctrl: TimeStepController::new(config.gravity, &config.params),
+            timestep_ctrl: OptimizedTimeStepController::new(config.gravity, &config.params),
             source_terms: Vec::new(),
             max_wave_speed: 0.0,
             dry_cells: 0,
@@ -194,6 +194,7 @@ impl UnstructuredSolverV2 {
                         h_right: h_r,
                         vel_left: vel_l,
                         vel_right: vel_r,
+                        z_face: 0.5 * (z_l + z_r),
                     }
                 };
 

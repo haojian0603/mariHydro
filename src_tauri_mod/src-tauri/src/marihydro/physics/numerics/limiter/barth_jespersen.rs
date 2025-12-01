@@ -49,7 +49,7 @@ impl BarthJespersenLimiter {
             }
         }
 
-        let mut alpha = 1.0;
+        let mut alpha: f64 = 1.0;
         for &face in mesh.cell_faces(cell) {
             let fc = mesh.face_centroid(face);
             let r = fc - center;
@@ -123,7 +123,7 @@ pub mod optimized {
                         pmin = pmin.min(pn);
                     }
                 }
-                let mut a = 1.0;
+                let mut a: f64 = 1.0;
                 for &face in mesh.cell_faces(cell) {
                     let r = mesh.face_centroid(face) - center;
                     let d = g.dot(r);

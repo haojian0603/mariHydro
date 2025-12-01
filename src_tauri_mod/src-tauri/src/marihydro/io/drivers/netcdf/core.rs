@@ -7,9 +7,9 @@ pub struct NetCdfDriver;
 
 impl RasterDriver for NetCdfDriver {
     fn read_metadata(&self, _path: &Path) -> MhResult<RasterMetadata> {
-        Err(MhError::Io("NetCDF not available".into()))
+        Err(MhError::io("NetCDF not available"))
     }
     fn read_band(&self, _path: &Path, _band: usize) -> MhResult<Vec<f64>> {
-        Err(MhError::Io("NetCDF not available".into()))
+        Err(MhError::io("NetCDF not available"))
     }
 }

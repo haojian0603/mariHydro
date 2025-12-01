@@ -31,9 +31,9 @@ pub struct CsvWindConfig {
 impl Default for CsvWindConfig {
     fn default() -> Self {
         Self {
-            time_column: ColumnRef::Name("datetime".into()),
-            u_column: ColumnRef::Name("u10".into()),
-            v_column: ColumnRef::Name("v10".into()),
+            time_column: ColumnRef::Name("datetime".to_string()),
+            u_column: ColumnRef::Name("u10".to_string()),
+            v_column: ColumnRef::Name("v10".to_string()),
             time_format: CsvTimeFormat::Iso8601,
             has_header: true,
             delimiter: b',',
@@ -99,7 +99,7 @@ impl CsvWindReader {
         start_time: DateTime<Utc>,
         config: CsvWindConfig,
     ) -> MhResult<Self> {
-        let file = File::open(path).map_err(|e| MhError::Io(e.to_string()))?;
+        let file = File::open(path).map_err(|e| MhError::io(e.to_string()))?;
         let reader = BufReader::new(file);
 
         let mut csv_reader = csv::ReaderBuilder::new()
@@ -112,7 +112,7 @@ impl CsvWindReader {
         let (time_idx, u_idx, v_idx) = if config.has_header {
             let headers = csv_reader
                 .headers()
-                .map_err(|e| MhError::Parse(format!("Failed to read CSV headers: {}", e)))?;
+                .map_err(|e| MhError::parse_simple(format!("Failed to read CSV headers: {}", e)))?;
             
             let time_idx = Self::resolve_column(&config.time_column, headers)?;
             let u_idx = Self::resolve_column(&config.u_column, headers)?;
@@ -121,7 +121,7 @@ impl CsvWindReader {
         } else {
             match (&config.time_column, &config.u_column, &config.v_column) {
                 (ColumnRef::Index(t), ColumnRef::Index(u), ColumnRef::Index(v)) => (*t, *u, *v),
-                _ => return Err(MhError::Config("Column names require header row".into())),
+                _ => return Err(MhError::config("Column names require header row")),
             }
         };
 
@@ -129,12 +129,12 @@ impl CsvWindReader {
 
         for (row_idx, result) in csv_reader.records().enumerate() {
             let record = result.map_err(|e| {
-                MhError::Parse(format!("CSV parse error at row {}: {}", row_idx + 1, e))
+                MhError::parse_simple(format!("CSV parse error at row {}: {}", row_idx + 1, e))
             })?;
 
             // 解析时间
             let time_str = record.get(time_idx).ok_or_else(|| {
-                MhError::Parse(format!("Missing time column at row {}", row_idx + 1))
+                MhError::parse_simple(format!("Missing time column at row {}", row_idx + 1))
             })?;
             let time_seconds =
                 Self::parse_time(time_str, &config.time_format, start_time)?;
@@ -142,15 +142,15 @@ impl CsvWindReader {
             // 解析 U, V
             let u: f64 = record
                 .get(u_idx)
-                .ok_or_else(|| MhError::Parse(format!("Missing U column at row {}", row_idx + 1)))?
+                .ok_or_else(|| MhError::parse_simple(format!("Missing U column at row {}", row_idx + 1)))?
                 .parse()
-                .map_err(|_| MhError::Parse(format!("Invalid U value at row {}", row_idx + 1)))?;
+                .map_err(|_| MhError::parse_simple(format!("Invalid U value at row {}", row_idx + 1)))?;
 
             let v: f64 = record
                 .get(v_idx)
-                .ok_or_else(|| MhError::Parse(format!("Missing V column at row {}", row_idx + 1)))?
+                .ok_or_else(|| MhError::parse_simple(format!("Missing V column at row {}", row_idx + 1)))?
                 .parse()
-                .map_err(|_| MhError::Parse(format!("Invalid V value at row {}", row_idx + 1)))?;
+                .map_err(|_| MhError::parse_simple(format!("Invalid V value at row {}", row_idx + 1)))?;
 
             records.push(WindRecord {
                 time_seconds,
@@ -160,7 +160,7 @@ impl CsvWindReader {
         }
 
         if records.is_empty() {
-            return Err(MhError::Parse("No valid wind records found in CSV".into()));
+            return Err(MhError::parse_simple("No valid wind records found in CSV"));
         }
 
         // 按时间排序
@@ -179,7 +179,7 @@ impl CsvWindReader {
             ColumnRef::Name(name) => headers
                 .iter()
                 .position(|h| h.eq_ignore_ascii_case(name))
-                .ok_or_else(|| MhError::Config(format!("Column '{}' not found in CSV", name))),
+                .ok_or_else(|| MhError::config(format!("Column '{}' not found in CSV", name))),
         }
     }
 
@@ -191,11 +191,11 @@ impl CsvWindReader {
         match format {
             CsvTimeFormat::Seconds => s
                 .parse::<f64>()
-                .map_err(|_| MhError::Parse(format!("Invalid time value: {}", s))),
+                .map_err(|_| MhError::parse_simple(format!("Invalid time value: {}", s))),
             CsvTimeFormat::Hours => s
                 .parse::<f64>()
                 .map(|h| h * 3600.0)
-                .map_err(|_| MhError::Parse(format!("Invalid time value: {}", s))),
+                .map_err(|_| MhError::parse_simple(format!("Invalid time value: {}", s))),
             CsvTimeFormat::Iso8601 => {
                 // 尝试多种 ISO 8601 变体
                 if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -211,7 +211,7 @@ impl CsvWindReader {
                     let dt = Utc.from_utc_datetime(&ndt);
                     return Ok((dt - start_time).num_seconds() as f64);
                 }
-                Err(MhError::Parse(format!("Invalid ISO8601 time: {}", s)))
+                Err(MhError::parse_simple(format!("Invalid ISO8601 time: {}", s)))
             }
             CsvTimeFormat::Custom(fmt) => {
                 NaiveDateTime::parse_from_str(s, fmt)
@@ -219,7 +219,7 @@ impl CsvWindReader {
                         let dt = Utc.from_utc_datetime(&ndt);
                         (dt - start_time).num_seconds() as f64
                     })
-                    .map_err(|_| MhError::Parse(format!("Time '{}' doesn't match format '{}'", s, fmt)))
+                    .map_err(|_| MhError::parse_simple(format!("Time '{}' doesn't match format '{}'", s, fmt)))
             }
         }
     }
@@ -283,7 +283,7 @@ impl CsvWindConfig {
     }
 
     pub fn time_column_name(mut self, name: &str) -> Self {
-        self.time_column = ColumnRef::Name(name.into());
+        self.time_column = ColumnRef::Name(name.to_string());
         self
     }
 
@@ -293,12 +293,12 @@ impl CsvWindConfig {
     }
 
     pub fn u_column_name(mut self, name: &str) -> Self {
-        self.u_column = ColumnRef::Name(name.into());
+        self.u_column = ColumnRef::Name(name.to_string());
         self
     }
 
     pub fn v_column_name(mut self, name: &str) -> Self {
-        self.v_column = ColumnRef::Name(name.into());
+        self.v_column = ColumnRef::Name(name.to_string());
         self
     }
 

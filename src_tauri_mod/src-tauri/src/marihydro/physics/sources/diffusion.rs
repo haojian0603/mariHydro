@@ -2,8 +2,8 @@
 
 use rayon::prelude::*;
 
-use crate::marihydro::domain::mesh::unstructured::{BoundaryKind, UnstructuredMesh};
-use crate::marihydro::infra::error::{MhError, MhResult};
+use crate::marihydro::domain::mesh::unstructured::UnstructuredMesh;
+use crate::marihydro::core::error::{MhError, MhResult};
 
 /// 扩散边界条件类型
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +72,7 @@ pub fn apply_diffusion_explicit(
     validate_diffusion_params(nu, dt)?;
 
     if field.len() != mesh.n_cells || field_out.len() != mesh.n_cells {
-        return Err(MhError::InvalidInput(format!(
+        return Err(MhError::invalid_input(format!(
             "场数组尺寸不匹配: 期望 {}, 实际 in={}, out={}",
             mesh.n_cells,
             field.len(),
@@ -122,24 +122,12 @@ fn compute_diffusion_fluxes(field: &[f64], mesh: &UnstructuredMesh, nu: f64) -> 
         flux_sum[neighbor] -= flux;
     }
 
-    // 边界面处理
-    for face_idx in mesh.boundary_faces() {
-        let bc_idx = mesh.boundary_index(face_idx);
-        let kind = mesh.bc_kind[bc_idx];
-
-        match kind {
-            BoundaryKind::Wall | BoundaryKind::Symmetry => {
-                // Neumann 零通量 (∂φ/∂n = 0)
-                // 无需处理
-            }
-            BoundaryKind::OpenSea | BoundaryKind::Outflow => {
-                // 假设零梯度边界条件
-                // 可以根据需要修改为外推
-            }
-            BoundaryKind::RiverInflow => {
-                // 入流边界通常假设零扩散通量
-            }
-        }
+    // 边界面处理 - 使用零梯度近似（Neumann边界条件）
+    // 对于大多数边界类型（Wall, Symmetry, OpenSea, Outflow, RiverInflow）
+    // 均可采用零通量或零梯度假设
+    for _face_idx in mesh.boundary_faces() {
+        // 零梯度边界条件：∂φ/∂n = 0
+        // 不对 flux_sum 做任何修改
     }
 
     flux_sum
@@ -183,7 +171,7 @@ pub fn compute_diffusion_fluxes_with_bc(
     // 边界面处理
     for face_idx in mesh.boundary_faces() {
         let owner = mesh.face_owner[face_idx];
-        let bc_idx = mesh.boundary_index(face_idx);
+        let bc_idx = mesh.boundary_index_of_face(face_idx);
         
         // 获取边界条件（使用默认值如果索引越界）
         let bc = boundary_conditions
@@ -215,7 +203,7 @@ pub fn apply_diffusion_explicit_with_bc(
     validate_diffusion_params(nu, dt)?;
 
     if field.len() != mesh.n_cells || field_out.len() != mesh.n_cells {
-        return Err(MhError::InvalidInput(format!(
+        return Err(MhError::invalid_input(format!(
             "场数组尺寸不匹配: 期望 {}, 实际 in={}, out={}",
             mesh.n_cells,
             field.len(),
@@ -251,7 +239,7 @@ pub fn apply_diffusion_explicit_variable(
     dt: f64,
 ) -> MhResult<()> {
     if field.len() != mesh.n_cells || field_out.len() != mesh.n_cells || nu.len() != mesh.n_cells {
-        return Err(MhError::InvalidInput("数组尺寸不匹配".into()));
+        return Err(MhError::invalid_input("数组尺寸不匹配"));
     }
 
     let mut flux_sum = vec![0.0; mesh.n_cells];
@@ -347,7 +335,7 @@ pub fn apply_diffusion_substeps(
 
 fn validate_diffusion_params(nu: f64, dt: f64) -> MhResult<()> {
     if nu < 0.0 {
-        return Err(MhError::InvalidInput(format!(
+        return Err(MhError::invalid_input(format!(
             "扩散系数不能为负: ν = {:.3} m²/s",
             nu
         )));
@@ -358,7 +346,7 @@ fn validate_diffusion_params(nu: f64, dt: f64) -> MhResult<()> {
     }
 
     if dt <= 0.0 {
-        return Err(MhError::InvalidInput(format!(
+        return Err(MhError::invalid_input(format!(
             "时间步长必须为正: dt = {:.3} s",
             dt
         )));
