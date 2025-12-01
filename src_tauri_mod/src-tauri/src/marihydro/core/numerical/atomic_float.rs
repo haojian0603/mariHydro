@@ -230,7 +230,12 @@ impl std::fmt::Debug for AtomicF64 {
 
 // AtomicF64 不能 Clone，因为原子类型不应该被复制
 // 但可以 Send + Sync
+//
+// SAFETY: AtomicU64 本身是 Send + Sync，
+// AtomicF64 只是将其包装为 f64 操作接口，继承相同的线程安全性
+#[allow(unsafe_code)]
 unsafe impl Send for AtomicF64 {}
+#[allow(unsafe_code)]
 unsafe impl Sync for AtomicF64 {}
 
 #[cfg(test)]

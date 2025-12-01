@@ -1,4 +1,11 @@
 // src-tauri/src/marihydro/workflow/job.rs
+//! 运行时状态检查版本的作业管理
+//!
+//! 提供 `SimulationJob` 和 `JobStatus` 类型，使用运行时枚举检查状态。
+//! 这是当前项目中主要使用的版本，用于 manager_v2、存储接口等。
+//!
+//! 另见 `job_v2.rs` 提供的类型状态模式版本（编译时状态检查）。
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

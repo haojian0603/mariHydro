@@ -488,23 +488,28 @@ impl MeshAccess for UnstructuredMesh {
         }
     }
 
+    #[allow(unsafe_code)]
     fn cell_faces(&self, cell: CellIndex) -> &[FaceIndex] {
         // 注意：这里需要转换类型，但 FaceId 和 FaceIndex 布局相同
         // 安全地重新解释内存
         let faces = self.cell_faces[cell.0].faces();
-        // FaceId(usize) 和 FaceIndex(usize) 内存布局相同
+        // SAFETY: FaceId(usize) 和 FaceIndex(usize) 都是 #[repr(transparent)] 包装 usize，内存布局相同
         unsafe { std::slice::from_raw_parts(faces.as_ptr() as *const FaceIndex, faces.len()) }
     }
 
+    #[allow(unsafe_code)]
     fn cell_neighbors(&self, cell: CellIndex) -> &[CellIndex] {
         let neighbors = &self.cell_neighbors[cell.0];
+        // SAFETY: usize 和 CellIndex 都是 #[repr(transparent)] 包装 usize，内存布局相同
         unsafe {
             std::slice::from_raw_parts(neighbors.as_ptr() as *const CellIndex, neighbors.len())
         }
     }
 
+    #[allow(unsafe_code)]
     fn cell_nodes(&self, cell: CellIndex) -> &[NodeIndex] {
         let nodes = &self.cell_node_ids[cell.0];
+        // SAFETY: usize 和 NodeIndex 都是 #[repr(transparent)] 包装 usize，内存布局相同
         unsafe { std::slice::from_raw_parts(nodes.as_ptr() as *const NodeIndex, nodes.len()) }
     }
 

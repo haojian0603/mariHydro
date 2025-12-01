@@ -546,6 +546,7 @@ impl Default for BoundaryIndex {
 /// 由于使用了 `#[repr(transparent)]`，`FaceId` 和 `FaceIndex` 布局相同，
 /// 此转换是安全的零开销操作。
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_face_ids(ids: &[FaceId]) -> &[FaceIndex] {
     // SAFETY: FaceId 和 FaceIndex 都是 #[repr(transparent)] 包装 usize，
     // 编译时断言已验证布局相同
@@ -554,49 +555,65 @@ pub fn reinterpret_face_ids(ids: &[FaceId]) -> &[FaceIndex] {
 
 /// 将 FaceIndex 切片重解释为 FaceId 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_face_indices(indices: &[FaceIndex]) -> &[FaceId] {
+    // SAFETY: FaceIndex 和 FaceId 都是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(indices.as_ptr() as *const FaceId, indices.len()) }
 }
 
 /// 将 CellId 切片重解释为 CellIndex 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_cell_ids(ids: &[CellId]) -> &[CellIndex] {
+    // SAFETY: CellId 和 CellIndex 都是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(ids.as_ptr() as *const CellIndex, ids.len()) }
 }
 
 /// 将 CellIndex 切片重解释为 CellId 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_cell_indices(indices: &[CellIndex]) -> &[CellId] {
+    // SAFETY: CellIndex 和 CellId 都是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(indices.as_ptr() as *const CellId, indices.len()) }
 }
 
 /// 将 NodeId 切片重解释为 NodeIndex 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_node_ids(ids: &[NodeId]) -> &[NodeIndex] {
+    // SAFETY: NodeId 和 NodeIndex 都是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(ids.as_ptr() as *const NodeIndex, ids.len()) }
 }
 
 /// 将 NodeIndex 切片重解释为 NodeId 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn reinterpret_node_indices(indices: &[NodeIndex]) -> &[NodeId] {
+    // SAFETY: NodeIndex 和 NodeId 都是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(indices.as_ptr() as *const NodeId, indices.len()) }
 }
 
 /// 将 usize 切片重解释为 CellIndex 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn usize_slice_as_cell_indices(slice: &[usize]) -> &[CellIndex] {
+    // SAFETY: CellIndex 是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const CellIndex, slice.len()) }
 }
 
 /// 将 usize 切片重解释为 FaceIndex 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn usize_slice_as_face_indices(slice: &[usize]) -> &[FaceIndex] {
+    // SAFETY: FaceIndex 是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const FaceIndex, slice.len()) }
 }
 
 /// 将 usize 切片重解释为 NodeIndex 切片
 #[inline]
+#[allow(unsafe_code)]
 pub fn usize_slice_as_node_indices(slice: &[usize]) -> &[NodeIndex] {
+    // SAFETY: NodeIndex 是 #[repr(transparent)] 包装 usize，内存布局相同
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const NodeIndex, slice.len()) }
 }
 

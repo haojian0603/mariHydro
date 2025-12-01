@@ -102,7 +102,7 @@ impl ExcelWindReader {
 
         let range = workbook
             .worksheet_range(&sheet_name)
-            .map_err(|e| MhError::parse_simple(format!("Failed to read sheet '{}': {}", sheet_name, e)))?;;
+            .map_err(|e| MhError::parse_simple(format!("Failed to read sheet '{}': {}", sheet_name, e)))?;
 
         let mut records = Vec::new();
 

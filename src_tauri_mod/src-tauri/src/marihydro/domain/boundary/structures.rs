@@ -841,12 +841,9 @@ impl StructureManager {
     }
 
     /// 按名称获取可变引用
-    pub fn get_by_name_mut(&mut self, name: &str) -> Option<&mut dyn HydraulicStructure> {
-        self.name_index
-            .get(name)
-            .copied()
-            .and_then(move |idx| self.structures.get_mut(idx))
-            .map(|s| s.as_mut())
+    pub fn get_by_name_mut(&mut self, name: &str) -> Option<&mut (dyn HydraulicStructure + '_)> {
+        let idx = *self.name_index.get(name)?;
+        Some(self.structures[idx].as_mut())
     }
 
     /// 获取结构物数量

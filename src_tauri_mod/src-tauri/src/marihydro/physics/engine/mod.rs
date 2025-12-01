@@ -5,17 +5,17 @@
 //! 提供求解器、时间积分器、并行计算等核心计算组件。
 
 pub mod flux_accumulator;
-pub mod parallel_v2;
+pub mod parallel;
 pub mod perf_utils;
-pub mod solver_v2;
+pub mod solver;
 pub mod time_integrator;
-pub mod timestep_v2;
+pub mod timestep;
 
 // 通量累加器
 pub use flux_accumulator::FluxAccumulator;
 
 // 并行计算器
-pub use parallel_v2::{ParallelFluxConfig, UnifiedParallelCalculator, UnifiedParallelCalculatorBuilder};
+pub use parallel::{ParallelFluxConfig, UnifiedParallelCalculator, UnifiedParallelCalculatorBuilder};
 
 // 性能工具
 pub use perf_utils::{
@@ -24,7 +24,7 @@ pub use perf_utils::{
 };
 
 // 求解器
-pub use solver_v2::{SolverConfig, UnstructuredSolverV2, SolverBuilderV2};
+pub use solver::{SolverConfig, UnstructuredSolverV2, SolverBuilderV2};
 
 // 类型别名（向后兼容）
 pub type ImprovedSolver = UnstructuredSolverV2;
@@ -37,4 +37,4 @@ pub use time_integrator::{
 };
 
 // 时间步控制
-pub use timestep_v2::{OptimizedCflCalculator, OptimizedTimeStepController, TimeStepControllerBuilder};
+pub use timestep::{OptimizedCflCalculator, OptimizedTimeStepController, TimeStepControllerBuilder};

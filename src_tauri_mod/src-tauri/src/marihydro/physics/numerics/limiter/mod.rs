@@ -93,15 +93,113 @@ pub trait GradientLimiter: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
-/// 创建限制器实例
-pub fn create_limiter(limiter_type: LimiterType) -> Box<dyn Limiter> {
-    match limiter_type {
-        LimiterType::None => Box::new(NoLimiter),
-        LimiterType::Minmod => Box::new(MinmodLimiter::new()),
-        LimiterType::Superbee => Box::new(SuperbeeLimiter::new()),
-        LimiterType::VanLeer => Box::new(VanLeerLimiter::new()),
-        LimiterType::BarthJespersen => Box::new(BarthJespersenAdapter::new()),
-        LimiterType::Venkatakrishnan => Box::new(VenkatakrishnanAdapter::new(0.3)),
+/// 创建限制器实例（返回具体类型而非 Box<dyn>）
+pub fn create_limiter(limiter_type: LimiterType) -> LimiterEnum {
+    LimiterEnum::new(limiter_type)
+}
+
+/// 限制器枚举包装器 - 替代 Box<dyn Limiter>
+/// 
+/// 使用枚举分发避免 E0038 (trait不是dyn兼容) 问题
+#[derive(Clone)]
+pub struct LimiterEnum {
+    kind: LimiterType,
+}
+
+impl LimiterEnum {
+    /// 创建新的限制器
+    pub fn new(kind: LimiterType) -> Self {
+        Self { kind }
+    }
+
+    /// 限制器名称
+    pub fn name(&self) -> &'static str {
+        self.kind.name()
+    }
+
+    /// 获取限制器能力
+    pub fn capabilities(&self) -> LimiterCapabilities {
+        match self.kind {
+            LimiterType::None => LimiterCapabilities {
+                parallel: true,
+                smooth: true,
+                monotone: false,
+                order: 0,
+            },
+            LimiterType::Minmod | LimiterType::Superbee => LimiterCapabilities {
+                parallel: true,
+                smooth: false,
+                monotone: true,
+                order: 2,
+            },
+            LimiterType::VanLeer => LimiterCapabilities {
+                parallel: true,
+                smooth: true,
+                monotone: true,
+                order: 2,
+            },
+            LimiterType::BarthJespersen => LimiterCapabilities {
+                parallel: true,
+                smooth: false,
+                monotone: true,
+                order: 2,
+            },
+            LimiterType::Venkatakrishnan => LimiterCapabilities {
+                parallel: true,
+                smooth: true,
+                monotone: false,
+                order: 2,
+            },
+        }
+    }
+
+    /// 批量计算限制因子（使用具体类型）
+    pub fn compute_limiters(
+        &self,
+        ctx: &LimiterContext,
+        mesh: &crate::marihydro::domain::mesh::UnstructuredMesh,
+        output: &mut [f64],
+    ) -> MhResult<()> {
+        match self.kind {
+            LimiterType::None => {
+                output[..mesh.n_cells()].fill(1.0);
+                Ok(())
+            }
+            LimiterType::Minmod => {
+                let limiter = MinmodLimiter::new();
+                limiter.compute_limiters(ctx, mesh, output)
+            }
+            LimiterType::Superbee => {
+                let limiter = SuperbeeLimiter::new();
+                limiter.compute_limiters(ctx, mesh, output)
+            }
+            LimiterType::VanLeer => {
+                let limiter = VanLeerLimiter::new();
+                limiter.compute_limiters(ctx, mesh, output)
+            }
+            LimiterType::BarthJespersen => {
+                let limiter = BarthJespersenLimiter::default();
+                limiter.compute_limiters(ctx.field, ctx.gradient, mesh, output)
+            }
+            LimiterType::Venkatakrishnan => {
+                let limiter = VenkatakrishnanLimiter::new(0.3);
+                limiter.compute_limiters(ctx.field, ctx.gradient, mesh, output)
+            }
+        }
+    }
+
+    /// 应用限制器到梯度（原地修改）
+    pub fn apply(
+        &self,
+        field: &[f64],
+        gradient: &mut ScalarGradientStorage,
+        mesh: &crate::marihydro::domain::mesh::UnstructuredMesh,
+    ) -> MhResult<()> {
+        let ctx = LimiterContext::new(field, gradient);
+        let mut limiters = vec![1.0; mesh.n_cells()];
+        self.compute_limiters(&ctx, mesh, &mut limiters)?;
+        gradient.apply_limiter(&limiters);
+        Ok(())
     }
 }
 

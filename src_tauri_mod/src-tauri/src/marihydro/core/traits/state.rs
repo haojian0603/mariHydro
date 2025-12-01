@@ -157,15 +157,13 @@ pub trait StateAccessMut: StateAccess {
         flux_hu: &[f64],
         flux_hv: &[f64],
     ) {
-        let h = self.h_slice_mut();
-        let hu = self.hu_slice_mut();
-        let hv = self.hv_slice_mut();
-
-        for i in 0..h.len() {
+        let n = self.n_cells();
+        for i in 0..n {
             let inv_area = 1.0 / areas[i];
-            h[i] += dt * flux_h[i] * inv_area;
-            hu[i] += dt * flux_hu[i] * inv_area;
-            hv[i] += dt * flux_hv[i] * inv_area;
+            let cell = CellIndex(i);
+            self.set_h(cell, self.h(cell) + dt * flux_h[i] * inv_area);
+            self.set_hu(cell, self.hu(cell) + dt * flux_hu[i] * inv_area);
+            self.set_hv(cell, self.hv(cell) + dt * flux_hv[i] * inv_area);
         }
     }
 
@@ -177,14 +175,12 @@ pub trait StateAccessMut: StateAccess {
         source_hu: &[f64],
         source_hv: &[f64],
     ) {
-        let h = self.h_slice_mut();
-        let hu = self.hu_slice_mut();
-        let hv = self.hv_slice_mut();
-
-        for i in 0..h.len() {
-            h[i] += dt * source_h[i];
-            hu[i] += dt * source_hu[i];
-            hv[i] += dt * source_hv[i];
+        let n = self.n_cells();
+        for i in 0..n {
+            let cell = CellIndex(i);
+            self.set_h(cell, self.h(cell) + dt * source_h[i]);
+            self.set_hu(cell, self.hu(cell) + dt * source_hu[i]);
+            self.set_hv(cell, self.hv(cell) + dt * source_hv[i]);
         }
     }
 

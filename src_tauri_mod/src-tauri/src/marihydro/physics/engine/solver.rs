@@ -1,4 +1,4 @@
-// src-tauri/src/marihydro/physics/engine/solver_v2.rs
+// src-tauri/src/marihydro/physics/engine/solver.rs
 
 //! 改进版求解器
 //!
@@ -14,7 +14,7 @@
 
 use crate::marihydro::core::error::MhResult;
 use crate::marihydro::core::traits::mesh::MeshAccess;
-use crate::marihydro::core::traits::source::{SourceContext, SourceTerm};
+use crate::marihydro::core::traits::source::{SourceContext, SourceTermKind, SourceTermManager};
 use crate::marihydro::core::types::{CellIndex, FaceIndex, NumericalParams};
 use crate::marihydro::core::Workspace;
 use crate::marihydro::domain::mesh::UnstructuredMesh;
@@ -25,7 +25,7 @@ use crate::marihydro::physics::schemes::{
     HydrostaticReconstruction,
 };
 use crate::marihydro::physics::sources::implicit::{ImplicitConfig, ImplicitMomentumDecay, ManningDamping};
-use super::timestep_v2::OptimizedTimeStepController;
+use super::timestep::OptimizedTimeStepController;
 use glam::DVec2;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,7 +76,7 @@ pub struct UnstructuredSolverV2 {
     timestep_ctrl: OptimizedTimeStepController,
 
     // 源项
-    source_terms: Vec<Box<dyn SourceTerm>>,
+    source_manager: SourceTermManager,
 
     // 统计
     max_wave_speed: f64,
@@ -101,7 +101,7 @@ impl UnstructuredSolverV2 {
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.gravity),
             implicit_decay: ImplicitMomentumDecay::new(ImplicitConfig::default()),
             timestep_ctrl: OptimizedTimeStepController::new(config.gravity, &config.params),
-            source_terms: Vec::new(),
+            source_manager: SourceTermManager::new(),
             max_wave_speed: 0.0,
             dry_cells: 0,
             limited_faces: 0,
@@ -109,8 +109,8 @@ impl UnstructuredSolverV2 {
     }
 
     /// 添加源项
-    pub fn add_source_term(&mut self, source: Box<dyn SourceTerm>) {
-        self.source_terms.push(source);
+    pub fn add_source_term(&mut self, source: SourceTermKind) {
+        self.source_manager.add(source);
     }
 
     /// 执行一个时间步
@@ -274,23 +274,16 @@ impl UnstructuredSolverV2 {
 
     /// 应用源项
     fn apply_source_terms(&mut self, state: &ShallowWaterState, dt: f64) -> MhResult<()> {
-        let ctx = SourceContext {
-            time: 0.0,
-            dt,
-            params: &self.config.params,
-            workspace: &self.workspace,
-        };
+        let ctx = SourceContext::new(0.0, dt, &self.config.params);
 
-        for source in &self.source_terms {
-            source.compute_all(
-                self.mesh.as_ref(),
-                state,
-                &ctx,
-                &mut self.workspace.source_h,
-                &mut self.workspace.source_hu,
-                &mut self.workspace.source_hv,
-            )?;
-        }
+        self.source_manager.compute_all(
+            self.mesh.as_ref(),
+            state,
+            &ctx,
+            &mut self.workspace.source_h,
+            &mut self.workspace.source_hu,
+            &mut self.workspace.source_hv,
+        )?;
 
         Ok(())
     }
@@ -366,7 +359,7 @@ impl UnstructuredSolverV2 {
 pub struct SolverBuilderV2 {
     mesh: Option<Arc<UnstructuredMesh>>,
     config: SolverConfig,
-    sources: Vec<Box<dyn SourceTerm>>,
+    sources: Vec<SourceTermKind>,
 }
 
 impl SolverBuilderV2 {
@@ -403,7 +396,7 @@ impl SolverBuilderV2 {
         self
     }
 
-    pub fn add_source(mut self, source: Box<dyn SourceTerm>) -> Self {
+    pub fn add_source(mut self, source: SourceTermKind) -> Self {
         self.sources.push(source);
         self
     }

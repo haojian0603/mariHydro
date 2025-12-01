@@ -137,12 +137,12 @@ impl TextWindReader {
             let u: f64 = columns.get(config.u_column)
                 .ok_or_else(|| MhError::parse_simple(format!("Missing U column at line {}", line_no + 1)))?
                 .parse()
-                .map_err(|_| MhError::parse_simple(format!("Invalid U value at line {}", line_no + 1)))?;;
+                .map_err(|_| MhError::parse_simple(format!("Invalid U value at line {}", line_no + 1)))?;
             
             let v: f64 = columns.get(config.v_column)
                 .ok_or_else(|| MhError::parse_simple(format!("Missing V column at line {}", line_no + 1)))?
                 .parse()
-                .map_err(|_| MhError::parse_simple(format!("Invalid V value at line {}", line_no + 1)))?;;
+                .map_err(|_| MhError::parse_simple(format!("Invalid V value at line {}", line_no + 1)))?;
             
             // 解析可选的空间坐标
             let x = if let Some(col) = config.x_column {

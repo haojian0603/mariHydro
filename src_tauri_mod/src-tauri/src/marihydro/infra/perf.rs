@@ -197,8 +197,11 @@ pub fn has_avx2() -> bool {
 
 /// 预取提示（可能被编译器忽略）
 #[inline]
+#[allow(unsafe_code)]
 pub fn prefetch_read<T>(ptr: *const T) {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: _mm_prefetch 是 CPU 提示指令，
+    // 即使指针无效也不会导致崩溃或内存访问错误
     unsafe {
         use std::arch::x86_64::_mm_prefetch;
         _mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0);

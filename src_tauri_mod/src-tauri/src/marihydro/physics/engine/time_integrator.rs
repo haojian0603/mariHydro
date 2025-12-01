@@ -271,7 +271,8 @@ impl TimeIntegrator for SspRk2 {
         self.state_1.enforce_positivity();
         
         // 线性组合：U^{n+1} = 0.5 * U^n + 0.5 * U^(1)
-        state.linear_combine(0.5, state, 0.5, &self.state_1);
+        // 使用 axpy 避免自引用借用问题
+        state.axpy(0.5, 0.5, &self.state_1);
         state.enforce_positivity();
         
         Ok(max_wave_speed_1.max(max_wave_speed_2))
@@ -363,7 +364,8 @@ impl TimeIntegrator for SspRk3 {
         self.state_2.enforce_positivity();
         
         // state = 1/3 * state + 2/3 * state_2
-        state.linear_combine(1.0 / 3.0, state, 2.0 / 3.0, &self.state_2);
+        // 使用 axpy 避免 state 同时作为 &mut self 和 &Self 的借用问题
+        state.axpy(1.0 / 3.0, 2.0 / 3.0, &self.state_2);
         state.enforce_positivity();
         
         Ok(max_wave_speed)
@@ -392,16 +394,120 @@ impl std::fmt::Display for TimeIntegratorKind {
     }
 }
 
-/// 创建时间积分器
+/// 创建时间积分器（返回具体类型而非 Box<dyn>）
 pub fn create_integrator(
     kind: TimeIntegratorKind,
     n_cells: usize,
     n_tracers: usize,
-) -> Box<dyn TimeIntegrator> {
-    match kind {
-        TimeIntegratorKind::ForwardEuler => Box::new(ForwardEuler::new(n_cells, n_tracers)),
-        TimeIntegratorKind::SspRk2 => Box::new(SspRk2::new(n_cells, n_tracers)),
-        TimeIntegratorKind::SspRk3 => Box::new(SspRk3::new(n_cells, n_tracers)),
+) -> TimeIntegratorEnum {
+    TimeIntegratorEnum::new(kind, n_cells, n_tracers)
+}
+
+/// 时间积分器枚举包装器 - 替代 Box<dyn TimeIntegrator>
+/// 
+/// 使用枚举分发避免 E0038 (trait不是dyn兼容) 问题
+pub struct TimeIntegratorEnum {
+    kind: TimeIntegratorKind,
+    euler: Option<ForwardEuler>,
+    rk2: Option<SspRk2>,
+    rk3: Option<SspRk3>,
+}
+
+impl TimeIntegratorEnum {
+    /// 创建新的时间积分器
+    pub fn new(kind: TimeIntegratorKind, n_cells: usize, n_tracers: usize) -> Self {
+        match kind {
+            TimeIntegratorKind::ForwardEuler => Self {
+                kind,
+                euler: Some(ForwardEuler::new(n_cells, n_tracers)),
+                rk2: None,
+                rk3: None,
+            },
+            TimeIntegratorKind::SspRk2 => Self {
+                kind,
+                euler: None,
+                rk2: Some(SspRk2::new(n_cells, n_tracers)),
+                rk3: None,
+            },
+            TimeIntegratorKind::SspRk3 => Self {
+                kind,
+                euler: None,
+                rk2: None,
+                rk3: Some(SspRk3::new(n_cells, n_tracers)),
+            },
+        }
+    }
+
+    /// 积分器名称
+    pub fn name(&self) -> &'static str {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => "ForwardEuler",
+            TimeIntegratorKind::SspRk2 => "SSP-RK2",
+            TimeIntegratorKind::SspRk3 => "SSP-RK3",
+        }
+    }
+
+    /// 时间精度阶数
+    pub fn order(&self) -> u8 {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => 1,
+            TimeIntegratorKind::SspRk2 => 2,
+            TimeIntegratorKind::SspRk3 => 3,
+        }
+    }
+
+    /// Runge-Kutta 级数
+    pub fn stages(&self) -> u8 {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => 1,
+            TimeIntegratorKind::SspRk2 => 2,
+            TimeIntegratorKind::SspRk3 => 3,
+        }
+    }
+
+    /// 最大稳定 CFL 数
+    pub fn max_cfl(&self) -> f64 {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => 0.5,
+            TimeIntegratorKind::SspRk2 => 1.0,
+            TimeIntegratorKind::SspRk3 => 1.0,
+        }
+    }
+
+    /// 推进一个时间步
+    pub fn advance<R: RhsComputer>(
+        &mut self,
+        state: &mut ShallowWaterState,
+        time: f64,
+        dt: f64,
+        rhs_computer: &mut R,
+    ) -> MhResult<f64> {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => {
+                self.euler.as_mut().unwrap().advance(state, time, dt, rhs_computer)
+            }
+            TimeIntegratorKind::SspRk2 => {
+                self.rk2.as_mut().unwrap().advance(state, time, dt, rhs_computer)
+            }
+            TimeIntegratorKind::SspRk3 => {
+                self.rk3.as_mut().unwrap().advance(state, time, dt, rhs_computer)
+            }
+        }
+    }
+
+    /// 确保内部缓冲区大小正确
+    pub fn ensure_size(&mut self, n_cells: usize, n_tracers: usize) {
+        match self.kind {
+            TimeIntegratorKind::ForwardEuler => {
+                self.euler.as_mut().unwrap().ensure_size(n_cells, n_tracers);
+            }
+            TimeIntegratorKind::SspRk2 => {
+                self.rk2.as_mut().unwrap().ensure_size(n_cells, n_tracers);
+            }
+            TimeIntegratorKind::SspRk3 => {
+                self.rk3.as_mut().unwrap().ensure_size(n_cells, n_tracers);
+            }
+        }
     }
 }
 

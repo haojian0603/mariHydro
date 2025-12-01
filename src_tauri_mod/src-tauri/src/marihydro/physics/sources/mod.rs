@@ -3,6 +3,9 @@
 //! 源项模块
 //!
 //! 包含各种物理源项的实现：摩擦、扩散、科氏力、大气压等。
+//! 
+//! 注意: 核心源项 trait 已被枚举化重构，主要类型定义在
+//! core/traits/source.rs 中。此模块保留辅助函数和便捷构造器。
 
 pub mod atmosphere;
 pub mod baroclinic;
@@ -19,13 +22,13 @@ pub mod vegetation;
 // 基础模块（包含 SourceTerm trait 实现）
 pub mod base;
 
-// atmosphere 模块导出
+// atmosphere 模块导出 (便捷构造器)
 pub use atmosphere::{
     wind_drag_coefficient_lp81, wind_drag_coefficient_wu82,
     WindStressSource, PressureGradientSource,
 };
 
-// coriolis 模块导出
+// coriolis 模块导出 (便捷构造器)
 pub use coriolis::CoriolisSource;
 
 // diffusion 模块导出
@@ -35,7 +38,7 @@ pub use diffusion::{
     DiffusionBC,
 };
 
-// friction 模块导出
+// friction 模块导出 (便捷构造器)
 pub use friction::{ManningFriction, ChezyFriction};
 
 // inflow 模块导出
@@ -46,7 +49,7 @@ pub use tracer_transport::{
     solve_tracer_step, AdvectionScheme, TracerBoundaryCondition, TracerTransportSolver,
 };
 
-// turbulence 模块导出
+// turbulence 模块导出 (便捷构造器)
 pub use turbulence::{compute_vorticity, SmagorinskyTurbulence};
 
 // turbulence_ke 模块导出

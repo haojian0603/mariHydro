@@ -29,5 +29,6 @@ pub use interpolator::{SpatialInterpolator, TemporalInterpolator};
 pub use limiter::GradientLimiter;
 pub use mesh::{CellGeometry, FaceGeometry, MeshAccess, MeshTopology};
 pub use repository::{Repository, SimulationRepository};
-pub use source::SourceTerm;
+// SourceTerm trait 已被枚举化，改为导出 SourceTermKind 和 SourceTermManager
+pub use source::{SourceTermKind, SourceTermManager, SourceContribution, SourceContext};
 pub use state::{ConservedState, StateAccess, StateAccessMut};

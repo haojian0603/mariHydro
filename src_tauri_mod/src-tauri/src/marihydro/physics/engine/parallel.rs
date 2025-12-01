@@ -1,4 +1,4 @@
-// src-tauri/src/marihydro/physics/engine/parallel_v2.rs
+// src-tauri/src/marihydro/physics/engine/parallel.rs
 //! 改进版并行通量计算模块
 //! 
 //! 集成 core/parallel 子系统，提供：
@@ -413,7 +413,10 @@ impl UnifiedParallelCalculator {
                 let fhu = flux.momentum_x * length;
                 let fhv = flux.momentum_y * length;
                 
-                // 无竞争直接写入
+                // SAFETY: 这里使用 unsafe 是因为我们通过图着色算法确保了同一颜色内的面不会
+                // 同时访问同一个单元格，因此不存在数据竞争。
+                // 每个面的owner和neighbor在同一颜色内是唯一的，所以指针写入是安全的。
+                #[allow(unsafe_code)]
                 unsafe {
                     let ptr_h = workspace.flux_h.as_ptr() as *mut f64;
                     let ptr_hu = workspace.flux_hu.as_ptr() as *mut f64;

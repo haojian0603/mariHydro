@@ -258,6 +258,30 @@ impl ShallowWaterState {
         }
     }
 
+    /// 自线性组合: self = a * self + b * other
+    /// 避免同时借用 self 作为可变和不可变引用
+    pub fn axpy(&mut self, a: f64, b: f64, other: &Self) {
+        debug_assert_eq!(self.n_cells(), other.n_cells());
+        
+        self.h.par_iter_mut()
+            .zip(other.h.par_iter())
+            .for_each(|(dst, &vb)| *dst = a * *dst + b * vb);
+        
+        self.hu.par_iter_mut()
+            .zip(other.hu.par_iter())
+            .for_each(|(dst, &vb)| *dst = a * *dst + b * vb);
+        
+        self.hv.par_iter_mut()
+            .zip(other.hv.par_iter())
+            .for_each(|(dst, &vb)| *dst = a * *dst + b * vb);
+        
+        if let (Some(ref mut dst), Some(ref src_b)) = (&mut self.hc, &other.hc) {
+            dst.par_iter_mut()
+                .zip(src_b.par_iter())
+                .for_each(|(d, &vb)| *d = a * *d + b * vb);
+        }
+    }
+
     /// 强制正性约束
     pub fn enforce_positivity(&mut self) {
         self.h.par_iter_mut().for_each(|h| {
