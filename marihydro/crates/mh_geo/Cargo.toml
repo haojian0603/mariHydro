@@ -9,4 +9,3 @@ edition = "2021"
 mh_foundation = { path = "../mh_foundation" }
 rstar = "0.12"
 serde = { version = "1.0", features = ["derive"] }
-

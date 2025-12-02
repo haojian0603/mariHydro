@@ -6,7 +6,8 @@
 //! # 示例
 //!
 //! ```
-//! use mh_geo::spatial_index::{SpatialIndex, Point2D, BoundingBox};
+//! use mh_geo::spatial_index::{SpatialIndex, BoundingBox};
+//! use mh_geo::geometry::Point2D;
 //!
 //! let mut index: SpatialIndex<u32> = SpatialIndex::new();
 //!
@@ -19,56 +20,8 @@
 //! let results = index.query_range(&bbox);
 //! ```
 
+use crate::geometry::Point2D;
 use rstar::{RTree, RTreeObject, AABB};
-
-// ============================================================================
-// 基本类型
-// ============================================================================
-
-/// 2D 点
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point2D {
-    /// x 坐标
-    pub x: f64,
-    /// y 坐标
-    pub y: f64,
-}
-
-impl Point2D {
-    /// 创建新的 2D 点
-    #[must_use]
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
-
-    /// 计算到另一个点的距离
-    #[must_use]
-    pub fn distance_to(&self, other: &Self) -> f64 {
-        let dx = self.x - other.x;
-        let dy = self.y - other.y;
-        (dx * dx + dy * dy).sqrt()
-    }
-
-    /// 计算到另一个点的距离平方
-    #[must_use]
-    pub fn distance_squared_to(&self, other: &Self) -> f64 {
-        let dx = self.x - other.x;
-        let dy = self.y - other.y;
-        dx * dx + dy * dy
-    }
-}
-
-impl From<(f64, f64)> for Point2D {
-    fn from((x, y): (f64, f64)) -> Self {
-        Self::new(x, y)
-    }
-}
-
-impl From<[f64; 2]> for Point2D {
-    fn from([x, y]: [f64; 2]) -> Self {
-        Self::new(x, y)
-    }
-}
 
 /// 边界框
 #[derive(Debug, Clone, Copy, PartialEq)]

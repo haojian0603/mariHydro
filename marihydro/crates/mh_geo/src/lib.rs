@@ -6,6 +6,7 @@
 //! # 模块
 //!
 //! - `crs`: 坐标参考系统定义和解析
+//! - `geometry`: 几何类型 (Point2D, Point3D)
 //! - `projection`: 投影转换 (UTM, Web Mercator, 高斯-克吕格)
 //! - `transform`: 坐标转换器和仿射变换
 //! - `spatial_index`: 基于 R-tree 的空间索引
@@ -31,6 +32,7 @@
 #![allow(clippy::must_use_candidate)]
 
 pub mod crs;
+pub mod geometry;
 pub mod projection;
 pub mod spatial_index;
 pub mod transform;
@@ -38,13 +40,16 @@ pub mod transform;
 /// 预导入模块
 pub mod prelude {
     pub use crate::crs::{Crs, CrsDefinition, CrsStrategy};
+    pub use crate::geometry::{Point2D, Point3D};
     pub use crate::projection::{Projection, ProjectionType};
-    pub use crate::spatial_index::{BoundingBox, Point2D, SpatialIndex};
+    pub use crate::spatial_index::{BoundingBox, SpatialIndex};
     pub use crate::transform::{AffineTransform, GeoTransformer};
 }
 
 // 重导出常用类型
 pub use crs::{Crs, CrsDefinition, CrsStrategy};
+pub use geometry::{Point2D, Point3D};
 pub use projection::{Projection, ProjectionType};
-pub use spatial_index::{BoundingBox, Point2D, SpatialIndex};
+pub use spatial_index::BoundingBox;
+pub use spatial_index::SpatialIndex;
 pub use transform::{AffineTransform, GeoTransformer};
