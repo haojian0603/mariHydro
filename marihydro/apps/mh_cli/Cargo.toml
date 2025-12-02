@@ -1,2 +1,10 @@
 # marihydro\apps\mh_cli\Cargo.toml
 
+[package]
+name = "mh_cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TODO: 添加依赖
+

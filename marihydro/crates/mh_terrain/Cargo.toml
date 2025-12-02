@@ -1,2 +1,12 @@
 # marihydro\crates\mh_terrain\Cargo.toml
 
+[package]
+name = "mh_terrain"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mh_foundation = { path = "../mh_foundation" }
+mh_geo = { path = "../mh_geo" }
+memmap2 = "0.9"
+

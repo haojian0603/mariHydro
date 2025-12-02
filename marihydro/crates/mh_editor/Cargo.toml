@@ -1,2 +1,13 @@
 # marihydro\crates\mh_editor\Cargo.toml
 
+[package]
+name = "mh_editor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mh_foundation = { path = "../mh_foundation" }
+mh_mesh = { path = "../mh_mesh" }
+mh_terrain = { path = "../mh_terrain" }
+serde = { version = "1.0", features = ["derive"] }
+

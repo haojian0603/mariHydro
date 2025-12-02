@@ -1,2 +1,15 @@
 # marihydro\crates\mh_physics\Cargo.toml
 
+[package]
+name = "mh_physics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mh_foundation = { path = "../mh_foundation" }
+mh_mesh = { path = "../mh_mesh" }
+wgpu = "23"
+ndarray = "0.16"
+rayon = "1.10"
+bytemuck = { version = "1.18", features = ["derive"] }
+

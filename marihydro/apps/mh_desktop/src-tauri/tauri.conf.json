@@ -1,0 +1,13 @@
+{
+  "productName": "MariHydro Desktop",
+  "version": "0.1.0",
+  "identifier": "com.marihydro.desktop",
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": ""
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

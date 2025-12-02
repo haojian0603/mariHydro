@@ -1,2 +1,17 @@
 # marihydro\crates\mh_foundation\Cargo.toml
 
+[package]
+name = "mh_foundation"
+version = "0.1.0"
+edition = "2021"
+description = "MariHydro Foundation Layer - Zero-dependency base abstractions"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+
+

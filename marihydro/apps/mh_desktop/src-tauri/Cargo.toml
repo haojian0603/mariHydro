@@ -1,0 +1,23 @@
+# marihydro\apps\mh_desktop\src-tauri\Cargo.toml
+
+[package]
+name = "mh_desktop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mh_foundation = { path = "../../../crates/mh_foundation" }
+mh_geo = { path = "../../../crates/mh_geo" }
+mh_mesh = { path = "../../../crates/mh_mesh" }
+mh_terrain = { path = "../../../crates/mh_terrain" }
+mh_editor = { path = "../../../crates/mh_editor" }
+mh_physics = { path = "../../../crates/mh_physics" }
+mh_io = { path = "../../../crates/mh_io" }
+
+tauri = { version = "2.0", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+
+[build-dependencies]
+tauri-build = { version = "2.0" }

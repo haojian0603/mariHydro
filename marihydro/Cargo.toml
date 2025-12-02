@@ -1,2 +1,21 @@
 # marihydro\Cargo.toml
 
+[workspace]
+resolver = "2"
+members = [
+    "crates/mh_foundation",
+    "crates/mh_geo",
+    "crates/mh_mesh",
+    "crates/mh_terrain",
+    "crates/mh_editor",
+    "crates/mh_physics",
+    "crates/mh_io",
+    "apps/mh_desktop/src-tauri",
+    "apps/mh_cli",
+]
+
+[workspace.dependencies]
+# 统一版本管理
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+
