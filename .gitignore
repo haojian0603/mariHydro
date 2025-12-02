@@ -7,6 +7,12 @@ target/
 杂项/
 *.py
 
+## AI修改文档
+marihydro/.ai
+
+## 旧的遗留资产
+marihydro/legacy_src
+
 ## VS Code
 .vscode/
 *.code-workspace
