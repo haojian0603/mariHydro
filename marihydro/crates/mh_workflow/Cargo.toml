@@ -1,0 +1,33 @@
+# crates/mh_workflow/Cargo.toml
+
+[package]
+name = "mh_workflow"
+version = "0.1.0"
+edition = "2021"
+description = "Workflow management for MariHydro"
+
+[dependencies]
+# 内部依赖
+mh_foundation = { path = "../mh_foundation" }
+
+# 同步原语
+parking_lot = "0.12"
+
+# 唯一标识
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 错误处理
+thiserror = "1.0"
+
+# 日志
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3.0"

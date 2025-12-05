@@ -1,0 +1,526 @@
+// crates/mh_physics/src/forcing/river.rs
+
+//! 河流入流数据提供者
+//!
+//! 提供时变河流入流边界条件，包括：
+//! - 恒定流量
+//! - 时间序列流量
+//! - 洪水过程线
+//! - 多点河流入流
+//!
+//! # 使用示例
+//!
+//! ```ignore
+//! use mh_physics::forcing::RiverProvider;
+//!
+//! // 恒定流量
+//! let river = RiverProvider::constant(100.0); // 100 m³/s
+//!
+//! // 洪水过程线
+//! let flood = RiverProvider::flood_wave(
+//!     50.0,   // 基流
+//!     500.0,  // 峰值
+//!     3600.0, // 上升时间
+//!     7200.0, // 下降时间
+//! );
+//! ```
+
+/// 河流入流数据提供者
+#[derive(Debug, Clone)]
+pub struct RiverProvider {
+    /// 数据类型
+    data: RiverData,
+    /// 入流方向 [弧度]
+    direction: f64,
+    /// 最后更新时间
+    last_update: f64,
+    /// 缓存的流量
+    cached_discharge: f64,
+}
+
+/// 河流数据类型
+#[derive(Debug, Clone)]
+pub enum RiverData {
+    /// 恒定流量
+    Constant(f64),
+    /// 时间序列
+    TimeSeries {
+        times: Vec<f64>,
+        discharges: Vec<f64>,
+    },
+    /// 洪水过程线（简化三角形）
+    FloodWave {
+        /// 基流 [m³/s]
+        base_flow: f64,
+        /// 峰值流量 [m³/s]
+        peak_flow: f64,
+        /// 峰值时间 [s]
+        peak_time: f64,
+        /// 上升时间 [s]
+        rise_time: f64,
+        /// 下降时间 [s]
+        fall_time: f64,
+    },
+    /// 周期性流量（日变化）
+    Periodic {
+        /// 平均流量
+        mean_discharge: f64,
+        /// 振幅
+        amplitude: f64,
+        /// 周期 [s]
+        period: f64,
+        /// 相位 [弧度]
+        phase: f64,
+    },
+    /// 阶梯流量
+    Step {
+        /// 初始流量
+        initial: f64,
+        /// 变化时间和流量
+        steps: Vec<(f64, f64)>,
+    },
+}
+
+impl RiverProvider {
+    /// 创建恒定流量
+    pub fn constant(discharge: f64) -> Self {
+        Self {
+            data: RiverData::Constant(discharge),
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: discharge,
+        }
+    }
+
+    /// 创建无入流
+    pub fn none() -> Self {
+        Self::constant(0.0)
+    }
+
+    /// 创建时间序列
+    pub fn time_series(times: Vec<f64>, discharges: Vec<f64>) -> Self {
+        let initial = discharges.first().copied().unwrap_or(0.0);
+        Self {
+            data: RiverData::TimeSeries { times, discharges },
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: initial,
+        }
+    }
+
+    /// 创建洪水过程线
+    ///
+    /// # 参数
+    /// - `base_flow`: 基流 [m³/s]
+    /// - `peak_flow`: 峰值流量 [m³/s]
+    /// - `rise_time`: 上升时间 [s]（从开始到峰值）
+    /// - `fall_time`: 下降时间 [s]（从峰值到恢复基流）
+    pub fn flood_wave(base_flow: f64, peak_flow: f64, rise_time: f64, fall_time: f64) -> Self {
+        Self {
+            data: RiverData::FloodWave {
+                base_flow,
+                peak_flow,
+                peak_time: rise_time,
+                rise_time,
+                fall_time,
+            },
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: base_flow,
+        }
+    }
+
+    /// 创建延迟洪水
+    pub fn delayed_flood(
+        base_flow: f64,
+        peak_flow: f64,
+        delay: f64,
+        rise_time: f64,
+        fall_time: f64,
+    ) -> Self {
+        Self {
+            data: RiverData::FloodWave {
+                base_flow,
+                peak_flow,
+                peak_time: delay + rise_time,
+                rise_time,
+                fall_time,
+            },
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: base_flow,
+        }
+    }
+
+    /// 创建周期性流量
+    pub fn periodic(mean_discharge: f64, amplitude: f64, period_hours: f64) -> Self {
+        Self {
+            data: RiverData::Periodic {
+                mean_discharge,
+                amplitude,
+                period: period_hours * 3600.0,
+                phase: 0.0,
+            },
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: mean_discharge,
+        }
+    }
+
+    /// 创建阶梯流量
+    pub fn step_changes(initial: f64, steps: Vec<(f64, f64)>) -> Self {
+        Self {
+            data: RiverData::Step { initial, steps },
+            direction: 0.0,
+            last_update: 0.0,
+            cached_discharge: initial,
+        }
+    }
+
+    /// 设置入流方向
+    pub fn with_direction(mut self, direction_deg: f64) -> Self {
+        self.direction = direction_deg.to_radians();
+        self
+    }
+
+    /// 获取指定时刻的流量
+    pub fn get_discharge_at(&self, time: f64) -> f64 {
+        match &self.data {
+            RiverData::Constant(q) => *q,
+
+            RiverData::TimeSeries { times, discharges } => {
+                if times.is_empty() {
+                    return 0.0;
+                }
+
+                if time <= times[0] {
+                    return discharges[0];
+                }
+                if time >= *times.last().unwrap() {
+                    return *discharges.last().unwrap();
+                }
+
+                // 线性插值
+                for i in 0..times.len() - 1 {
+                    if time >= times[i] && time < times[i + 1] {
+                        let t = (time - times[i]) / (times[i + 1] - times[i]);
+                        return discharges[i] + t * (discharges[i + 1] - discharges[i]);
+                    }
+                }
+
+                0.0
+            }
+
+            RiverData::FloodWave { base_flow, peak_flow, peak_time, rise_time, fall_time } => {
+                let start_time = peak_time - rise_time;
+                let end_time = peak_time + fall_time;
+
+                if time < start_time {
+                    *base_flow
+                } else if time < *peak_time {
+                    // 上升段
+                    let t = (time - start_time) / rise_time;
+                    base_flow + t * (peak_flow - base_flow)
+                } else if time < end_time {
+                    // 下降段
+                    let t = (time - peak_time) / fall_time;
+                    peak_flow - t * (peak_flow - base_flow)
+                } else {
+                    *base_flow
+                }
+            }
+
+            RiverData::Periodic { mean_discharge, amplitude, period, phase } => {
+                let omega = 2.0 * std::f64::consts::PI / period;
+                mean_discharge + amplitude * (omega * time + phase).sin()
+            }
+
+            RiverData::Step { initial, steps } => {
+                let mut q = *initial;
+                for (t, new_q) in steps {
+                    if time >= *t {
+                        q = *new_q;
+                    } else {
+                        break;
+                    }
+                }
+                q
+            }
+        }
+    }
+
+    /// 获取入流方向
+    pub fn get_direction(&self) -> f64 {
+        self.direction
+    }
+
+    /// 获取入流速度分量
+    pub fn get_velocity_components(&self, time: f64, cross_section_area: f64) -> (f64, f64) {
+        let q = self.get_discharge_at(time);
+        let velocity = if cross_section_area > 1e-6 {
+            q / cross_section_area
+        } else {
+            0.0
+        };
+
+        let u = velocity * self.direction.cos();
+        let v = velocity * self.direction.sin();
+        (u, v)
+    }
+
+    /// 更新缓存
+    pub fn update(&mut self, time: f64) {
+        if (time - self.last_update).abs() > 1e-10 {
+            self.cached_discharge = self.get_discharge_at(time);
+            self.last_update = time;
+        }
+    }
+
+    /// 获取缓存的流量
+    pub fn cached(&self) -> f64 {
+        self.cached_discharge
+    }
+
+    /// 获取峰值流量
+    pub fn peak_discharge(&self) -> f64 {
+        match &self.data {
+            RiverData::Constant(q) => *q,
+            RiverData::TimeSeries { discharges, .. } => {
+                discharges.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+            }
+            RiverData::FloodWave { peak_flow, .. } => *peak_flow,
+            RiverData::Periodic { mean_discharge, amplitude, .. } => mean_discharge + amplitude,
+            RiverData::Step { initial, steps } => {
+                let max_step = steps.iter().map(|(_, q)| *q).fold(f64::NEG_INFINITY, f64::max);
+                f64::max(*initial, max_step)
+            }
+        }
+    }
+}
+
+/// 多河流入流管理器
+#[derive(Debug, Clone)]
+pub struct RiverSystem {
+    /// 河流列表
+    rivers: Vec<RiverEntry>,
+}
+
+/// 单条河流入口
+#[derive(Debug, Clone)]
+pub struct RiverEntry {
+    /// 河流名称
+    pub name: String,
+    /// 入流单元
+    pub cells: Vec<usize>,
+    /// 数据提供者
+    pub provider: RiverProvider,
+    /// 入流分配权重
+    pub weights: Vec<f64>,
+}
+
+impl RiverSystem {
+    /// 创建空系统
+    pub fn new() -> Self {
+        Self { rivers: Vec::new() }
+    }
+
+    /// 添加河流
+    pub fn add_river(&mut self, name: &str, cells: Vec<usize>, provider: RiverProvider) {
+        let n = cells.len();
+        let weight = if n > 0 { 1.0 / n as f64 } else { 0.0 };
+
+        self.rivers.push(RiverEntry {
+            name: name.to_string(),
+            cells,
+            provider,
+            weights: vec![weight; n],
+        });
+    }
+
+    /// 添加带权重的河流
+    pub fn add_river_with_weights(
+        &mut self,
+        name: &str,
+        cells: Vec<usize>,
+        provider: RiverProvider,
+        weights: Vec<f64>,
+    ) {
+        self.rivers.push(RiverEntry {
+            name: name.to_string(),
+            cells,
+            provider,
+            weights,
+        });
+    }
+
+    /// 获取河流数量
+    pub fn count(&self) -> usize {
+        self.rivers.len()
+    }
+
+    /// 获取所有河流总流量
+    pub fn total_discharge(&self, time: f64) -> f64 {
+        self.rivers.iter().map(|r| r.provider.get_discharge_at(time)).sum()
+    }
+
+    /// 更新所有河流
+    pub fn update_all(&mut self, time: f64) {
+        for river in &mut self.rivers {
+            river.provider.update(time);
+        }
+    }
+
+    /// 获取单元的总入流量
+    pub fn get_cell_inflow(&self, cell: usize, time: f64) -> f64 {
+        let mut total = 0.0;
+        for river in &self.rivers {
+            for (i, &c) in river.cells.iter().enumerate() {
+                if c == cell {
+                    let q = river.provider.get_discharge_at(time);
+                    let w = river.weights.get(i).copied().unwrap_or(0.0);
+                    total += q * w;
+                }
+            }
+        }
+        total
+    }
+
+    /// 应用入流到状态（需要单元面积）
+    pub fn apply_inflow(&self, time: f64, dt: f64, h: &mut [f64], cell_areas: &[f64]) {
+        for river in &self.rivers {
+            let q = river.provider.get_discharge_at(time);
+
+            for (i, &cell) in river.cells.iter().enumerate() {
+                if cell < h.len() && cell < cell_areas.len() {
+                    let w = river.weights.get(i).copied().unwrap_or(0.0);
+                    let area = cell_areas[cell].max(1e-6);
+                    h[cell] += q * w * dt / area;
+                }
+            }
+        }
+    }
+}
+
+impl Default for RiverSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_constant_river() {
+        let river = RiverProvider::constant(100.0);
+        assert!((river.get_discharge_at(0.0) - 100.0).abs() < 1e-10);
+        assert!((river.get_discharge_at(3600.0) - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_time_series_river() {
+        let river = RiverProvider::time_series(
+            vec![0.0, 3600.0, 7200.0],
+            vec![50.0, 100.0, 75.0],
+        );
+
+        assert!((river.get_discharge_at(0.0) - 50.0).abs() < 1e-10);
+        assert!((river.get_discharge_at(1800.0) - 75.0).abs() < 1e-10); // 插值
+        assert!((river.get_discharge_at(3600.0) - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_flood_wave() {
+        let river = RiverProvider::flood_wave(10.0, 100.0, 3600.0, 7200.0);
+
+        // 洪水前
+        assert!((river.get_discharge_at(0.0) - 10.0).abs() < 1e-10);
+
+        // 峰值
+        assert!((river.get_discharge_at(3600.0) - 100.0).abs() < 1e-10);
+
+        // 洪水后
+        assert!((river.get_discharge_at(20000.0) - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_flood_wave_rising() {
+        let river = RiverProvider::flood_wave(10.0, 100.0, 3600.0, 7200.0);
+
+        // 上升中点
+        let q = river.get_discharge_at(1800.0);
+        assert!((q - 55.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_step_changes() {
+        let river = RiverProvider::step_changes(50.0, vec![
+            (1000.0, 100.0),
+            (2000.0, 75.0),
+        ]);
+
+        assert!((river.get_discharge_at(0.0) - 50.0).abs() < 1e-10);
+        assert!((river.get_discharge_at(500.0) - 50.0).abs() < 1e-10);
+        assert!((river.get_discharge_at(1500.0) - 100.0).abs() < 1e-10);
+        assert!((river.get_discharge_at(2500.0) - 75.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_river_direction() {
+        let river = RiverProvider::constant(100.0).with_direction(90.0);
+        assert!((river.get_direction() - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_velocity_components() {
+        let river = RiverProvider::constant(100.0).with_direction(0.0);
+        let (u, v) = river.get_velocity_components(0.0, 10.0);
+
+        // 流速 = 100/10 = 10 m/s，方向 0 度
+        assert!((u - 10.0).abs() < 1e-10);
+        assert!(v.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_peak_discharge() {
+        let river = RiverProvider::flood_wave(10.0, 100.0, 3600.0, 7200.0);
+        assert!((river.peak_discharge() - 100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_river_system() {
+        let mut system = RiverSystem::new();
+
+        system.add_river("River1", vec![0, 1], RiverProvider::constant(100.0));
+        system.add_river("River2", vec![5], RiverProvider::constant(50.0));
+
+        assert_eq!(system.count(), 2);
+        assert!((system.total_discharge(0.0) - 150.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_river_system_cell_inflow() {
+        let mut system = RiverSystem::new();
+        system.add_river("River1", vec![0, 1], RiverProvider::constant(100.0));
+
+        // 流量均分到两个单元
+        let q = system.get_cell_inflow(0, 0.0);
+        assert!((q - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_river_system_apply() {
+        let mut system = RiverSystem::new();
+        system.add_river("River1", vec![0], RiverProvider::constant(100.0));
+
+        let mut h = vec![1.0; 10];
+        let areas = vec![100.0; 10]; // 100 m² 单元
+
+        // dt = 1s, Q = 100 m³/s, A = 100 m²
+        // Δh = Q * dt / A = 100 * 1 / 100 = 1.0 m
+        system.apply_inflow(0.0, 1.0, &mut h, &areas);
+
+        assert!((h[0] - 2.0).abs() < 1e-10);
+    }
+}

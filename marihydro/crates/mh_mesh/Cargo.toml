@@ -11,4 +11,5 @@ mh_geo = { path = "../mh_geo" }
 memmap2 = "0.9"
 bytemuck = { version = "1.18", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
 

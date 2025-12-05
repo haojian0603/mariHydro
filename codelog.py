@@ -20,6 +20,7 @@ class CodeCollector:
         ".toml": "toml",
         ".yaml": "yaml",
         ".yml": "yaml",
+        ".wgsl": "wgsl",  # 添加WGSL着色器语言支持
     }
 
     def __init__(self, root_path="."):
@@ -41,16 +42,16 @@ class CodeCollector:
         if src_path.exists():
             self._scan_directory(src_path, extensions=[".rs"])
 
-        # 2. 扫描assets目录 (JSON, GEO配置文件)
+        # 2. 扫描assets目录 (JSON, GEO, WGSL配置文件)
         assets_path = self.root_path / "assets"
         if assets_path.exists():
             self._scan_directory(
-                assets_path, extensions=[".json", ".geo", ".toml", ".yaml", ".yml"]
+                assets_path, extensions=[".json", ".geo", ".toml", ".yaml", ".yml", ".wgsl"]
             )
             print(f"📁 扫描assets目录")
 
         # 3. 扫描根目录下的特定文件
-        for pattern in ["*.rs", "*.toml", "*.json"]:
+        for pattern in ["*.rs", "*.toml", "*.json", "*.wgsl"]:
             for file in self.root_path.glob(pattern):
                 if self.output_dir_name not in file.parts and file.is_file():
                     if file not in self.collected_files:
@@ -63,6 +64,8 @@ class CodeCollector:
             "node_modules",
             "src",
             "assets",
+            "legacy_src",
+            ".ai",
             self.output_dir_name,
         }
         for item in self.root_path.iterdir():
@@ -76,12 +79,14 @@ class CodeCollector:
         rust_count = sum(1 for f in self.collected_files if f.suffix == ".rs")
         json_count = sum(1 for f in self.collected_files if f.suffix == ".json")
         geo_count = sum(1 for f in self.collected_files if f.suffix == ".geo")
-        other_count = len(self.collected_files) - rust_count - json_count - geo_count
+        wgsl_count = sum(1 for f in self.collected_files if f.suffix == ".wgsl")
+        other_count = len(self.collected_files) - rust_count - json_count - geo_count - wgsl_count
 
         print(f"📄 找到 {len(self.collected_files)} 个文件:")
         print(f"   - Rust: {rust_count}")
         print(f"   - JSON: {json_count}")
         print(f"   - GEO:  {geo_count}")
+        print(f"   - WGSL: {wgsl_count}")
         if other_count > 0:
             print(f"   - 其他: {other_count}")
 
@@ -158,8 +163,8 @@ class CodeCollector:
 项目路径: {self.root_path}
 扫描内容:
   - src/: *.rs
-  - assets/: *.json, *.geo, *.toml, *.yaml
-  - 根目录: *.rs, *.toml, *.json
+  - assets/: *.json, *.geo, *.toml, *.yaml, *.wgsl
+  - 根目录: *.rs, *.toml, *.json, *.wgsl
 排除目录: target, .git, node_modules, {self.output_dir_name}
 {"=" * 80}
 
@@ -182,7 +187,7 @@ class CodeCollector:
             # 再写入配置文件
             if config_files:
                 f.write("\n" + "=" * 80 + "\n")
-                f.write("# 配置文件 (JSON/GEO/TOML/YAML)\n")
+                f.write("# 配置文件 (JSON/GEO/TOML/YAML/WGSL)\n")
                 f.write("=" * 80 + "\n\n")
                 self._write_files(f, config_files)
 
@@ -244,17 +249,17 @@ def main():
         description="收集Rust项目中的代码和配置文件到codelog文件夹",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例:
-  python collect_code.py                    # 扫描当前目录
-  python collect_code.py /path/to/project   # 扫描指定路径
-  python collect_code.py . my_code.txt      # 指定输出文件名
+        示例:
+        python collect_code.py                    # 扫描当前目录
+        python collect_code.py /path/to/project   # 扫描指定路径
+        python collect_code.py . my_code.txt      # 指定输出文件名
 
-扫描规则:
-  - src/         -> *.rs (Rust源码)
-  - assets/      -> *.json, *.geo, *.toml, *.yaml (配置文件)
-  - 根目录       -> *.rs, *.toml, *.json
-  - 其他子目录   -> *.rs
-        """,
+        扫描规则:
+        - src/         -> *.rs (Rust源码)
+        - assets/      -> *.json, *.geo, *.toml, *.yaml, *.wgsl (配置文件)
+        - 根目录       -> *.rs, *.toml, *.json, *.wgsl
+        - 其他子目录   -> *.rs
+                """,
     )
 
     parser.add_argument(

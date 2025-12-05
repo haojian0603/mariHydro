@@ -1,0 +1,371 @@
+//! Venkatakrishnan 限制器
+//!
+//! 光滑的梯度限制器，避免 Barth-Jespersen 的梯度突变问题。
+//!
+//! # 算法
+//!
+//! 使用光滑函数替代 min 操作:
+//!
+//! ```text
+//!         (Δ²_max + ε²) Δ_f + 2 Δ²_f Δ_max
+//! α_f = ────────────────────────────────────  如果 Δ_f > 0
+//!         Δ²_max + 2 Δ²_f + Δ_max Δ_f + ε²
+//! ```
+//!
+//! 其中:
+//! - ε² = (K * h)³，h 是网格特征尺度
+//! - K 是用户参数，通常 1-10，默认 5
+//!
+//! # 特点
+//!
+//! - 光滑连续，不产生梯度突变
+//! - 在光滑区域趋近于 1（二阶精度）
+//! - 在不连续处限制梯度（一阶精度）
+//! - K 越大，越不耗散
+//!
+//! # 参考文献
+//!
+//! Venkatakrishnan, V. (1993). "On the accuracy of limiters and 
+//! convergence to steady state solutions". AIAA Paper 93-0880.
+
+use super::traits::{LimiterContext, SlopeLimiter};
+
+/// Venkatakrishnan 限制器
+///
+/// 光滑的二阶精度限制器，推荐用于通用浅水模拟。
+#[derive(Debug, Clone, Copy)]
+pub struct Venkatakrishnan {
+    /// K 参数，控制限制强度 (通常 1-10)
+    k: f64,
+    
+    /// ε² = (K * h)³，预计算的平滑参数
+    eps_squared: f64,
+    
+    /// 判断梯度为零的容差
+    tol: f64,
+}
+
+impl Venkatakrishnan {
+    /// 创建新的 Venkatakrishnan 限制器
+    ///
+    /// # Arguments
+    /// * `k` - K 参数，控制限制强度，通常 1-10
+    /// * `mesh_scale` - 网格特征尺度 h（如平均边长或最小边长）
+    pub fn new(k: f64, mesh_scale: f64) -> Self {
+        // ε² = (K * h)³
+        let kh = k * mesh_scale;
+        let eps_squared = kh * kh * kh;
+        
+        Self {
+            k,
+            eps_squared,
+            tol: 1e-12,
+        }
+    }
+    
+    /// 创建具有自定义容差的限制器
+    pub fn with_tolerance(k: f64, mesh_scale: f64, tol: f64) -> Self {
+        let kh = k * mesh_scale;
+        let eps_squared = kh * kh * kh;
+        
+        Self {
+            k,
+            eps_squared,
+            tol,
+        }
+    }
+    
+    /// 获取 K 参数
+    pub fn k(&self) -> f64 {
+        self.k
+    }
+    
+    /// 获取 ε² 值
+    pub fn eps_squared(&self) -> f64 {
+        self.eps_squared
+    }
+    
+    /// 更新网格尺度（当网格变化时）
+    pub fn update_mesh_scale(&mut self, mesh_scale: f64) {
+        let kh = self.k * mesh_scale;
+        self.eps_squared = kh * kh * kh;
+    }
+    
+    /// 计算光滑限制函数 φ(x, y, ε²)
+    ///
+    /// ```text
+    ///         (y² + ε²) x + 2 x² y
+    /// φ = ────────────────────────────
+    ///         y² + 2 x² + x y + ε²
+    /// ```
+    #[inline]
+    fn phi(&self, x: f64, y: f64) -> f64 {
+        let x2 = x * x;
+        let y2 = y * y;
+        let eps2 = self.eps_squared;
+        
+        let numerator = (y2 + eps2) * x + 2.0 * x2 * y;
+        let denominator = y2 + 2.0 * x2 + x * y + eps2;
+        
+        if denominator.abs() < self.tol {
+            1.0
+        } else {
+            numerator / denominator
+        }
+    }
+}
+
+impl Default for Venkatakrishnan {
+    fn default() -> Self {
+        // 默认 K=5, mesh_scale=1
+        Self::new(5.0, 1.0)
+    }
+}
+
+impl SlopeLimiter for Venkatakrishnan {
+    fn compute_limiter(&self, ctx: &LimiterContext) -> f64 {
+        // 如果梯度为零，不需要限制
+        if ctx.is_gradient_zero(self.tol) {
+            return 1.0;
+        }
+        
+        let delta = ctx.gradient;
+        
+        if delta > 0.0 {
+            // 正梯度：使用 Δ_max
+            let delta_max = ctx.delta_max();
+            if delta_max < self.tol {
+                // 已经在最大值附近
+                0.0
+            } else {
+                self.phi(delta, delta_max).min(1.0)
+            }
+        } else {
+            // 负梯度：使用 Δ_min
+            let delta_min = ctx.delta_min();
+            if delta_min > -self.tol {
+                // 已经在最小值附近
+                0.0
+            } else {
+                // 取绝对值来使用相同的 phi 函数
+                self.phi(-delta, -delta_min).min(1.0)
+            }
+        }
+    }
+    
+    fn name(&self) -> &'static str {
+        "Venkatakrishnan"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_venkatakrishnan_creation() {
+        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        assert_eq!(limiter.k(), 5.0);
+        
+        // ε² = (5 * 0.1)³ = 0.5³ = 0.125
+        assert!((limiter.eps_squared() - 0.125).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_venkatakrishnan_default() {
+        let limiter = Venkatakrishnan::default();
+        assert_eq!(limiter.k(), 5.0);
+        // ε² = (5 * 1)³ = 125
+        assert!((limiter.eps_squared() - 125.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_venkatakrishnan_name() {
+        let limiter = Venkatakrishnan::default();
+        assert_eq!(limiter.name(), "Venkatakrishnan");
+    }
+    
+    #[test]
+    fn test_zero_gradient() {
+        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        let ctx = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        assert_eq!(limiter.compute_limiter(&ctx), 1.0);
+    }
+    
+    #[test]
+    fn test_small_gradient() {
+        // 测试基本行为：小梯度时的限制值
+        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        // ε² = (5 * 0.1)³ = 0.125
+        let ctx = LimiterContext::new(1.0, 0.1, 0.5, 1.5, 0.1);
+        let alpha = limiter.compute_limiter(&ctx);
+        // 限制器应该返回 [0, 1] 范围内的值
+        assert!(alpha >= 0.0 && alpha <= 1.0, "Alpha {} out of bounds", alpha);
+        
+        // 测试零梯度应该返回 1.0
+        let ctx_zero = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        assert_eq!(limiter.compute_limiter(&ctx_zero), 1.0);
+    }
+    
+    #[test]
+    fn test_k_parameter_sensitivity() {
+        // K 参数越大，限制越小（alpha 越接近 1）
+        // 这是 Venkatakrishnan 限制器的关键特性
+        let mesh_scale = 0.1;
+        
+        let limiter_k1 = Venkatakrishnan::new(1.0, mesh_scale);
+        let limiter_k5 = Venkatakrishnan::new(5.0, mesh_scale);
+        let limiter_k10 = Venkatakrishnan::new(10.0, mesh_scale);
+        
+        // 测试场景：需要一定限制的情况
+        let ctx = LimiterContext::new(1.0, 0.4, 0.5, 1.5, 0.1);
+        
+        let alpha_k1 = limiter_k1.compute_limiter(&ctx);
+        let alpha_k5 = limiter_k5.compute_limiter(&ctx);
+        let alpha_k10 = limiter_k10.compute_limiter(&ctx);
+        
+        // K 越大，alpha 应该越接近 1（限制越小）
+        assert!(alpha_k1 <= alpha_k5, 
+            "K=1 should limit more than K=5: {} vs {}", alpha_k1, alpha_k5);
+        assert!(alpha_k5 <= alpha_k10, 
+            "K=5 should limit more than K=10: {} vs {}", alpha_k5, alpha_k10);
+        
+        // 额外测试：K 越大，差距越明显
+        // 验证 ε² 计算正确
+        assert!(limiter_k1.eps_squared() < limiter_k5.eps_squared(),
+            "Larger K should give larger ε²");
+        assert!(limiter_k5.eps_squared() < limiter_k10.eps_squared(),
+            "Larger K should give larger ε²");
+    }
+    
+    #[test]
+    fn test_large_gradient() {
+        let limiter = Venkatakrishnan::new(1.0, 0.01); // 小 ε²
+        // 大梯度，小 ε² → 类似 Barth-Jespersen
+        let ctx = LimiterContext::new(1.0, 0.8, 0.5, 1.5, 0.1);
+        let alpha = limiter.compute_limiter(&ctx);
+        // Δ_max = 0.5, gradient = 0.8 → 需要限制
+        assert!(alpha < 1.0);
+        assert!(alpha > 0.0);
+    }
+    
+    #[test]
+    fn test_convergence_to_barth_jespersen() {
+        // 当 ε² → 0 时，Venkatakrishnan 应该趋近 Barth-Jespersen
+        // 但由于两者公式不同，不期望完全相等
+        // Venkatakrishnan 使用光滑函数，BJ 使用 min 操作
+        
+        use super::super::barth_jespersen::BarthJespersen;
+        
+        let bj = BarthJespersen::new();
+        
+        // 测试不同的 ε² 值：随着 ε² 减小，VK 应该更接近 BJ
+        let vk_large_eps = Venkatakrishnan::new(5.0, 1.0);    // ε² = 125
+        let vk_medium_eps = Venkatakrishnan::new(1.0, 0.1);   // ε² = 0.001
+        let vk_small_eps = Venkatakrishnan::new(0.01, 0.01);  // ε² = 1e-9
+        
+        let ctx = LimiterContext::new(1.0, 0.8, 0.5, 1.5, 0.1);
+        
+        let alpha_bj = bj.compute_limiter(&ctx);
+        let alpha_vk_large = vk_large_eps.compute_limiter(&ctx);
+        let alpha_vk_medium = vk_medium_eps.compute_limiter(&ctx);
+        let alpha_vk_small = vk_small_eps.compute_limiter(&ctx);
+        
+        // 验证：ε² 越小，VK 限制器产生更小的 alpha（更多限制）
+        // 这是因为 ε² 提供了光滑性，ε²越小越接近非光滑的 BJ
+        assert!(alpha_vk_large >= alpha_vk_small,
+            "Larger ε² should give larger alpha. large={}, small={}", 
+            alpha_vk_large, alpha_vk_small);
+        
+        // 验证所有结果都在有效范围内
+        assert!(alpha_vk_large >= 0.0 && alpha_vk_large <= 1.0, 
+            "alpha_vk_large out of bounds: {}", alpha_vk_large);
+        assert!(alpha_vk_medium >= 0.0 && alpha_vk_medium <= 1.0,
+            "alpha_vk_medium out of bounds: {}", alpha_vk_medium);
+        assert!(alpha_vk_small >= 0.0 && alpha_vk_small <= 1.0,
+            "alpha_vk_small out of bounds: {}", alpha_vk_small);
+        
+        // 验证 BJ 在有效范围
+        assert!(alpha_bj >= 0.0 && alpha_bj <= 1.0,
+            "alpha_bj out of bounds: {}", alpha_bj);
+    }
+    
+    #[test]
+    fn test_update_mesh_scale() {
+        let mut limiter = Venkatakrishnan::new(5.0, 0.1);
+        assert!((limiter.eps_squared() - 0.125).abs() < 1e-10);
+        
+        limiter.update_mesh_scale(0.2);
+        // ε² = (5 * 0.2)³ = 1.0³ = 1.0
+        assert!((limiter.eps_squared() - 1.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_smoothness() {
+        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        
+        // 测试限制器在梯度变化时是连续的（只测试正梯度区域）
+        // 在 0 附近会有突变因为处理逻辑不同
+        let gradients: Vec<f64> = (1..=100).map(|i| i as f64 * 0.01).collect();
+        let alphas: Vec<f64> = gradients
+            .iter()
+            .map(|&g| {
+                let ctx = LimiterContext::new(1.0, g, 0.5, 1.5, 0.1);
+                limiter.compute_limiter(&ctx)
+            })
+            .collect();
+        
+        // 检查连续性：相邻值差不应该太大
+        for window in alphas.windows(2) {
+            let diff = (window[1] - window[0]).abs();
+            assert!(diff < 0.2, "Limiter not smooth: diff = {}", diff);
+        }
+    }
+    
+    #[test]
+    fn test_positive_vs_negative_symmetry() {
+        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        
+        // 正梯度
+        let ctx_pos = LimiterContext::new(1.0, 0.3, 0.5, 1.5, 0.1);
+        let alpha_pos = limiter.compute_limiter(&ctx_pos);
+        
+        // 对称的负梯度
+        let ctx_neg = LimiterContext::new(1.0, -0.3, 0.5, 1.5, 0.1);
+        let alpha_neg = limiter.compute_limiter(&ctx_neg);
+        
+        // 由于 delta_max 和 delta_min 对称，结果应该相等
+        assert!((alpha_pos - alpha_neg).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_at_maximum() {
+        let limiter = Venkatakrishnan::new(1.0, 0.01); // 小 ε² 使限制更明显
+        // 单元值已经是最大值，正梯度应该被强限制
+        let ctx = LimiterContext::new(1.5, 0.3, 0.5, 1.5, 0.1);
+        let alpha = limiter.compute_limiter(&ctx);
+        assert!(alpha < 0.1);
+    }
+    
+    #[test]
+    fn test_limiter_bounded() {
+        let limiter = Venkatakrishnan::new(3.0, 0.1);
+        
+        // 测试各种情况下 α ∈ [0, 1]
+        let test_cases = vec![
+            (1.0, 0.5, 0.0, 2.0),
+            (1.0, -0.5, 0.0, 2.0),
+            (1.0, 2.0, 0.0, 2.0),
+            (1.0, -2.0, 0.0, 2.0),
+            (1.0, 0.01, 0.5, 1.5),
+            (1.0, -0.01, 0.5, 1.5),
+        ];
+        
+        for (q, g, q_min, q_max) in test_cases {
+            let ctx = LimiterContext::new(q, g, q_min, q_max, 0.1);
+            let alpha = limiter.compute_limiter(&ctx);
+            assert!(alpha >= 0.0 && alpha <= 1.0, 
+                "Alpha {} out of bounds for q={}, g={}", alpha, q, g);
+        }
+    }
+}

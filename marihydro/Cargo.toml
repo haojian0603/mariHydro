@@ -10,6 +10,7 @@ members = [
     "crates/mh_editor",
     "crates/mh_physics",
     "crates/mh_io",
+    "crates/mh_workflow",
     "apps/mh_desktop/src-tauri",
     "apps/mh_cli",
 ]

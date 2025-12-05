@@ -130,6 +130,43 @@ impl FrozenMesh {
         }
     }
 
+    /// 创建带有指定单元数量的空网格（用于测试）
+    ///
+    /// 创建的网格有指定数量的单元，但没有实际几何数据。
+    pub fn empty_with_cells(n_cells: usize) -> Self {
+        Self {
+            n_nodes: 0,
+            node_coords: Vec::new(),
+            n_cells,
+            cell_center: vec![Point2D::new(0.0, 0.0); n_cells],
+            cell_area: vec![1.0; n_cells],
+            cell_z_bed: vec![0.0; n_cells],
+            cell_node_offsets: vec![0; n_cells + 1],
+            cell_node_indices: Vec::new(),
+            cell_face_offsets: vec![0; n_cells + 1],
+            cell_face_indices: Vec::new(),
+            cell_neighbor_offsets: vec![0; n_cells + 1],
+            cell_neighbor_indices: Vec::new(),
+            n_faces: 0,
+            n_interior_faces: 0,
+            face_center: Vec::new(),
+            face_normal: Vec::new(),
+            face_length: Vec::new(),
+            face_z_left: Vec::new(),
+            face_z_right: Vec::new(),
+            face_owner: Vec::new(),
+            face_neighbor: Vec::new(),
+            face_delta_owner: Vec::new(),
+            face_delta_neighbor: Vec::new(),
+            face_dist_o2n: Vec::new(),
+            boundary_face_indices: Vec::new(),
+            boundary_names: Vec::new(),
+            face_boundary_id: Vec::new(),
+            min_cell_size: 1.0,
+            max_cell_size: 1.0,
+        }
+    }
+
     // =========================================================================
     // 基本统计
     // =========================================================================
