@@ -29,9 +29,7 @@
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
-
-use super::state::{TracerField, TracerState, TracerType};
-use crate::state::ConservedState;
+use super::state::{TracerField, TracerState};
 
 // ============================================================
 // 对流格式
@@ -309,28 +307,6 @@ impl TracerTransportSolver {
         h_face * un * c_upwind * face_length
     }
 
-    /// 计算 TVD 限制器值
-    fn compute_limiter(&self, r: f64) -> f64 {
-        if r <= 0.0 {
-            return 0.0;
-        }
-
-        match self.config.advection_scheme {
-            TracerAdvectionScheme::TvdMinmod => {
-                r.min(1.0).max(0.0)
-            }
-            TracerAdvectionScheme::TvdSuperbee => {
-                let a = (2.0 * r).min(1.0);
-                let b = r.min(2.0);
-                a.max(b).max(0.0)
-            }
-            TracerAdvectionScheme::TvdVanLeer => {
-                (r + r.abs()) / (1.0 + r.abs())
-            }
-            _ => 1.0, // 其他格式不使用限制器
-        }
-    }
-
     /// 计算单个面的扩散通量
     ///
     /// # 参数
@@ -588,6 +564,7 @@ impl MultiTracerSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tracer::state::TracerType;
     use super::super::state::TracerProperties;
 
     fn approx_eq(a: f64, b: f64) -> bool {
@@ -705,7 +682,7 @@ mod tests {
         state.add_tracer(TracerProperties::salinity()).unwrap();
         state.add_tracer(TracerProperties::temperature()).unwrap();
 
-        let mut solver = MultiTracerSolver::new(TracerTransportConfig::default());
+        let _solver = MultiTracerSolver::new(TracerTransportConfig::default());
 
         // 确保可以访问两个示踪剂
         assert!(state.get(TracerType::Salinity).is_some());

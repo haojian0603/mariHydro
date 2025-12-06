@@ -9,12 +9,9 @@ edition = "2021"
 mh_foundation = { path = "../mh_foundation" }
 mh_mesh = { path = "../mh_mesh" }
 mh_geo = { path = "../mh_geo" }
-wgpu = "23"
 ndarray = "0.16"
-rayon = "1.10"
-bytemuck = { version = "1.18", features = ["derive"] }
+rayon = "1.10"      #核心依赖
 glam = "0.29"
 serde = { version = "1.0", features = ["derive"] }
-pollster = "0.3"
 log = "0.4"
 thiserror = "1.0"

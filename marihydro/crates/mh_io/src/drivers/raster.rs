@@ -2,7 +2,6 @@
 
 //! 栅格驱动抽象接口
 
-use std::path::Path;
 
 /// 栅格驱动 trait
 pub trait RasterDriver {

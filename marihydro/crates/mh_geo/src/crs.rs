@@ -17,7 +17,7 @@
 //! assert!(utm.is_projected());
 //! ```
 
-use mh_foundation::error::{MhError, MhResult};
+use mh_foundation::error::MhResult;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

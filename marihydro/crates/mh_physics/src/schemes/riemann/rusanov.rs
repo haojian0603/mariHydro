@@ -250,6 +250,19 @@ impl RusanovSolver {
         let ut_l = vel_l.dot(tangent);
         let ut_r = vel_r.dot(tangent);
 
+        // 静水平衡：左右水深相等且无流速时应返回零通量以保持守恒
+        let depth_close = (h_l - h_r).abs() <= self.params.h_min;
+        let vel_tol = 1e-12_f64;
+        let still_water = depth_close
+            && un_l.abs() <= vel_tol
+            && un_r.abs() <= vel_tol
+            && ut_l.abs() <= vel_tol
+            && ut_r.abs() <= vel_tol;
+        if still_water {
+            let lambda_max = self.max_wave_speed(h_l, h_r, un_l, un_r);
+            return Ok(RiemannFlux::from_rotated(0.0, 0.0, 0.0, normal, lambda_max));
+        }
+
         // 计算最大波速
         let lambda_max = self.max_wave_speed(h_l, h_r, un_l, un_r);
 
@@ -597,8 +610,8 @@ mod tests {
         let solver = create_test_solver();
 
         // 超临界流
-        let h = 1.0;
-        let c = (9.81 * h).sqrt(); // ≈ 3.13 m/s
+        let h = 1.0_f64;
+        let c = (9.81_f64 * h).sqrt(); // ≈ 3.13 m/s
         let u_fast = 5.0; // 超临界
 
         let flux = solver

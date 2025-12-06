@@ -23,12 +23,11 @@
 //! pipeline.flush()?;
 //! ```
 
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender, TrySendError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -380,7 +379,7 @@ impl IoPipeline {
         receiver: Receiver<OutputRequest>,
         pending_count: Arc<AtomicUsize>,
         stats: Arc<Mutex<PipelineStats>>,
-        shutdown_flag: Arc<AtomicBool>,
+        _shutdown_flag: Arc<AtomicBool>,
     ) {
         while let Ok(request) = receiver.recv() {
             // 检查关闭请求

@@ -3,7 +3,6 @@
 //! 床面演变计算
 //! 基于 Exner 方程的床面高程变化求解器
 
-use super::properties::SedimentProperties;
 use serde::{Deserialize, Serialize};
 
 /// Exner 方程求解器配置

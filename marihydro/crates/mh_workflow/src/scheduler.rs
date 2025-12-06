@@ -4,18 +4,14 @@
 //!
 //! 提供CPU/GPU计算设备的自动选择和调度。
 
-use std::sync::Arc;
+// GPU 相关引用已移除
 
-/// 设备类型
+/// 设备类型（现在仅保留 CPU）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceType {
     /// CPU
     Cpu,
-    /// 集成GPU
-    IntegratedGpu,
-    /// 独立GPU
-    DiscreteGpu,
-    /// 其他加速器
+    /// 其他 / 未知（保留以便将来扩展）
     Other,
 }
 
@@ -29,24 +25,18 @@ impl std::fmt::Display for DeviceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Cpu => write!(f, "CPU"),
-            Self::IntegratedGpu => write!(f, "Integrated GPU"),
-            Self::DiscreteGpu => write!(f, "Discrete GPU"),
             Self::Other => write!(f, "Other"),
         }
     }
 }
 
-/// 混合计算策略
+/// 混合计算策略（GPU相关策略移除）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridStrategy {
     /// 仅使用CPU
     CpuOnly,
-    /// 仅使用GPU
-    GpuOnly,
-    /// 自动选择
+    /// 自动选择（当前等同于 CPU）
     Auto,
-    /// 强制指定设备
-    ForceDevice(DeviceType),
 }
 
 impl Default for HybridStrategy {
@@ -59,9 +49,7 @@ impl std::fmt::Display for HybridStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CpuOnly => write!(f, "CPU Only"),
-            Self::GpuOnly => write!(f, "GPU Only"),
             Self::Auto => write!(f, "Auto"),
-            Self::ForceDevice(device) => write!(f, "Force {}", device),
         }
     }
 }
@@ -71,14 +59,6 @@ impl std::fmt::Display for HybridStrategy {
 pub struct HybridConfig {
     /// 计算策略
     pub strategy: HybridStrategy,
-    /// GPU最小单元数阈值（低于此值使用CPU）
-    pub gpu_min_cells: usize,
-    /// GPU最大单元数阈值（超过此值分批处理）
-    pub gpu_max_cells: usize,
-    /// 允许回退到CPU
-    pub allow_fallback: bool,
-    /// GPU优先级权重 (0-100)
-    pub gpu_priority: u32,
     /// CPU线程数 (0=自动)
     pub cpu_threads: usize,
 }
@@ -87,38 +67,19 @@ impl Default for HybridConfig {
     fn default() -> Self {
         Self {
             strategy: HybridStrategy::Auto,
-            gpu_min_cells: 10_000,
-            gpu_max_cells: 10_000_000,
-            allow_fallback: true,
-            gpu_priority: 70,
             cpu_threads: 0,
         }
     }
 }
 
 impl HybridConfig {
-    /// 创建CPU-only配置
+    /// 创建 CPU-only 配置
     pub fn cpu_only() -> Self {
         Self {
             strategy: HybridStrategy::CpuOnly,
+            cpu_threads: 0,
             ..Default::default()
         }
-    }
-
-    /// 创建GPU-only配置
-    pub fn gpu_only() -> Self {
-        Self {
-            strategy: HybridStrategy::GpuOnly,
-            allow_fallback: true,
-            ..Default::default()
-        }
-    }
-
-    /// 设置GPU阈值
-    pub fn with_gpu_threshold(mut self, min: usize, max: usize) -> Self {
-        self.gpu_min_cells = min;
-        self.gpu_max_cells = max;
-        self
     }
 }
 
@@ -146,7 +107,7 @@ impl DeviceSelection {
         }
     }
 
-    /// GPU选择
+    /// GPU选择 (legacy; remains for compatibility but unused)
     pub fn gpu(device_type: DeviceType, reason: impl Into<String>, speedup: f64) -> Self {
         Self {
             device_type,
@@ -167,53 +128,12 @@ impl DeviceSelection {
     }
 }
 
-/// GPU能力信息
-#[derive(Debug, Clone)]
-pub struct GpuCapabilities {
-    /// 设备名称
-    pub device_name: String,
-    /// 设备类型
-    pub device_type: DeviceType,
-    /// 显存大小 (MB)
-    pub memory_mb: u64,
-    /// 最大工作组大小
-    pub max_workgroup_size: u32,
-    /// 最大缓冲区大小
-    pub max_buffer_size: u64,
-    /// 支持的特性
-    pub features: GpuFeatures,
-}
-
-impl Default for GpuCapabilities {
-    fn default() -> Self {
-        Self {
-            device_name: "Unknown".into(),
-            device_type: DeviceType::DiscreteGpu,
-            memory_mb: 0,
-            max_workgroup_size: 256,
-            max_buffer_size: 256 * 1024 * 1024,
-            features: GpuFeatures::default(),
-        }
-    }
-}
-
-/// GPU特性
-#[derive(Debug, Clone, Default)]
-pub struct GpuFeatures {
-    /// 支持float64
-    pub float64: bool,
-    /// 支持原子操作
-    pub atomics: bool,
-    /// 支持subgroup操作
-    pub subgroups: bool,
-}
+// GPU support was removed; these types have been deleted.
 
 /// 混合计算调度器
 pub struct HybridScheduler {
     /// 配置
     config: HybridConfig,
-    /// GPU能力
-    gpu_capabilities: Option<Arc<GpuCapabilities>>,
     /// 当前设备
     current_device: DeviceType,
     /// 历史性能数据
@@ -226,7 +146,7 @@ struct PerformanceRecord {
     device: DeviceType,
     num_cells: usize,
     elapsed_secs: f64,
-    timestamp: std::time::Instant,
+    _timestamp: std::time::Instant,
 }
 
 impl HybridScheduler {
@@ -234,168 +154,31 @@ impl HybridScheduler {
     pub fn new(config: HybridConfig) -> Self {
         Self {
             config,
-            gpu_capabilities: None,
             current_device: DeviceType::Cpu,
             performance_history: parking_lot::RwLock::new(Vec::new()),
         }
     }
 
-    /// 设置GPU能力
-    pub fn with_gpu(mut self, capabilities: GpuCapabilities) -> Self {
-        let device_type = capabilities.device_type;
-        self.gpu_capabilities = Some(Arc::new(capabilities));
-        self.current_device = device_type;
-        self
-    }
-
-    /// 尝试检测GPU
-    pub fn detect_gpu(&mut self) -> Option<&GpuCapabilities> {
-        // TODO: 实际的GPU检测
-        // 这里返回None表示未检测到
-        self.gpu_capabilities.as_deref()
-    }
-
     /// 选择计算设备
-    pub fn select_device(&self, num_cells: usize) -> DeviceSelection {
-        match self.config.strategy {
-            HybridStrategy::CpuOnly => {
-                DeviceSelection::cpu("Strategy: CPU only")
-            }
-
-            HybridStrategy::GpuOnly => {
-                if let Some(gpu) = &self.gpu_capabilities {
-                    let speedup = self.estimate_gpu_speedup(num_cells);
-                    DeviceSelection::gpu(
-                        gpu.device_type,
-                        format!("Strategy: GPU only ({})", gpu.device_name),
-                        speedup,
-                    )
-                } else if self.config.allow_fallback {
-                    DeviceSelection::fallback("No GPU available, falling back to CPU")
-                } else {
-                    DeviceSelection::cpu("No GPU available")
-                }
-            }
-
-            HybridStrategy::ForceDevice(device) => {
-                if device == DeviceType::Cpu {
-                    DeviceSelection::cpu("Forced CPU")
-                } else if self.gpu_capabilities.is_some() {
-                    let speedup = self.estimate_gpu_speedup(num_cells);
-                    DeviceSelection::gpu(device, "Forced GPU", speedup)
-                } else if self.config.allow_fallback {
-                    DeviceSelection::fallback("Forced GPU not available, falling back to CPU")
-                } else {
-                    DeviceSelection::cpu("Forced GPU not available")
-                }
-            }
-
-            HybridStrategy::Auto => {
-                self.auto_select(num_cells)
-            }
-        }
+    pub fn select_device(&self, _num_cells: usize) -> DeviceSelection {
+        // GPU support removed; always choose CPU for now.
+        DeviceSelection::cpu("GPU support removed; CPU only")
     }
 
     /// 自动选择设备
-    fn auto_select(&self, num_cells: usize) -> DeviceSelection {
-        // 检查是否有GPU
-        let gpu = match &self.gpu_capabilities {
-            Some(gpu) => gpu,
-            None => return DeviceSelection::cpu("No GPU available"),
-        };
-
-        // 检查单元数阈值
-        if num_cells < self.config.gpu_min_cells {
-            return DeviceSelection::cpu(format!(
-                "Cell count ({}) below GPU threshold ({})",
-                num_cells, self.config.gpu_min_cells
-            ));
-        }
-
-        // 检查是否超过GPU最大处理能力
-        if num_cells > self.config.gpu_max_cells {
-            // 可能需要分批处理，但仍然使用GPU
-            let speedup = self.estimate_gpu_speedup(num_cells);
-            return DeviceSelection::gpu(
-                gpu.device_type,
-                format!(
-                    "Large mesh ({}), will batch process on {}",
-                    num_cells, gpu.device_name
-                ),
-                speedup,
-            );
-        }
-
-        // 检查显存是否足够
-        let estimated_memory_mb = self.estimate_memory_usage(num_cells);
-        if estimated_memory_mb > gpu.memory_mb as f64 * 0.8 {
-            if self.config.allow_fallback {
-                return DeviceSelection::fallback(format!(
-                    "Insufficient GPU memory: need {:.0} MB, have {} MB",
-                    estimated_memory_mb, gpu.memory_mb
-                ));
-            }
-        }
-
-        // 估计加速比
-        let speedup = self.estimate_gpu_speedup(num_cells);
-
-        // 如果加速比太小，使用CPU
-        if speedup < 1.5 {
-            return DeviceSelection::cpu(format!(
-                "Low GPU speedup ({:.2}x), using CPU instead",
-                speedup
-            ));
-        }
-
-        DeviceSelection::gpu(
-            gpu.device_type,
-            format!(
-                "Auto-selected {} ({:.2}x speedup)",
-                gpu.device_name, speedup
-            ),
-            speedup,
-        )
+    // Automatic selection removed (CPU only)
+    #[allow(dead_code)]
+    fn auto_select(&self, _num_cells: usize) -> DeviceSelection {
+        DeviceSelection::cpu("GPU support removed; auto -> CPU")
     }
 
-    /// 估计GPU加速比
-    fn estimate_gpu_speedup(&self, num_cells: usize) -> f64 {
-        // 简单的经验公式
-        // 实际应该基于历史数据和设备特性
-
-        if num_cells < 1000 {
-            // 小网格，GPU开销较大
-            0.5
-        } else if num_cells < 10_000 {
-            // 中等网格
-            1.0 + (num_cells as f64 / 10_000.0) * 2.0
-        } else if num_cells < 100_000 {
-            // 大网格
-            3.0 + (num_cells as f64 / 100_000.0) * 7.0
-        } else {
-            // 非常大的网格
-            10.0 + (num_cells as f64 / 1_000_000.0).min(10.0) * 5.0
-        }
-    }
-
-    /// 估计内存使用量 (MB)
-    fn estimate_memory_usage(&self, num_cells: usize) -> f64 {
-        // 每个单元大约需要：
-        // - 状态: 4 * 8 bytes (h, hu, hv, eta)
-        // - 梯度: 6 * 8 bytes
-        // - 拓扑: 8 * 4 bytes (邻接关系)
-        // - 其他: 约 100 bytes
-        let bytes_per_cell = 4 * 8 + 6 * 8 + 8 * 4 + 100;
-        (num_cells * bytes_per_cell) as f64 / (1024.0 * 1024.0)
-    }
-
-    /// 记录性能数据
+    // 记录性能数据
     pub fn record_performance(&self, device: DeviceType, num_cells: usize, elapsed_secs: f64) {
         let record = PerformanceRecord {
             device,
             num_cells,
             elapsed_secs,
-            timestamp: std::time::Instant::now(),
+            _timestamp: std::time::Instant::now(),
         };
 
         let mut history = self.performance_history.write();
@@ -414,12 +197,7 @@ impl HybridScheduler {
 
     /// 是否有GPU可用
     pub fn has_gpu(&self) -> bool {
-        self.gpu_capabilities.is_some()
-    }
-
-    /// 获取GPU能力
-    pub fn gpu_capabilities(&self) -> Option<&GpuCapabilities> {
-        self.gpu_capabilities.as_deref()
+        false
     }
 
     /// 获取配置
@@ -435,17 +213,9 @@ impl HybridScheduler {
             .iter()
             .filter(|r| r.device == DeviceType::Cpu)
             .collect();
-
-        let gpu_records: Vec<_> = history
-            .iter()
-            .filter(|r| r.device != DeviceType::Cpu)
-            .collect();
-
         PerformanceStats {
             cpu_invocations: cpu_records.len(),
-            gpu_invocations: gpu_records.len(),
             avg_cpu_cells_per_sec: Self::avg_throughput(&cpu_records),
-            avg_gpu_cells_per_sec: Self::avg_throughput(&gpu_records),
         }
     }
 
@@ -470,22 +240,15 @@ impl HybridScheduler {
 pub struct PerformanceStats {
     /// CPU调用次数
     pub cpu_invocations: usize,
-    /// GPU调用次数
-    pub gpu_invocations: usize,
     /// 平均CPU吞吐量 (单元/秒)
     pub avg_cpu_cells_per_sec: f64,
-    /// 平均GPU吞吐量 (单元/秒)
-    pub avg_gpu_cells_per_sec: f64,
 }
 
 impl PerformanceStats {
     /// 计算GPU相对CPU的实际加速比
     pub fn actual_speedup(&self) -> Option<f64> {
-        if self.avg_cpu_cells_per_sec > 0.0 && self.avg_gpu_cells_per_sec > 0.0 {
-            Some(self.avg_gpu_cells_per_sec / self.avg_cpu_cells_per_sec)
-        } else {
-            None
-        }
+        // GPU removed; return None
+        None
     }
 }
 
@@ -500,8 +263,6 @@ impl PerformanceStats {
 pub struct SchedulerDiagnostics {
     /// 配置信息
     pub config_summary: String,
-    /// GPU 状态
-    pub gpu_status: GpuDiagnostics,
     /// 性能统计
     pub performance: PerformanceStats,
     /// 设备选择历史统计
@@ -511,48 +272,7 @@ pub struct SchedulerDiagnostics {
 }
 
 /// GPU 诊断信息
-#[derive(Debug, Clone, Default)]
-pub struct GpuDiagnostics {
-    /// 是否可用
-    pub available: bool,
-    /// 设备名称
-    pub device_name: String,
-    /// 设备类型
-    pub device_type: String,
-    /// 可用显存 (MB)
-    pub memory_mb: u64,
-    /// 最大工作组大小
-    pub max_workgroup_size: u32,
-    /// 特性支持情况
-    pub features_summary: String,
-    /// 健康状态
-    pub health_status: GpuHealthStatus,
-}
-
-/// GPU 健康状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GpuHealthStatus {
-    /// 状态良好
-    Healthy,
-    /// 警告状态
-    Warning,
-    /// 错误状态
-    Error,
-    /// 未知状态
-    #[default]
-    Unknown,
-}
-
-impl std::fmt::Display for GpuHealthStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Healthy => write!(f, "Healthy"),
-            Self::Warning => write!(f, "Warning"),
-            Self::Error => write!(f, "Error"),
-            Self::Unknown => write!(f, "Unknown"),
-        }
-    }
-}
+// GPU diagnostics removed since GPU support was removed.
 
 /// 设备选择统计
 #[derive(Debug, Clone, Default)]
@@ -561,12 +281,8 @@ pub struct SelectionStats {
     pub total_selections: u64,
     /// CPU 选择次数
     pub cpu_selections: u64,
-    /// GPU 选择次数
-    pub gpu_selections: u64,
     /// 回退次数
     pub fallback_count: u64,
-    /// 因内存不足回退次数
-    pub memory_fallbacks: u64,
     /// 因阈值不满足选择CPU次数
     pub threshold_cpu_selections: u64,
 }
@@ -574,11 +290,7 @@ pub struct SelectionStats {
 impl SelectionStats {
     /// GPU 选择率
     pub fn gpu_selection_rate(&self) -> f64 {
-        if self.total_selections == 0 {
-            0.0
-        } else {
-            self.gpu_selections as f64 / self.total_selections as f64
-        }
+        0.0
     }
 
     /// 回退率
@@ -606,14 +318,12 @@ impl HybridScheduler {
     /// }
     /// ```
     pub fn diagnostics(&self) -> SchedulerDiagnostics {
-        let gpu_status = self.build_gpu_diagnostics();
         let performance = self.performance_stats();
         let selection_stats = self.build_selection_stats();
-        let recommendations = self.build_recommendations(&gpu_status, &performance, &selection_stats);
+        let recommendations = self.build_recommendations(&performance, &selection_stats);
 
         SchedulerDiagnostics {
             config_summary: self.config_summary(),
-            gpu_status,
             performance,
             selection_stats,
             recommendations,
@@ -623,45 +333,13 @@ impl HybridScheduler {
     /// 生成配置摘要
     fn config_summary(&self) -> String {
         format!(
-            "策略: {}, GPU阈值: {}-{}, 回退: {}, 线程: {}",
+            "策略: {}, 线程: {}",
             self.config.strategy,
-            self.config.gpu_min_cells,
-            self.config.gpu_max_cells,
-            if self.config.allow_fallback { "允许" } else { "禁止" },
             if self.config.cpu_threads == 0 { "自动".to_string() } else { self.config.cpu_threads.to_string() }
         )
     }
 
-    /// 构建 GPU 诊断信息
-    fn build_gpu_diagnostics(&self) -> GpuDiagnostics {
-        match &self.gpu_capabilities {
-            Some(gpu) => {
-                let features = format!(
-                    "float64: {}, atomics: {}, subgroups: {}",
-                    gpu.features.float64,
-                    gpu.features.atomics,
-                    gpu.features.subgroups
-                );
-
-                GpuDiagnostics {
-                    available: true,
-                    device_name: gpu.device_name.clone(),
-                    device_type: format!("{}", gpu.device_type),
-                    memory_mb: gpu.memory_mb,
-                    max_workgroup_size: gpu.max_workgroup_size,
-                    features_summary: features,
-                    health_status: GpuHealthStatus::Healthy,
-                }
-            }
-            None => GpuDiagnostics {
-                available: false,
-                device_name: "无".to_string(),
-                device_type: "N/A".to_string(),
-                health_status: GpuHealthStatus::Unknown,
-                ..Default::default()
-            }
-        }
-    }
+    // GPU diagnostics removed
 
     /// 构建设备选择统计
     fn build_selection_stats(&self) -> SelectionStats {
@@ -673,7 +351,7 @@ impl HybridScheduler {
         for record in history.iter() {
             match record.device {
                 DeviceType::Cpu => stats.cpu_selections += 1,
-                _ => stats.gpu_selections += 1,
+                _ => { /* No GPU support: nothing to count here */ }
             }
         }
 
@@ -681,34 +359,15 @@ impl HybridScheduler {
     }
 
     /// 生成优化建议
-    fn build_recommendations(
-        &self,
-        gpu_status: &GpuDiagnostics,
-        performance: &PerformanceStats,
-        stats: &SelectionStats,
-    ) -> Vec<String> {
+    fn build_recommendations(&self, performance: &PerformanceStats, stats: &SelectionStats) -> Vec<String> {
         let mut recommendations = Vec::new();
 
-        // GPU 相关建议
-        if !gpu_status.available {
-            recommendations.push(
-                "未检测到 GPU，建议安装支持 Vulkan 的显卡驱动以获得更好性能".to_string()
-            );
-        } else if gpu_status.memory_mb < 2048 {
-            recommendations.push(format!(
-                "GPU 显存较小 ({} MB)，大型网格可能需要分批处理",
-                gpu_status.memory_mb
-            ));
-        }
+        // GPU support removed; no GPU-specific recommendations.
 
         // 性能相关建议
-        if let Some(speedup) = performance.actual_speedup() {
-            if speedup < 2.0 && performance.gpu_invocations > 10 {
-                recommendations.push(format!(
-                    "实测 GPU 加速比较低 ({:.2}x)，建议检查网格规模是否满足 GPU 阈值",
-                    speedup
-                ));
-            }
+        // CPU-only recommendations
+        if performance.avg_cpu_cells_per_sec < 10.0 && stats.total_selections > 10 {
+            recommendations.push("CPU 吞吐量低，建议检查数据分割或线程配置".to_string());
         }
 
         // 回退相关建议
@@ -719,13 +378,11 @@ impl HybridScheduler {
             ));
         }
 
-        // 阈值相关建议
+        // 阈值相关建议: 如果大多数选择仍然使用 CPU, 建议优化线程或任务划分
         if stats.total_selections > 100 {
             let cpu_rate = stats.cpu_selections as f64 / stats.total_selections as f64;
-            if cpu_rate > 0.8 && gpu_status.available {
-                recommendations.push(
-                    "CPU 选择率过高，建议降低 gpu_min_cells 阈值以更多使用 GPU".to_string()
-                );
+            if cpu_rate > 0.8 {
+                recommendations.push("CPU 选择率高，建议优化线程或任务划分".to_string());
             }
         }
 
@@ -743,22 +400,16 @@ impl HybridScheduler {
         println!("========== 调度器诊断报告 ==========");
         println!("配置: {}", diag.config_summary);
         println!("");
-        println!("GPU 状态:");
-        println!("  可用: {}", diag.gpu_status.available);
-        println!("  设备: {} ({})", diag.gpu_status.device_name, diag.gpu_status.device_type);
-        println!("  显存: {} MB", diag.gpu_status.memory_mb);
-        println!("  健康: {}", diag.gpu_status.health_status);
-        println!("");
+        // GPU support removed; skip GPU diagnostics
         println!("性能统计:");
-        println!("  CPU 调用: {}, GPU 调用: {}", diag.performance.cpu_invocations, diag.performance.gpu_invocations);
+        println!("  CPU 调用: {}", diag.performance.cpu_invocations);
         println!("  CPU 吞吐: {:.0} cells/s", diag.performance.avg_cpu_cells_per_sec);
-        println!("  GPU 吞吐: {:.0} cells/s", diag.performance.avg_gpu_cells_per_sec);
         if let Some(speedup) = diag.performance.actual_speedup() {
             println!("  实测加速比: {:.2}x", speedup);
         }
         println!("");
         println!("选择统计:");
-        println!("  GPU 选择率: {:.1}%", diag.selection_stats.gpu_selection_rate() * 100.0);
+        // GPU selection rate not available in CPU-only mode
         println!("  回退率: {:.1}%", diag.selection_stats.fallback_rate() * 100.0);
         println!("");
         println!("建议:");
@@ -777,13 +428,11 @@ mod tests {
     fn test_hybrid_config() {
         let config = HybridConfig::default();
         assert_eq!(config.strategy, HybridStrategy::Auto);
-        assert!(config.allow_fallback);
 
         let cpu_config = HybridConfig::cpu_only();
         assert_eq!(cpu_config.strategy, HybridStrategy::CpuOnly);
 
-        let gpu_config = HybridConfig::gpu_only();
-        assert_eq!(gpu_config.strategy, HybridStrategy::GpuOnly);
+        // GPU-only config removed
     }
 
     #[test]
@@ -802,56 +451,20 @@ mod tests {
 
         let selection = scheduler.select_device(100_000);
         assert_eq!(selection.device_type, DeviceType::Cpu);
-        assert!(selection.reason.contains("No GPU"));
+        assert!(selection.reason.contains("GPU support removed"));
     }
 
-    #[test]
-    fn test_scheduler_auto_with_gpu() {
-        let gpu = GpuCapabilities {
-            device_name: "Test GPU".into(),
-            device_type: DeviceType::DiscreteGpu,
-            memory_mb: 4096,
-            ..Default::default()
-        };
-
-        let scheduler = HybridScheduler::new(HybridConfig::default()).with_gpu(gpu);
-
-        // 小网格应该使用CPU
-        let selection = scheduler.select_device(1000);
-        assert_eq!(selection.device_type, DeviceType::Cpu);
-
-        // 大网格应该使用GPU
-        let selection = scheduler.select_device(100_000);
-        assert_eq!(selection.device_type, DeviceType::DiscreteGpu);
-        assert!(selection.estimated_speedup > 1.0);
-    }
-
-    #[test]
-    fn test_estimate_speedup() {
-        let scheduler = HybridScheduler::new(HybridConfig::default());
-
-        // 小网格加速比应该较低
-        let speedup = scheduler.estimate_gpu_speedup(500);
-        assert!(speedup < 1.0);
-
-        // 大网格加速比应该较高
-        let speedup = scheduler.estimate_gpu_speedup(500_000);
-        assert!(speedup > 5.0);
-    }
+    // GPU-related tests removed — scheduler is now CPU-only.
 
     #[test]
     fn test_performance_recording() {
         let scheduler = HybridScheduler::new(HybridConfig::default());
 
         scheduler.record_performance(DeviceType::Cpu, 10000, 1.0);
-        scheduler.record_performance(DeviceType::DiscreteGpu, 10000, 0.1);
 
         let stats = scheduler.performance_stats();
         assert_eq!(stats.cpu_invocations, 1);
-        assert_eq!(stats.gpu_invocations, 1);
-
-        if let Some(speedup) = stats.actual_speedup() {
-            assert!(speedup > 1.0);
-        }
+        // GPU stats removed; actual_speedup returns None
+        assert!(stats.actual_speedup().is_none());
     }
 }

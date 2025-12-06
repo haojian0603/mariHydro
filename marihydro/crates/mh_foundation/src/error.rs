@@ -1,6 +1,6 @@
 // marihydro\crates\mh_foundation\src/error.rs
 
-//! 统一错误类型
+//! 错误处理模块，定义统一错误类型
 //!
 //! 提供 `MhError` 枚举和 `MhResult` 类型别名，用于整个项目的错误处理。
 //!
@@ -38,27 +38,37 @@ pub enum MhError {
     /// IO 错误
     #[error("IO错误: {message}")]
     Io {
+        /// 描述性错误信息
         message: String,
         #[source]
+        /// 可选的底层 IO 错误
         source: Option<std::io::Error>,
     },
 
     /// 文件不存在
     #[error("文件不存在: {path}")]
-    FileNotFound { path: PathBuf },
+    FileNotFound {
+        /// 未找到的路径
+        path: PathBuf,
+    },
 
     /// 不支持的文件格式
     #[error("不支持的文件格式: {format} (支持的格式: {supported:?})")]
     UnsupportedFormat {
+        /// 输入文件格式
         format: String,
+        /// 支持的格式列表
         supported: Vec<String>,
     },
 
     /// 文件解析错误
     #[error("文件解析错误: {file} 第{line}行: {message}")]
     ParseError {
+        /// 文件路径
         file: PathBuf,
+        /// 行号
         line: usize,
+        /// 具体错误信息
         message: String,
     },
 
@@ -68,22 +78,32 @@ pub enum MhError {
     
     /// 无效输入
     #[error("无效的输入数据: {message}")]
-    InvalidInput { message: String },
+    InvalidInput {
+        /// 说明无效原因
+        message: String,
+    },
 
     /// 数据超出范围
     #[error("数据超出范围: {field}={value}, 期望范围=[{min}, {max}]")]
     OutOfRange {
+        /// 字段名
         field: &'static str,
+        /// 实际值
         value: f64,
+        /// 最小允许值
         min: f64,
+        /// 最大允许值
         max: f64,
     },
 
     /// 数组大小不匹配
     #[error("数组大小不匹配: {name} 期望{expected}, 实际{actual}")]
     SizeMismatch {
+        /// 数据名称
         name: &'static str,
+        /// 期望大小
         expected: usize,
+        /// 实际大小
         actual: usize,
     },
 
@@ -94,8 +114,11 @@ pub enum MhError {
     /// 索引越界
     #[error("索引越界: {index_type} 索引 {index} 超出范围 0..{len}")]
     IndexOutOfBounds {
+        /// 索引类别描述
         index_type: &'static str,
+        /// 访问的索引
         index: usize,
+        /// 上界（长度）
         len: usize,
     },
 
@@ -109,7 +132,10 @@ pub enum MhError {
     
     /// 无效网格拓扑
     #[error("无效的网格拓扑: {message}")]
-    InvalidMesh { message: String },
+    InvalidMesh {
+        /// 网格拓扑错误描述
+        message: String,
+    },
 
     // ========================================================================
     // 配置相关错误
@@ -117,17 +143,26 @@ pub enum MhError {
     
     /// 配置错误
     #[error("配置错误: {message}")]
-    Config { message: String },
+    Config {
+        /// 具体错误信息
+        message: String,
+    },
 
     /// 缺少配置项
     #[error("缺少必需的配置项: {key}")]
-    MissingConfig { key: String },
+    MissingConfig {
+        /// 配置键名
+        key: String,
+    },
 
     /// 配置值无效
     #[error("配置值无效: {key}={value}, 原因: {reason}")]
     InvalidConfig {
+        /// 配置键名
         key: String,
+        /// 配置值
         value: String,
+        /// 无效原因说明
         reason: String,
     },
 
@@ -137,7 +172,10 @@ pub enum MhError {
     
     /// 序列化错误
     #[error("序列化错误: {message}")]
-    Serialization { message: String },
+    Serialization {
+        /// 序列化失败原因
+        message: String,
+    },
 
     // ========================================================================
     // 地理/投影错误
@@ -157,7 +195,10 @@ pub enum MhError {
     
     /// 锁获取失败
     #[error("锁获取失败: {resource}")]
-    LockError { resource: String },
+    LockError {
+        /// 失败的资源名
+        resource: String,
+    },
 
     /// 通道发送失败
     #[error("通道发送失败")]
@@ -181,7 +222,10 @@ pub enum MhError {
     
     /// 内部错误
     #[error("内部错误: {message}")]
-    Internal { message: String },
+    Internal {
+        /// 内部错误描述
+        message: String,
+    },
 
     /// 运行时错误
     #[error("运行时错误: {0}")]
@@ -189,11 +233,17 @@ pub enum MhError {
 
     /// 功能未实现
     #[error("功能未实现: {feature}")]
-    NotImplemented { feature: String },
+    NotImplemented {
+        /// 未实现的功能描述
+        feature: String,
+    },
 
     /// 资源未找到
     #[error("资源未找到: {resource}")]
-    NotFound { resource: String },
+    NotFound {
+        /// 资源名称
+        resource: String,
+    },
 }
 
 // ============================================================================

@@ -25,7 +25,6 @@
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use glam::DVec2;
 
 /// 最大风速限制 [m/s]
 const MAX_WIND_SPEED: f64 = 100.0;

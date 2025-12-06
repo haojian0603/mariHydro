@@ -488,7 +488,7 @@ pub fn inscribed_circumscribed_ratio(p0: &[f64; 3], p1: &[f64; 3], p2: &[f64; 3]
     }
     
     // 理想等边三角形的比值为 0.5
-    (2.0 * inradius / circumradius).min(1.0)
+    inradius / circumradius
 }
 
 #[cfg(test)]

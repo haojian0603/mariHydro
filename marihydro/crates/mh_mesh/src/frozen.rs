@@ -635,7 +635,7 @@ impl MeshTopology for FrozenMesh {
 // 空间查询扩展方法
 // =========================================================================
 
-use crate::locator::{LocateResult, MeshLocator};
+use crate::locator::MeshLocator;
 use crate::spatial_index::MeshSpatialIndex;
 
 impl FrozenMesh {
@@ -673,7 +673,7 @@ impl FrozenMesh {
     ///     LocateResult::Outside { .. } => println!("在网格外"),
     /// }
     /// ```
-    pub fn create_locator(&self) -> MeshLocator {
+    pub fn create_locator(&self) -> MeshLocator<'_> {
         MeshLocator::new(self)
     }
 

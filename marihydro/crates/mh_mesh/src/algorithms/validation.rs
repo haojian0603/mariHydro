@@ -553,9 +553,9 @@ pub fn quick_topology_check(
 pub fn validate_boundary(
     halfedges: &[(Option<usize>, usize, usize, usize, Option<usize>)],
 ) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
+    let errors = Vec::new();
 
-    for (he_idx, he) in halfedges.iter().enumerate() {
+    for (_he_idx, he) in halfedges.iter().enumerate() {
         // 边界半边应该没有 twin
         if he.0.is_none() {
             // 检查边界半边是否属于边界面

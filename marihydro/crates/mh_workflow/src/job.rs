@@ -149,8 +149,6 @@ pub struct SimulationConfig {
     pub end_time: f64,
     /// 输出间隔 (秒)
     pub output_interval: f64,
-    /// 使用GPU
-    pub use_gpu: bool,
     /// 线程数 (0=自动)
     pub num_threads: usize,
     /// 检查点间隔 (秒, 0=禁用)
@@ -168,7 +166,6 @@ impl Default for SimulationConfig {
             start_time: 0.0,
             end_time: 3600.0,
             output_interval: 60.0,
-            use_gpu: false,
             num_threads: 0,
             checkpoint_interval: 300.0,
             max_cfl: 0.5,
@@ -199,11 +196,7 @@ impl SimulationConfig {
         self
     }
 
-    /// 启用GPU
-    pub fn with_gpu(mut self, use_gpu: bool) -> Self {
-        self.use_gpu = use_gpu;
-        self
-    }
+    // GPU support removed
 
     /// 设置线程数
     pub fn with_threads(mut self, num_threads: usize) -> Self {
@@ -412,8 +405,7 @@ mod tests {
     #[test]
     fn test_simulation_job() {
         let config = SimulationConfig::new("test.mhp")
-            .with_time_range(0.0, 3600.0)
-            .with_gpu(true);
+            .with_time_range(0.0, 3600.0);
 
         let mut job = SimulationJob::new("Test Job", config)
             .with_priority(JobPriority::High)

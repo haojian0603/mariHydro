@@ -173,7 +173,7 @@ impl<T> Idx<T> {
         self.generation == generation
     }
 
-    /// 转换为Option<usize>
+    /// 转换为 `Option<usize>`
     #[inline]
     pub fn to_option(self) -> Option<usize> {
         if self.is_valid() {

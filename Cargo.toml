@@ -1,3 +1,5 @@
 [workspace]
 resolver = "2"
-members = ["src_tauri_mod/src-tauri"]
+members = [
+	"marihydro",
+]

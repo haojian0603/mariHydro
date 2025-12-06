@@ -200,7 +200,7 @@ impl NaturalNeighborInterpolator {
 
         // 计算 Natural Neighbor 风格的权重
         // 使用 Sibson 风格的权重近似
-        let weights = self.compute_weights(&neighbors, x, y);
+        let weights = self.compute_weights(&neighbors);
 
         // 加权插值
         let mut weight_sum = 0.0;
@@ -222,7 +222,7 @@ impl NaturalNeighborInterpolator {
     /// 计算 Natural Neighbor 风格的权重
     ///
     /// 使用改进的权重函数近似真正的 Natural Neighbor 权重。
-    fn compute_weights(&self, neighbors: &[(usize, f64)], x: f64, y: f64) -> Vec<f64> {
+    fn compute_weights(&self, neighbors: &[(usize, f64)]) -> Vec<f64> {
         if neighbors.is_empty() {
             return vec![];
         }
@@ -318,7 +318,7 @@ impl NaturalNeighborInterpolator {
         neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         neighbors.truncate(self.config.max_neighbors);
 
-        let weights = self.compute_weights(&neighbors, x, y);
+        let weights = self.compute_weights(&neighbors);
         let indices: Vec<usize> = neighbors.iter().map(|&(idx, _)| idx).collect();
 
         (indices, weights)

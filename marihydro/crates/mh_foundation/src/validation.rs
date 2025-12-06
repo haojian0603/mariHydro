@@ -120,29 +120,41 @@ impl fmt::Display for ValidationReport {
 pub enum ValidationError {
     /// 非有限值
     NonFinite {
+        /// 字段名称
         field: &'static str,
+        /// 所在单元 ID
         cell_id: usize,
+        /// 非有限的数值
         value: f64,
     },
     /// 数据超出范围
     OutOfRange {
+        /// 字段名称
         field: &'static str,
+        /// 所在单元 ID
         cell_id: usize,
+        /// 实际值
         value: f64,
+        /// 下界
         min: f64,
+        /// 上界
         max: f64,
     },
     /// 拓扑错误
     TopologyError {
+        /// 错误描述
         message: String,
+        /// 可选的元素 ID
         element_id: Option<usize>,
     },
     /// 一致性错误
     ConsistencyError {
+        /// 错误描述
         message: String,
     },
     /// 自定义错误
     Custom {
+        /// 自定义消息
         message: String,
     },
 }
@@ -194,25 +206,36 @@ impl std::error::Error for ValidationError {}
 pub enum ValidationWarning {
     /// 高数值
     HighValue {
+        /// 字段名称
         field: &'static str,
+        /// 单元 ID
         cell_id: usize,
+        /// 实际值
         value: f64,
+        /// 阈值
         threshold: f64,
     },
     /// 低数值
     LowValue {
+        /// 字段名称
         field: &'static str,
+        /// 单元 ID
         cell_id: usize,
+        /// 实际值
         value: f64,
+        /// 阈值
         threshold: f64,
     },
     /// 质量警告
     QualityWarning {
+        /// 警告描述
         message: String,
+        /// 可选的元素 ID
         element_id: Option<usize>,
     },
     /// 自定义警告
     Custom {
+        /// 自定义消息
         message: String,
     },
 }

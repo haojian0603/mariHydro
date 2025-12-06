@@ -33,6 +33,7 @@ use super::rusanov::RusanovSolver;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
 use glam::DVec2;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ============================================================================
 // 自适应配置
@@ -240,6 +241,65 @@ impl AdaptiveStats {
     }
 }
 
+/// 线程安全的统计计数器
+#[derive(Debug, Default)]
+struct AdaptiveStatsCounters {
+    hllc_count: AtomicU64,
+    rusanov_count: AtomicU64,
+    blended_count: AtomicU64,
+    dry_wet_rusanov: AtomicU64,
+    jump_rusanov: AtomicU64,
+    supercritical_rusanov: AtomicU64,
+}
+
+impl AdaptiveStatsCounters {
+    fn snapshot(&self) -> AdaptiveStats {
+        AdaptiveStats {
+            hllc_count: self.hllc_count.load(Ordering::Relaxed),
+            rusanov_count: self.rusanov_count.load(Ordering::Relaxed),
+            blended_count: self.blended_count.load(Ordering::Relaxed),
+            dry_wet_rusanov: self.dry_wet_rusanov.load(Ordering::Relaxed),
+            jump_rusanov: self.jump_rusanov.load(Ordering::Relaxed),
+            supercritical_rusanov: self.supercritical_rusanov.load(Ordering::Relaxed),
+        }
+    }
+
+    fn reset(&self) {
+        self.hllc_count.store(0, Ordering::Relaxed);
+        self.rusanov_count.store(0, Ordering::Relaxed);
+        self.blended_count.store(0, Ordering::Relaxed);
+        self.dry_wet_rusanov.store(0, Ordering::Relaxed);
+        self.jump_rusanov.store(0, Ordering::Relaxed);
+        self.supercritical_rusanov.store(0, Ordering::Relaxed);
+    }
+
+    fn update(&self, choice: &SolverChoice, reason: AdaptiveReason) {
+        match choice {
+            SolverChoice::Hllc => {
+                self.hllc_count.fetch_add(1, Ordering::Relaxed);
+            }
+            SolverChoice::Rusanov => {
+                self.rusanov_count.fetch_add(1, Ordering::Relaxed);
+                match reason {
+                    AdaptiveReason::DryWet => {
+                        self.dry_wet_rusanov.fetch_add(1, Ordering::Relaxed);
+                    }
+                    AdaptiveReason::DepthJump => {
+                        self.jump_rusanov.fetch_add(1, Ordering::Relaxed);
+                    }
+                    AdaptiveReason::Supercritical => {
+                        self.supercritical_rusanov.fetch_add(1, Ordering::Relaxed);
+                    }
+                    AdaptiveReason::VelocityJump | AdaptiveReason::Default => {}
+                }
+            }
+            SolverChoice::Blended(_) => {
+                self.blended_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // 自适应求解器
 // ============================================================================
@@ -272,7 +332,7 @@ pub struct AdaptiveSolver {
     config: AdaptiveConfig,
 
     /// 统计信息
-    stats: AdaptiveStats,
+    stats: AdaptiveStatsCounters,
 
     /// 基本参数
     params: SolverParams,
@@ -286,7 +346,7 @@ impl AdaptiveSolver {
             hllc: HllcSolver::from_params(params),
             rusanov: RusanovSolver::from_params(params),
             config: AdaptiveConfig::default(),
-            stats: AdaptiveStats::default(),
+            stats: AdaptiveStatsCounters::default(),
             params,
         }
     }
@@ -302,7 +362,7 @@ impl AdaptiveSolver {
             hllc: HllcSolver::from_params(params),
             rusanov: RusanovSolver::from_params(params),
             config,
-            stats: AdaptiveStats::default(),
+            stats: AdaptiveStatsCounters::default(),
             params,
         }
     }
@@ -318,12 +378,12 @@ impl AdaptiveSolver {
     }
 
     /// 获取统计信息
-    pub fn stats(&self) -> &AdaptiveStats {
-        &self.stats
+    pub fn stats(&self) -> AdaptiveStats {
+        self.stats.snapshot()
     }
 
     /// 重置统计
-    pub fn reset_stats(&mut self) {
+    pub fn reset_stats(&self) {
         self.stats.reset();
     }
 
@@ -338,13 +398,13 @@ impl AdaptiveSolver {
         h_right: f64,
         vel_left: DVec2,
         vel_right: DVec2,
-    ) -> SolverChoice {
+    ) -> (SolverChoice, AdaptiveReason) {
         let h_max = h_left.max(h_right);
         let h_min = h_left.min(h_right);
 
         // 1. 干湿检查
         if h_min < self.config.transition_depth {
-            return SolverChoice::Rusanov;
+            return (SolverChoice::Rusanov, AdaptiveReason::DryWet);
         }
 
         // 2. 水深跳跃检查
@@ -354,11 +414,14 @@ impl AdaptiveSolver {
                 // 计算混合权重
                 let weight = self.compute_blend_weight(depth_jump, self.config.depth_jump_threshold);
                 if weight < 0.01 {
-                    return SolverChoice::Rusanov;
+                    return (SolverChoice::Rusanov, AdaptiveReason::DepthJump);
                 }
-                return SolverChoice::Blended(weight.max(self.config.min_hllc_weight));
+                return (
+                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    AdaptiveReason::DepthJump,
+                );
             }
-            return SolverChoice::Rusanov;
+            return (SolverChoice::Rusanov, AdaptiveReason::DepthJump);
         }
 
         // 3. Froude 数检查
@@ -371,11 +434,14 @@ impl AdaptiveSolver {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(froude, self.config.froude_critical);
                 if weight < 0.01 {
-                    return SolverChoice::Rusanov;
+                    return (SolverChoice::Rusanov, AdaptiveReason::Supercritical);
                 }
-                return SolverChoice::Blended(weight.max(self.config.min_hllc_weight));
+                return (
+                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    AdaptiveReason::Supercritical,
+                );
             }
-            return SolverChoice::Rusanov;
+            return (SolverChoice::Rusanov, AdaptiveReason::Supercritical);
         }
 
         // 4. 速度跳跃检查
@@ -384,15 +450,18 @@ impl AdaptiveSolver {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(vel_jump, self.config.velocity_jump_threshold);
                 if weight < 0.01 {
-                    return SolverChoice::Rusanov;
+                    return (SolverChoice::Rusanov, AdaptiveReason::VelocityJump);
                 }
-                return SolverChoice::Blended(weight.max(self.config.min_hllc_weight));
+                return (
+                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    AdaptiveReason::VelocityJump,
+                );
             }
-            return SolverChoice::Rusanov;
+            return (SolverChoice::Rusanov, AdaptiveReason::VelocityJump);
         }
 
         // 默认使用 HLLC
-        SolverChoice::Hllc
+        (SolverChoice::Hllc, AdaptiveReason::Default)
     }
 
     /// 计算混合权重
@@ -418,20 +487,8 @@ impl AdaptiveSolver {
     }
 
     /// 更新统计
-    fn update_stats(&mut self, choice: &SolverChoice, reason: AdaptiveReason) {
-        match choice {
-            SolverChoice::Hllc => self.stats.hllc_count += 1,
-            SolverChoice::Rusanov => {
-                self.stats.rusanov_count += 1;
-                match reason {
-                    AdaptiveReason::DryWet => self.stats.dry_wet_rusanov += 1,
-                    AdaptiveReason::DepthJump => self.stats.jump_rusanov += 1,
-                    AdaptiveReason::Supercritical => self.stats.supercritical_rusanov += 1,
-                    _ => {}
-                }
-            }
-            SolverChoice::Blended(_) => self.stats.blended_count += 1,
-        }
+    fn update_stats(&self, choice: &SolverChoice, reason: AdaptiveReason) {
+        self.stats.update(choice, reason);
     }
 
     /// 混合两个通量
@@ -487,7 +544,8 @@ impl RiemannSolver for AdaptiveSolver {
         normal: DVec2,
     ) -> Result<RiemannFlux, RiemannError> {
         // 选择求解器
-        let choice = self.choose_solver(h_left, h_right, vel_left, vel_right);
+        let (choice, reason) = self.choose_solver(h_left, h_right, vel_left, vel_right);
+        self.update_stats(&choice, reason);
 
         // 执行求解
         match choice {
@@ -580,7 +638,7 @@ mod tests {
         let solver = create_test_solver();
 
         // 平滑情况应该选择 HLLC
-        let choice = solver.choose_solver(1.0, 1.1, DVec2::ZERO, DVec2::ZERO);
+        let (choice, _) = solver.choose_solver(1.0, 1.1, DVec2::ZERO, DVec2::ZERO);
         assert_eq!(choice, SolverChoice::Hllc);
     }
 
@@ -589,7 +647,7 @@ mod tests {
         let solver = create_test_solver();
 
         // 干湿情况应该选择 Rusanov
-        let choice = solver.choose_solver(0.001, 1.0, DVec2::ZERO, DVec2::ZERO);
+        let (choice, _) = solver.choose_solver(0.001, 1.0, DVec2::ZERO, DVec2::ZERO);
         assert_eq!(choice, SolverChoice::Rusanov);
     }
 
@@ -598,7 +656,7 @@ mod tests {
         let solver = create_test_solver();
 
         // 大跳跃应该选择 Rusanov
-        let choice = solver.choose_solver(2.0, 0.5, DVec2::ZERO, DVec2::ZERO);
+        let (choice, _) = solver.choose_solver(2.0, 0.5, DVec2::ZERO, DVec2::ZERO);
         // 相对跳跃 = 1.5/2.0 = 0.75 > 0.5
         assert!(choice.uses_rusanov());
     }
@@ -615,7 +673,7 @@ mod tests {
         let solver = AdaptiveSolver::with_config(&params, 9.81, config);
 
         // 中等跳跃应该混合
-        let choice = solver.choose_solver(1.0, 0.6, DVec2::ZERO, DVec2::ZERO);
+        let (choice, _) = solver.choose_solver(1.0, 0.6, DVec2::ZERO, DVec2::ZERO);
         // 相对跳跃 = 0.4/1.0 = 0.4，略高于阈值
         match choice {
             SolverChoice::Blended(w) => {
@@ -644,27 +702,27 @@ mod tests {
         let solver = create_test_solver();
 
         // 超临界流（Fr > 1.5）
-        let h = 0.5;
-        let c = (9.81 * h).sqrt(); // ≈ 2.2 m/s
+        let h = 0.5_f64;
+        let c = (9.81_f64 * h).sqrt(); // ≈ 2.2 m/s
         let u = c * 2.0; // Fr = 2
 
-        let choice = solver.choose_solver(h, h, DVec2::new(u, 0.0), DVec2::new(u, 0.0));
+        let (choice, _) = solver.choose_solver(h, h, DVec2::new(u, 0.0), DVec2::new(u, 0.0));
         assert!(choice.uses_rusanov());
     }
 
     #[test]
     fn test_statistics() {
-        let mut solver = create_test_solver();
+        let solver = create_test_solver();
 
         // 多次求解
         for _ in 0..10 {
             let _ = solver.solve(1.0, 1.0, DVec2::ZERO, DVec2::ZERO, DVec2::X);
         }
 
-        // 注意：当前实现中 stats 更新在 choose_solver 中未调用
-        // 这里只测试接口
         let stats = solver.stats();
-        assert_eq!(stats.total(), 0); // 当前未实现统计更新
+        assert_eq!(stats.total(), 10);
+        assert_eq!(stats.hllc_count, 10);
+        assert_eq!(stats.rusanov_count, 0);
     }
 
     #[test]

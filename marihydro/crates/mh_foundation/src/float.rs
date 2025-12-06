@@ -57,6 +57,7 @@ pub const DEFAULT_CONVERGENCE_TOL: f64 = 1e-8;
 /// 非有限值错误
 #[derive(Debug, Clone)]
 pub struct NonFiniteError {
+    /// 非法的浮点值（NaN 或 Inf）
     pub value: f64,
 }
 

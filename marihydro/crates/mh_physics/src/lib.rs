@@ -32,7 +32,6 @@ pub mod types;
 
 // 待迁移模块（占位）
 pub mod forcing;
-pub mod gpu;
 pub mod numerics;
 pub mod sediment;
 pub mod sources;

@@ -4,7 +4,7 @@
 //!
 //! 提供自适应网格加密功能。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// 细化配置
 #[derive(Debug, Clone)]
@@ -159,7 +159,7 @@ impl Refiner {
 
         // 处理需要绿色细分的三角形（与红色三角形相邻但本身不需要细化）
         // 这里简化处理，实际的红绿细分更复杂
-        let final_triangles = self.fix_hanging_nodes(&new_vertices, &new_triangles, &edge_midpoints);
+        let final_triangles = self.fix_hanging_nodes(&new_triangles, &edge_midpoints);
 
         (new_vertices, final_triangles)
     }
@@ -241,7 +241,6 @@ impl Refiner {
     /// 修复悬挂节点（简化版本）
     fn fix_hanging_nodes(
         &self,
-        vertices: &[[f64; 2]],
         triangles: &[[usize; 3]],
         edge_midpoints: &HashMap<(usize, usize), usize>,
     ) -> Vec<[usize; 3]> {

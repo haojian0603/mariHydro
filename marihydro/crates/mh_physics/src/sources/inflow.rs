@@ -25,7 +25,6 @@
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use glam::DVec2;
 
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]

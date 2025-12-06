@@ -378,7 +378,6 @@ impl<'a> MeshLocator<'a> {
     ///
     /// 返回 (边界面索引, 距离)
     pub fn find_nearest_boundary_face(&self, x: f64, y: f64) -> (usize, f64) {
-        let point = Point2D::new(x, y);
         let mut min_dist = f64::MAX;
         let mut nearest_face = 0usize;
 

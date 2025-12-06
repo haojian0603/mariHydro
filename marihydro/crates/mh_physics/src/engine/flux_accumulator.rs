@@ -370,7 +370,7 @@ mod tests {
         // 边界面：owner=0, neighbor=None
         acc.accumulate_flux(0, None, 1.0, 2.0, 3.0);
 
-        let (h, hu, hv) = acc.collect();
+        let (h, _hu, _hv) = acc.collect();
         // 只有owner得到通量
         assert!((h[0] - (-1.0)).abs() < 1e-10);
         assert!((h[1] - 0.0).abs() < 1e-10);

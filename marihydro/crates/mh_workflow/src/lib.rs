@@ -52,7 +52,7 @@ pub use job::{JobId, JobPriority, JobStatus, SimulationConfig, SimulationJob};
 pub use manager::{WorkflowError, WorkflowManager};
 pub use runner::{JobRunner, RunnerConfig, RunnerError};
 pub use scheduler::{
-    DeviceSelection, GpuDiagnostics, GpuHealthStatus, HybridConfig, HybridScheduler, 
+    DeviceSelection, HybridConfig, HybridScheduler, 
     HybridStrategy, PerformanceStats, SchedulerDiagnostics, SelectionStats,
 };
 pub use storage::{FileStorage, MemoryStorage, Storage, StorageError};

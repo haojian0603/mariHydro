@@ -82,6 +82,7 @@ impl Triangulator {
         while remaining.len() > 3 && safety_counter < max_iterations {
             safety_counter += 1;
             let mut found_ear = false;
+            let mut best_ear: Option<(usize, f64)> = None;
             
             let len = remaining.len();
             for i in 0..len {
@@ -93,13 +94,42 @@ impl Triangulator {
                 let next = remaining[next_idx];
                 
                 if self.is_ear(vertices, &remaining, prev, curr, next) {
-                    triangles.push([prev, curr, next]);
-                    remaining.remove(i);
-                    found_ear = true;
-                    break;
+                    if self.config.quality_refinement {
+                        let angle = self.triangle_min_angle(
+                            vertices[prev],
+                            vertices[curr],
+                            vertices[next],
+                        );
+
+                        if angle >= self.config.min_angle
+                            || best_ear.is_none()
+                            || best_ear.as_ref().map(|(_, a)| angle > *a).unwrap_or(false)
+                        {
+                            best_ear = Some((i, angle));
+                        }
+                    } else {
+                        triangles.push([prev, curr, next]);
+                        remaining.remove(i);
+                        found_ear = true;
+                        break;
+                    }
                 }
             }
             
+            if self.config.quality_refinement {
+                if let Some((ear_idx, _)) = best_ear {
+                    let prev_idx = if ear_idx == 0 { len - 1 } else { ear_idx - 1 };
+                    let next_idx = (ear_idx + 1) % len;
+                    let prev = remaining[prev_idx];
+                    let curr = remaining[ear_idx];
+                    let next = remaining[next_idx];
+
+                    triangles.push([prev, curr, next]);
+                    remaining.remove(ear_idx);
+                    found_ear = true;
+                }
+            }
+
             if !found_ear {
                 // 退化情况，跳过
                 break;

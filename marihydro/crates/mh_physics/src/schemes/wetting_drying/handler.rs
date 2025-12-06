@@ -4,7 +4,7 @@
 //!
 //! 提供单元干湿状态判定、状态修正和界面通量限制。
 
-use crate::state::{ConservedState, ShallowWaterState};
+use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 
 /// 单元干湿状态
@@ -245,7 +245,6 @@ impl WettingDryingHandler {
                 // 需要限制
                 if dh[i] < 0.0 {
                     // 限制减少量
-                    let limited_dh = -state.h[i] / dt;
                     state.h[i] = 0.0;
                     // 同时清零动量
                     state.hu[i] = 0.0;

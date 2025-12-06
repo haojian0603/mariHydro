@@ -108,7 +108,7 @@ impl GreenGaussGradient {
         field: &[f64],
         mesh: &PhysicsMesh,
     ) -> DVec2 {
-        let area = mesh.cell_area(cell).unwrap_or(1.0);
+        let area = mesh.cell_area_unchecked(cell);
         if area < 1e-14 {
             return DVec2::ZERO;
         }
@@ -117,12 +117,11 @@ impl GreenGaussGradient {
         let phi_c = field[cell];
         let mut grad = DVec2::ZERO;
 
-        // 遍历所有面，找出属于该单元的面
-        for face in 0..mesh.n_faces() {
+        // 仅遍历该单元关联的面，避免 O(N^2)
+        for face in mesh.cell_faces(cell) {
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
 
-            // 检查面是否属于当前单元
             let is_owner = owner == cell;
             let is_neighbor = neighbor == Some(cell);
 
@@ -133,18 +132,15 @@ impl GreenGaussGradient {
             let normal = mesh.face_normal(face);
             let length = mesh.face_length(face);
 
-            // 法向修正（owner 向外为正）
+            // owner 侧法向指向外侧，neighbor 取相反号
             let sign = if is_owner { 1.0 } else { -1.0 };
             let ds = normal * length * sign;
 
-            // 计算面上的值
             let phi_face = if let Some(neigh) = neighbor {
                 let other = if is_owner { neigh } else { owner };
-                
+
                 match self.config.face_interpolation {
-                    FaceInterpolation::Arithmetic => {
-                        0.5 * (phi_c + field[other])
-                    }
+                    FaceInterpolation::Arithmetic => 0.5 * (phi_c + field[other]),
                     FaceInterpolation::DistanceWeighted => {
                         let face_center = mesh.face_center(face);
                         let other_center = mesh.cell_center(other);
@@ -270,7 +266,6 @@ mod tests {
     use super::*;
     use mh_geo::{Point2D, Point3D};
     use mh_mesh::FrozenMesh;
-    use std::sync::Arc;
 
     /// 创建简单的 2x1 网格
     fn create_test_mesh() -> PhysicsMesh {

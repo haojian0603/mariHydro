@@ -344,7 +344,6 @@ impl<'a> DiffusionSolver<'a> {
 
         if n_substeps > 1 {
             // 在需要时记录调试信息
-            #[cfg(feature = "logging")]
             log::debug!(
                 "扩散需要 {} 个子步以保证稳定性 (ν={:.2e}, dt={:.2e})",
                 n_substeps,

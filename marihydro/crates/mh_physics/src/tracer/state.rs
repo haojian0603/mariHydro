@@ -656,8 +656,9 @@ mod tests {
         let mut field = TracerField::new(props, 1);
 
         field.apply_decay(1.0);
-        // 应该是 100 * exp(-0.1) ≈ 90.48
-        assert!((field.concentration(0) - 90.48373903808578).abs() < 1e-6);
+        // 精确指数衰减解：C = C0 * exp(-k * dt)
+        let expected = 100.0 * (-0.1_f64).exp();
+        assert!((field.concentration(0) - expected).abs() < 1e-12);
     }
 
     #[test]

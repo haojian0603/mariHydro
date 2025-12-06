@@ -31,7 +31,6 @@ pub use utm::*;
 pub use web_mercator::*;
 
 use mh_foundation::error::{MhError, MhResult};
-use std::f64::consts::PI;
 
 // ============================================================================
 // WGS84 椭球参数

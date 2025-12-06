@@ -307,7 +307,7 @@ impl ColoringOptimizer {
                 .max_by_key(|&(_, s)| s)
                 .unwrap();
 
-            let (min_color, min_size) = result.color_sizes
+            let (min_color, _) = result.color_sizes
                 .iter()
                 .enumerate()
                 .min_by_key(|&(_, s)| s)

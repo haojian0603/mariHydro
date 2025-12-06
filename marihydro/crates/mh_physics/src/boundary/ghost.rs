@@ -235,7 +235,7 @@ impl GhostStateCalculator {
     /// 使用外部强迫的速度和水深。
     fn compute_inflow_ghost(
         &self,
-        interior: ConservedState,
+        _interior: ConservedState,
         external: &ExternalForcing,
     ) -> ConservedState {
         let h = external.eta.max(self.params.h_min);

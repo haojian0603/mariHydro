@@ -17,7 +17,6 @@ use crate::adapter::PhysicsMesh;
 use crate::types::NumericalParams;
 
 use glam::DVec2;
-use rayon::prelude::*;
 
 // ============================================================
 // 配置
@@ -148,7 +147,7 @@ impl LeastSquaresGradient {
         let mut neighbor_count = 0;
 
         // 收集邻居贡献
-        for face in 0..mesh.n_faces() {
+        for face in mesh.cell_faces(cell) {
             let owner = mesh.face_owner(face);
             let neighbor_opt = mesh.face_neighbor(face);
 

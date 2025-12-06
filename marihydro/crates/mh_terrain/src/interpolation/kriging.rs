@@ -246,8 +246,6 @@ pub struct KrigingInterpolator {
     variogram: VariogramModel,
     /// 预计算的 Kriging 矩阵逆
     k_inv: Option<DMatrix<f64>>,
-    /// 预计算的值向量
-    z_vec: DVector<f64>,
 }
 
 impl KrigingInterpolator {
@@ -264,13 +262,11 @@ impl KrigingInterpolator {
             "采样点数量必须等于值数量"
         );
 
-        let z_vec = DVector::from_vec(values.clone());
         let mut interpolator = Self {
             points,
             values,
             variogram,
             k_inv: None,
-            z_vec,
         };
 
         interpolator.compute_kriging_matrix();

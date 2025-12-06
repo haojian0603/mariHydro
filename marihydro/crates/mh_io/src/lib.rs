@@ -56,7 +56,6 @@ pub mod snapshot;
 // 重导出常用类型
 pub use drivers::{GdalDriver, GdalError, NetCdfDriver, NetCdfError, RasterMetadata};
 pub use exporters::{VtuExporter, VtuMesh, VtuState};
-pub use project::*;
 
 // 重导出计划四新增类型
 pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManager};

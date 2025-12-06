@@ -238,7 +238,6 @@ impl Smoother {
         mu: f64,
     ) {
         let lambda = self.config.lambda;
-        let n = vertices.len();
 
         for _ in 0..self.config.iterations {
             // 正向平滑
@@ -504,7 +503,7 @@ pub fn find_boundary_vertices(
         }
     }
 
-    let mut boundary = std::collections::HashSet::new();
+    let mut boundary = std::collections::HashSet::with_capacity(num_vertices.saturating_div(2));
     for ((a, b), count) in edge_count {
         if count == 1 {
             boundary.insert(a);

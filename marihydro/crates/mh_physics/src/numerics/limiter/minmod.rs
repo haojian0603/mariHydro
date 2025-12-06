@@ -70,11 +70,6 @@ impl Minmod {
         }
     }
     
-    /// 三参数 Minmod 函数
-    #[inline]
-    fn minmod3(&self, a: f64, b: f64, c: f64) -> f64 {
-        self.minmod(a, self.minmod(b, c))
-    }
 }
 
 impl SlopeLimiter for Minmod {
@@ -114,38 +109,6 @@ impl SlopeLimiter for Minmod {
 
 /// 扩展的 Minmod 限制器 (Superbee 变体的基础)
 ///
-/// 提供额外的 minmod3 方法用于三点模板
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MinmodExtended {
-    /// 基础 Minmod 限制器
-    inner: Minmod,
-}
-
-impl MinmodExtended {
-    /// 创建新的扩展 Minmod 限制器
-    pub fn new() -> Self {
-        Self {
-            inner: Minmod::new(),
-        }
-    }
-    
-    /// 计算三点 Minmod
-    ///
-    /// 用于 MUSCL 重构等需要比较多个斜率的场景
-    pub fn minmod3(&self, a: f64, b: f64, c: f64) -> f64 {
-        self.inner.minmod3(a, b, c)
-    }
-}
-
-impl SlopeLimiter for MinmodExtended {
-    fn compute_limiter(&self, ctx: &LimiterContext) -> f64 {
-        self.inner.compute_limiter(ctx)
-    }
-    
-    fn name(&self) -> &'static str {
-        "MinmodExtended"
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -185,18 +148,6 @@ mod tests {
         // 包含零
         assert_eq!(limiter.minmod(0.0, 3.0), 0.0);
         assert_eq!(limiter.minmod(2.0, 0.0), 0.0);
-    }
-    
-    #[test]
-    fn test_minmod3_function() {
-        let limiter = Minmod::new();
-        
-        // 全同号
-        assert_eq!(limiter.minmod3(1.0, 2.0, 3.0), 1.0);
-        assert_eq!(limiter.minmod3(-1.0, -2.0, -3.0), -1.0);
-        
-        // 有异号
-        assert_eq!(limiter.minmod3(1.0, -2.0, 3.0), 0.0);
     }
     
     #[test]
@@ -286,27 +237,6 @@ mod tests {
         }
     }
     
-    #[test]
-    fn test_minmod_extended() {
-        let limiter = MinmodExtended::new();
-        
-        // 应该和基础 Minmod 行为一致
-        let ctx = LimiterContext::new(1.0, 0.8, 0.5, 1.5, 0.1);
-        let alpha = limiter.compute_limiter(&ctx);
-        assert!((alpha - 0.625).abs() < 1e-10);
-        
-        assert_eq!(limiter.name(), "MinmodExtended");
-    }
-    
-    #[test]
-    fn test_minmod_extended_minmod3() {
-        let limiter = MinmodExtended::new();
-        
-        // 测试三参数版本
-        assert_eq!(limiter.minmod3(1.0, 2.0, 3.0), 1.0);
-        assert_eq!(limiter.minmod3(-1.0, -2.0, -3.0), -1.0);
-        assert_eq!(limiter.minmod3(1.0, -2.0, 3.0), 0.0);
-    }
     
     #[test]
     fn test_compare_with_barth_jespersen() {

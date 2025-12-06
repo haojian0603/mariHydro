@@ -203,7 +203,7 @@ impl WaveBottomFriction {
     }
 
     /// 根据模型计算摩擦系数
-    fn compute_friction_coefficient(&self, amplitude: f64, period: f64) -> f64 {
+    fn compute_friction_coefficient(&self, amplitude: f64, _period: f64) -> f64 {
         match self.config.model {
             WaveBottomFrictionModel::Jonswap => {
                 // JONSWAP 经验公式
@@ -287,8 +287,8 @@ pub struct WaveCurrentInteraction {
     wave_friction: WaveBottomFriction,
     /// 联合剪切应力 [Pa]
     tau_combined: Vec<f64>,
-    /// 联合摩擦系数
-    fc_combined: Vec<f64>,
+    /// 联合摩擦系数（暂未使用）
+    _fc_combined: Vec<f64>,
 }
 
 impl WaveCurrentInteraction {
@@ -297,7 +297,7 @@ impl WaveCurrentInteraction {
         Self {
             wave_friction: WaveBottomFriction::new(n_cells, config),
             tau_combined: vec![0.0; n_cells],
-            fc_combined: vec![0.0; n_cells],
+            _fc_combined: vec![0.0; n_cells],
         }
     }
 

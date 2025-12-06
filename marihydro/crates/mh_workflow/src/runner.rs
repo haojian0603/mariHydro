@@ -58,7 +58,7 @@ pub struct RunnerConfig {
     /// 超时时间 (秒，0=无超时)
     pub timeout_secs: u64,
     /// 是否使用GPU
-    pub use_gpu: bool,
+    // GPU support removed
     /// 线程数
     pub num_threads: usize,
 }
@@ -69,7 +69,7 @@ impl Default for RunnerConfig {
             progress_interval: 1.0,
             checkpoint_interval: 300.0,
             timeout_secs: 0,
-            use_gpu: false,
+            // use_gpu not applicable
             num_threads: 0,
         }
     }
@@ -81,7 +81,7 @@ impl From<&SimulationConfig> for RunnerConfig {
             progress_interval: 1.0,
             checkpoint_interval: config.checkpoint_interval,
             timeout_secs: 0,
-            use_gpu: config.use_gpu,
+            // use_gpu removed from SimulationConfig
             num_threads: config.num_threads,
         }
     }

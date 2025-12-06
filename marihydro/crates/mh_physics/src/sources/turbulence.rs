@@ -32,7 +32,6 @@
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::adapter::PhysicsMesh;
 use crate::state::ShallowWaterState;
-use glam::DVec2;
 
 /// Smagorinsky 常数的默认值
 pub const DEFAULT_SMAGORINSKY_CONSTANT: f64 = 0.15;

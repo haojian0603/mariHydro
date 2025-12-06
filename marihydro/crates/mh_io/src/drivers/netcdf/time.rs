@@ -498,10 +498,15 @@ impl CfTimeUnits {
             CfCalendar::NoLeap => {
                 let days_before_month = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
                 let total_days = jd_int as i32;
-                let y = total_days / 365;
-                let doy = total_days % 365;
-                let m = (1..=12).find(|&i| days_before_month[i] > doy).unwrap_or(12);
-                let d = doy - days_before_month[m - 1] + 1;
+                let mut y = total_days / 365;
+                let mut doy = total_days % 365; // 1..=365 ideally
+                if doy == 0 {
+                    doy = 365;
+                    y -= 1;
+                }
+                // find month where cumulative days >= doy
+                let m = (1..=12).find(|&i| days_before_month[i] >= doy).unwrap_or(12);
+                let d = doy - days_before_month[m - 1];
                 (y, m as u32, d as u32)
             }
             CfCalendar::AllLeap => {
