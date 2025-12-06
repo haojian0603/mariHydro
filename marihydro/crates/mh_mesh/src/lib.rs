@@ -9,10 +9,16 @@
 //! - [`HalfEdgeMesh`]: 可编辑的半边网格
 //! - [`FrozenMesh`]: 只读的 SoA 布局网格，用于计算
 //!
+//! # Trait 抽象
+//!
+//! - [`MeshAccess`]: 网格只读访问接口
+//! - [`MeshTopology`]: 网格拓扑计算接口
+//!
 //! # 模块结构
 //!
 //! - [`halfedge`]: 半边网格核心实现
 //! - [`frozen`]: 冻结网格
+//! - [`traits`]: 网格抽象接口
 //! - [`compat`]: 兼容层转换
 //! - [`io`]: 网格 IO (GMSH, GeoJSON, MHB)
 //!
@@ -43,9 +49,15 @@ pub mod frozen;
 pub mod halfedge;
 pub mod io;
 pub mod quality;
+pub mod traits;
 
 // 算法模块（待实现）
 pub mod algorithms;
+
+// 新增模块：空间索引和点定位
+pub mod spatial_index;
+pub mod locator;
+pub mod converter;
 
 // 重新导出核心类型
 pub use attributes::{
@@ -54,3 +66,17 @@ pub use attributes::{
 };
 pub use frozen::{FrozenMesh, MeshStatistics};
 pub use halfedge::{Face, HalfEdge, HalfEdgeMesh, Vertex};
+
+// 重新导出 trait 抽象
+pub use traits::{
+    CellGeometry, FaceGeometry, MeshAccess, MeshAccessExt, MeshTopology, ValidationReport,
+    ValidationStats,
+};
+
+// 重新导出新增模块的核心类型
+pub use spatial_index::{CellEnvelope, MeshSpatialIndex, SpatialBounds, SpatialIndexData};
+pub use locator::{
+    CachedLocator, LocateResult, LocateTolerance, LocatorCacheStats, MeshLocator,
+};
+pub use converter::{MeshStatisticsExt, SimpleMeshData};
+

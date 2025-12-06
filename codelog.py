@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-代码收集器 - 将项目中的Rust代码和assets中的配置文件收集到codelog文件夹中的txt文件
-使用方法: python collect_code.py [路径] [输出文件名]
+代码收集器 - 将指定路径下的所有文件收集到codelog文件夹中的txt文件
+使用方法: python collect_code.py /path/to/project
 """
 
 import sys
@@ -10,98 +10,150 @@ from pathlib import Path
 
 
 class CodeCollector:
-    """收集Rust代码和配置文件并生成带文件树的文档"""
+    """收集指定路径下的所有文件并生成带文件树的文档"""
 
     # 文件扩展名到代码块语言的映射
     EXTENSION_LANG_MAP = {
         ".rs": "rust",
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
         ".json": "json",
         ".geo": "geo",
         ".toml": "toml",
         ".yaml": "yaml",
         ".yml": "yaml",
-        ".wgsl": "wgsl",  # 添加WGSL着色器语言支持
+        ".wgsl": "wgsl",
+        ".md": "markdown",
+        ".txt": "text",
+        ".sh": "bash",
+        ".bash": "bash",
+        ".zsh": "bash",
+        ".fish": "fish",
+        ".css": "css",
+        ".scss": "scss",
+        ".html": "html",
+        ".xml": "xml",
+        ".sql": "sql",
+        ".cpp": "cpp",
+        ".c": "c",
+        ".h": "cpp",
+        ".hpp": "cpp",
+        ".java": "java",
+        ".go": "go",
+        ".rb": "ruby",
+        ".php": "php",
+        ".swift": "swift",
+        ".kt": "kotlin",
+        ".ini": "ini",
+        ".conf": "conf",
+        ".config": "conf",
+        ".dockerfile": "dockerfile",
     }
 
-    def __init__(self, root_path="."):
+    def __init__(self, root_path=".", excluded_extensions=None, excluded_dirs=None):
         self.root_path = Path(root_path).resolve()
         if not self.root_path.exists():
             raise FileNotFoundError(f"路径不存在: {self.root_path}")
 
+        # 默认排除的文件扩展名
+        self.excluded_extensions = excluded_extensions or {
+            ".pyc",
+            ".pyo",
+            ".so",
+            ".dll",
+            ".exe",
+            ".bin",
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".ico",
+            ".svg",
+            ".webp",
+            ".mp3",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".rar",
+            ".7z",
+            ".lock",
+            ".sqlite",
+            ".db",
+        }
+        
+        # 默认排除的目录
+        self.excluded_dirs = excluded_dirs or {
+            "target",
+            ".git",
+            "node_modules",
+            "__pycache__",
+            ".idea",
+            ".vscode",
+            "build",
+            "dist",
+            "codelog",
+        }
+
         self.collected_files = []
-        self.file_tree = []
         self.output_dir_name = "codelog"
         self.output_dir = Path.cwd() / self.output_dir_name
 
     def gather_files(self):
-        """递归收集所有目标文件"""
+        """递归收集所有文件（应用排除规则）"""
         print(f"🔍 正在扫描: {self.root_path}")
 
-        # 1. 扫描src目录 (Rust源码)
-        src_path = self.root_path / "src"
-        if src_path.exists():
-            self._scan_directory(src_path, extensions=[".rs"])
-
-        # 2. 扫描assets目录 (JSON, GEO, WGSL配置文件)
-        assets_path = self.root_path / "assets"
-        if assets_path.exists():
-            self._scan_directory(
-                assets_path, extensions=[".json", ".geo", ".toml", ".yaml", ".yml", ".wgsl"]
-            )
-            print(f"📁 扫描assets目录")
-
-        # 3. 扫描根目录下的特定文件
-        for pattern in ["*.rs", "*.toml", "*.json", "*.wgsl"]:
-            for file in self.root_path.glob(pattern):
-                if self.output_dir_name not in file.parts and file.is_file():
-                    if file not in self.collected_files:
-                        self.collected_files.append(file)
-
-        # 4. 扫描其他子目录的Rust文件
-        excluded_dirs = {
-            "target",
-            ".git",
-            "node_modules",
-            "src",
-            "assets",
-            "legacy_src",
-            ".ai",
-            self.output_dir_name,
-        }
-        for item in self.root_path.iterdir():
-            if item.is_dir() and item.name not in excluded_dirs:
-                self._scan_directory(item, extensions=[".rs"])
+        # 递归扫描所有文件
+        try:
+            for file_path in self.root_path.rglob("*"):
+                if not file_path.is_file():
+                    continue
+                    
+                # 检查是否在排除目录中
+                parts = file_path.parts
+                if any(excluded in parts for excluded in self.excluded_dirs):
+                    continue
+                    
+                # 检查文件扩展名是否在排除列表中
+                if file_path.suffix.lower() in self.excluded_extensions:
+                    continue
+                    
+                # 排除输出目录本身
+                if self.output_dir_name in parts:
+                    continue
+                    
+                self.collected_files.append(file_path)
+                
+        except Exception as e:
+            print(f"⚠️ 扫描时出错: {e}")
 
         # 排序：按路径字母顺序
         self.collected_files.sort(key=lambda p: str(p.relative_to(self.root_path)))
 
         # 统计
-        rust_count = sum(1 for f in self.collected_files if f.suffix == ".rs")
-        json_count = sum(1 for f in self.collected_files if f.suffix == ".json")
-        geo_count = sum(1 for f in self.collected_files if f.suffix == ".geo")
-        wgsl_count = sum(1 for f in self.collected_files if f.suffix == ".wgsl")
-        other_count = len(self.collected_files) - rust_count - json_count - geo_count - wgsl_count
+        total_count = len(self.collected_files)
+        if total_count == 0:
+            print("⚠️ 未找到任何文件")
+            return
 
-        print(f"📄 找到 {len(self.collected_files)} 个文件:")
-        print(f"   - Rust: {rust_count}")
-        print(f"   - JSON: {json_count}")
-        print(f"   - GEO:  {geo_count}")
-        print(f"   - WGSL: {wgsl_count}")
-        if other_count > 0:
-            print(f"   - 其他: {other_count}")
+        # 按扩展名分组统计
+        ext_stats = {}
+        for f in self.collected_files:
+            ext = f.suffix.lower() or "(无扩展名)"
+            ext_stats[ext] = ext_stats.get(ext, 0) + 1
 
-    def _scan_directory(self, directory: Path, extensions: list[str]):
-        """扫描单个目录中指定扩展名的文件"""
-        try:
-            for ext in extensions:
-                for path in directory.rglob(f"*{ext}"):
-                    parts = path.parts
-                    # 排除 target 目录和 codelog 输出目录
-                    if "target" not in parts and self.output_dir_name not in parts:
-                        if path not in self.collected_files:
-                            self.collected_files.append(path)
-        except Exception as e:
-            print(f"⚠️ 扫描 {directory} 时出错: {e}")
+        print(f"📄 找到 {total_count} 个文件:")
+        for ext, count in sorted(ext_stats.items()):
+            print(f"   - {ext}: {count}")
 
     def build_file_tree(self):
         """构建文件树结构"""
@@ -129,10 +181,9 @@ class CodeCollector:
                 for filename in sorted(files_by_dir[dir_path]):
                     tree_lines.append(f"├── {filename}")
             else:
-                tree_lines.append(f"├── {dir_path}/")
+                tree_lines.append(f"├── {dir_path}\\")
                 for filename in sorted(files_by_dir[dir_path]):
-                    indent = "│   " + "    "
-                    tree_lines.append(f"{indent}├── {filename}")
+                    tree_lines.append(f"│   ├── {filename}")
 
         tree_lines.extend(["", "=" * 50, ""])
         return "\n".join(tree_lines)
@@ -142,7 +193,7 @@ class CodeCollector:
         return self.EXTENSION_LANG_MAP.get(file_path.suffix.lower(), "text")
 
     def collect_to_file(self, output_filename=None):
-        """将所有代码收集到codelog文件夹中的单个文件"""
+        """将所有文件收集到codelog文件夹中的单个文件"""
         self.output_dir.mkdir(exist_ok=True)
 
         if not output_filename:
@@ -158,38 +209,33 @@ class CodeCollector:
 
         with open(output_path, "w", encoding="utf-8") as f:
             # 写入头部信息
-            f.write(f"""代码收集报告
-生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-项目路径: {self.root_path}
-扫描内容:
-  - src/: *.rs
-  - assets/: *.json, *.geo, *.toml, *.yaml, *.wgsl
-  - 根目录: *.rs, *.toml, *.json, *.wgsl
-排除目录: target, .git, node_modules, {self.output_dir_name}
-{"=" * 80}
-
-""")
+            f.write(f"""代码收集日志
+            生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            项目路径: {self.root_path}
+            扫描模式: 收集所有文件（应用排除规则）
+            排除的文件类型: {', '.join(sorted(self.excluded_extensions))}
+            排除的目录: {', '.join(sorted(self.excluded_dirs))}
+            {"=" * 80}
+            """)
 
             # 写入文件树
             f.write(file_tree_str)
 
-            # 按类型分组写入
-            rust_files = [p for p in self.collected_files if p.suffix == ".rs"]
-            config_files = [p for p in self.collected_files if p.suffix != ".rs"]
+            # 按扩展名分组写入
+            files_by_ext = {}
+            for file_path in self.collected_files:
+                ext = file_path.suffix.lower()
+                if ext not in files_by_ext:
+                    files_by_ext[ext] = []
+                files_by_ext[ext].append(file_path)
 
-            # 先写入Rust文件
-            if rust_files:
+            # 按扩展名排序后写入
+            for ext in sorted(files_by_ext.keys()):
+                ext_name = ext[1:].upper() if ext else "无扩展名"
                 f.write("\n" + "=" * 80 + "\n")
-                f.write("# Rust 源代码\n")
+                f.write(f"# {ext_name} 文件\n")
                 f.write("=" * 80 + "\n\n")
-                self._write_files(f, rust_files)
-
-            # 再写入配置文件
-            if config_files:
-                f.write("\n" + "=" * 80 + "\n")
-                f.write("# 配置文件 (JSON/GEO/TOML/YAML/WGSL)\n")
-                f.write("=" * 80 + "\n\n")
-                self._write_files(f, config_files)
+                self._write_files(f, sorted(files_by_ext[ext]))
 
         print(f"✅ 完成！共记录 {len(self.collected_files)} 个文件")
         print(f"📂 输出文件: {output_path}")
@@ -246,32 +292,51 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="收集Rust项目中的代码和配置文件到codelog文件夹",
+        description="收集指定路径下的所有文件到codelog文件夹",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-        示例:
-        python collect_code.py                    # 扫描当前目录
-        python collect_code.py /path/to/project   # 扫描指定路径
-        python collect_code.py . my_code.txt      # 指定输出文件名
-
-        扫描规则:
-        - src/         -> *.rs (Rust源码)
-        - assets/      -> *.json, *.geo, *.toml, *.yaml, *.wgsl (配置文件)
-        - 根目录       -> *.rs, *.toml, *.json, *.wgsl
-        - 其他子目录   -> *.rs
-                """,
     )
 
     parser.add_argument(
-        "path", nargs="?", default=".", help="要扫描的项目路径（默认: 当前目录）"
+        "path", help="要扫描的项目路径"
     )
-    parser.add_argument("output", nargs="?", help="输出文件名（默认: 自动生成）")
 
     args = parser.parse_args()
 
     try:
-        collector = CodeCollector(args.path)
-        collector.collect_to_file(args.output)
+        # 自定义排除的文件类型和目录（在此修改）
+        custom_excluded_extensions = {
+            # 二进制和编译文件
+            ".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".o", ".obj", ".class",
+            # 图片和媒体
+            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", ".webp",
+            ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac",
+            # 文档和压缩包
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz",
+            # 数据库和锁文件
+            ".sqlite", ".db", ".lock",
+        }
+        
+        custom_excluded_dirs = {
+            # 编译输出
+            "target", "build", "dist", "out", "output",
+            # 版本控制
+            ".git", ".svn", ".hg",
+            # 依赖和缓存
+            "node_modules", "__pycache__", ".venv", "venv", "env",
+            "vendor", ".cache", ".gradle", ".cargo",
+            # IDE
+            ".idea", ".vscode", ".vs",
+            # 其他
+            "codelog",".ai"
+        }
+        
+        collector = CodeCollector(
+            args.path,
+            excluded_extensions=custom_excluded_extensions,
+            excluded_dirs=custom_excluded_dirs,
+        )
+        collector.collect_to_file()
     except Exception as e:
         print(f"❌ 错误: {e}")
         sys.exit(1)

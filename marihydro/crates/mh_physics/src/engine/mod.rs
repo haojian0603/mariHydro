@@ -34,7 +34,8 @@ pub use timestep::{
 pub use solver::{
     ShallowWaterSolver, SolverConfig, SolverConfigBuilder, SolverBuilder,
     SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
-    BedSlopeCorrection,
+    BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
+    StabilityStatus,
 };
 pub use parallel::{
     ParallelFluxCalculator, ParallelFluxConfig, ParallelFluxConfigBuilder,

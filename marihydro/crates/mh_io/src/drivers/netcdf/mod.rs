@@ -10,6 +10,7 @@
 //! - 读取变量数据
 //! - 支持 CF 约定
 //! - 时间序列支持
+//! - CF 时间格式解析
 //!
 //! # 依赖
 //!
@@ -17,6 +18,8 @@
 
 mod driver;
 mod error;
+pub mod time;
 
 pub use driver::*;
 pub use error::*;
+pub use time::{CfCalendar, CfTimeError, CfTimeUnits, DateTime, TimeUnit};

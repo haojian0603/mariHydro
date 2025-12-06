@@ -14,7 +14,19 @@
 //!
 //! 其中:
 //! - ε² = (K * h)³，h 是网格特征尺度
-//! - K 是用户参数，通常 1-10，默认 5
+//! - K 是用户参数
+//!
+//! # K 值选择指南
+//!
+//! | K 值 | 特性 | 适用场景 |
+//! |------|------|---------|
+//! | 0.1-0.3 | 强限制，高稳定性 | 激波、溃坝、干湿过渡 |
+//! | 0.3-1.0 | 中等限制 | 一般流动 |
+//! | 1.0-5.0 | 弱限制，高精度 | 平滑流、稳态问题 |
+//! | 5.0-10.0 | 几乎不限制 | 非常光滑的问题 |
+//!
+//! **注意**: 传统文献推荐 K=5-10，但对于浅水方程中常见的干湿过渡和
+//! 强间断问题，K=0.3 更加稳定。
 //!
 //! # 特点
 //!
@@ -33,9 +45,16 @@ use super::traits::{LimiterContext, SlopeLimiter};
 /// Venkatakrishnan 限制器
 ///
 /// 光滑的二阶精度限制器，推荐用于通用浅水模拟。
+///
+/// # 默认配置
+///
+/// 默认使用 K=0.3，适合浅水方程中常见的干湿过渡和强间断问题。
+/// 如需更高精度（较少耗散），可使用 `for_smooth_flow()` 预设。
 #[derive(Debug, Clone, Copy)]
 pub struct Venkatakrishnan {
-    /// K 参数，控制限制强度 (通常 1-10)
+    /// K 参数，控制限制强度
+    /// - 小值 (0.1-0.3): 强限制，高稳定性
+    /// - 大值 (1.0-5.0): 弱限制，高精度
     k: f64,
     
     /// ε² = (K * h)³，预计算的平滑参数
@@ -49,8 +68,13 @@ impl Venkatakrishnan {
     /// 创建新的 Venkatakrishnan 限制器
     ///
     /// # Arguments
-    /// * `k` - K 参数，控制限制强度，通常 1-10
+    /// * `k` - K 参数，控制限制强度
     /// * `mesh_scale` - 网格特征尺度 h（如平均边长或最小边长）
+    ///
+    /// # K 值建议
+    /// - 激波/溃坝问题: 0.1-0.3
+    /// - 一般流动: 0.3-1.0
+    /// - 光滑稳态: 1.0-5.0
     pub fn new(k: f64, mesh_scale: f64) -> Self {
         // ε² = (K * h)³
         let kh = k * mesh_scale;
@@ -75,6 +99,46 @@ impl Venkatakrishnan {
         }
     }
     
+    // =========================================================================
+    // 预设配置
+    // =========================================================================
+    
+    /// 创建适合激波和溃坝问题的限制器
+    ///
+    /// 使用 K=0.1，提供最强的限制以确保稳定性。
+    /// 适用于溃坝、水跃等强间断问题。
+    pub fn for_shock_capturing(mesh_scale: f64) -> Self {
+        Self::new(0.1, mesh_scale)
+    }
+    
+    /// 创建适合干湿过渡的限制器
+    ///
+    /// 使用 K=0.3（默认值），平衡稳定性和精度。
+    /// 适用于大多数浅水模拟。
+    pub fn for_wetting_drying(mesh_scale: f64) -> Self {
+        Self::new(0.3, mesh_scale)
+    }
+    
+    /// 创建适合光滑流动的限制器
+    ///
+    /// 使用 K=2.0，减少数值耗散。
+    /// 适用于平滑流动、稳态问题。
+    pub fn for_smooth_flow(mesh_scale: f64) -> Self {
+        Self::new(2.0, mesh_scale)
+    }
+    
+    /// 创建几乎不限制的限制器
+    ///
+    /// 使用 K=5.0，接近无限制器的二阶精度。
+    /// 仅适用于非常光滑、无间断的问题。
+    pub fn minimal_limiting(mesh_scale: f64) -> Self {
+        Self::new(5.0, mesh_scale)
+    }
+    
+    // =========================================================================
+    // 访问器
+    // =========================================================================
+    
     /// 获取 K 参数
     pub fn k(&self) -> f64 {
         self.k
@@ -88,6 +152,13 @@ impl Venkatakrishnan {
     /// 更新网格尺度（当网格变化时）
     pub fn update_mesh_scale(&mut self, mesh_scale: f64) {
         let kh = self.k * mesh_scale;
+        self.eps_squared = kh * kh * kh;
+    }
+    
+    /// 更新 K 参数
+    pub fn set_k(&mut self, k: f64, mesh_scale: f64) {
+        self.k = k;
+        let kh = k * mesh_scale;
         self.eps_squared = kh * kh * kh;
     }
     
@@ -117,8 +188,9 @@ impl Venkatakrishnan {
 
 impl Default for Venkatakrishnan {
     fn default() -> Self {
-        // 默认 K=5, mesh_scale=1
-        Self::new(5.0, 1.0)
+        // 默认 K=0.3（适合浅水方程的干湿过渡）, mesh_scale=1
+        // 注意：这与传统推荐值 K=5 不同，但对浅水问题更稳定
+        Self::new(0.3, 1.0)
     }
 }
 
@@ -174,9 +246,24 @@ mod tests {
     #[test]
     fn test_venkatakrishnan_default() {
         let limiter = Venkatakrishnan::default();
-        assert_eq!(limiter.k(), 5.0);
-        // ε² = (5 * 1)³ = 125
-        assert!((limiter.eps_squared() - 125.0).abs() < 1e-10);
+        assert_eq!(limiter.k(), 0.3); // 新默认值
+        // ε² = (0.3 * 1)³ = 0.027
+        assert!((limiter.eps_squared() - 0.027).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_presets() {
+        let shock = Venkatakrishnan::for_shock_capturing(1.0);
+        assert_eq!(shock.k(), 0.1);
+        
+        let wet_dry = Venkatakrishnan::for_wetting_drying(1.0);
+        assert_eq!(wet_dry.k(), 0.3);
+        
+        let smooth = Venkatakrishnan::for_smooth_flow(1.0);
+        assert_eq!(smooth.k(), 2.0);
+        
+        let minimal = Venkatakrishnan::minimal_limiting(1.0);
+        assert_eq!(minimal.k(), 5.0);
     }
     
     #[test]

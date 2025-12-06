@@ -9,4 +9,8 @@ edition = "2021"
 mh_foundation = { path = "../mh_foundation" }
 mh_geo = { path = "../mh_geo" }
 memmap2 = "0.9"
+nalgebra = "0.33"  # 线性代数库，用于 Kriging 矩阵运算
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"  # 日志记录
 

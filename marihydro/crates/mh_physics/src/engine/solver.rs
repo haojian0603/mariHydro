@@ -29,6 +29,104 @@ use std::sync::Arc;
 // 求解器配置
 // ============================================================
 
+/// 数值格式类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NumericalScheme {
+    /// 一阶精度
+    FirstOrder,
+    /// 二阶 MUSCL
+    #[default]
+    SecondOrderMuscl,
+    /// 二阶 WENO
+    SecondOrderWeno,
+}
+
+impl std::fmt::Display for NumericalScheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FirstOrder => write!(f, "First Order"),
+            Self::SecondOrderMuscl => write!(f, "MUSCL"),
+            Self::SecondOrderWeno => write!(f, "WENO"),
+        }
+    }
+}
+
+/// 回退策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FallbackStrategy {
+    /// 不回退，失败时报错
+    NoFallback,
+    /// 回退到一阶格式
+    #[default]
+    FallbackToFirstOrder,
+    /// 回退到较小时间步
+    ReduceTimestep,
+    /// 综合策略：先减小时间步，再降低格式精度
+    Progressive,
+}
+
+impl std::fmt::Display for FallbackStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoFallback => write!(f, "无回退"),
+            Self::FallbackToFirstOrder => write!(f, "回退一阶"),
+            Self::ReduceTimestep => write!(f, "减小时间步"),
+            Self::Progressive => write!(f, "渐进回退"),
+        }
+    }
+}
+
+/// 稳定性检查选项
+#[derive(Debug, Clone, Copy)]
+pub struct StabilityOptions {
+    /// 是否检查 NaN/Inf
+    pub check_nan: bool,
+    /// 是否检查负水深
+    pub check_negative_depth: bool,
+    /// 是否检查极大速度
+    pub check_extreme_velocity: bool,
+    /// 速度上限 [m/s]
+    pub velocity_limit: f64,
+    /// 水深上限 [m]
+    pub depth_limit: f64,
+}
+
+impl Default for StabilityOptions {
+    fn default() -> Self {
+        Self {
+            check_nan: true,
+            check_negative_depth: true,
+            check_extreme_velocity: true,
+            velocity_limit: 100.0,
+            depth_limit: 1000.0,
+        }
+    }
+}
+
+impl StabilityOptions {
+    /// 严格模式
+    pub fn strict() -> Self {
+        Self {
+            check_nan: true,
+            check_negative_depth: true,
+            check_extreme_velocity: true,
+            velocity_limit: 50.0,
+            depth_limit: 500.0,
+        }
+    }
+
+    /// 宽松模式
+    pub fn relaxed() -> Self {
+        Self {
+            check_nan: true,
+            check_negative_depth: true,
+            check_extreme_velocity: false,
+            velocity_limit: 200.0,
+            depth_limit: 2000.0,
+        }
+    }
+}
+
 /// 求解器配置
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
@@ -42,6 +140,16 @@ pub struct SolverConfig {
     pub parallel_threshold: usize,
     /// 是否启用隐式摩擦（预留）
     pub implicit_friction: bool,
+    /// 数值格式
+    pub scheme: NumericalScheme,
+    /// 回退策略
+    pub fallback: FallbackStrategy,
+    /// 稳定性检查选项
+    pub stability: StabilityOptions,
+    /// 最大回退次数
+    pub max_fallback_attempts: u32,
+    /// 时间步减小因子（回退时使用）
+    pub timestep_reduction_factor: f64,
 }
 
 impl Default for SolverConfig {
@@ -52,6 +160,11 @@ impl Default for SolverConfig {
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
             implicit_friction: true,
+            scheme: NumericalScheme::default(),
+            fallback: FallbackStrategy::default(),
+            stability: StabilityOptions::default(),
+            max_fallback_attempts: 3,
+            timestep_reduction_factor: 0.5,
         }
     }
 }
@@ -60,6 +173,38 @@ impl SolverConfig {
     /// 创建构建器
     pub fn builder() -> SolverConfigBuilder {
         SolverConfigBuilder::default()
+    }
+
+    /// 快速配置：性能优先
+    pub fn performance() -> Self {
+        Self {
+            scheme: NumericalScheme::FirstOrder,
+            stability: StabilityOptions::relaxed(),
+            parallel_threshold: 500,
+            ..Default::default()
+        }
+    }
+
+    /// 快速配置：精度优先
+    pub fn accuracy() -> Self {
+        Self {
+            scheme: NumericalScheme::SecondOrderMuscl,
+            stability: StabilityOptions::strict(),
+            fallback: FallbackStrategy::Progressive,
+            ..Default::default()
+        }
+    }
+
+    /// 快速配置：稳健模式
+    pub fn robust() -> Self {
+        Self {
+            scheme: NumericalScheme::FirstOrder,
+            fallback: FallbackStrategy::Progressive,
+            stability: StabilityOptions::strict(),
+            max_fallback_attempts: 5,
+            timestep_reduction_factor: 0.25,
+            ..Default::default()
+        }
     }
 }
 
@@ -95,6 +240,36 @@ impl SolverConfigBuilder {
         self
     }
 
+    /// 设置数值格式
+    pub fn scheme(mut self, scheme: NumericalScheme) -> Self {
+        self.config.scheme = scheme;
+        self
+    }
+
+    /// 设置回退策略
+    pub fn fallback(mut self, fallback: FallbackStrategy) -> Self {
+        self.config.fallback = fallback;
+        self
+    }
+
+    /// 设置稳定性选项
+    pub fn stability(mut self, stability: StabilityOptions) -> Self {
+        self.config.stability = stability;
+        self
+    }
+
+    /// 设置最大回退次数
+    pub fn max_fallback_attempts(mut self, attempts: u32) -> Self {
+        self.config.max_fallback_attempts = attempts;
+        self
+    }
+
+    /// 设置时间步减小因子
+    pub fn timestep_reduction_factor(mut self, factor: f64) -> Self {
+        self.config.timestep_reduction_factor = factor.clamp(0.1, 0.9);
+        self
+    }
+
     pub fn build(self) -> SolverConfig {
         self.config
     }
@@ -115,6 +290,57 @@ pub struct SolverStats {
     pub limited_faces: usize,
     /// 当前时间步长 [s]
     pub dt: f64,
+    /// 回退次数
+    pub fallback_count: u32,
+    /// 当前使用的格式
+    pub current_scheme: NumericalScheme,
+    /// 稳定性状态
+    pub stability_status: StabilityStatus,
+}
+
+/// 稳定性状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StabilityStatus {
+    /// 稳定
+    #[default]
+    Stable,
+    /// 接近不稳定
+    Marginal,
+    /// 需要回退
+    NeedsFallback,
+    /// 不稳定（计算失败）
+    Unstable,
+}
+
+impl std::fmt::Display for StabilityStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stable => write!(f, "稳定"),
+            Self::Marginal => write!(f, "临界"),
+            Self::NeedsFallback => write!(f, "需回退"),
+            Self::Unstable => write!(f, "不稳定"),
+        }
+    }
+}
+
+impl SolverStats {
+    /// 检查是否需要回退
+    pub fn needs_fallback(&self) -> bool {
+        matches!(self.stability_status, StabilityStatus::NeedsFallback | StabilityStatus::Unstable)
+    }
+
+    /// 生成诊断摘要
+    pub fn summary(&self) -> String {
+        format!(
+            "dt={:.4}s, wave_speed={:.2}m/s, dry={}, limited={}, status={}, fallbacks={}",
+            self.dt,
+            self.max_wave_speed,
+            self.dry_cells,
+            self.limited_faces,
+            self.stability_status,
+            self.fallback_count
+        )
+    }
 }
 
 // ============================================================

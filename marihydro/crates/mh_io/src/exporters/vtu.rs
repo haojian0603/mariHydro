@@ -353,7 +353,72 @@ impl VtuExporter {
     }
 }
 
+// ============================================================
+// VTU 导出配置
+// ============================================================
+
+/// VTU 导出配置
+#[derive(Debug, Clone)]
+pub struct VtuExportConfig {
+    /// 是否使用二进制格式
+    pub binary: bool,
+    /// 干湿阈值
+    pub h_dry: f64,
+    /// 是否导出速度场
+    pub export_velocity: bool,
+    /// 是否导出底床高程
+    pub export_bed: bool,
+    /// 是否导出水位
+    pub export_eta: bool,
+    /// 是否导出弗劳德数
+    pub export_froude: bool,
+    /// 附加标量场名称
+    pub extra_scalars: Vec<String>,
+    /// 精度（小数位数）
+    pub precision: usize,
+}
+
+impl Default for VtuExportConfig {
+    fn default() -> Self {
+        Self {
+            binary: false,
+            h_dry: 1e-6,
+            export_velocity: true,
+            export_bed: true,
+            export_eta: true,
+            export_froude: false,
+            extra_scalars: Vec::new(),
+            precision: 6,
+        }
+    }
+}
+
+impl VtuExportConfig {
+    /// 创建完整导出配置（所有字段）
+    pub fn full() -> Self {
+        Self {
+            export_froude: true,
+            ..Default::default()
+        }
+    }
+
+    /// 创建精简导出配置（仅基本字段）
+    pub fn minimal() -> Self {
+        Self {
+            export_velocity: false,
+            export_froude: false,
+            ..Default::default()
+        }
+    }
+}
+
+// ============================================================
+// VTU Trait 定义
+// ============================================================
+
 /// VTU 网格 trait
+///
+/// 提供 VTU 导出所需的网格信息。
 pub trait VtuMesh {
     /// 节点数量
     fn n_nodes(&self) -> usize;
@@ -365,17 +430,80 @@ pub trait VtuMesh {
     fn cell_nodes(&self, idx: usize) -> Vec<usize>;
     /// 获取单元底床高程
     fn cell_z_bed(&self, idx: usize) -> f64;
+    /// 获取单元面积（可选，用于计算弗劳德数）
+    fn cell_area(&self, _idx: usize) -> f64 {
+        1.0
+    }
 }
 
 /// VTU 状态 trait
+///
+/// 提供 VTU 导出所需的状态信息。
 pub trait VtuState {
-    /// 水深
+    /// 单元数量
+    fn n_cells(&self) -> usize {
+        0
+    }
+    /// 水深 [m]
     fn h(&self, idx: usize) -> f64;
-    /// X 方向动量
+    /// X 方向动量 [m²/s]
     fn hu(&self, idx: usize) -> f64;
-    /// Y 方向动量
+    /// Y 方向动量 [m²/s]
     fn hv(&self, idx: usize) -> f64;
+    /// 获取附加标量（可选）
+    fn scalar(&self, _name: &str, _idx: usize) -> Option<f64> {
+        None
+    }
+    /// 可用的标量场名称
+    fn available_scalars(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
+
+/// VTU 状态扩展（提供便捷计算方法）
+pub trait VtuStateExt: VtuState {
+    /// 计算速度 u
+    fn velocity_u(&self, idx: usize, h_dry: f64) -> f64 {
+        let h = self.h(idx);
+        if h > h_dry {
+            self.hu(idx) / h
+        } else {
+            0.0
+        }
+    }
+
+    /// 计算速度 v
+    fn velocity_v(&self, idx: usize, h_dry: f64) -> f64 {
+        let h = self.h(idx);
+        if h > h_dry {
+            self.hv(idx) / h
+        } else {
+            0.0
+        }
+    }
+
+    /// 计算速度大小
+    fn velocity_magnitude(&self, idx: usize, h_dry: f64) -> f64 {
+        let u = self.velocity_u(idx, h_dry);
+        let v = self.velocity_v(idx, h_dry);
+        (u * u + v * v).sqrt()
+    }
+
+    /// 计算弗劳德数
+    fn froude_number(&self, idx: usize, h_dry: f64, gravity: f64) -> f64 {
+        let h = self.h(idx);
+        if h > h_dry {
+            let vel = self.velocity_magnitude(idx, h_dry);
+            let c = (gravity * h).sqrt();
+            vel / c
+        } else {
+            0.0
+        }
+    }
+}
+
+// 自动实现
+impl<T: VtuState + ?Sized> VtuStateExt for T {}
 
 /// 为 FrozenMesh 实现 VtuMesh
 impl VtuMesh for mh_mesh::FrozenMesh {
@@ -404,6 +532,10 @@ impl VtuMesh for mh_mesh::FrozenMesh {
     fn cell_z_bed(&self, idx: usize) -> f64 {
         self.cell_z_bed[idx]
     }
+
+    fn cell_area(&self, idx: usize) -> f64 {
+        self.cell_area[idx]
+    }
 }
 
 /// 简单的状态数组包装
@@ -413,7 +545,18 @@ pub struct SimpleState<'a> {
     pub hv: &'a [f64],
 }
 
+impl<'a> SimpleState<'a> {
+    /// 创建新的简单状态
+    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Self {
+        Self { h, hu, hv }
+    }
+}
+
 impl<'a> VtuState for SimpleState<'a> {
+    fn n_cells(&self) -> usize {
+        self.h.len()
+    }
+
     fn h(&self, idx: usize) -> f64 {
         self.h[idx]
     }
@@ -424,6 +567,59 @@ impl<'a> VtuState for SimpleState<'a> {
 
     fn hv(&self, idx: usize) -> f64 {
         self.hv[idx]
+    }
+}
+
+/// 带附加标量的状态
+pub struct StateWithScalars<'a> {
+    /// 基础状态
+    pub base: SimpleState<'a>,
+    /// 标量场 (名称, 数据)
+    pub scalars: Vec<(&'a str, &'a [f64])>,
+}
+
+impl<'a> StateWithScalars<'a> {
+    /// 创建新状态
+    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Self {
+        Self {
+            base: SimpleState::new(h, hu, hv),
+            scalars: Vec::new(),
+        }
+    }
+
+    /// 添加标量场
+    pub fn with_scalar(mut self, name: &'a str, data: &'a [f64]) -> Self {
+        self.scalars.push((name, data));
+        self
+    }
+}
+
+impl<'a> VtuState for StateWithScalars<'a> {
+    fn n_cells(&self) -> usize {
+        self.base.h.len()
+    }
+
+    fn h(&self, idx: usize) -> f64 {
+        self.base.h(idx)
+    }
+
+    fn hu(&self, idx: usize) -> f64 {
+        self.base.hu(idx)
+    }
+
+    fn hv(&self, idx: usize) -> f64 {
+        self.base.hv(idx)
+    }
+
+    fn scalar(&self, name: &str, idx: usize) -> Option<f64> {
+        self.scalars
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, data)| data[idx])
+    }
+
+    fn available_scalars(&self) -> Vec<String> {
+        self.scalars.iter().map(|(n, _)| n.to_string()).collect()
     }
 }
 
@@ -442,5 +638,62 @@ mod tests {
         assert_eq!(VtuCellType::Triangle as u8, 5);
         assert_eq!(VtuCellType::Quad as u8, 9);
         assert_eq!(VtuCellType::Polygon as u8, 7);
+    }
+
+    #[test]
+    fn test_vtu_export_config() {
+        let config = VtuExportConfig::default();
+        assert!(config.export_velocity);
+        assert!(!config.export_froude);
+
+        let full = VtuExportConfig::full();
+        assert!(full.export_froude);
+
+        let minimal = VtuExportConfig::minimal();
+        assert!(!minimal.export_velocity);
+    }
+
+    #[test]
+    fn test_simple_state() {
+        let h = vec![1.0, 2.0, 3.0];
+        let hu = vec![0.1, 0.2, 0.3];
+        let hv = vec![0.0, 0.0, 0.0];
+
+        let state = SimpleState::new(&h, &hu, &hv);
+        assert_eq!(state.n_cells(), 3);
+        assert!((state.h(0) - 1.0).abs() < 1e-10);
+
+        // 测试扩展方法
+        let u = state.velocity_u(0, 1e-6);
+        assert!((u - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_state_with_scalars() {
+        let h = vec![1.0, 2.0];
+        let hu = vec![0.0; 2];
+        let hv = vec![0.0; 2];
+        let temp = vec![20.0, 21.0];
+
+        let state = StateWithScalars::new(&h, &hu, &hv).with_scalar("temperature", &temp);
+
+        assert_eq!(state.available_scalars(), vec!["temperature"]);
+        assert!((state.scalar("temperature", 0).unwrap() - 20.0).abs() < 1e-10);
+        assert!(state.scalar("salinity", 0).is_none());
+    }
+
+    #[test]
+    fn test_froude_number() {
+        let h = vec![1.0, 0.0001];
+        let hu = vec![3.13, 0.0]; // 大约 Fr = 1 对于 h=1, g=9.81
+        let hv = vec![0.0, 0.0];
+
+        let state = SimpleState::new(&h, &hu, &hv);
+        let fr = state.froude_number(0, 1e-6, 9.81);
+        assert!((fr - 1.0).abs() < 0.01);
+
+        // 干单元应该返回 0
+        let fr_dry = state.froude_number(1, 0.001, 9.81);
+        assert!((fr_dry - 0.0).abs() < 1e-10);
     }
 }

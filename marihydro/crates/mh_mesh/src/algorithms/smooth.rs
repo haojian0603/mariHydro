@@ -574,7 +574,8 @@ mod tests {
             let a = vertices[t[0]];
             let b = vertices[t[1]];
             let c = vertices[t[2]];
-            ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.0
+            let cross: f64 = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+            cross.abs() / 2.0
         }).sum();
 
         let smoother = Smoother::new(SmoothConfig::taubin(10));
@@ -585,7 +586,8 @@ mod tests {
             let a = vertices[t[0]];
             let b = vertices[t[1]];
             let c = vertices[t[2]];
-            ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.0
+            let cross: f64 = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+            cross.abs() / 2.0
         }).sum();
 
         // 面积应该接近（允许一定误差）

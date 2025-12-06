@@ -814,6 +814,113 @@ impl std::fmt::Display for StateError {
 impl std::error::Error for StateError {}
 
 // ============================================================
+// StateAccess / StateAccessMut trait 实现
+// ============================================================
+
+use crate::traits::{StateAccess, StateAccessMut};
+
+impl StateAccess for ShallowWaterState {
+    #[inline]
+    fn n_cells(&self) -> usize {
+        self.n_cells
+    }
+
+    #[inline]
+    fn get(&self, cell: usize) -> ConservedState {
+        ConservedState::new(self.h[cell], self.hu[cell], self.hv[cell])
+    }
+
+    #[inline]
+    fn h(&self, cell: usize) -> f64 {
+        self.h[cell]
+    }
+
+    #[inline]
+    fn hu(&self, cell: usize) -> f64 {
+        self.hu[cell]
+    }
+
+    #[inline]
+    fn hv(&self, cell: usize) -> f64 {
+        self.hv[cell]
+    }
+
+    #[inline]
+    fn z(&self, cell: usize) -> f64 {
+        self.z[cell]
+    }
+
+    #[inline]
+    fn h_slice(&self) -> &[f64] {
+        &self.h
+    }
+
+    #[inline]
+    fn hu_slice(&self) -> &[f64] {
+        &self.hu
+    }
+
+    #[inline]
+    fn hv_slice(&self) -> &[f64] {
+        &self.hv
+    }
+
+    #[inline]
+    fn z_slice(&self) -> &[f64] {
+        &self.z
+    }
+}
+
+impl StateAccessMut for ShallowWaterState {
+    #[inline]
+    fn set(&mut self, cell: usize, state: ConservedState) {
+        self.h[cell] = state.h;
+        self.hu[cell] = state.hu;
+        self.hv[cell] = state.hv;
+    }
+
+    #[inline]
+    fn set_h(&mut self, cell: usize, value: f64) {
+        self.h[cell] = value;
+    }
+
+    #[inline]
+    fn set_hu(&mut self, cell: usize, value: f64) {
+        self.hu[cell] = value;
+    }
+
+    #[inline]
+    fn set_hv(&mut self, cell: usize, value: f64) {
+        self.hv[cell] = value;
+    }
+
+    #[inline]
+    fn set_z(&mut self, cell: usize, value: f64) {
+        self.z[cell] = value;
+    }
+
+    #[inline]
+    fn h_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.h
+    }
+
+    #[inline]
+    fn hu_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.hu
+    }
+
+    #[inline]
+    fn hv_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.hv
+    }
+
+    #[inline]
+    fn z_slice_mut(&mut self) -> &mut [f64] {
+        &mut self.z
+    }
+}
+
+// ============================================================
 // 单元测试
 // ============================================================
 

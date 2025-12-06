@@ -40,6 +40,7 @@
 
 pub mod events;
 pub mod job;
+pub mod job_v2;
 pub mod manager;
 pub mod runner;
 pub mod scheduler;
@@ -50,5 +51,26 @@ pub use events::{EventDispatcher, EventListener, WorkflowEvent};
 pub use job::{JobId, JobPriority, JobStatus, SimulationConfig, SimulationJob};
 pub use manager::{WorkflowError, WorkflowManager};
 pub use runner::{JobRunner, RunnerConfig, RunnerError};
-pub use scheduler::{DeviceSelection, HybridConfig, HybridScheduler, HybridStrategy};
+pub use scheduler::{
+    DeviceSelection, GpuDiagnostics, GpuHealthStatus, HybridConfig, HybridScheduler, 
+    HybridStrategy, PerformanceStats, SchedulerDiagnostics, SelectionStats,
+};
 pub use storage::{FileStorage, MemoryStorage, Storage, StorageError};
+
+// 类型状态 API（高级用法）
+pub mod typed {
+    //! 类型状态作业 API
+    //!
+    //! 提供编译时状态验证的作业类型。
+    //!
+    //! # 示例
+    //!
+    //! ```ignore
+    //! use mh_workflow::typed::{TypedJob, Pending, Running};
+    //!
+    //! let pending = TypedJob::new("job-1", "project-1");
+    //! let running = pending.start();  // Pending -> Running
+    //! let completed = running.complete("/path/to/result");
+    //! ```
+    pub use crate::job_v2::*;
+}

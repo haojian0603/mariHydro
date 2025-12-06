@@ -12,4 +12,13 @@ memmap2 = "0.9"
 bytemuck = { version = "1.18", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
+rstar = "0.12"  # R-Tree 空间索引
+
+[features]
+default = []
+parallel = ["rayon"]
+
+[dependencies.rayon]
+version = "1.10"
+optional = true
 

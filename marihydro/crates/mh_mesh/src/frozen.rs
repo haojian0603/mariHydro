@@ -468,6 +468,525 @@ impl std::fmt::Display for MeshStatistics {
     }
 }
 
+// =========================================================================
+// MeshAccess trait 实现
+// =========================================================================
+
+use crate::traits::{MeshAccess, MeshTopology};
+
+impl MeshAccess for FrozenMesh {
+    #[inline]
+    fn n_cells(&self) -> usize {
+        self.n_cells
+    }
+
+    #[inline]
+    fn n_faces(&self) -> usize {
+        self.n_faces
+    }
+
+    #[inline]
+    fn n_internal_faces(&self) -> usize {
+        self.n_interior_faces
+    }
+
+    #[inline]
+    fn n_nodes(&self) -> usize {
+        self.n_nodes
+    }
+
+    #[inline]
+    fn cell_centroid(&self, cell: usize) -> Point2D {
+        self.cell_center[cell]
+    }
+
+    #[inline]
+    fn cell_area(&self, cell: usize) -> f64 {
+        self.cell_area[cell]
+    }
+
+    #[inline]
+    fn face_centroid(&self, face: usize) -> Point2D {
+        self.face_center[face]
+    }
+
+    #[inline]
+    fn face_length(&self, face: usize) -> f64 {
+        self.face_length[face]
+    }
+
+    #[inline]
+    fn face_normal(&self, face: usize) -> Point3D {
+        self.face_normal[face]
+    }
+
+    #[inline]
+    fn node_position(&self, node: usize) -> Point3D {
+        self.node_coords[node]
+    }
+
+    #[inline]
+    fn cell_bed_elevation(&self, cell: usize) -> f64 {
+        self.cell_z_bed[cell]
+    }
+
+    #[inline]
+    fn face_owner(&self, face: usize) -> usize {
+        self.face_owner[face] as usize
+    }
+
+    #[inline]
+    fn face_neighbor(&self, face: usize) -> Option<usize> {
+        let n = self.face_neighbor[face];
+        if n == u32::MAX {
+            None
+        } else {
+            Some(n as usize)
+        }
+    }
+
+    #[inline]
+    fn cell_face_indices(&self, cell: usize) -> &[u32] {
+        let start = self.cell_face_offsets[cell];
+        let end = self.cell_face_offsets[cell + 1];
+        &self.cell_face_indices[start..end]
+    }
+
+    #[inline]
+    fn cell_neighbor_indices(&self, cell: usize) -> &[u32] {
+        let start = self.cell_neighbor_offsets[cell];
+        let end = self.cell_neighbor_offsets[cell + 1];
+        &self.cell_neighbor_indices[start..end]
+    }
+
+    #[inline]
+    fn cell_node_indices(&self, cell: usize) -> &[u32] {
+        let start = self.cell_node_offsets[cell];
+        let end = self.cell_node_offsets[cell + 1];
+        &self.cell_node_indices[start..end]
+    }
+
+    #[inline]
+    fn boundary_id(&self, face: usize) -> Option<usize> {
+        self.face_boundary_id
+            .get(face)
+            .and_then(|opt| opt.map(|id| id as usize))
+    }
+
+    #[inline]
+    fn boundary_name(&self, boundary_id: usize) -> Option<&str> {
+        self.boundary_names.get(boundary_id).map(|s| s.as_str())
+    }
+
+    #[inline]
+    fn all_cell_centroids(&self) -> &[Point2D] {
+        &self.cell_center
+    }
+
+    #[inline]
+    fn all_cell_areas(&self) -> &[f64] {
+        &self.cell_area
+    }
+
+    #[inline]
+    fn all_cell_bed_elevations(&self) -> &[f64] {
+        &self.cell_z_bed
+    }
+
+    #[inline]
+    fn face_z_left(&self, face: usize) -> f64 {
+        self.face_z_left[face]
+    }
+
+    #[inline]
+    fn face_z_right(&self, face: usize) -> f64 {
+        self.face_z_right[face]
+    }
+}
+
+impl MeshTopology for FrozenMesh {
+    #[inline]
+    fn face_o2n_distance(&self, face: usize) -> f64 {
+        self.face_dist_o2n[face]
+    }
+
+    #[inline]
+    fn face_delta_owner(&self, face: usize) -> Point2D {
+        self.face_delta_owner[face]
+    }
+
+    #[inline]
+    fn face_delta_neighbor(&self, face: usize) -> Point2D {
+        self.face_delta_neighbor[face]
+    }
+
+    #[inline]
+    fn min_cell_size(&self) -> f64 {
+        self.min_cell_size
+    }
+
+    #[inline]
+    fn max_cell_size(&self) -> f64 {
+        self.max_cell_size
+    }
+}
+
+// =========================================================================
+// 空间查询扩展方法
+// =========================================================================
+
+use crate::locator::{LocateResult, MeshLocator};
+use crate::spatial_index::MeshSpatialIndex;
+
+impl FrozenMesh {
+    // =========================================================================
+    // 空间索引创建
+    // =========================================================================
+
+    /// 创建网格空间索引
+    ///
+    /// 基于 R-Tree 的空间索引，支持高效的点定位和范围查询。
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let mesh = FrozenMesh::load("mesh.bin")?;
+    /// let index = mesh.create_spatial_index();
+    /// let cell = index.locate_point(Point2D::new(100.0, 200.0));
+    /// ```
+    pub fn create_spatial_index(&self) -> MeshSpatialIndex {
+        MeshSpatialIndex::build(self.n_cells, |i| self.get_cell_vertices(i))
+    }
+
+    /// 创建网格定位器
+    ///
+    /// 高级定位器，支持精确点定位和批量查询。
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let mesh = FrozenMesh::load("mesh.bin")?;
+    /// let locator = mesh.create_locator();
+    /// match locator.locate(Point2D::new(100.0, 200.0)) {
+    ///     LocateResult::InCell { cell, .. } => println!("在单元 {} 内", cell),
+    ///     LocateResult::OnBoundary { .. } => println!("在边界上"),
+    ///     LocateResult::Outside { .. } => println!("在网格外"),
+    /// }
+    /// ```
+    pub fn create_locator(&self) -> MeshLocator {
+        MeshLocator::new(self)
+    }
+
+    // =========================================================================
+    // 单元几何查询
+    // =========================================================================
+
+    /// 获取单元的顶点坐标列表（2D）
+    ///
+    /// 返回按逆时针顺序排列的顶点坐标。
+    ///
+    /// # 参数
+    ///
+    /// * `cell` - 单元索引
+    ///
+    /// # 返回
+    ///
+    /// 顶点坐标数组（通常为3-4个顶点）
+    pub fn get_cell_vertices(&self, cell: usize) -> Vec<Point2D> {
+        self.cell_nodes(cell)
+            .iter()
+            .map(|&node_idx| self.node_xy(node_idx as usize))
+            .collect()
+    }
+
+    /// 获取单元的顶点坐标列表（3D）
+    pub fn get_cell_vertices_3d(&self, cell: usize) -> Vec<Point3D> {
+        self.cell_nodes(cell)
+            .iter()
+            .map(|&node_idx| self.node_coords(node_idx as usize))
+            .collect()
+    }
+
+    /// 计算点相对于三角形单元的重心坐标
+    ///
+    /// 重心坐标 (λ₁, λ₂, λ₃) 满足：
+    /// - λ₁ + λ₂ + λ₃ = 1
+    /// - 点 P = λ₁·V₁ + λ₂·V₂ + λ₃·V₃
+    ///
+    /// # 参数
+    ///
+    /// * `cell` - 单元索引（必须是三角形）
+    /// * `point` - 查询点
+    ///
+    /// # 返回
+    ///
+    /// - `Some((λ₁, λ₂, λ₃))` - 成功计算重心坐标
+    /// - `None` - 单元不是三角形或面积退化
+    ///
+    /// # 判定规则
+    ///
+    /// - 所有 λ ∈ [0, 1]: 点在单元内部
+    /// - 任一 λ < 0: 点在单元外部
+    /// - 任一 λ = 0: 点在边上
+    pub fn compute_barycentric(&self, cell: usize, point: Point2D) -> Option<(f64, f64, f64)> {
+        let nodes = self.cell_nodes(cell);
+        if nodes.len() != 3 {
+            return None;
+        }
+
+        let v0 = self.node_xy(nodes[0] as usize);
+        let v1 = self.node_xy(nodes[1] as usize);
+        let v2 = self.node_xy(nodes[2] as usize);
+
+        // 向量
+        let v0v1 = Point2D::new(v1.x - v0.x, v1.y - v0.y);
+        let v0v2 = Point2D::new(v2.x - v0.x, v2.y - v0.y);
+        let v0p = Point2D::new(point.x - v0.x, point.y - v0.y);
+
+        // 计算点积
+        let dot00 = v0v1.x * v0v1.x + v0v1.y * v0v1.y;
+        let dot01 = v0v1.x * v0v2.x + v0v1.y * v0v2.y;
+        let dot02 = v0v1.x * v0p.x + v0v1.y * v0p.y;
+        let dot11 = v0v2.x * v0v2.x + v0v2.y * v0v2.y;
+        let dot12 = v0v2.x * v0p.x + v0v2.y * v0p.y;
+
+        // 计算重心坐标
+        let denom = dot00 * dot11 - dot01 * dot01;
+        if denom.abs() < 1e-12 {
+            return None; // 退化三角形
+        }
+
+        let inv_denom = 1.0 / denom;
+        let u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
+        let v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
+        let w = 1.0 - u - v;
+
+        Some((w, u, v))
+    }
+
+    /// 判断点是否在单元内部
+    ///
+    /// 使用射线法检测点是否在多边形内部。
+    ///
+    /// # 参数
+    ///
+    /// * `cell` - 单元索引
+    /// * `point` - 查询点
+    /// * `tolerance` - 边界容差（默认使用 1e-10）
+    pub fn point_in_cell(&self, cell: usize, point: Point2D, tolerance: f64) -> bool {
+        let vertices = self.get_cell_vertices(cell);
+        let n = vertices.len();
+        if n < 3 {
+            return false;
+        }
+
+        // 射线法：从点向右发射水平射线，计算与多边形边的交点数
+        let mut inside = false;
+
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let vi = &vertices[i];
+            let vj = &vertices[j];
+
+            // 检查是否与水平射线相交
+            if ((vi.y > point.y) != (vj.y > point.y))
+                && (point.x < (vj.x - vi.x) * (point.y - vi.y) / (vj.y - vi.y) + vi.x - tolerance)
+            {
+                inside = !inside;
+            }
+        }
+
+        inside
+    }
+
+    // =========================================================================
+    // 边界查询
+    // =========================================================================
+
+    /// 查找距离点最近的边界面
+    ///
+    /// # 参数
+    ///
+    /// * `point` - 查询点
+    ///
+    /// # 返回
+    ///
+    /// `(面索引, 最短距离)` 或 `None`（如果没有边界面）
+    pub fn find_nearest_boundary_face(&self, point: Point2D) -> Option<(usize, f64)> {
+        if self.n_interior_faces >= self.n_faces {
+            return None;
+        }
+
+        let mut best_face = None;
+        let mut best_dist = f64::INFINITY;
+
+        for face in self.boundary_faces() {
+            let center = self.face_center(face);
+            let dx = center.x - point.x;
+            let dy = center.y - point.y;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            if dist < best_dist {
+                best_dist = dist;
+                best_face = Some(face);
+            }
+        }
+
+        best_face.map(|f| (f, best_dist))
+    }
+
+    /// 获取指定边界的所有面索引
+    ///
+    /// # 参数
+    ///
+    /// * `boundary_name` - 边界名称
+    ///
+    /// # 返回
+    ///
+    /// 属于该边界的面索引列表
+    pub fn get_boundary_faces_by_name(&self, boundary_name: &str) -> Vec<usize> {
+        // 查找边界ID
+        let boundary_id = self
+            .boundary_names
+            .iter()
+            .position(|name| name == boundary_name);
+
+        match boundary_id {
+            Some(id) => self
+                .boundary_faces()
+                .filter(|&face| {
+                    self.face_boundary_id
+                        .get(face)
+                        .and_then(|opt| *opt)
+                        .map(|bid| bid as usize == id)
+                        .unwrap_or(false)
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    // =========================================================================
+    // 邻居查询
+    // =========================================================================
+
+    /// 获取单元的所有有效邻居（排除边界）
+    ///
+    /// # 参数
+    ///
+    /// * `cell` - 单元索引
+    ///
+    /// # 返回
+    ///
+    /// 有效邻居单元索引列表
+    pub fn get_valid_neighbors(&self, cell: usize) -> Vec<usize> {
+        self.cell_neighbors(cell)
+            .iter()
+            .filter(|&&n| n != u32::MAX)
+            .map(|&n| n as usize)
+            .collect()
+    }
+
+    /// 获取单元的 n 阶邻居（n 跳可达的所有单元）
+    ///
+    /// # 参数
+    ///
+    /// * `cell` - 起始单元索引
+    /// * `order` - 邻居阶数（1 = 直接邻居，2 = 邻居的邻居，...）
+    ///
+    /// # 返回
+    ///
+    /// 所有 n 阶内可达的单元索引集合
+    pub fn get_n_order_neighbors(&self, cell: usize, order: usize) -> Vec<usize> {
+        use std::collections::HashSet;
+
+        if order == 0 {
+            return vec![cell];
+        }
+
+        let mut visited = HashSet::new();
+        let mut current_layer = vec![cell];
+        visited.insert(cell);
+
+        for _ in 0..order {
+            let mut next_layer = Vec::new();
+
+            for &c in &current_layer {
+                for neighbor in self.get_valid_neighbors(c) {
+                    if !visited.contains(&neighbor) {
+                        visited.insert(neighbor);
+                        next_layer.push(neighbor);
+                    }
+                }
+            }
+
+            current_layer = next_layer;
+        }
+
+        visited.into_iter().filter(|&c| c != cell).collect()
+    }
+
+    // =========================================================================
+    // 几何计算
+    // =========================================================================
+
+    /// 计算两个单元中心之间的距离
+    #[inline]
+    pub fn cell_distance(&self, cell1: usize, cell2: usize) -> f64 {
+        let c1 = self.cell_center(cell1);
+        let c2 = self.cell_center(cell2);
+        let dx = c2.x - c1.x;
+        let dy = c2.y - c1.y;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// 计算网格边界框
+    pub fn bounding_box(&self) -> (Point2D, Point2D) {
+        if self.n_nodes == 0 {
+            return (Point2D::new(0.0, 0.0), Point2D::new(0.0, 0.0));
+        }
+
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
+        for &coord in &self.node_coords {
+            min_x = min_x.min(coord.x);
+            min_y = min_y.min(coord.y);
+            max_x = max_x.max(coord.x);
+            max_y = max_y.max(coord.y);
+        }
+
+        (Point2D::new(min_x, min_y), Point2D::new(max_x, max_y))
+    }
+
+    /// 计算网格中心点
+    pub fn centroid(&self) -> Point2D {
+        if self.n_cells == 0 {
+            return Point2D::new(0.0, 0.0);
+        }
+
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let mut total_area = 0.0;
+
+        for cell in 0..self.n_cells {
+            let center = self.cell_center(cell);
+            let area = self.cell_area(cell);
+            sum_x += center.x * area;
+            sum_y += center.y * area;
+            total_area += area;
+        }
+
+        if total_area > 0.0 {
+            Point2D::new(sum_x / total_area, sum_y / total_area)
+        } else {
+            Point2D::new(0.0, 0.0)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,4 +1004,29 @@ mod tests {
         let mesh = FrozenMesh::empty();
         assert!(mesh.validate().is_ok());
     }
+
+    #[test]
+    fn test_mesh_access_trait() {
+        let mesh = FrozenMesh::empty_with_cells(5);
+        
+        // 通过 trait 访问
+        fn check_mesh<M: MeshAccess>(m: &M) -> usize {
+            m.n_cells()
+        }
+        
+        assert_eq!(check_mesh(&mesh), 5);
+    }
+
+    #[test]
+    fn test_mesh_topology_trait() {
+        let mesh = FrozenMesh::empty_with_cells(5);
+        
+        // 通过 trait 访问
+        fn check_topology<M: MeshTopology>(m: &M) -> f64 {
+            m.min_cell_size()
+        }
+        
+        assert_eq!(check_topology(&mesh), 1.0);
+    }
 }
+

@@ -489,6 +489,286 @@ impl PerformanceStats {
     }
 }
 
+// ============================================================
+// 调度器诊断
+// ============================================================
+
+/// 调度器诊断报告
+///
+/// 提供详细的调度器运行状态和性能信息，用于调试和优化。
+#[derive(Debug, Clone)]
+pub struct SchedulerDiagnostics {
+    /// 配置信息
+    pub config_summary: String,
+    /// GPU 状态
+    pub gpu_status: GpuDiagnostics,
+    /// 性能统计
+    pub performance: PerformanceStats,
+    /// 设备选择历史统计
+    pub selection_stats: SelectionStats,
+    /// 建议
+    pub recommendations: Vec<String>,
+}
+
+/// GPU 诊断信息
+#[derive(Debug, Clone, Default)]
+pub struct GpuDiagnostics {
+    /// 是否可用
+    pub available: bool,
+    /// 设备名称
+    pub device_name: String,
+    /// 设备类型
+    pub device_type: String,
+    /// 可用显存 (MB)
+    pub memory_mb: u64,
+    /// 最大工作组大小
+    pub max_workgroup_size: u32,
+    /// 特性支持情况
+    pub features_summary: String,
+    /// 健康状态
+    pub health_status: GpuHealthStatus,
+}
+
+/// GPU 健康状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuHealthStatus {
+    /// 状态良好
+    Healthy,
+    /// 警告状态
+    Warning,
+    /// 错误状态
+    Error,
+    /// 未知状态
+    #[default]
+    Unknown,
+}
+
+impl std::fmt::Display for GpuHealthStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Healthy => write!(f, "Healthy"),
+            Self::Warning => write!(f, "Warning"),
+            Self::Error => write!(f, "Error"),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+/// 设备选择统计
+#[derive(Debug, Clone, Default)]
+pub struct SelectionStats {
+    /// 总选择次数
+    pub total_selections: u64,
+    /// CPU 选择次数
+    pub cpu_selections: u64,
+    /// GPU 选择次数
+    pub gpu_selections: u64,
+    /// 回退次数
+    pub fallback_count: u64,
+    /// 因内存不足回退次数
+    pub memory_fallbacks: u64,
+    /// 因阈值不满足选择CPU次数
+    pub threshold_cpu_selections: u64,
+}
+
+impl SelectionStats {
+    /// GPU 选择率
+    pub fn gpu_selection_rate(&self) -> f64 {
+        if self.total_selections == 0 {
+            0.0
+        } else {
+            self.gpu_selections as f64 / self.total_selections as f64
+        }
+    }
+
+    /// 回退率
+    pub fn fallback_rate(&self) -> f64 {
+        if self.total_selections == 0 {
+            0.0
+        } else {
+            self.fallback_count as f64 / self.total_selections as f64
+        }
+    }
+}
+
+impl HybridScheduler {
+    /// 生成调度器诊断报告
+    ///
+    /// 返回详细的诊断信息，包括配置、GPU状态、性能统计和建议。
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let diagnostics = scheduler.diagnostics();
+    /// println!("GPU状态: {}", diagnostics.gpu_status.health_status);
+    /// for rec in &diagnostics.recommendations {
+    ///     println!("建议: {}", rec);
+    /// }
+    /// ```
+    pub fn diagnostics(&self) -> SchedulerDiagnostics {
+        let gpu_status = self.build_gpu_diagnostics();
+        let performance = self.performance_stats();
+        let selection_stats = self.build_selection_stats();
+        let recommendations = self.build_recommendations(&gpu_status, &performance, &selection_stats);
+
+        SchedulerDiagnostics {
+            config_summary: self.config_summary(),
+            gpu_status,
+            performance,
+            selection_stats,
+            recommendations,
+        }
+    }
+
+    /// 生成配置摘要
+    fn config_summary(&self) -> String {
+        format!(
+            "策略: {}, GPU阈值: {}-{}, 回退: {}, 线程: {}",
+            self.config.strategy,
+            self.config.gpu_min_cells,
+            self.config.gpu_max_cells,
+            if self.config.allow_fallback { "允许" } else { "禁止" },
+            if self.config.cpu_threads == 0 { "自动".to_string() } else { self.config.cpu_threads.to_string() }
+        )
+    }
+
+    /// 构建 GPU 诊断信息
+    fn build_gpu_diagnostics(&self) -> GpuDiagnostics {
+        match &self.gpu_capabilities {
+            Some(gpu) => {
+                let features = format!(
+                    "float64: {}, atomics: {}, subgroups: {}",
+                    gpu.features.float64,
+                    gpu.features.atomics,
+                    gpu.features.subgroups
+                );
+
+                GpuDiagnostics {
+                    available: true,
+                    device_name: gpu.device_name.clone(),
+                    device_type: format!("{}", gpu.device_type),
+                    memory_mb: gpu.memory_mb,
+                    max_workgroup_size: gpu.max_workgroup_size,
+                    features_summary: features,
+                    health_status: GpuHealthStatus::Healthy,
+                }
+            }
+            None => GpuDiagnostics {
+                available: false,
+                device_name: "无".to_string(),
+                device_type: "N/A".to_string(),
+                health_status: GpuHealthStatus::Unknown,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// 构建设备选择统计
+    fn build_selection_stats(&self) -> SelectionStats {
+        let history = self.performance_history.read();
+
+        let mut stats = SelectionStats::default();
+        stats.total_selections = history.len() as u64;
+
+        for record in history.iter() {
+            match record.device {
+                DeviceType::Cpu => stats.cpu_selections += 1,
+                _ => stats.gpu_selections += 1,
+            }
+        }
+
+        stats
+    }
+
+    /// 生成优化建议
+    fn build_recommendations(
+        &self,
+        gpu_status: &GpuDiagnostics,
+        performance: &PerformanceStats,
+        stats: &SelectionStats,
+    ) -> Vec<String> {
+        let mut recommendations = Vec::new();
+
+        // GPU 相关建议
+        if !gpu_status.available {
+            recommendations.push(
+                "未检测到 GPU，建议安装支持 Vulkan 的显卡驱动以获得更好性能".to_string()
+            );
+        } else if gpu_status.memory_mb < 2048 {
+            recommendations.push(format!(
+                "GPU 显存较小 ({} MB)，大型网格可能需要分批处理",
+                gpu_status.memory_mb
+            ));
+        }
+
+        // 性能相关建议
+        if let Some(speedup) = performance.actual_speedup() {
+            if speedup < 2.0 && performance.gpu_invocations > 10 {
+                recommendations.push(format!(
+                    "实测 GPU 加速比较低 ({:.2}x)，建议检查网格规模是否满足 GPU 阈值",
+                    speedup
+                ));
+            }
+        }
+
+        // 回退相关建议
+        if stats.fallback_rate() > 0.1 {
+            recommendations.push(format!(
+                "回退率较高 ({:.1}%)，建议检查 GPU 内存配置或调整阈值",
+                stats.fallback_rate() * 100.0
+            ));
+        }
+
+        // 阈值相关建议
+        if stats.total_selections > 100 {
+            let cpu_rate = stats.cpu_selections as f64 / stats.total_selections as f64;
+            if cpu_rate > 0.8 && gpu_status.available {
+                recommendations.push(
+                    "CPU 选择率过高，建议降低 gpu_min_cells 阈值以更多使用 GPU".to_string()
+                );
+            }
+        }
+
+        if recommendations.is_empty() {
+            recommendations.push("调度器运行正常，暂无优化建议".to_string());
+        }
+
+        recommendations
+    }
+
+    /// 打印诊断报告到日志
+    pub fn log_diagnostics(&self) {
+        let diag = self.diagnostics();
+
+        println!("========== 调度器诊断报告 ==========");
+        println!("配置: {}", diag.config_summary);
+        println!("");
+        println!("GPU 状态:");
+        println!("  可用: {}", diag.gpu_status.available);
+        println!("  设备: {} ({})", diag.gpu_status.device_name, diag.gpu_status.device_type);
+        println!("  显存: {} MB", diag.gpu_status.memory_mb);
+        println!("  健康: {}", diag.gpu_status.health_status);
+        println!("");
+        println!("性能统计:");
+        println!("  CPU 调用: {}, GPU 调用: {}", diag.performance.cpu_invocations, diag.performance.gpu_invocations);
+        println!("  CPU 吞吐: {:.0} cells/s", diag.performance.avg_cpu_cells_per_sec);
+        println!("  GPU 吞吐: {:.0} cells/s", diag.performance.avg_gpu_cells_per_sec);
+        if let Some(speedup) = diag.performance.actual_speedup() {
+            println!("  实测加速比: {:.2}x", speedup);
+        }
+        println!("");
+        println!("选择统计:");
+        println!("  GPU 选择率: {:.1}%", diag.selection_stats.gpu_selection_rate() * 100.0);
+        println!("  回退率: {:.1}%", diag.selection_stats.fallback_rate() * 100.0);
+        println!("");
+        println!("建议:");
+        for (i, rec) in diag.recommendations.iter().enumerate() {
+            println!("  {}. {}", i + 1, rec);
+        }
+        println!("=====================================");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
