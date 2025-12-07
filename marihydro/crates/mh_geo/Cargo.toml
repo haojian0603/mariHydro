@@ -1,11 +1,20 @@
-# marihydro\crates\mh_geo\Cargo.toml
-
 [package]
 name = "mh_geo"
 version = "0.1.0"
 edition = "2021"
+authors = ["MariHydro Team"]
+description = "Geographic and projection utilities for MariHydro"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 mh_foundation = { path = "../mh_foundation" }
-rstar = "0.12"
 serde = { version = "1.0", features = ["derive"] }
+rstar = "0.12"
+num-complex = "0.4"
+
+[dev-dependencies]
+approx = "0.5"
+
+[features]
+default = ["order-8"]
+order-8 = []  # 启用8阶级数展开

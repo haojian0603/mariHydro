@@ -1,4 +1,3 @@
-// marihydro\crates\mh_geo\src/projection/mod.rs
 //! 纯 Rust 实现的坐标投影转换
 //!
 //! 支持的投影类型：
@@ -6,6 +5,12 @@
 //! - UTM 投影 (EPSG:326xx/327xx)
 //! - Web Mercator (EPSG:3857)
 //! - 高斯-克吕格投影 (中国常用)
+//!
+//! # 算法特点
+//!
+//! - UTM/高斯-克吕格使用 Karney (2011) 算法，精度达亚毫米级
+//! - 支持多种椭球体（WGS84、CGCS2000、GRS80 等）
+//! - 零外部依赖，纯 Rust 实现
 //!
 //! # 示例
 //!
@@ -23,33 +28,19 @@
 //! ```
 
 mod gauss_kruger;
+mod traits;
+mod math_utils;
+pub mod transverse_mercator;
 mod utm;
 mod web_mercator;
 
 pub use gauss_kruger::*;
+pub use traits::{FastProjection, MapProjection, TransverseMercatorParams};
 pub use utm::*;
 pub use web_mercator::*;
 
+use crate::ellipsoid::Ellipsoid;
 use mh_foundation::error::{MhError, MhResult};
-
-// ============================================================================
-// WGS84 椭球参数
-// ============================================================================
-
-/// WGS84 长半轴 (m)
-pub const WGS84_A: f64 = 6_378_137.0;
-
-/// WGS84 扁率
-pub const WGS84_F: f64 = 1.0 / 298.257_223_563;
-
-/// WGS84 短半轴 (m)
-pub const WGS84_B: f64 = WGS84_A * (1.0 - WGS84_F);
-
-/// 第一偏心率的平方
-pub const WGS84_E2: f64 = 2.0 * WGS84_F - WGS84_F * WGS84_F;
-
-/// 第二偏心率的平方
-pub const WGS84_EP2: f64 = WGS84_E2 / (1.0 - WGS84_E2);
 
 // ============================================================================
 // 投影类型定义
@@ -100,13 +91,17 @@ impl ProjectionType {
                 zone: (code - 32700) as u8,
                 north: false,
             }),
-            // CGCS2000 高斯-克吕格 3度带
+            // CGCS2000 高斯-克吕格 3度带 (EPSG:4534-4554)
             4534..=4554 => Ok(Self::GaussKruger3 {
                 zone: (code - 4534 + 25) as u8,
             }),
+            // CGCS2000 高斯-克吕格 6度带 (EPSG:4502-4512)
+            4502..=4512 => Ok(Self::GaussKruger6 {
+                zone: (code - 4502 + 13) as u8,
+            }),
             _ => Err(MhError::Config {
                 message: format!(
-                    "Unsupported EPSG code: {code}. Supported: 4326, 3857, 32601-32660, 32701-32760"
+                    "Unsupported EPSG code: {code}. Supported: 4326, 3857, 32601-32660, 32701-32760, 4502-4554"
                 ),
             }),
         }
@@ -132,7 +127,13 @@ impl ProjectionType {
                     None
                 }
             }
-            Self::GaussKruger6 { .. } => None, // 无标准 EPSG
+            Self::GaussKruger6 { zone } => {
+                if *zone >= 13 && *zone <= 23 {
+                    Some(4502 + u32::from(*zone - 13))
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -163,6 +164,40 @@ impl ProjectionType {
             north: lat >= 0.0,
         }
     }
+
+    /// 自动从经度确定高斯-克吕格 3度带
+    #[must_use]
+    pub fn auto_gk3(lon: f64) -> Self {
+        let zone = (lon / 3.0).round() as u8;
+        let zone = zone.clamp(25, 45);
+        Self::GaussKruger3 { zone }
+    }
+
+    /// 自动从经度确定高斯-克吕格 6度带
+    #[must_use]
+    pub fn auto_gk6(lon: f64) -> Self {
+        let zone = ((lon + 3.0) / 6.0).floor() as u8 + 1;
+        let zone = zone.clamp(13, 23);
+        Self::GaussKruger6 { zone }
+    }
+
+    /// 转换为快速投影枚举（用于性能关键路径）
+    #[must_use]
+    pub fn to_fast_projection(&self) -> FastProjection {
+        match self {
+            Self::Geographic => FastProjection::Geographic(Ellipsoid::WGS84),
+            Self::Utm { zone, north } => {
+                FastProjection::TransverseMercator(TransverseMercatorParams::utm(*zone, *north))
+            }
+            Self::WebMercator => FastProjection::WebMercator,
+            Self::GaussKruger3 { zone } => {
+                FastProjection::TransverseMercator(TransverseMercatorParams::gauss_kruger_3(*zone))
+            }
+            Self::GaussKruger6 { zone } => {
+                FastProjection::TransverseMercator(TransverseMercatorParams::gauss_kruger_6(*zone))
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -174,13 +209,22 @@ impl ProjectionType {
 pub struct Projection {
     source: ProjectionType,
     target: ProjectionType,
+    source_fast: FastProjection,
+    target_fast: FastProjection,
 }
 
 impl Projection {
     /// 创建新的投影转换器
     #[must_use]
     pub fn new(source: ProjectionType, target: ProjectionType) -> Self {
-        Self { source, target }
+        let source_fast = source.to_fast_projection();
+        let target_fast = target.to_fast_projection();
+        Self {
+            source,
+            target,
+            source_fast,
+            target_fast,
+        }
     }
 
     /// 从 EPSG 代码创建
@@ -188,30 +232,32 @@ impl Projection {
     /// # Errors
     /// 如果 EPSG 代码无效则返回错误
     pub fn from_epsg(source_epsg: u32, target_epsg: u32) -> MhResult<Self> {
-        Ok(Self {
-            source: ProjectionType::from_epsg(source_epsg)?,
-            target: ProjectionType::from_epsg(target_epsg)?,
-        })
+        Ok(Self::new(
+            ProjectionType::from_epsg(source_epsg)?,
+            ProjectionType::from_epsg(target_epsg)?,
+        ))
     }
 
     /// 正向投影：将源坐标转换为目标坐标
     ///
     /// # Errors
     /// 如果坐标超出有效范围则返回错误
+    #[inline]
     pub fn forward(&self, x: f64, y: f64) -> MhResult<(f64, f64)> {
         // 先转为地理坐标
-        let (lon, lat) = self.to_geographic(x, y, &self.source)?;
+        let (lon, lat) = self.source_fast.inverse(x, y)?;
         // 再投影到目标
-        self.from_geographic(lon, lat, &self.target)
+        self.target_fast.forward(lon, lat)
     }
 
     /// 逆向投影：将目标坐标转换回源坐标
     ///
     /// # Errors
     /// 如果坐标超出有效范围则返回错误
+    #[inline]
     pub fn inverse(&self, x: f64, y: f64) -> MhResult<(f64, f64)> {
-        let (lon, lat) = self.to_geographic(x, y, &self.target)?;
-        self.from_geographic(lon, lat, &self.source)
+        let (lon, lat) = self.target_fast.inverse(x, y)?;
+        self.source_fast.forward(lon, lat)
     }
 
     /// 批量正向转换
@@ -247,75 +293,6 @@ impl Projection {
     pub fn target(&self) -> &ProjectionType {
         &self.target
     }
-
-    // ========================================================================
-    // 私有方法：投影 -> 地理坐标
-    // ========================================================================
-
-    fn to_geographic(&self, x: f64, y: f64, proj: &ProjectionType) -> MhResult<(f64, f64)> {
-        match proj {
-            ProjectionType::Geographic => Ok((x, y)),
-            ProjectionType::Utm { zone, north } => utm_to_geographic(x, y, *zone, *north),
-            ProjectionType::WebMercator => web_mercator_to_geographic(x, y),
-            ProjectionType::GaussKruger3 { zone } => {
-                gauss_kruger_to_geographic(x, y, f64::from(*zone) * 3.0)
-            }
-            ProjectionType::GaussKruger6 { zone } => {
-                gauss_kruger_to_geographic(x, y, f64::from(*zone) * 6.0 - 3.0)
-            }
-        }
-    }
-
-    fn from_geographic(&self, lon: f64, lat: f64, proj: &ProjectionType) -> MhResult<(f64, f64)> {
-        match proj {
-            ProjectionType::Geographic => Ok((lon, lat)),
-            ProjectionType::Utm { zone, north } => geographic_to_utm(lon, lat, *zone, *north),
-            ProjectionType::WebMercator => geographic_to_web_mercator(lon, lat),
-            ProjectionType::GaussKruger3 { zone } => {
-                geographic_to_gauss_kruger(lon, lat, f64::from(*zone) * 3.0)
-            }
-            ProjectionType::GaussKruger6 { zone } => {
-                geographic_to_gauss_kruger(lon, lat, f64::from(*zone) * 6.0 - 3.0)
-            }
-        }
-    }
-}
-
-// ============================================================================
-// 辅助函数
-// ============================================================================
-
-/// 计算子午线弧长
-#[must_use]
-pub fn meridian_arc(lat: f64) -> f64 {
-    let n = (WGS84_A - WGS84_B) / (WGS84_A + WGS84_B);
-
-    let a0 = WGS84_A
-        * (1.0 - n + (5.0 / 4.0) * (n.powi(2) - n.powi(3))
-            + (81.0 / 64.0) * (n.powi(4) - n.powi(5)));
-
-    let a2 = (3.0 / 2.0) * WGS84_A
-        * (n - n.powi(2) + (7.0 / 8.0) * (n.powi(3) - n.powi(4)) + (55.0 / 64.0) * n.powi(5));
-
-    let a4 = (15.0 / 16.0) * WGS84_A
-        * (n.powi(2) - n.powi(3) + (3.0 / 4.0) * (n.powi(4) - n.powi(5)));
-
-    let a6 = (35.0 / 48.0) * WGS84_A * (n.powi(3) - n.powi(4) + (11.0 / 16.0) * n.powi(5));
-
-    let a8 = (315.0 / 512.0) * WGS84_A * (n.powi(4) - n.powi(5));
-
-    a0 * lat - a2 * (2.0 * lat).sin() + a4 * (4.0 * lat).sin() - a6 * (6.0 * lat).sin()
-        + a8 * (8.0 * lat).sin()
-}
-
-/// 子午线弧长系数
-#[must_use]
-pub fn meridian_arc_factor() -> f64 {
-    let n = (WGS84_A - WGS84_B) / (WGS84_A + WGS84_B);
-
-    WGS84_A
-        * (1.0 - n + (5.0 / 4.0) * (n.powi(2) - n.powi(3))
-            + (81.0 / 64.0) * (n.powi(4) - n.powi(5)))
 }
 
 // ============================================================================
@@ -350,7 +327,6 @@ pub fn wgs84_to_web_mercator(lon: f64, lat: f64) -> MhResult<(f64, f64)> {
 ///
 /// # Errors
 /// 返回可能的错误
-#[allow(clippy::unnecessary_wraps)]
 pub fn web_mercator_to_wgs84(x: f64, y: f64) -> MhResult<(f64, f64)> {
     web_mercator_to_geographic(x, y)
 }
@@ -365,6 +341,22 @@ pub fn wgs84_to_auto_utm(lon: f64, lat: f64) -> MhResult<(f64, f64, u8, bool)> {
     let north = lat >= 0.0;
     let (x, y) = geographic_to_utm(lon, lat, zone, north)?;
     Ok((x, y, zone, north))
+}
+
+/// WGS84 -> 高斯-克吕格 3度带快捷转换
+///
+/// # Errors
+/// 如果坐标超出有效范围则返回错误
+pub fn wgs84_to_gk3(lon: f64, lat: f64, zone: u8) -> MhResult<(f64, f64)> {
+    geographic_to_gauss_kruger(lon, lat, f64::from(zone) * 3.0)
+}
+
+/// 高斯-克吕格 3度带 -> WGS84 快捷转换
+///
+/// # Errors
+/// 如果坐标超出有效范围则返回错误
+pub fn gk3_to_wgs84(x: f64, y: f64, zone: u8) -> MhResult<(f64, f64)> {
+    gauss_kruger_to_geographic(x, y, f64::from(zone) * 3.0)
 }
 
 // ============================================================================
@@ -402,6 +394,20 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_type_to_epsg() {
+        assert_eq!(ProjectionType::Geographic.to_epsg(), Some(4326));
+        assert_eq!(ProjectionType::WebMercator.to_epsg(), Some(3857));
+        assert_eq!(
+            ProjectionType::Utm {
+                zone: 50,
+                north: true
+            }
+            .to_epsg(),
+            Some(32650)
+        );
+    }
+
+    #[test]
     fn test_projection_transform() {
         let proj = Projection::from_epsg(4326, 32650).expect("create projection");
 
@@ -410,8 +416,8 @@ mod tests {
         assert!(y > 4_000_000.0 && y < 5_000_000.0);
 
         let (lon, lat) = proj.inverse(x, y).expect("inverse");
-        assert!((lon - 116.0).abs() < 1e-6);
-        assert!((lat - 40.0).abs() < 1e-6);
+        assert!((lon - 116.0).abs() < 1e-9);
+        assert!((lat - 40.0).abs() < 1e-9);
     }
 
     #[test]
@@ -425,7 +431,7 @@ mod tests {
             }
         );
 
-        let proj_type = ProjectionType::auto_utm(-122.0, 37.0); // 旧金山
+        let proj_type = ProjectionType::auto_utm(-122.0, 37.0);
         assert_eq!(
             proj_type,
             ProjectionType::Utm {
@@ -436,6 +442,12 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_gk3() {
+        let proj_type = ProjectionType::auto_gk3(117.0);
+        assert_eq!(proj_type, ProjectionType::GaussKruger3 { zone: 39 });
+    }
+
+    #[test]
     fn test_identity_projection() {
         let proj = Projection::new(ProjectionType::Geographic, ProjectionType::Geographic);
         assert!(proj.is_identity());
@@ -443,5 +455,20 @@ mod tests {
         let (x, y) = proj.forward(116.0, 40.0).expect("forward");
         assert!((x - 116.0).abs() < 1e-10);
         assert!((y - 40.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fast_projection() {
+        let fast = ProjectionType::Utm {
+            zone: 50,
+            north: true,
+        }
+        .to_fast_projection();
+
+        let (x, y) = fast.forward(116.0, 40.0).expect("forward");
+        let (lon, lat) = fast.inverse(x, y).expect("inverse");
+
+        assert!((lon - 116.0).abs() < 1e-9);
+        assert!((lat - 40.0).abs() < 1e-9);
     }
 }

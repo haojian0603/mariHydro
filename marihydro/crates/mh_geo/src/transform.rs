@@ -1,4 +1,3 @@
-// marihydro\crates\mh_geo\src/transform.rs
 //! 坐标转换器
 //!
 //! 基于纯 Rust 实现的投影转换，不依赖外部 C 库
@@ -18,7 +17,7 @@
 //! ```
 
 use crate::crs::Crs;
-use crate::projection::{Projection, ProjectionType};
+use crate::projection::FastProjection;
 use mh_foundation::error::MhResult;
 
 // ============================================================================
@@ -64,6 +63,47 @@ impl AffineTransform {
             c: 0.0,
             d: 0.0,
             e: 1.0,
+            f: 0.0,
+        }
+    }
+
+    /// 创建平移变换
+    #[must_use]
+    pub fn translation(tx: f64, ty: f64) -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: tx,
+            d: 0.0,
+            e: 1.0,
+            f: ty,
+        }
+    }
+
+    /// 创建缩放变换
+    #[must_use]
+    pub fn scale(sx: f64, sy: f64) -> Self {
+        Self {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: 0.0,
+            e: sy,
+            f: 0.0,
+        }
+    }
+
+    /// 创建旋转变换（弧度，逆时针）
+    #[must_use]
+    pub fn rotation(angle: f64) -> Self {
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        Self {
+            a: cos_a,
+            b: -sin_a,
+            c: 0.0,
+            d: sin_a,
+            e: cos_a,
             f: 0.0,
         }
     }
@@ -128,6 +168,38 @@ impl AffineTransform {
     pub fn apply_batch(&self, points: &[(f64, f64)]) -> Vec<(f64, f64)> {
         points.iter().map(|&(x, y)| self.apply(x, y)).collect()
     }
+
+    /// 组合两个变换：self * other
+    ///
+    /// 结果变换先应用 other，再应用 self
+    #[must_use]
+    pub fn compose(&self, other: &Self) -> Self {
+        Self {
+            a: self.a * other.a + self.b * other.d,
+            b: self.a * other.b + self.b * other.e,
+            c: self.a * other.c + self.b * other.f + self.c,
+            d: self.d * other.a + self.e * other.d,
+            e: self.d * other.b + self.e * other.e,
+            f: self.d * other.c + self.e * other.f + self.f,
+        }
+    }
+
+    /// 获取变换的行列式
+    #[must_use]
+    pub fn determinant(&self) -> f64 {
+        self.a * self.e - self.b * self.d
+    }
+
+    /// 是否为恒等变换
+    #[must_use]
+    pub fn is_identity(&self) -> bool {
+        (self.a - 1.0).abs() < 1e-10
+            && self.b.abs() < 1e-10
+            && self.c.abs() < 1e-10
+            && self.d.abs() < 1e-10
+            && (self.e - 1.0).abs() < 1e-10
+            && self.f.abs() < 1e-10
+    }
 }
 
 // ============================================================================
@@ -140,10 +212,10 @@ pub struct GeoTransformer {
     source_crs: Crs,
     /// 目标 CRS
     target_crs: Crs,
-    /// 源投影类型
-    source_proj: ProjectionType,
-    /// 目标投影类型
-    target_proj: ProjectionType,
+    /// 快速投影（源）
+    source_proj: FastProjection,
+    /// 快速投影（目标）
+    target_proj: FastProjection,
     /// 是否为恒等变换
     is_identity: bool,
 }
@@ -155,12 +227,8 @@ impl GeoTransformer {
     /// 如果 CRS 不支持则返回错误
     pub fn new(source: &Crs, target: &Crs) -> MhResult<Self> {
         let is_identity = source.definition == target.definition;
-
-        let source_epsg = source.epsg().unwrap_or(4326);
-        let target_epsg = target.epsg().unwrap_or(4326);
-
-        let source_proj = ProjectionType::from_epsg(source_epsg)?;
-        let target_proj = ProjectionType::from_epsg(target_epsg)?;
+        let source_proj = source.to_fast_projection();
+        let target_proj = target.to_fast_projection();
 
         Ok(Self {
             source_crs: source.clone(),
@@ -188,8 +256,8 @@ impl GeoTransformer {
         Self {
             source_crs: crs.clone(),
             target_crs: crs,
-            source_proj: ProjectionType::Geographic,
-            target_proj: ProjectionType::Geographic,
+            source_proj: FastProjection::Geographic(crate::ellipsoid::Ellipsoid::WGS84),
+            target_proj: FastProjection::Geographic(crate::ellipsoid::Ellipsoid::WGS84),
             is_identity: true,
         }
     }
@@ -204,8 +272,10 @@ impl GeoTransformer {
             return Ok((x, y));
         }
 
-        let projection = Projection::new(self.source_proj.clone(), self.target_proj.clone());
-        projection.forward(x, y)
+        // 源坐标 -> 地理坐标
+        let (lon, lat) = self.source_proj.inverse(x, y)?;
+        // 地理坐标 -> 目标坐标
+        self.target_proj.forward(lon, lat)
     }
 
     /// 逆向变换单点
@@ -218,8 +288,8 @@ impl GeoTransformer {
             return Ok((x, y));
         }
 
-        let projection = Projection::new(self.source_proj.clone(), self.target_proj.clone());
-        projection.inverse(x, y)
+        let (lon, lat) = self.target_proj.inverse(x, y)?;
+        self.source_proj.forward(lon, lat)
     }
 
     /// 批量正向变换
@@ -275,7 +345,7 @@ impl GeoTransformer {
     /// 返回从真北到网格北的顺时针角度（弧度）
     #[must_use]
     pub fn compute_convergence_angle(&self, x: f64, y: f64) -> f64 {
-        if self.is_identity || !self.target_crs.is_projected() {
+        if self.is_identity || self.target_crs.is_geographic() {
             return 0.0;
         }
 
@@ -435,12 +505,31 @@ mod tests {
     }
 
     #[test]
+    fn test_affine_compose() {
+        let scale = AffineTransform::scale(2.0, 2.0);
+        let translate = AffineTransform::translation(10.0, 20.0);
+
+        // 先缩放再平移
+        let combined = translate.compose(&scale);
+        let (x, y) = combined.apply(5.0, 5.0);
+        assert!((x - 20.0).abs() < 1e-10); // 2*5 + 10
+        assert!((y - 30.0).abs() < 1e-10); // 2*5 + 20
+    }
+
+    #[test]
+    fn test_affine_rotation() {
+        let rot90 = AffineTransform::rotation(std::f64::consts::FRAC_PI_2);
+        let (x, y) = rot90.apply(1.0, 0.0);
+        assert!(x.abs() < 1e-10);
+        assert!((y - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
     fn test_wgs84_to_utm() {
         // 北京 116°E, 40°N -> UTM 50N
         let result = conversions::wgs84_to_utm(116.0, 40.0, 50, true);
         assert!(result.is_ok());
         let (x, y) = result.expect("utm conversion failed");
-        // UTM 坐标应该在合理范围内
         assert!(x > 400_000.0 && x < 600_000.0, "x out of range: {x}");
         assert!(y > 4_000_000.0 && y < 5_000_000.0, "y out of range: {y}");
     }
@@ -460,8 +549,8 @@ mod tests {
         let (lon, lat) = transformer
             .inverse_transform_point(x, y)
             .expect("inverse failed");
-        assert!((lon - 116.0).abs() < 1e-5, "lon mismatch: {lon}");
-        assert!((lat - 40.0).abs() < 1e-5, "lat mismatch: {lat}");
+        assert!((lon - 116.0).abs() < 1e-9, "lon mismatch: {lon}");
+        assert!((lat - 40.0).abs() < 1e-9, "lat mismatch: {lat}");
     }
 
     #[test]
@@ -469,14 +558,12 @@ mod tests {
         let (x, y) =
             conversions::wgs84_to_web_mercator(116.0, 40.0).expect("web mercator failed");
 
-        // Web Mercator 坐标应该在合理范围
         assert!(x > 12_900_000.0 && x < 12_950_000.0, "x out of range: {x}");
         assert!(y > 4_800_000.0 && y < 4_900_000.0, "y out of range: {y}");
 
-        // 逆变换
         let (lon, lat) = conversions::web_mercator_to_wgs84(x, y).expect("inverse failed");
-        assert!((lon - 116.0).abs() < 1e-5);
-        assert!((lat - 40.0).abs() < 1e-5);
+        assert!((lon - 116.0).abs() < 1e-9);
+        assert!((lat - 40.0).abs() < 1e-9);
     }
 
     #[test]
@@ -485,8 +572,8 @@ mod tests {
         let affine = AffineTransform::from_gdal_geotransform(gt);
 
         let (x, y) = affine.apply(10.0, 20.0);
-        assert!((x - 110.0).abs() < 1e-10); // 1*10 + 100
-        assert!((y - 180.0).abs() < 1e-10); // -1*20 + 200
+        assert!((x - 110.0).abs() < 1e-10);
+        assert!((y - 180.0).abs() < 1e-10);
 
         let gt2 = affine.to_gdal_geotransform();
         assert_eq!(gt, gt2);
@@ -502,10 +589,15 @@ mod tests {
         let transformed = transformer.transform_points(&points).expect("batch failed");
         assert_eq!(transformed.len(), 3);
 
-        // 验证每个点都在合理范围
         for (x, y) in &transformed {
             assert!(*x > 100_000.0 && *x < 900_000.0);
             assert!(*y > 4_000_000.0 && *y < 5_000_000.0);
         }
+    }
+
+    #[test]
+    fn test_affine_is_identity() {
+        assert!(AffineTransform::identity().is_identity());
+        assert!(!AffineTransform::translation(1.0, 0.0).is_identity());
     }
 }
