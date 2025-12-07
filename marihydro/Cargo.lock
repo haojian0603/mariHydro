@@ -1912,7 +1912,9 @@ dependencies = [
 name = "mh_geo"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "mh_foundation",
+ "num-complex",
  "rstar",
  "serde",
 ]

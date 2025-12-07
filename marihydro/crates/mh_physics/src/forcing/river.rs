@@ -385,7 +385,11 @@ impl RiverSystem {
         total
     }
 
-    /// 应用入流到状态（需要单元面积）
+    /// 应用入流到状态（仅质量，不含动量）
+    /// 
+    /// **注意**：此函数已弃用，请使用 `apply_inflow_with_momentum` 替代
+    /// 仅更新水深会导致入流水体携带零动量，不符合物理规律
+    #[deprecated(since = "0.2.0", note = "请使用 apply_inflow_with_momentum 替代")]
     pub fn apply_inflow(&self, time: f64, dt: f64, h: &mut [f64], cell_areas: &[f64]) {
         for river in &self.rivers {
             let q = river.provider.get_discharge_at(time);
@@ -398,6 +402,104 @@ impl RiverSystem {
                 }
             }
         }
+    }
+
+    /// 应用入流到状态（质量和动量同时更新）
+    /// 
+    /// 根据质量守恒和动量守恒方程，河流入流应同时贡献：
+    /// - 质量源项：dh/dt = Q / A
+    /// - 动量源项：d(hu)/dt = Q·u_in / A, d(hv)/dt = Q·v_in / A
+    /// 
+    /// 其中 (u_in, v_in) 是入流速度，由流量、过水断面和入流方向计算
+    /// 
+    /// # 参数
+    /// - `time`: 当前时间 [s]
+    /// - `dt`: 时间步长 [s]
+    /// - `h`: 水深数组 [m]（就地更新）
+    /// - `hu`: x方向动量 h·u [m²/s]（就地更新）
+    /// - `hv`: y方向动量 h·v [m²/s]（就地更新）
+    /// - `cell_areas`: 单元面积 [m²]
+    /// - `cross_section_areas`: 各入流点的过水断面积 [m²]（用于计算入流速度）
+    ///   若为 None，则使用单元面积的平方根乘以水深估算
+    pub fn apply_inflow_with_momentum(
+        &self,
+        time: f64,
+        dt: f64,
+        h: &mut [f64],
+        hu: &mut [f64],
+        hv: &mut [f64],
+        cell_areas: &[f64],
+        cross_section_areas: Option<&[f64]>,
+    ) {
+        for river in &self.rivers {
+            let q = river.provider.get_discharge_at(time);
+            let direction = river.provider.get_direction();
+
+            for (i, &cell) in river.cells.iter().enumerate() {
+                if cell >= h.len() || cell >= cell_areas.len() {
+                    continue;
+                }
+
+                let w = river.weights.get(i).copied().unwrap_or(0.0);
+                let area = cell_areas[cell].max(1e-6);
+                
+                // 计算单元的入流量
+                let q_cell = q * w;
+                
+                // 计算水深变化
+                let delta_h = q_cell * dt / area;
+                
+                // 计算入流速度
+                // 过水断面面积：优先使用指定值，否则用 sqrt(A) * h_new 估算
+                let cross_area = if let Some(cs) = cross_section_areas {
+                    cs.get(cell).copied().unwrap_or_else(|| {
+                        let h_new = (h[cell] + delta_h).max(1e-3);
+                        cell_areas[cell].sqrt() * h_new
+                    })
+                } else {
+                    // 假设过水断面宽度约为 sqrt(A)，深度约为 h
+                    let h_new = (h[cell] + delta_h).max(1e-3);
+                    cell_areas[cell].sqrt() * h_new
+                };
+                
+                // 入流速度 = Q / A_cross
+                let u_inflow = if cross_area > 1e-6 {
+                    q_cell / cross_area
+                } else {
+                    0.0
+                };
+                
+                // 速度分量
+                let u_in = u_inflow * direction.cos();
+                let v_in = u_inflow * direction.sin();
+                
+                // 更新质量（水深）
+                h[cell] += delta_h;
+                
+                // 更新动量
+                // 动量源项 = Q * u_in / A * dt = q_cell * u_in * dt / area
+                // 注意：这里用的是动量通量，不是速度
+                hu[cell] += q_cell * u_in * dt / area;
+                hv[cell] += q_cell * v_in * dt / area;
+            }
+        }
+    }
+
+    /// 快速版本：使用单元自身水深估算入流速度
+    /// 
+    /// 这是 apply_inflow_with_momentum 的简化版本：
+    /// - 过水断面假设为 sqrt(cell_area) * h
+    /// - 入流速度按此断面计算
+    pub fn apply_inflow_fast(
+        &self,
+        time: f64,
+        dt: f64,
+        h: &mut [f64],
+        hu: &mut [f64],
+        hv: &mut [f64],
+        cell_areas: &[f64],
+    ) {
+        self.apply_inflow_with_momentum(time, dt, h, hu, hv, cell_areas, None);
     }
 }
 
@@ -519,8 +621,79 @@ mod tests {
 
         // dt = 1s, Q = 100 m³/s, A = 100 m²
         // Δh = Q * dt / A = 100 * 1 / 100 = 1.0 m
+        #[allow(deprecated)]
         system.apply_inflow(0.0, 1.0, &mut h, &areas);
 
         assert!((h[0] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_river_system_apply_with_momentum() {
+        let mut system = RiverSystem::new();
+        // 创建向东(0度)流动的河流
+        system.add_river("River1", vec![0], RiverProvider::constant(100.0).with_direction(0.0));
+
+        let mut h = vec![1.0; 10];
+        let mut hu = vec![0.0; 10];
+        let mut hv = vec![0.0; 10];
+        let areas = vec![100.0; 10]; // 100 m² 单元
+
+        // 提供过水断面积 = 10 m²
+        let cross_areas = vec![10.0; 10];
+
+        // dt = 1s, Q = 100 m³/s
+        // 入流速度 u_in = Q / A_cross = 100 / 10 = 10 m/s（向东）
+        // Δh = Q * dt / A = 100 * 1 / 100 = 1.0 m
+        // Δ(hu) = Q * u_in * dt / A = 100 * 10 * 1 / 100 = 10.0 m²/s
+        system.apply_inflow_with_momentum(
+            0.0, 1.0, &mut h, &mut hu, &mut hv, &areas, Some(&cross_areas)
+        );
+
+        assert!((h[0] - 2.0).abs() < 1e-10, "h = {}", h[0]);
+        assert!((hu[0] - 10.0).abs() < 1e-10, "hu = {}", hu[0]);
+        assert!(hv[0].abs() < 1e-10, "hv = {}", hv[0]);
+    }
+
+    #[test]
+    fn test_river_system_apply_momentum_angled() {
+        let mut system = RiverSystem::new();
+        // 创建45度角流动的河流
+        system.add_river("River1", vec![0], RiverProvider::constant(100.0).with_direction(45.0));
+
+        let mut h = vec![1.0; 10];
+        let mut hu = vec![0.0; 10];
+        let mut hv = vec![0.0; 10];
+        let areas = vec![100.0; 10];
+        let cross_areas = vec![10.0; 10];
+
+        system.apply_inflow_with_momentum(
+            0.0, 1.0, &mut h, &mut hu, &mut hv, &areas, Some(&cross_areas)
+        );
+
+        // u_in = 10 m/s, 方向45度
+        // hu 增量 = Q * u_in * cos(45°) * dt / A = 100 * 10 * 0.7071 * 1 / 100 ≈ 7.07
+        let sqrt2_2 = std::f64::consts::FRAC_1_SQRT_2;
+        assert!((hu[0] - 10.0 * sqrt2_2).abs() < 1e-6, "hu = {}", hu[0]);
+        assert!((hv[0] - 10.0 * sqrt2_2).abs() < 1e-6, "hv = {}", hv[0]);
+    }
+
+    #[test]
+    fn test_river_fast_inflow() {
+        let mut system = RiverSystem::new();
+        system.add_river("River1", vec![0], RiverProvider::constant(10.0).with_direction(0.0));
+
+        let mut h = vec![1.0; 10];
+        let mut hu = vec![0.0; 10];
+        let mut hv = vec![0.0; 10];
+        let areas = vec![100.0; 10];
+
+        // 使用快速版本（自动估算过水断面）
+        system.apply_inflow_fast(0.0, 1.0, &mut h, &mut hu, &mut hv, &areas);
+
+        // 水深应该增加
+        assert!(h[0] > 1.0);
+        // 动量应该增加（向东）
+        assert!(hu[0] > 0.0);
+        assert!(hv[0].abs() < 1e-10);
     }
 }

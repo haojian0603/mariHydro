@@ -210,12 +210,12 @@ class CodeCollector:
         with open(output_path, "w", encoding="utf-8") as f:
             # 写入头部信息
             f.write(f"""代码收集日志
-            生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            项目路径: {self.root_path}
-            扫描模式: 收集所有文件（应用排除规则）
-            排除的文件类型: {', '.join(sorted(self.excluded_extensions))}
-            排除的目录: {', '.join(sorted(self.excluded_dirs))}
-            {"=" * 80}
+生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+项目路径: {self.root_path}
+扫描模式: 收集所有文件（应用排除规则）
+排除的文件类型: {', '.join(sorted(self.excluded_extensions))}
+排除的目录: {', '.join(sorted(self.excluded_dirs))}
+{"=" * 80}
             """)
 
             # 写入文件树

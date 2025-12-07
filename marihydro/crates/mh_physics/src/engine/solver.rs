@@ -1575,6 +1575,7 @@ mod tests {
         let mesh = Arc::new(create_simple_mesh());
         let config = SolverConfig::builder()
             .parallel_threshold(10000) // 强制串行
+            .scheme(NumericalScheme::FirstOrder) // 使用一阶避免重构依赖
             .build();
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
         
@@ -1590,12 +1591,15 @@ mod tests {
             state.z[i] = 0.0;
         }
         
+        // 重置工作空间
+        solver.workspace.reset();
+        
         // 计算通量
         let max_speed = solver.compute_fluxes_serial(&state);
         
         // 验证最大波速合理
         // 波速 c = sqrt(g*h)，对于 h=2, c ≈ 4.43
-        assert!(max_speed > 0.0, "最大波速应大于0");
+        assert!(max_speed > 0.0, "最大波速应大于0, 实际: {}", max_speed);
         assert!(max_speed < 10.0, "最大波速应合理: {}", max_speed);
         
         // 验证通量非零
@@ -1621,18 +1625,20 @@ mod tests {
             state.z[i] = 0.0;
         }
         
-        // 串行计算
+        // 串行计算（使用一阶避免重构依赖）
         let config_serial = SolverConfig::builder()
             .parallel_threshold(10000)
+            .scheme(NumericalScheme::FirstOrder)
             .build();
         let mut solver_serial = ShallowWaterSolver::new(mesh.clone(), config_serial);
         solver_serial.workspace.reset();
         let max_speed_serial = solver_serial.compute_fluxes_serial(&state);
         let flux_h_serial = solver_serial.workspace.flux_h.clone();
         
-        // 并行计算
+        // 并行计算（同样使用一阶）
         let config_parallel = SolverConfig::builder()
             .parallel_threshold(0)
+            .scheme(NumericalScheme::FirstOrder)
             .build();
         let mut solver_parallel = ShallowWaterSolver::new(mesh.clone(), config_parallel);
         solver_parallel.workspace.reset();

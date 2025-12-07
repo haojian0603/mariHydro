@@ -40,13 +40,8 @@ use std::time::{Duration, Instant};
 /// - `Sequential`: 完全串行执行，适用于小规模问题
 /// - `CollectThenAccumulate`: 先并行计算各面通量(真正并行)，
 ///   然后串行累加到单元(瓶颈)。对于中等规模问题有效。
-/// - `Auto`: 根据面数自动选择策略
-///
-/// # TODO (TD-5.3.3)
-///
-/// 未来需要添加：
 /// - `Colored`: 使用图着色实现真正的无锁并行累加
-/// - `Atomic`: 使用原子操作进行并行累加
+/// - `Auto`: 根据面数自动选择策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelStrategy {
     /// 串行执行
@@ -55,6 +50,10 @@ pub enum ParallelStrategy {
     ///
     /// 注意：累加阶段是串行的，对于大规模网格可能成为瓶颈
     CollectThenAccumulate,
+    /// 着色并行：使用图着色分组面，同一颜色的面可安全并行处理
+    /// 
+    /// 这是推荐的大规模并行策略，需要预先计算面着色
+    Colored,
     /// 自动选择（根据问题规模）
     Auto,
 }
@@ -191,12 +190,6 @@ impl FluxComputeMetrics {
 /// 并行通量计算器
 ///
 /// 封装通量计算的并行执行逻辑。
-///
-/// # TODO(phase5)
-/// 
-/// - 添加 AdaptiveScheduler 支持（参考 legacy）
-/// - 添加 StrategySelector 自动选择最优策略
-/// - 实现着色并行（TD-5.3.3）
 pub struct ParallelFluxCalculator {
     config: ParallelFluxConfig,
     /// 黎曼求解器
@@ -207,6 +200,9 @@ pub struct ParallelFluxCalculator {
     hydrostatic: HydrostaticReconstruction,
     /// 性能指标
     metrics: FluxComputeMetrics,
+    /// 面着色（用于 Colored 策略）
+    /// 每个元素是一组可以并行处理的面索引
+    face_colors: Option<Vec<Vec<usize>>>,
 }
 
 impl ParallelFluxCalculator {
@@ -217,8 +213,107 @@ impl ParallelFluxCalculator {
             wetting_drying: WettingDryingHandler::from_params(&config.params),
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.g),
             metrics: FluxComputeMetrics::default(),
+            face_colors: None,
             config,
         }
+    }
+
+    /// 为网格设置面着色（用于 Colored 策略）
+    /// 
+    /// 面着色将面分成若干组，同一组内的面不共享单元，
+    /// 因此可以安全地并行更新这些面关联的单元。
+    /// 
+    /// # 参数
+    /// - `mesh`: 网格
+    pub fn setup_face_coloring(&mut self, mesh: &PhysicsMesh) {
+        let n_faces = mesh.n_faces();
+        if n_faces == 0 {
+            self.face_colors = Some(Vec::new());
+            return;
+        }
+
+        // 构建面的邻接关系
+        // 两个面相邻 <=> 它们共享一个单元
+        // 即 face_i 和 face_j 相邻当且仅当：
+        //   owner(face_i) == owner(face_j) 或
+        //   owner(face_i) == neighbor(face_j) 或
+        //   neighbor(face_i) == owner(face_j) 或
+        //   neighbor(face_i) == neighbor(face_j)
+        
+        use std::collections::{HashMap, HashSet};
+        
+        // 构建单元到面的映射
+        let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
+        for face_idx in 0..n_faces {
+            let owner = mesh.face_owner(face_idx);
+            cell_to_faces.entry(owner).or_default().push(face_idx);
+            if let Some(neigh) = mesh.face_neighbor(face_idx) {
+                cell_to_faces.entry(neigh).or_default().push(face_idx);
+            }
+        }
+
+        // 构建面的邻接表
+        let mut face_neighbors: Vec<HashSet<usize>> = vec![HashSet::new(); n_faces];
+        for faces in cell_to_faces.values() {
+            // 同一单元的所有面互为邻居
+            for i in 0..faces.len() {
+                for j in (i + 1)..faces.len() {
+                    face_neighbors[faces[i]].insert(faces[j]);
+                    face_neighbors[faces[j]].insert(faces[i]);
+                }
+            }
+        }
+
+        // 贪心着色
+        let mut face_color = vec![usize::MAX; n_faces];
+        let mut num_colors = 0;
+
+        // 按邻居数量排序（高度数优先）
+        let mut order: Vec<usize> = (0..n_faces).collect();
+        order.sort_by_key(|&f| std::cmp::Reverse(face_neighbors[f].len()));
+
+        for &face in &order {
+            // 找到邻居使用的颜色
+            let used_colors: HashSet<usize> = face_neighbors[face]
+                .iter()
+                .filter_map(|&n| {
+                    if face_color[n] != usize::MAX {
+                        Some(face_color[n])
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // 找到最小可用颜色
+            let mut color = 0;
+            while used_colors.contains(&color) {
+                color += 1;
+            }
+
+            face_color[face] = color;
+            num_colors = num_colors.max(color + 1);
+        }
+
+        // 按颜色分组面
+        let mut color_faces: Vec<Vec<usize>> = vec![Vec::new(); num_colors];
+        for (face, &color) in face_color.iter().enumerate() {
+            if color != usize::MAX {
+                color_faces[color].push(face);
+            }
+        }
+
+        self.face_colors = Some(color_faces);
+    }
+
+    /// 检查是否已设置面着色
+    pub fn has_face_coloring(&self) -> bool {
+        self.face_colors.is_some()
+    }
+
+    /// 获取颜色数量
+    pub fn num_colors(&self) -> usize {
+        self.face_colors.as_ref().map(|c| c.len()).unwrap_or(0)
     }
 
     /// 计算通量（自动选择策略）
@@ -242,10 +337,21 @@ impl ParallelFluxCalculator {
             ParallelStrategy::CollectThenAccumulate => {
                 (self.compute_parallel(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
             }
+            ParallelStrategy::Colored => {
+                // 如果没有设置着色，先设置
+                if !self.has_face_coloring() {
+                    self.setup_face_coloring(mesh);
+                }
+                (self.compute_colored(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
+            }
             ParallelStrategy::Auto => {
                 if n_faces < self.config.min_parallel_size {
                     (self.compute_serial(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), false)
+                } else if self.has_face_coloring() {
+                    // 有着色就用着色并行
+                    (self.compute_colored(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
                 } else {
+                    // 否则用收集后累加
                     (self.compute_parallel(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
                 }
             }
@@ -357,6 +463,76 @@ impl ParallelFluxCalculator {
                 flux_hv[neigh] += fhv;
                 source_hu[neigh] += bed_src.source_right_x;
                 source_hv[neigh] += bed_src.source_right_y;
+            }
+        }
+
+        f64::from_bits(max_speed_atomic.load(Ordering::Relaxed))
+    }
+
+    /// 着色并行计算
+    /// 
+    /// 使用预计算的面着色，同一颜色的面可以并行计算和累加
+    /// 因为它们不共享单元
+    fn compute_colored(
+        &self,
+        state: &ShallowWaterState,
+        mesh: &PhysicsMesh,
+        flux_h: &mut [f64],
+        flux_hu: &mut [f64],
+        flux_hv: &mut [f64],
+        source_hu: &mut [f64],
+        source_hv: &mut [f64],
+    ) -> f64 {
+        // 重置
+        flux_h.fill(0.0);
+        flux_hu.fill(0.0);
+        flux_hv.fill(0.0);
+        source_hu.fill(0.0);
+        source_hv.fill(0.0);
+
+        let max_speed_atomic = AtomicU64::new(0u64);
+
+        let color_faces = match &self.face_colors {
+            Some(cf) => cf,
+            None => return 0.0, // 没有着色，返回0
+        };
+
+        // 按颜色批次处理
+        // 同一颜色的面不共享单元，可以安全并行
+        for faces_in_color in color_faces {
+            // 并行计算当前颜色的所有面
+            let results: Vec<_> = faces_in_color
+                .par_iter()
+                .map(|&face_idx| {
+                    let (flux, bed_src, length, owner, neighbor) = 
+                        self.compute_face(state, mesh, face_idx);
+                    
+                    max_speed_atomic.fetch_max(flux.max_wave_speed.to_bits(), Ordering::Relaxed);
+                    
+                    (flux, bed_src, length, owner, neighbor)
+                })
+                .collect();
+
+            // 累加当前颜色的结果（仍然需要串行，但批次内已经是无锁的）
+            // 由于同一颜色的面不共享单元，可以安全累加
+            for (flux, bed_src, length, owner, neighbor) in results {
+                let fh = flux.mass * length;
+                let fhu = flux.momentum_x * length;
+                let fhv = flux.momentum_y * length;
+
+                flux_h[owner] -= fh;
+                flux_hu[owner] -= fhu;
+                flux_hv[owner] -= fhv;
+                source_hu[owner] += bed_src.source_left_x;
+                source_hv[owner] += bed_src.source_left_y;
+
+                if let Some(neigh) = neighbor {
+                    flux_h[neigh] += fh;
+                    flux_hu[neigh] += fhu;
+                    flux_hv[neigh] += fhv;
+                    source_hu[neigh] += bed_src.source_right_x;
+                    source_hv[neigh] += bed_src.source_right_y;
+                }
             }
         }
 
@@ -538,6 +714,15 @@ mod tests {
         assert!((config.g - 10.0).abs() < 1e-10);
         assert_eq!(config.min_parallel_size, 500);
         assert_eq!(config.strategy, ParallelStrategy::Sequential);
+    }
+
+    #[test]
+    fn test_colored_strategy() {
+        let config = ParallelFluxConfig::builder()
+            .strategy(ParallelStrategy::Colored)
+            .build();
+        
+        assert_eq!(config.strategy, ParallelStrategy::Colored);
     }
 
     #[test]

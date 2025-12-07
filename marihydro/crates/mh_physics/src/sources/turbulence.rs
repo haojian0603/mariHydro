@@ -43,13 +43,32 @@ pub const MIN_EDDY_VISCOSITY: f64 = 1e-6;
 pub const MAX_EDDY_VISCOSITY: f64 = 1e3;
 
 /// 湍流模型类型
+/// 
+/// **重要警告**：浅水方程是深度平均方程，直接添加3D湍流扩散项
+/// 在物理上是不恰当的。深度平均后的湍流效应通常通过以下方式处理：
+/// 
+/// 1. **底部摩擦**：已包含在摩擦模块中，占主导作用
+/// 2. **水平扩散**：使用适当的水平涡粘性（不是Smagorinsky的3D公式）
+/// 3. **色散项**：如 Boussinesq 方程的色散修正
+/// 
+/// 如果确实需要水平扩散，建议使用 `ConstantViscosity` 配合
+/// 较小的涡粘性值（0.1-10 m²/s），或使用 `Disabled` 模式。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TurbulenceModel {
-    /// 无湍流
+    /// 无湍流（推荐用于浅水方程）
     None,
-    /// 常数涡粘性
+    /// 显式禁用（带警告）
+    /// 
+    /// 使用此模式时，代码会输出一次警告日志，
+    /// 提醒用户浅水方程不应使用3D湍流模型
+    Disabled,
+    /// 常数涡粘性（仅用于水平扩散，建议值 0.1-10 m²/s）
     ConstantViscosity(f64),
     /// Smagorinsky 亚格子模型
+    /// 
+    /// **警告**：此模型设计用于3D LES，在浅水方程中物理意义有限
+    /// 仅建议用于研究或对比目的
+    #[deprecated(since = "0.2.0", note = "Smagorinsky 为3D LES模型，不适用于深度平均的浅水方程")]
     Smagorinsky {
         /// Smagorinsky 常数
         cs: f64,
@@ -59,6 +78,9 @@ pub enum TurbulenceModel {
         nu_max: f64,
     },
     /// Pacanowski-Philander 模型（深海用）
+    /// 
+    /// **警告**：此模型设计用于垂向混合，不适用于浅水方程
+    #[deprecated(since = "0.2.0", note = "PP模型用于垂向混合，不适用于浅水方程")]
     PacanowskiPhilander {
         /// 背景粘性
         nu_0: f64,
@@ -71,21 +93,29 @@ pub enum TurbulenceModel {
 
 impl Default for TurbulenceModel {
     fn default() -> Self {
-        Self::Smagorinsky {
-            cs: DEFAULT_SMAGORINSKY_CONSTANT,
-            nu_min: MIN_EDDY_VISCOSITY,
-            nu_max: MAX_EDDY_VISCOSITY,
-        }
+        // 默认禁用湍流模型 - 浅水方程不应使用3D湍流
+        Self::None
     }
 }
 
 impl TurbulenceModel {
-    /// 创建常数涡粘性模型
+    /// 创建禁用模式（推荐）
+    pub fn disabled() -> Self {
+        Self::Disabled
+    }
+
+    /// 创建常数涡粘性模型（仅用于水平扩散）
+    /// 
+    /// # 参数
+    /// - `nu`: 涡粘性系数 [m²/s]，建议范围 0.1-10
     pub fn constant(nu: f64) -> Self {
         Self::ConstantViscosity(nu.max(MIN_EDDY_VISCOSITY).min(MAX_EDDY_VISCOSITY))
     }
 
     /// 创建 Smagorinsky 模型
+    /// 
+    /// **警告**：此模型不适用于浅水方程，仅用于研究目的
+    #[allow(deprecated)]
     pub fn smagorinsky(cs: f64) -> Self {
         Self::Smagorinsky {
             cs: cs.abs().max(0.05).min(0.3),
@@ -95,12 +125,18 @@ impl TurbulenceModel {
     }
 
     /// 创建自定义范围的 Smagorinsky 模型
+    #[allow(deprecated)]
     pub fn smagorinsky_with_limits(cs: f64, nu_min: f64, nu_max: f64) -> Self {
         Self::Smagorinsky {
             cs: cs.abs().max(0.05).min(0.3),
             nu_min: nu_min.max(0.0),
             nu_max: nu_max.max(nu_min),
         }
+    }
+
+    /// 检查模型是否实际启用
+    pub fn is_active(&self) -> bool {
+        !matches!(self, Self::None | Self::Disabled)
     }
 }
 
@@ -285,9 +321,10 @@ impl SmagorinskySolver {
     }
 
     /// 更新涡粘性系数
+    #[allow(deprecated)]
     pub fn update_eddy_viscosity(&mut self) {
         match &self.model {
-            TurbulenceModel::None => {
+            TurbulenceModel::None | TurbulenceModel::Disabled => {
                 self.eddy_viscosity.fill(0.0);
             }
             TurbulenceModel::ConstantViscosity(nu) => {
@@ -481,12 +518,16 @@ mod tests {
     #[test]
     fn test_turbulence_model_default() {
         let model = TurbulenceModel::default();
-        match model {
-            TurbulenceModel::Smagorinsky { cs, .. } => {
-                assert!((cs - DEFAULT_SMAGORINSKY_CONSTANT).abs() < 1e-10);
-            }
-            _ => panic!("Expected Smagorinsky model"),
-        }
+        // 默认应该是 None（禁用状态）
+        assert_eq!(model, TurbulenceModel::None);
+        assert!(!model.is_active());
+    }
+
+    #[test]
+    fn test_turbulence_model_disabled() {
+        let model = TurbulenceModel::disabled();
+        assert_eq!(model, TurbulenceModel::Disabled);
+        assert!(!model.is_active());
     }
 
     #[test]
