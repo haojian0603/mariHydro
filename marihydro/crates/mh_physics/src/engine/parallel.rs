@@ -291,15 +291,15 @@ impl ParallelFluxCalculator {
             flux_h[owner] -= fh;
             flux_hu[owner] -= fhu;
             flux_hv[owner] -= fhv;
-            source_hu[owner] += bed_src.source_x;
-            source_hv[owner] += bed_src.source_y;
+            source_hu[owner] += bed_src.source_left_x;
+            source_hv[owner] += bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
                 flux_h[neigh] += fh;
                 flux_hu[neigh] += fhu;
                 flux_hv[neigh] += fhv;
-                source_hu[neigh] -= bed_src.source_x;
-                source_hv[neigh] -= bed_src.source_y;
+                source_hu[neigh] += bed_src.source_right_x;
+                source_hv[neigh] += bed_src.source_right_y;
             }
         }
 
@@ -348,15 +348,15 @@ impl ParallelFluxCalculator {
             flux_h[owner] -= fh;
             flux_hu[owner] -= fhu;
             flux_hv[owner] -= fhv;
-            source_hu[owner] += bed_src.source_x;
-            source_hv[owner] += bed_src.source_y;
+            source_hu[owner] += bed_src.source_left_x;
+            source_hv[owner] += bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
                 flux_h[neigh] += fh;
                 flux_hu[neigh] += fhu;
                 flux_hv[neigh] += fhv;
-                source_hu[neigh] -= bed_src.source_x;
-                source_hv[neigh] -= bed_src.source_y;
+                source_hu[neigh] += bed_src.source_right_x;
+                source_hv[neigh] += bed_src.source_right_y;
             }
         }
 

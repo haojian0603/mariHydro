@@ -462,4 +462,158 @@ mod tests {
         assert_eq!(mesh.n_faces(), 0);
         assert_eq!(mesh.n_nodes(), 0);
     }
+    #[test]
+    fn test_cell_perimeter() {
+        // 创建简单网格测试周长计算
+        let frozen = create_test_frozen_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
+        
+        // 对于单位正方形单元，周长应该是 4.0
+        if let Some(perimeter) = mesh.cell_perimeter(0) {
+            assert!((perimeter - 4.0).abs() < 1e-10,
+                    "单元周长不正确: {}", perimeter);
+        }
+    }
+
+    #[test]
+    fn test_face_accessors() {
+        let frozen = create_test_frozen_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
+        
+        // 测试内部面
+        if mesh.n_interior_faces() > 0 {
+            let face = 0;
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
+            
+            assert!(neighbor.is_some(), "内部面应该有邻居");
+            assert!(mesh.has_neighbor(face));
+            assert!(!mesh.is_boundary_face(face));
+        }
+        
+        // 测试边界面
+        for face in mesh.boundary_faces() {
+            assert!(mesh.face_neighbor(face).is_none());
+            assert_eq!(mesh.face_neighbor_raw(face), INVALID_CELL);
+            assert!(mesh.is_boundary_face(face));
+        }
+    }
+
+    #[test]
+    fn test_cell_connectivity() {
+        let frozen = create_test_frozen_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
+        
+        for cell in mesh.cells() {
+            // 每个单元应该有面
+            let faces: Vec<_> = mesh.cell_faces(cell).collect();
+            assert!(!faces.is_empty(), "单元 {} 没有面", cell);
+            
+            // 所有面索引应该有效
+            for &face in &faces {
+                assert!(face < mesh.n_faces(),
+                        "单元 {} 有无效面索引 {}", cell, face);
+            }
+        }
+    }
+
+    #[test]
+    fn test_range_iterators() {
+        let frozen = create_test_frozen_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
+        
+        // 验证范围一致性
+        assert_eq!(mesh.interior_faces().len(), mesh.n_interior_faces());
+        assert_eq!(mesh.boundary_faces().len(), mesh.n_boundary_faces());
+        assert_eq!(mesh.cells().len(), mesh.n_cells());
+        assert_eq!(mesh.faces().len(), mesh.n_faces());
+        
+        // 内部面 + 边界面 = 总面数
+        assert_eq!(
+            mesh.n_interior_faces() + mesh.n_boundary_faces(),
+            mesh.n_faces()
+        );
+    }
+
+    #[test]
+    fn test_face_index_types() {
+        let idx = FaceIndex(5);
+        assert_eq!(usize::from(idx), 5);
+        
+        let idx2 = FaceIndex::from(10usize);
+        assert_eq!(idx2.0, 10);
+    }
+
+    #[test]
+    fn test_node_index_types() {
+        let idx = NodeIndex(3);
+        assert_eq!(usize::from(idx), 3);
+        
+        let idx2 = NodeIndex::from(7usize);
+        assert_eq!(idx2.0, 7);
+    }
+
+    /// 创建用于测试的 FrozenMesh
+    fn create_test_frozen_mesh() -> FrozenMesh {
+        use mh_geo::{Point2D, Point3D};
+        
+        // 简单的 2x1 网格 (2个单元)
+        FrozenMesh {
+            n_nodes: 6,
+            node_coords: vec![
+                Point3D::new(0.0, 0.0, 0.0),
+                Point3D::new(1.0, 0.0, 0.0),
+                Point3D::new(2.0, 0.0, 0.0),
+                Point3D::new(0.0, 1.0, 0.0),
+                Point3D::new(1.0, 1.0, 0.0),
+                Point3D::new(2.0, 1.0, 0.0),
+            ],
+            n_cells: 2,
+            cell_center: vec![
+                Point2D::new(0.5, 0.5),
+                Point2D::new(1.5, 0.5),
+            ],
+            cell_area: vec![1.0, 1.0],
+            cell_z_bed: vec![0.0, 0.0],
+            cell_node_offsets: vec![0, 4, 8],
+            cell_node_indices: vec![0, 1, 4, 3, 1, 2, 5, 4],
+            cell_face_offsets: vec![0, 4, 8],
+            cell_face_indices: vec![0, 1, 2, 3, 0, 4, 5, 6],
+            cell_neighbor_offsets: vec![0, 1, 2],
+            cell_neighbor_indices: vec![1, 0],
+            n_faces: 7,
+            n_interior_faces: 1,
+            face_center: vec![
+                Point2D::new(1.0, 0.5),  // 内部面
+                Point2D::new(0.5, 0.0),  // 边界
+                Point2D::new(0.0, 0.5),
+                Point2D::new(0.5, 1.0),
+                Point2D::new(1.5, 0.0),
+                Point2D::new(2.0, 0.5),
+                Point2D::new(1.5, 1.0),
+            ],
+            face_normal: vec![
+                Point3D::new(1.0, 0.0, 0.0),
+                Point3D::new(0.0, -1.0, 0.0),
+                Point3D::new(-1.0, 0.0, 0.0),
+                Point3D::new(0.0, 1.0, 0.0),
+                Point3D::new(0.0, -1.0, 0.0),
+                Point3D::new(1.0, 0.0, 0.0),
+                Point3D::new(0.0, 1.0, 0.0),
+            ],
+            face_length: vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            face_z_left: vec![0.0; 7],
+            face_z_right: vec![0.0; 7],
+            face_owner: vec![0, 0, 0, 0, 1, 1, 1],
+            face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
+            face_delta_owner: vec![Point2D::ZERO; 7],
+            face_delta_neighbor: vec![Point2D::ZERO; 7],
+            face_dist_o2n: vec![1.0; 7],
+            boundary_face_indices: vec![1, 2, 3, 4, 5, 6],
+            boundary_names: vec!["boundary".to_string()],
+            face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
+            min_cell_size: 1.0,
+            max_cell_size: 1.0,
+        }
+    }
 }

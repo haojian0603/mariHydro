@@ -92,12 +92,14 @@ impl GhostMomentumMode {
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
 /// let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
 /// let normal = DVec2::new(1.0, 0.0);
+/// let z_bed = 0.0; // 底床高程
 ///
 /// let ghost = calculator.compute_ghost(
 ///     interior,
 ///     BoundaryKind::Wall,
 ///     normal,
 ///     None,
+///     z_bed,
 /// );
 /// ```
 pub struct GhostStateCalculator {
@@ -122,6 +124,7 @@ impl GhostStateCalculator {
     /// - `kind`: 边界类型
     /// - `normal`: 面外法向量（单位向量）
     /// - `external`: 外部强迫数据（用于开边界）
+    /// - `z_bed`: 内部单元底床高程（用于计算水位）
     ///
     /// # 返回
     /// 幽灵单元的守恒量状态
@@ -131,12 +134,13 @@ impl GhostStateCalculator {
         kind: BoundaryKind,
         normal: DVec2,
         external: Option<&ExternalForcing>,
+        z_bed: f64,
     ) -> ConservedState {
         match kind {
             BoundaryKind::Wall => self.compute_wall_ghost(interior, normal),
             BoundaryKind::Symmetry => self.compute_symmetry_ghost(interior, normal),
             BoundaryKind::OpenSea => {
-                self.compute_open_sea_ghost(interior, normal, external.unwrap_or(&ExternalForcing::ZERO))
+                self.compute_open_sea_ghost(interior, normal, external.unwrap_or(&ExternalForcing::ZERO), z_bed)
             }
             BoundaryKind::Outflow => self.compute_outflow_ghost(interior),
             BoundaryKind::RiverInflow => {
@@ -186,11 +190,16 @@ impl GhostStateCalculator {
     /// 计算开海边界的幽灵状态
     ///
     /// 使用 Flather 辐射条件。
+    /// 
+    /// Flather 条件基于特征分解：
+    /// un* = un_ext + (c/h)(η_int - η_ext)
+    /// 其中 η = h + z_bed 是水位
     fn compute_open_sea_ghost(
         &self,
         interior: ConservedState,
         normal: DVec2,
         external: &ExternalForcing,
+        z_bed: f64,
     ) -> ConservedState {
         let h_int = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h_int);
@@ -205,16 +214,19 @@ impl GhostStateCalculator {
         let un_ext = external.velocity.dot(normal);
 
         // Flather 条件修正法向速度
-        // 假设内部水位 = h_int（忽略底高程简化）
-        let eta_diff = h_int - external.eta.max(self.params.h_min);
+        // 正确使用水位 η = h + z_bed
+        let eta_int = h_int + z_bed;
+        let eta_ext = external.eta.max(self.params.h_min);
+        let eta_diff = eta_int - eta_ext;
         let un_ghost = un_ext - (c / h_int) * eta_diff;
 
         // 切向速度保持
         let ut = velocity_int - normal * un_int;
         let ghost_velocity = ut + normal * un_ghost;
 
-        // 幽灵水深使用外部水位（简化）
-        let h_ghost = external.eta.max(self.params.h_min);
+        // 幽灵水深：从外部水位减去底床高程
+        // h_ghost = max(0, eta_ext - z_bed)
+        let h_ghost = (external.eta - z_bed).max(self.params.h_min);
 
         ConservedState {
             h: h_ghost,
@@ -294,6 +306,7 @@ impl GhostStateCalculator {
     /// - `kinds`: 边界类型数组
     /// - `normals`: 法向量数组
     /// - `externals`: 外部强迫数组（可选）
+    /// - `z_beds`: 底床高程数组
     /// - `output`: 输出数组
     pub fn compute_ghost_batch(
         &self,
@@ -301,17 +314,19 @@ impl GhostStateCalculator {
         kinds: &[BoundaryKind],
         normals: &[DVec2],
         externals: Option<&[ExternalForcing]>,
+        z_beds: &[f64],
         output: &mut [ConservedState],
     ) {
         debug_assert_eq!(interiors.len(), kinds.len());
         debug_assert_eq!(interiors.len(), normals.len());
+        debug_assert_eq!(interiors.len(), z_beds.len());
         debug_assert_eq!(interiors.len(), output.len());
 
         let empty_forcing = ExternalForcing::ZERO;
 
         for i in 0..interiors.len() {
             let external = externals.map(|e| &e[i]).unwrap_or(&empty_forcing);
-            output[i] = self.compute_ghost(interiors[i], kinds[i], normals[i], Some(external));
+            output[i] = self.compute_ghost(interiors[i], kinds[i], normals[i], Some(external), z_beds[i]);
         }
     }
 
@@ -380,7 +395,7 @@ mod tests {
         let interior = ConservedState::from_primitive(1.0, 1.0, 0.0);
         let normal = DVec2::new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None);
+        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
         // 水深保持
         assert!(approx_eq(ghost.h, 1.0));
@@ -396,7 +411,7 @@ mod tests {
         let interior = ConservedState::from_primitive(1.0, 1.0, 1.0);
         let normal = DVec2::new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None);
+        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
         // 法向反转，切向保持
         assert!(approx_eq(ghost.hu, -1.0));
@@ -409,7 +424,7 @@ mod tests {
         let interior = ConservedState::from_primitive(1.5, 0.5, 0.3);
         let normal = DVec2::new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None);
+        let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None, 0.0);
 
         // 出流：完全复制
         assert!(approx_eq(ghost.h, 1.5));
@@ -429,12 +444,40 @@ mod tests {
             BoundaryKind::RiverInflow,
             normal,
             Some(&external),
+            0.0,
         );
 
         // 使用外部强迫
         assert!(approx_eq(ghost.h, 2.0));
         assert!(approx_eq(ghost.hu, 2.0)); // h * u = 2.0 * 1.0
         assert!(approx_eq(ghost.hv, 0.0));
+    }
+
+    #[test]
+    fn test_flather_open_sea_with_z_bed() {
+        // 测试 Flather 边界条件正确使用水位 η = h + z_bed
+        let calculator = GhostStateCalculator::default();
+        
+        // 内部单元: h=1.0, z_bed=0.5, 所以 η_int = 1.5
+        let interior = ConservedState::from_primitive(1.0, 0.0, 0.0);
+        let normal = DVec2::new(1.0, 0.0);
+        let z_bed = 0.5;
+        
+        // 外部强迫: η_ext = 1.5 (与内部相同)
+        let external = ExternalForcing::new(1.5, 0.0, 0.0);
+        
+        let ghost = calculator.compute_ghost(
+            interior,
+            BoundaryKind::OpenSea,
+            normal,
+            Some(&external),
+            z_bed,
+        );
+        
+        // 当 η_int = η_ext 时，Flather 条件应该给出 un_ghost = un_ext = 0
+        // 幽灵水深 h_ghost = η_ext - z_bed = 1.5 - 0.5 = 1.0
+        assert!(approx_eq(ghost.h, 1.0));
+        assert!(ghost.hu.abs() < 1e-9); // 速度接近零
     }
 
     #[test]
@@ -493,9 +536,10 @@ mod tests {
         ];
         let kinds = vec![BoundaryKind::Wall, BoundaryKind::Outflow];
         let normals = vec![DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0)];
+        let z_beds = vec![0.0, 0.0];
 
         let mut output = vec![ConservedState::default(); 2];
-        calculator.compute_ghost_batch(&interiors, &kinds, &normals, None, &mut output);
+        calculator.compute_ghost_batch(&interiors, &kinds, &normals, None, &z_beds, &mut output);
 
         // 固壁：法向反转
         assert!(approx_eq(output[0].hu, -1.0));

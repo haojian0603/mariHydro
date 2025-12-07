@@ -45,12 +45,14 @@
 //! let calculator = GhostStateCalculator::default();
 //! let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
 //! let normal = DVec2::new(1.0, 0.0);
+//! let z_bed = 0.0; // 底床高程
 //!
 //! let ghost = calculator.compute_ghost(
 //!     interior,
 //!     BoundaryKind::Wall,
 //!     normal,
 //!     None,
+//!     z_bed,
 //! );
 //! ```
 //!

@@ -19,6 +19,7 @@ use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
+use crate::numerics::reconstruction::{MusclConfig, MusclReconstructor, Reconstructor};
 
 use glam::DVec2;
 use rayon::prelude::*;
@@ -362,6 +363,12 @@ pub struct SolverWorkspace {
     pub source_hu: Vec<f64>,
     /// 源项累加（y动量）
     pub source_hv: Vec<f64>,
+    /// 单元速度 u 分量（用于重构）
+    pub vel_u: Vec<f64>,
+    /// 单元速度 v 分量（用于重构）
+    pub vel_v: Vec<f64>,
+    /// 水位 η = h + z（用于 well-balanced 重构）
+    pub eta: Vec<f64>,
 }
 
 impl SolverWorkspace {
@@ -373,6 +380,9 @@ impl SolverWorkspace {
             flux_hv: vec![0.0; n_cells],
             source_hu: vec![0.0; n_cells],
             source_hv: vec![0.0; n_cells],
+            vel_u: vec![0.0; n_cells],
+            vel_v: vec![0.0; n_cells],
+            eta: vec![0.0; n_cells],
         }
     }
 
@@ -402,6 +412,9 @@ impl SolverWorkspace {
         self.flux_hv.resize(n_cells, 0.0);
         self.source_hu.resize(n_cells, 0.0);
         self.source_hv.resize(n_cells, 0.0);
+        self.vel_u.resize(n_cells, 0.0);
+        self.vel_v.resize(n_cells, 0.0);
+        self.eta.resize(n_cells, 0.0);
     }
 }
 
@@ -424,13 +437,27 @@ pub struct HydrostaticFaceState {
     pub z_face: f64,
 }
 
-/// 床坡源项修正
+/// 床坡源项修正（分别给左右单元）
 #[derive(Debug, Clone, Copy)]
 pub struct BedSlopeCorrection {
-    /// x方向源项
-    pub source_x: f64,
-    /// y方向源项
-    pub source_y: f64,
+    /// 左侧（owner）单元 x 方向源项
+    pub source_left_x: f64,
+    /// 左侧（owner）单元 y 方向源项
+    pub source_left_y: f64,
+    /// 右侧（neighbor）单元 x 方向源项
+    pub source_right_x: f64,
+    /// 右侧（neighbor）单元 y 方向源项
+    pub source_right_y: f64,
+}
+
+impl BedSlopeCorrection {
+    /// 零源项
+    pub const ZERO: Self = Self {
+        source_left_x: 0.0,
+        source_left_y: 0.0,
+        source_right_x: 0.0,
+        source_right_y: 0.0,
+    };
 }
 
 /// 静水重构处理器
@@ -499,20 +526,20 @@ impl HydrostaticReconstruction {
         let h_face = 0.5 * (h_l + h_r);
         
         if h_face < self.params.h_dry {
-            return BedSlopeCorrection {
-                source_x: 0.0,
-                source_y: 0.0,
-            };
+            return BedSlopeCorrection::ZERO;
         }
 
-        // 床坡源项: -g * h * ∇z
-        // 在有限体积离散中: S = -g * h_face * (z_r - z_l) * n * L
+        // 旧的床坡源项方法（已弃用，保留供参考）
+        // 注意：求解器中使用 compute_hydrostatic_bed_slope 替代
         let dz = z_r - z_l;
         let factor = -self.g * h_face * dz * length;
 
+        // 简化处理：左右各分一半
         BedSlopeCorrection {
-            source_x: factor * normal.x,
-            source_y: factor * normal.y,
+            source_left_x: 0.5 * factor * normal.x,
+            source_left_y: 0.5 * factor * normal.y,
+            source_right_x: -0.5 * factor * normal.x,
+            source_right_y: -0.5 * factor * normal.y,
         }
     }
 }
@@ -541,6 +568,12 @@ pub struct ShallowWaterSolver {
     timestep_ctrl: TimeStepController,
     /// 统计信息
     stats: SolverStats,
+    /// 水位重构器（用于 well-balanced 方法）
+    muscl_eta: MusclReconstructor,
+    /// u 速度重构器
+    muscl_u: MusclReconstructor,
+    /// v 速度重构器
+    muscl_v: MusclReconstructor,
 }
 
 impl ShallowWaterSolver {
@@ -553,6 +586,17 @@ impl ShallowWaterSolver {
             .with_dt_limits(config.params.dt_min, config.params.dt_max)
             .build();
 
+        let muscl_config = if matches!(config.scheme, NumericalScheme::FirstOrder) {
+            MusclConfig::first_order()
+        } else {
+            MusclConfig::default()
+        };
+
+        // 使用 muscl_eta 代替 muscl_h，实现 well-balanced 二阶重构
+        let muscl_eta = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
+        let muscl_u = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
+        let muscl_v = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
+
         Self {
             mesh: mesh.clone(),
             config: config.clone(),
@@ -562,6 +606,9 @@ impl ShallowWaterSolver {
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.gravity),
             timestep_ctrl,
             stats: SolverStats::default(),
+            muscl_eta,
+            muscl_u,
+            muscl_v,
         }
     }
 
@@ -572,20 +619,23 @@ impl ShallowWaterSolver {
         // 1. 重置工作区
         self.workspace.reset();
 
-        // 2. 计算通量（集成干湿处理）
+        // 2. 预计算速度并准备二阶重构
+        self.prepare_reconstruction(state);
+
+        // 3. 计算通量（集成干湿处理）
         let max_wave_speed = if self.mesh.n_faces() >= self.config.parallel_threshold {
             self.compute_fluxes_parallel(state)
         } else {
             self.compute_fluxes_serial(state)
         };
 
-        // 3. 更新状态
+        // 4. 更新状态
         self.update_state(state, dt);
 
-        // 4. 强制正性并处理干区
+        // 5. 强制正性并处理干区
         let (dry_cells, _) = self.enforce_positivity(state, dt);
 
-        // 5. 更新统计
+        // 6. 更新统计
         self.stats.max_wave_speed = max_wave_speed;
         self.stats.dry_cells = dry_cells;
         self.stats.dt = dt;
@@ -596,6 +646,51 @@ impl ShallowWaterSolver {
     /// 计算自适应时间步长
     pub fn compute_dt(&mut self, state: &ShallowWaterState) -> f64 {
         self.timestep_ctrl.update(state, &self.mesh, &self.config.params)
+    }
+
+    /// 是否使用二阶格式
+    #[inline]
+    fn use_second_order(&self) -> bool {
+        matches!(self.config.scheme, NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno)
+    }
+
+    /// 根据配置同步重构器开关并计算梯度
+    ///
+    /// 对于 well-balanced 二阶格式，重构水位 η = h + z 而非水深 h，
+    /// 以保证 C-property（静水平衡时速度为零）
+    fn prepare_reconstruction(&mut self, state: &ShallowWaterState) {
+        let n = state.n_cells();
+        if self.workspace.vel_u.len() != n {
+            self.workspace.resize(n);
+        }
+
+        // 预计算安全速度和水位
+        for i in 0..n {
+            let (u, v) = self.config.params.safe_velocity_components(state.hu[i], state.hv[i], state.h[i]);
+            self.workspace.vel_u[i] = u;
+            self.workspace.vel_v[i] = v;
+            // 计算水位 η = h + z（用于 well-balanced 重构）
+            self.workspace.eta[i] = state.h[i] + state.z[i];
+        }
+
+        if !self.use_second_order() {
+            let cfg = MusclConfig::first_order();
+            self.muscl_eta.set_config(cfg.clone());
+            self.muscl_u.set_config(cfg.clone());
+            self.muscl_v.set_config(cfg);
+            return;
+        }
+
+        // 二阶模式：使用默认配置
+        let cfg = MusclConfig::default();
+        self.muscl_eta.set_config(cfg.clone());
+        self.muscl_u.set_config(cfg.clone());
+        self.muscl_v.set_config(cfg);
+
+        // 对水位 η 而非水深 h 计算梯度，保证 C-property
+        self.muscl_eta.compute_gradients(&self.workspace.eta);
+        self.muscl_u.compute_gradients(&self.workspace.vel_u);
+        self.muscl_v.compute_gradients(&self.workspace.vel_v);
     }
 
     // =========================================================================
@@ -620,16 +715,16 @@ impl ShallowWaterSolver {
             self.workspace.flux_h[owner] -= fh;
             self.workspace.flux_hu[owner] -= fhu;
             self.workspace.flux_hv[owner] -= fhv;
-            self.workspace.source_hu[owner] += bed_src.source_x;
-            self.workspace.source_hv[owner] += bed_src.source_y;
+            self.workspace.source_hu[owner] += bed_src.source_left_x;
+            self.workspace.source_hv[owner] += bed_src.source_left_y;
 
             // 累加到 neighbor（如果存在）
             if let Some(neigh) = neighbor {
                 self.workspace.flux_h[neigh] += fh;
                 self.workspace.flux_hu[neigh] += fhu;
                 self.workspace.flux_hv[neigh] += fhv;
-                self.workspace.source_hu[neigh] -= bed_src.source_x;
-                self.workspace.source_hv[neigh] -= bed_src.source_y;
+                self.workspace.source_hu[neigh] += bed_src.source_right_x;
+                self.workspace.source_hv[neigh] += bed_src.source_right_y;
             }
         }
 
@@ -678,15 +773,15 @@ impl ShallowWaterSolver {
             self.workspace.flux_h[owner] -= fh;
             self.workspace.flux_hu[owner] -= fhu;
             self.workspace.flux_hv[owner] -= fhv;
-            self.workspace.source_hu[owner] += bed_src.source_x;
-            self.workspace.source_hv[owner] += bed_src.source_y;
+            self.workspace.source_hu[owner] += bed_src.source_left_x;
+            self.workspace.source_hv[owner] += bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
                 self.workspace.flux_h[neigh] += fh;
                 self.workspace.flux_hu[neigh] += fhu;
                 self.workspace.flux_hv[neigh] += fhv;
-                self.workspace.source_hu[neigh] -= bed_src.source_x;
-                self.workspace.source_hv[neigh] -= bed_src.source_y;
+                self.workspace.source_hu[neigh] += bed_src.source_right_x;
+                self.workspace.source_hv[neigh] += bed_src.source_right_y;
             }
         }
 
@@ -707,26 +802,78 @@ impl ShallowWaterSolver {
         let owner = self.mesh.face_owner(face_idx);
         let neighbor = self.mesh.face_neighbor(face_idx);
 
-        // 获取左侧状态
-        let h_l = state.h[owner];
-        let z_l = state.z[owner];
-        let (u_l, v_l) = self.config.params.safe_velocity_components(
-            state.hu[owner], state.hv[owner], h_l
-        );
-        let vel_l = DVec2::new(u_l, v_l);
+        // 重构后的左/右状态
+        // 注意：二阶重构使用水位 η = h + z，然后反推水深 h = η - z
+        // 这是 well-balanced 方法的关键，保证 C-property（静水平衡时 η=const）
+        let (h_l, vel_l, z_l, h_r, vel_r, z_r) = if self.use_second_order() {
+            // 重构水位 η 而非水深 h
+            let eta_rec = self.muscl_eta.reconstruct_scalar(face_idx, &self.workspace.eta);
+            let u_rec = self.muscl_u.reconstruct_scalar(face_idx, &self.workspace.vel_u);
+            let v_rec = self.muscl_v.reconstruct_scalar(face_idx, &self.workspace.vel_v);
 
-        // 获取右侧状态
-        let (h_r, vel_r, z_r) = if let Some(neigh) = neighbor {
-            let h = state.h[neigh];
-            let (u, v) = self.config.params.safe_velocity_components(
-                state.hu[neigh], state.hv[neigh], h
-            );
-            (h, DVec2::new(u, v), state.z[neigh])
+            if let Some(neigh) = neighbor {
+                let z_owner = state.z[owner];
+                let z_neigh = state.z[neigh];
+                // 从水位反推水深：h = max(0, η - z)
+                let h_left = (eta_rec.left - z_owner).max(0.0);
+                let h_right = (eta_rec.right - z_neigh).max(0.0);
+                (
+                    h_left,
+                    DVec2::new(u_rec.left, v_rec.left),
+                    z_owner,
+                    h_right,
+                    DVec2::new(u_rec.right, v_rec.right),
+                    z_neigh,
+                )
+            } else {
+                // 边界：右侧使用反射条件
+                let z_owner = state.z[owner];
+                let h_left = (eta_rec.left - z_owner).max(0.0);
+                let vel_left = DVec2::new(u_rec.left, v_rec.left);
+                let vn = vel_left.dot(normal);
+                (
+                    h_left,
+                    vel_left,
+                    z_owner,
+                    h_left,
+                    vel_left - 2.0 * vn * normal,
+                    z_owner,
+                )
+            }
         } else {
-            // TODO(phase5): 边界处理简化为反射条件
-            // 完整实现应支持：入流/出流/滑移/无滑移等多种边界类型
-            let vn = vel_l.dot(normal);
-            (h_l, vel_l - 2.0 * vn * normal, z_l)
+            // 一阶：使用单元中心值
+            let h_l = state.h[owner];
+            let z_l = state.z[owner];
+            let (u_l, v_l) = self.config.params.safe_velocity_components(
+                state.hu[owner], state.hv[owner], h_l,
+            );
+            let vel_l = DVec2::new(u_l, v_l);
+
+            if let Some(neigh) = neighbor {
+                let h = state.h[neigh];
+                let (u, v) = self.config.params.safe_velocity_components(
+                    state.hu[neigh], state.hv[neigh], h,
+                );
+                (
+                    h_l,
+                    vel_l,
+                    z_l,
+                    h,
+                    DVec2::new(u, v),
+                    state.z[neigh],
+                )
+            } else {
+                // 边界反射
+                let vn = vel_l.dot(normal);
+                (
+                    h_l,
+                    vel_l,
+                    z_l,
+                    h_l,
+                    vel_l - 2.0 * vn * normal,
+                    z_l,
+                )
+            }
         };
 
         // 静水重构
@@ -744,16 +891,16 @@ impl ShallowWaterSolver {
         };
 
         // 干湿界面通量限制
+        // 注意：不能简单地限制通量，否则会阻止润湿过程
+        // 只有在两侧都干或者处于过渡区时才限制
         let wet_l = self.wetting_drying.get_state(recon.h_left);
         let wet_r = self.wetting_drying.get_state(recon.h_right);
         let flux_limiter = match (wet_l, wet_r) {
             (WetState::Dry, WetState::Dry) => 0.0,
-            (WetState::Dry, _) | (_, WetState::Dry) => {
-                // 干湿界面：使用较小水深作为限制
-                let h_min = recon.h_left.min(recon.h_right);
-                (h_min / self.config.params.h_wet).min(1.0)
-            }
-            (WetState::PartiallyWet, _) | (_, WetState::PartiallyWet) => {
+            // 干湿界面：允许从湿侧流向干侧，不限制通量
+            (WetState::Dry, _) | (_, WetState::Dry) => 1.0,
+            (WetState::PartiallyWet, WetState::PartiallyWet) => {
+                // 两侧都在过渡区时平滑限制
                 let h_min = recon.h_left.min(recon.h_right);
                 ((h_min - self.config.params.h_dry) 
                     / (self.config.params.h_wet - self.config.params.h_dry)).clamp(0.0, 1.0)
@@ -776,10 +923,54 @@ impl ShallowWaterSolver {
             flux
         };
 
-        // 床坡源项
-        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal, length);
+        // 床坡源项（基于静水重构的水深差异）
+        // 参考: Audusse et al. (2004) - 式 (4.5)
+        // S_bed = 0.5 * g * (h_L^2 - h_L*^2) * n  (左侧贡献)
+        //       + 0.5 * g * (h_R^2 - h_R*^2) * n  (右侧贡献，符号相反)
+        // 这确保了 C-property: 当 η = const 时，通量和源项完全平衡
+        let bed_src = self.compute_hydrostatic_bed_slope(
+            h_l, h_r, recon.h_left, recon.h_right, normal, length
+        );
 
         (limited_flux, bed_src, length, owner, neighbor)
+    }
+
+    /// 计算静水重构后的床坡源项
+    ///
+    /// 基于 Audusse (2004) 方法，使用原始水深和重构水深的差异计算
+    /// 这保证了 C-property（静水平衡时速度为零）
+    ///
+    /// 原理：
+    /// - 通量使用重构水深 h* 计算，压力项变为 0.5*g*h*²
+    /// - 但实际压力应为 0.5*g*h²
+    /// - 因此需要补偿压力差: 0.5*g*(h² - h*²)
+    /// - 这个补偿作为源项加到对应单元上
+    fn compute_hydrostatic_bed_slope(
+        &self,
+        h_l: f64,
+        h_r: f64,
+        h_l_star: f64,  // 静水重构后的左侧水深
+        h_r_star: f64,  // 静水重构后的右侧水深
+        normal: DVec2,
+        length: f64,
+    ) -> BedSlopeCorrection {
+        let g = self.config.gravity;
+        
+        // 左侧单元的压力补偿: 0.5 * g * (h_L² - h_L*²) * L
+        // 这是因为通量中用的是 h_L*，需要补偿到实际压力
+        let pressure_diff_l = 0.5 * g * (h_l * h_l - h_l_star * h_l_star) * length;
+        
+        // 右侧单元的压力补偿: 0.5 * g * (h_R² - h_R*²) * L
+        let pressure_diff_r = 0.5 * g * (h_r * h_r - h_r_star * h_r_star) * length;
+        
+        // 左侧源项沿负法向（法向指向外侧，源项补偿应指向单元内部方向）
+        // 实际上根据守恒律的推导，左侧补偿应沿负法向
+        BedSlopeCorrection {
+            source_left_x: -pressure_diff_l * normal.x,
+            source_left_y: -pressure_diff_l * normal.y,
+            source_right_x: pressure_diff_r * normal.x,
+            source_right_y: pressure_diff_r * normal.y,
+        }
     }
 
     // =========================================================================
@@ -1184,6 +1375,7 @@ mod tests {
 
     #[test]
     fn test_bed_slope_correction() {
+        // 测试旧的 bed_slope_correction 方法（保留供参考）
         let params = NumericalParams::default();
         let hydro = HydrostaticReconstruction::new(&params, 9.81);
 
@@ -1197,8 +1389,11 @@ mod tests {
         // S = -g * h_face * dz * L * n
         // dz = 1.0, h_face = 1.0, L = 1.0, n = (1, 0)
         // S_x = -9.81 * 1.0 * 1.0 * 1.0 * 1.0 = -9.81
-        assert!((correction.source_x - (-9.81)).abs() < 1e-10);
-        assert!(correction.source_y.abs() < 1e-10);
+        // 左右各分一半: left = 0.5 * (-9.81) = -4.905
+        assert!((correction.source_left_x - (-4.905)).abs() < 1e-10);
+        assert!(correction.source_left_y.abs() < 1e-10);
+        assert!((correction.source_right_x - 4.905).abs() < 1e-10);
+        assert!(correction.source_right_y.abs() < 1e-10);
     }
 
     #[test]
