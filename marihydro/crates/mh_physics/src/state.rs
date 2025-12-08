@@ -23,9 +23,11 @@
 //! 从 legacy_src/domain/state/shallow_water.rs 迁移，保持算法不变。
 
 use glam::DVec2;
+use mh_foundation::memory::AlignedVec;
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
+use crate::fields::{FieldMeta, FieldRegistry};
 use crate::types::{CellIndex, NumericalParams, SafeVelocity};
 
 // ============================================================
@@ -117,6 +119,197 @@ impl Mul<f64> for ConservedState {
 }
 
 // ============================================================
+// 动态标量场（示踪剂等）
+// ============================================================
+
+/// 动态标量场集合，按名称管理示踪剂等扩展字段
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DynamicScalars {
+    /// 单元数量
+    #[serde(default)]
+    len: usize,
+    /// 字段名称列表（顺序即存储顺序）
+    #[serde(default)]
+    names: Vec<String>,
+    /// 数据存储
+    #[serde(default)]
+    data: Vec<AlignedVec<f64>>,
+}
+
+impl DynamicScalars {
+    /// 创建空集合
+    pub fn new(len: usize) -> Self {
+        Self {
+            len,
+            names: Vec::new(),
+            data: Vec::new(),
+        }
+    }
+
+    /// 创建指定数量的匿名示踪剂字段（名称为 tracer_i）
+    pub fn with_count(len: usize, count: usize) -> Self {
+        let mut scalars = Self::new(len);
+        for i in 0..count {
+            scalars.register(format!("tracer_{i}"));
+        }
+        scalars
+    }
+
+    /// 当前单元数量
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// 字段数量
+    #[inline]
+    pub fn count(&self) -> usize {
+        self.data.len()
+    }
+
+    /// 字段名称列表
+    #[inline]
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// 注册一个新字段，如已存在则直接返回索引
+    pub fn register(&mut self, name: impl Into<String>) -> usize {
+        let name = name.into();
+        if let Some(pos) = self.names.iter().position(|n| n == &name) {
+            // 确保长度一致
+            self.data[pos].resize(self.len);
+            return pos;
+        }
+
+        self.names.push(name);
+        self.data.push(AlignedVec::zeros(self.len));
+        self.data.len() - 1
+    }
+
+    /// 按索引获取只读切片
+    #[inline]
+    pub fn get(&self, idx: usize) -> Option<&[f64]> {
+        self.data.get(idx).map(|v| v.as_slice())
+    }
+
+    /// 按索引获取可变切片
+    #[inline]
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut [f64]> {
+        self.data.get_mut(idx).map(|v| v.as_mut_slice())
+    }
+
+    /// 按名称获取只读切片
+    pub fn get_by_name(&self, name: &str) -> Option<&[f64]> {
+        self.names.iter().position(|n| n == name).and_then(|i| self.get(i))
+    }
+
+    /// 按名称获取可变切片
+    pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut [f64]> {
+        if let Some(pos) = self.names.iter().position(|n| n == name) {
+            return self.get_mut(pos);
+        }
+        None
+    }
+
+    /// 将所有字段清零
+    pub fn clear_all(&mut self) {
+        for field in &mut self.data {
+            field.as_mut_slice().fill(0.0);
+        }
+    }
+
+    /// 调整单元长度并保持已有数据（新增部分填零）
+    pub fn resize_len(&mut self, len: usize) {
+        self.len = len;
+        for field in &mut self.data {
+            field.resize(len);
+        }
+    }
+
+    /// 按另一个集合的布局对齐（名称、数量、长度），但不复制数据
+    pub fn match_layout(&mut self, other: &Self) {
+        if self.len != other.len || self.names != other.names {
+            self.len = other.len;
+            self.names = other.names.clone();
+            self.data = other
+                .data
+                .iter()
+                .map(|_| AlignedVec::zeros(other.len))
+                .collect();
+        } else {
+            self.resize_len(other.len);
+        }
+    }
+
+    /// 复制数据并对齐布局
+    pub fn copy_from(&mut self, other: &Self) {
+        self.match_layout(other);
+        for (dst, src) in self.data.iter_mut().zip(other.data.iter()) {
+            dst.as_mut_slice().copy_from_slice(src.as_slice());
+        }
+    }
+
+    /// self += scale * rhs
+    pub fn add_scaled(&mut self, rhs: &Self, scale: f64) {
+        self.match_layout(rhs);
+        for (dst, src) in self.data.iter_mut().zip(rhs.data.iter()) {
+            for (d, s) in dst.as_mut_slice().iter_mut().zip(src.as_slice()) {
+                *d += scale * s;
+            }
+        }
+    }
+
+    /// 设置字段数量，多余的截断，不足的以 tracer_i 填充
+    pub fn set_count(&mut self, count: usize) {
+        self.names.truncate(count);
+        self.data.truncate(count);
+        while self.data.len() < count {
+            let idx = self.data.len();
+            self.names.push(format!("tracer_{idx}"));
+            self.data.push(AlignedVec::zeros(self.len));
+        }
+    }
+
+    /// self = a * A + b * B
+    pub fn linear_combine(&mut self, a: f64, state_a: &Self, b: f64, state_b: &Self) {
+        debug_assert_eq!(state_a.names, state_b.names, "示踪剂字段布局不一致");
+        self.match_layout(state_a);
+        for ((dst, sa), sb) in self
+            .data
+            .iter_mut()
+            .zip(state_a.data.iter())
+            .zip(state_b.data.iter())
+        {
+            for ((d, a_val), b_val) in dst
+                .as_mut_slice()
+                .iter_mut()
+                .zip(sa.as_slice())
+                .zip(sb.as_slice())
+            {
+                *d = a * a_val + b * b_val;
+            }
+        }
+    }
+
+    /// self = a * self + b * other
+    pub fn axpy(&mut self, a: f64, b: f64, other: &Self) {
+        self.match_layout(other);
+        for (dst, src) in self.data.iter_mut().zip(other.data.iter()) {
+            for (d, s) in dst.as_mut_slice().iter_mut().zip(src.as_slice()) {
+                *d = a * *d + b * s;
+            }
+        }
+    }
+
+    /// 迭代所有字段的可变存储
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut AlignedVec<f64>> {
+        self.data.iter_mut()
+    }
+}
+
+// ============================================================
 // 浅水方程状态 (SoA 布局)
 // ============================================================
 
@@ -129,17 +322,28 @@ pub struct ShallowWaterState {
     n_cells: usize,
 
     /// 水深 [m]
-    pub h: Vec<f64>,
+    pub h: AlignedVec<f64>,
     /// x 方向动量 [m²/s]
-    pub hu: Vec<f64>,
+    pub hu: AlignedVec<f64>,
     /// y 方向动量 [m²/s]
-    pub hv: Vec<f64>,
+    pub hv: AlignedVec<f64>,
     /// 底床高程 [m]
-    pub z: Vec<f64>,
+    pub z: AlignedVec<f64>,
 
-    /// 可选的标量浓度场
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hc: Option<Vec<f64>>,
+    /// x 方向速度 [m/s]（预计算，用于半隐式求解器）
+    #[serde(default)]
+    pub u: AlignedVec<f64>,
+    /// y 方向速度 [m/s]（预计算，用于半隐式求解器）
+    #[serde(default)]
+    pub v: AlignedVec<f64>,
+
+    /// 动态示踪剂字段
+    #[serde(default)]
+    pub tracers: DynamicScalars,
+
+    /// 字段注册表（元数据）
+    #[serde(default = "FieldRegistry::shallow_water")]
+    pub field_registry: FieldRegistry,
 }
 
 impl ShallowWaterState {
@@ -147,24 +351,22 @@ impl ShallowWaterState {
     pub fn new(n_cells: usize) -> Self {
         Self {
             n_cells,
-            h: vec![0.0; n_cells],
-            hu: vec![0.0; n_cells],
-            hv: vec![0.0; n_cells],
-            z: vec![0.0; n_cells],
-            hc: None,
+            h: AlignedVec::zeros(n_cells),
+            hu: AlignedVec::zeros(n_cells),
+            hv: AlignedVec::zeros(n_cells),
+            z: AlignedVec::zeros(n_cells),
+            u: AlignedVec::zeros(n_cells),
+            v: AlignedVec::zeros(n_cells),
+            tracers: DynamicScalars::new(n_cells),
+            field_registry: FieldRegistry::shallow_water(),
         }
     }
 
     /// 创建带标量的状态
     pub fn with_scalar(n_cells: usize) -> Self {
-        Self {
-            n_cells,
-            h: vec![0.0; n_cells],
-            hu: vec![0.0; n_cells],
-            hv: vec![0.0; n_cells],
-            z: vec![0.0; n_cells],
-            hc: Some(vec![0.0; n_cells]),
-        }
+        let mut state = Self::new(n_cells);
+        state.register_tracer("tracer_0", "");
+        state
     }
 
     /// 从初始水位和底床创建（冷启动）
@@ -175,23 +377,31 @@ impl ShallowWaterState {
 
         Self {
             n_cells,
-            h,
-            hu: vec![0.0; n_cells],
-            hv: vec![0.0; n_cells],
-            z: z_bed.to_vec(),
-            hc: None,
+            h: AlignedVec::from_vec(h),
+            hu: AlignedVec::zeros(n_cells),
+            hv: AlignedVec::zeros(n_cells),
+            z: AlignedVec::from_vec(z_bed.to_vec()),
+            u: AlignedVec::zeros(n_cells),
+            v: AlignedVec::zeros(n_cells),
+            tracers: DynamicScalars::new(n_cells),
+            field_registry: FieldRegistry::shallow_water(),
         }
     }
 
     /// 克隆结构（不复制数据，创建零初始化的状态）
     pub fn clone_structure(&self) -> Self {
+        let mut tracers = DynamicScalars::new(self.n_cells);
+        tracers.match_layout(&self.tracers);
         Self {
             n_cells: self.n_cells,
-            h: vec![0.0; self.n_cells],
-            hu: vec![0.0; self.n_cells],
-            hv: vec![0.0; self.n_cells],
+            h: AlignedVec::zeros(self.n_cells),
+            hu: AlignedVec::zeros(self.n_cells),
+            hv: AlignedVec::zeros(self.n_cells),
             z: self.z.clone(),
-            hc: self.hc.as_ref().map(|_| vec![0.0; self.n_cells]),
+            u: AlignedVec::zeros(self.n_cells),
+            v: AlignedVec::zeros(self.n_cells),
+            tracers,
+            field_registry: self.field_registry.clone(),
         }
     }
 
@@ -199,6 +409,53 @@ impl ShallowWaterState {
     #[inline]
     pub fn n_cells(&self) -> usize {
         self.n_cells
+    }
+
+    /// 注册一个新的示踪剂字段，若已存在则返回其索引
+    pub fn register_tracer(&mut self, name: impl Into<String>, unit: impl Into<String>) -> usize {
+        let name = name.into();
+        let idx = self.tracers.register(name.clone());
+        if !self.field_registry.contains(&name) {
+            self.field_registry
+                .register(FieldMeta::cell_scalar(name.clone(), unit.into()).with_desc("示踪剂标量"));
+        }
+        idx
+    }
+
+    /// 获取示踪剂数量
+    #[inline]
+    pub fn tracer_count(&self) -> usize {
+        self.tracers.count()
+    }
+
+    /// 获取所有示踪剂名称
+    #[inline]
+    pub fn tracer_names(&self) -> &[String] {
+        self.tracers.names()
+    }
+
+    /// 按索引获取示踪剂切片
+    #[inline]
+    pub fn tracer_slice(&self, idx: usize) -> Option<&[f64]> {
+        self.tracers.get(idx)
+    }
+
+    /// 按索引获取可变示踪剂切片
+    #[inline]
+    pub fn tracer_slice_mut(&mut self, idx: usize) -> Option<&mut [f64]> {
+        self.tracers.get_mut(idx)
+    }
+
+    /// 按名称获取示踪剂切片
+    #[inline]
+    pub fn tracer_by_name(&self, name: &str) -> Option<&[f64]> {
+        self.tracers.get_by_name(name)
+    }
+
+    /// 按名称获取可变示踪剂切片
+    #[inline]
+    pub fn tracer_by_name_mut(&mut self, name: &str) -> Option<&mut [f64]> {
+        self.tracers.get_mut_by_name(name)
     }
 
     // ========== 状态访问 ==========
@@ -277,9 +534,9 @@ impl ShallowWaterState {
         self.h.fill(0.0);
         self.hu.fill(0.0);
         self.hv.fill(0.0);
-        if let Some(ref mut hc) = self.hc {
-            hc.fill(0.0);
-        }
+        self.u.fill(0.0);
+        self.v.fill(0.0);
+        self.tracers.clear_all();
     }
 
     // ========== 切片访问 ==========
@@ -354,9 +611,9 @@ impl ShallowWaterState {
         self.h.copy_from_slice(&other.h);
         self.hu.copy_from_slice(&other.hu);
         self.hv.copy_from_slice(&other.hv);
-        if let (Some(ref mut dst), Some(ref src)) = (&mut self.hc, &other.hc) {
-            dst.copy_from_slice(src);
-        }
+        self.u.copy_from_slice(&other.u);
+        self.v.copy_from_slice(&other.v);
+        self.tracers.copy_from(&other.tracers);
     }
 
     /// 添加缩放的 RHS: self += scale * rhs
@@ -366,6 +623,7 @@ impl ShallowWaterState {
             self.hu[i] += scale * rhs.dhu_dt[i];
             self.hv[i] += scale * rhs.dhv_dt[i];
         }
+        self.tracers.add_scaled(&rhs.tracer_rhs, scale);
     }
 
     /// 二元线性组合: self = a*A + b*B
@@ -377,15 +635,10 @@ impl ShallowWaterState {
             self.h[i] = a * state_a.h[i] + b * state_b.h[i];
             self.hu[i] = a * state_a.hu[i] + b * state_b.hu[i];
             self.hv[i] = a * state_a.hv[i] + b * state_b.hv[i];
+            self.u[i] = a * state_a.u[i] + b * state_b.u[i];
+            self.v[i] = a * state_a.v[i] + b * state_b.v[i];
         }
-
-        if let (Some(ref mut dst), Some(ref src_a), Some(ref src_b)) =
-            (&mut self.hc, &state_a.hc, &state_b.hc)
-        {
-            for i in 0..self.n_cells {
-                dst[i] = a * src_a[i] + b * src_b[i];
-            }
-        }
+        self.tracers.linear_combine(a, &state_a.tracers, b, &state_b.tracers);
     }
 
     /// 自线性组合: self = a * self + b * other
@@ -396,13 +649,10 @@ impl ShallowWaterState {
             self.h[i] = a * self.h[i] + b * other.h[i];
             self.hu[i] = a * self.hu[i] + b * other.hu[i];
             self.hv[i] = a * self.hv[i] + b * other.hv[i];
+            self.u[i] = a * self.u[i] + b * other.u[i];
+            self.v[i] = a * self.v[i] + b * other.v[i];
         }
-
-        if let (Some(ref mut dst), Some(ref src_b)) = (&mut self.hc, &other.hc) {
-            for i in 0..self.n_cells {
-                dst[i] = a * dst[i] + b * src_b[i];
-            }
-        }
+        self.tracers.axpy(a, b, &other.tracers);
     }
 
     /// 强制正性约束
@@ -413,10 +663,10 @@ impl ShallowWaterState {
             }
         }
 
-        if let Some(ref mut hc) = self.hc {
-            for c in hc.iter_mut() {
-                if *c < 0.0 {
-                    *c = 0.0;
+        for tracer in self.tracers.iter_mut() {
+            for v in tracer.as_mut_slice() {
+                if *v < 0.0 {
+                    *v = 0.0;
                 }
             }
         }
@@ -485,34 +735,31 @@ impl ShallowWaterState {
 #[derive(Debug, Clone)]
 pub struct RhsBuffers {
     /// 水深变化率 [m/s]
-    pub dh_dt: Vec<f64>,
+    pub dh_dt: AlignedVec<f64>,
     /// x 动量变化率 [m²/s²]
-    pub dhu_dt: Vec<f64>,
+    pub dhu_dt: AlignedVec<f64>,
     /// y 动量变化率 [m²/s²]
-    pub dhv_dt: Vec<f64>,
+    pub dhv_dt: AlignedVec<f64>,
     /// 标量示踪剂变化率（可选）
-    pub tracer_rhs: Vec<Vec<f64>>,
+    pub tracer_rhs: DynamicScalars,
 }
 
 impl RhsBuffers {
     /// 创建新的 RHS 缓冲区
     pub fn new(n_cells: usize) -> Self {
         Self {
-            dh_dt: vec![0.0; n_cells],
-            dhu_dt: vec![0.0; n_cells],
-            dhv_dt: vec![0.0; n_cells],
-            tracer_rhs: Vec::new(),
+            dh_dt: AlignedVec::zeros(n_cells),
+            dhu_dt: AlignedVec::zeros(n_cells),
+            dhv_dt: AlignedVec::zeros(n_cells),
+            tracer_rhs: DynamicScalars::new(n_cells),
         }
     }
 
     /// 创建带有示踪剂的 RHS 缓冲区
     pub fn with_tracers(n_cells: usize, n_tracers: usize) -> Self {
-        Self {
-            dh_dt: vec![0.0; n_cells],
-            dhu_dt: vec![0.0; n_cells],
-            dhv_dt: vec![0.0; n_cells],
-            tracer_rhs: (0..n_tracers).map(|_| vec![0.0; n_cells]).collect(),
-        }
+        let mut rhs = Self::new(n_cells);
+        rhs.tracer_rhs.set_count(n_tracers);
+        rhs
     }
 
     /// 获取单元数量
@@ -522,7 +769,7 @@ impl RhsBuffers {
 
     /// 获取示踪剂数量
     pub fn n_tracers(&self) -> usize {
-        self.tracer_rhs.len()
+        self.tracer_rhs.count()
     }
 
     /// 重置为零
@@ -530,20 +777,21 @@ impl RhsBuffers {
         self.dh_dt.fill(0.0);
         self.dhu_dt.fill(0.0);
         self.dhv_dt.fill(0.0);
-        for tracer in &mut self.tracer_rhs {
-            tracer.fill(0.0);
-        }
+        self.tracer_rhs.clear_all();
     }
 
     /// 调整大小
     pub fn resize(&mut self, n_cells: usize, n_tracers: usize) {
-        self.dh_dt.resize(n_cells, 0.0);
-        self.dhu_dt.resize(n_cells, 0.0);
-        self.dhv_dt.resize(n_cells, 0.0);
-        self.tracer_rhs.resize_with(n_tracers, || vec![0.0; n_cells]);
-        for tracer in &mut self.tracer_rhs {
-            tracer.resize(n_cells, 0.0);
-        }
+        self.dh_dt.resize(n_cells);
+        self.dhu_dt.resize(n_cells);
+        self.dhv_dt.resize(n_cells);
+        self.tracer_rhs.resize_len(n_cells);
+        self.tracer_rhs.set_count(n_tracers);
+    }
+
+    /// 将示踪剂布局对齐到给定状态
+    pub fn match_tracers(&mut self, layout: &DynamicScalars) {
+        self.tracer_rhs.match_layout(layout);
     }
 
     /// 添加通量贡献

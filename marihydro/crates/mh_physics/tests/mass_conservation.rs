@@ -20,6 +20,7 @@ use mh_physics::engine::{ShallowWaterSolver, SolverConfig, NumericalScheme};
 use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
 use mh_geo::{Point2D, Point3D};
+use mh_foundation::memory::AlignedVec;
 
 // ============================================================================
 // 测试辅助函数
@@ -295,6 +296,15 @@ fn create_rectangular_mesh(
             .collect(),
         min_cell_size: dx.min(dy),
         max_cell_size: dx.max(dy),
+        // AMR 预分配字段
+        cell_refinement_level: vec![0; n_cells],
+        cell_parent: (0..n_cells as u32).collect(),
+        ghost_capacity: 0,
+        // ID 映射与排列字段
+        cell_original_id: Vec::new(),
+        face_original_id: Vec::new(),
+        cell_permutation: Vec::new(),
+        cell_inv_permutation: Vec::new(),
     };
     
     PhysicsMesh::from_frozen(&frozen)
@@ -438,10 +448,10 @@ fn test_mass_conservation_wetting_drying() {
     
     // 部分干湿初始条件
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![0.1, 0.1, 0.0, 0.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![0.1, 0.1, 0.0, 0.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
         .expect("模拟失败");
@@ -461,10 +471,10 @@ fn test_mass_conservation_all_wet() {
     
     // 全湿
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 1.0, 1.0, 1.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 1.0, 1.0, 1.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
         .expect("模拟失败");
@@ -481,10 +491,10 @@ fn test_mass_conservation_all_dry() {
     
     // 全干
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![0.0, 0.0, 0.0, 0.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![0.0, 0.0, 0.0, 0.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
         .expect("模拟失败");
@@ -504,10 +514,10 @@ fn test_mass_conservation_single_wet_cell() {
     
     // 仅一个单元有水
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![0.5, 0.0, 0.0, 0.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![0.5, 0.0, 0.0, 0.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 200)
         .expect("模拟失败");
@@ -529,10 +539,10 @@ fn test_lake_at_rest_flat_bed() {
     
     // 平底静水
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0; 4];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0; 4]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let initial_h = state.h.clone();
     
@@ -569,8 +579,8 @@ fn test_lake_at_rest_sloped_bed() {
         state.h[i] = (eta - z).max(0.0);
         state.z[i] = z;
     }
-    state.hu = vec![0.0; n_cells];
-    state.hv = vec![0.0; n_cells];
+    state.hu = AlignedVec::from_vec(vec![0.0; n_cells]);
+    state.hv = AlignedVec::from_vec(vec![0.0; n_cells]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 1000)
         .expect("模拟失败");
@@ -618,8 +628,8 @@ fn test_lake_at_rest_bump() {
         state.h[i] = (eta - z).max(0.0);
         state.z[i] = z;
     }
-    state.hu = vec![0.0; n_cells];
-    state.hv = vec![0.0; n_cells];
+    state.hu = AlignedVec::from_vec(vec![0.0; n_cells]);
+    state.hv = AlignedVec::from_vec(vec![0.0; n_cells]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 500)
         .expect("模拟失败");
@@ -642,10 +652,10 @@ fn test_dam_break_mass_conservation() {
     
     // 溃坝初始条件
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 0.1, 1.0, 0.1];  // 左高右低
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 0.1, 1.0, 0.1]);  // 左高右低
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.0005, 200)
         .expect("模拟失败");
@@ -669,10 +679,10 @@ fn test_wetting_drying_cycle() {
     
     // 中心有水，向外扩散
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![0.2, 0.2, 0.0, 0.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![0.2, 0.2, 0.0, 0.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 500)
         .expect("模拟失败");
@@ -721,10 +731,10 @@ fn test_extreme_depth_ratio() {
     
     // 极端水深比 (100:1)
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 0.01, 1.0, 0.01];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 0.01, 1.0, 0.01]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.0001, 100)
         .expect("极端水深比模拟失败");
@@ -745,10 +755,10 @@ fn test_thin_film_stability() {
     // 极薄水层
     let thin_h = 2e-4;
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![thin_h; 4];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![thin_h; 4]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
         .expect("薄膜模拟失败");
@@ -767,10 +777,10 @@ fn test_high_velocity_wet_dry_interface() {
     
     // 高速流冲击干区
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 0.0, 1.0, 0.0];
-    state.z = vec![0.0; 4];
-    state.hu = vec![1.0, 0.0, 1.0, 0.0];  // 高速向右
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 0.0, 1.0, 0.0]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![1.0, 0.0, 1.0, 0.0]);  // 高速向右
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.0001, 100)
         .expect("高速干湿界面模拟失败");
@@ -787,10 +797,10 @@ fn test_very_deep_water() {
     
     // 深水 (100m)
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![100.0; 4];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![100.0; 4]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let result = run_simulation(&mut solver, &mut state, &mesh, 0.0001, 100)
         .expect("深水模拟失败");
@@ -810,10 +820,10 @@ fn test_long_time_integration() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
     
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0; 4];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.1; 4];  // 小速度
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0; 4]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.1; 4]);  // 小速度
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let initial_mass = compute_total_mass(&state, &mesh);
     
@@ -844,10 +854,10 @@ fn test_error_growth_rate() {
     let config = SolverConfig::default();
     
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 0.5, 1.0, 0.5];
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 0.5, 1.0, 0.5]);
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let initial_mass = compute_total_mass(&state, &mesh);
     let dt = 0.001;
@@ -957,10 +967,10 @@ fn test_first_vs_second_order_conservation() {
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
         
         let mut state = ShallowWaterState::new(4);
-        state.h = vec![0.1, 0.1, 0.0, 0.0];
-        state.z = vec![0.0; 4];
-        state.hu = vec![0.0; 4];
-        state.hv = vec![0.0; 4];
+        state.h = AlignedVec::from_vec(vec![0.1, 0.1, 0.0, 0.0]);
+        state.z = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hv = AlignedVec::from_vec(vec![0.0; 4]);
         
         let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
             .expect(&format!("{} 模拟失败", name));
@@ -1001,10 +1011,10 @@ fn test_conservation_various_thresholds() {
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
         
         let mut state = ShallowWaterState::new(4);
-        state.h = vec![0.1, 0.1, 0.0, 0.0];
-        state.z = vec![0.0; 4];
-        state.hu = vec![0.0; 4];
-        state.hv = vec![0.0; 4];
+        state.h = AlignedVec::from_vec(vec![0.1, 0.1, 0.0, 0.0]);
+        state.z = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hv = AlignedVec::from_vec(vec![0.0; 4]);
         
         let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
             .expect(&format!("h_dry={:.0e} 模拟失败", h_dry));
@@ -1036,10 +1046,10 @@ fn test_conservation_various_cfl() {
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
         
         let mut state = ShallowWaterState::new(4);
-        state.h = vec![1.0, 0.5, 1.0, 0.5];
-        state.z = vec![0.0; 4];
-        state.hu = vec![0.0; 4];
-        state.hv = vec![0.0; 4];
+        state.h = AlignedVec::from_vec(vec![1.0, 0.5, 1.0, 0.5]);
+        state.z = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+        state.hv = AlignedVec::from_vec(vec![0.0; 4]);
         
         // 自适应时间步
         let dt = solver.compute_dt(&state);
@@ -1199,10 +1209,10 @@ fn test_energy_dissipation() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config);
     
     let mut state = ShallowWaterState::new(4);
-    state.h = vec![1.0, 0.5, 1.0, 0.5];  // 有势能差
-    state.z = vec![0.0; 4];
-    state.hu = vec![0.0; 4];
-    state.hv = vec![0.0; 4];
+    state.h = AlignedVec::from_vec(vec![1.0, 0.5, 1.0, 0.5]);  // 有势能差
+    state.z = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hu = AlignedVec::from_vec(vec![0.0; 4]);
+    state.hv = AlignedVec::from_vec(vec![0.0; 4]);
     
     let g = 9.81;
     let mut prev_energy = compute_total_energy(&state, &mesh, g);

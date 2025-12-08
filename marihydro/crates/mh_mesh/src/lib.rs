@@ -58,6 +58,7 @@ pub mod algorithms;
 pub mod spatial_index;
 pub mod locator;
 pub mod converter;
+pub mod topology;
 
 // 重新导出核心类型
 pub use attributes::{
@@ -73,10 +74,14 @@ pub use traits::{
     ValidationStats,
 };
 
-// 重新导出新增模块的核心类型
+// 新增模块：空间索引和点定位
 pub use spatial_index::{CellEnvelope, MeshSpatialIndex, SpatialBounds, SpatialIndexData};
 pub use locator::{
     CachedLocator, LocateResult, LocateTolerance, LocatorCacheStats, MeshLocator,
 };
 pub use converter::{MeshStatisticsExt, SimpleMeshData};
+
+// 网格生成
+pub mod generation;
+pub use generation::{CircularMeshGenerator, RectMeshGenerator};
 

@@ -37,6 +37,10 @@ pub mod sediment;
 pub mod sources;
 pub mod waves;
 
+// 新增模块：字段注册和算子抽象
+pub mod fields;
+pub mod operators;
+
 // 重导出常用类型
 pub use adapter::PhysicsMesh;
 pub use engine::{
@@ -56,6 +60,7 @@ pub use types::{
     BoundaryIndex, CellIndex, FaceIndex, LimiterType, NodeIndex, NumericalParams,
     NumericalParamsBuilder, ParamsValidationError, PhysicalConstants, RiemannSolverType,
     SafeDepth, SafeVelocity, SolverConfig, TimeIntegration,
+    BoundaryValueProvider, ConstantBoundaryProvider, ZeroBoundaryProvider,
 };
 
 // 重导出源项类型

@@ -272,10 +272,13 @@ impl<V: Default, E: Default, F: Default> HalfEdgeMesh<V, E, F> {
             max_cell_size = max_cell_size.max(size);
         }
 
+        // 计算单元数量（在移动前提取）
+        let n_cells = cell_center.len();
+
         FrozenMesh {
             n_nodes: node_coords.len(),
             node_coords,
-            n_cells: cell_center.len(),
+            n_cells,
             cell_center,
             cell_area,
             cell_z_bed,
@@ -302,8 +305,19 @@ impl<V: Default, E: Default, F: Default> HalfEdgeMesh<V, E, F> {
             face_boundary_id,
             min_cell_size,
             max_cell_size,
+            // AMR 预分配字段
+            cell_refinement_level: vec![0; n_cells],
+            cell_parent: (0..n_cells as u32).collect(),
+            ghost_capacity: 0,
+            // ID 映射与排列字段（默认为空）
+            cell_original_id: Vec::new(),
+            face_original_id: Vec::new(),
+            cell_permutation: Vec::new(),
+            cell_inv_permutation: Vec::new(),
         }
+
     }
+
 }
 
 /// 从 FrozenMesh 创建 HalfEdgeMesh

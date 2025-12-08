@@ -1307,6 +1307,15 @@ mod tests {
             face_boundary_id: (0..n_faces).map(|i| if i >= 4 { Some(0) } else { None }).collect(),
             min_cell_size: dx.min(dy),
             max_cell_size: dx.max(dy),
+            // AMR 预分配字段
+            cell_refinement_level: vec![0; 4],
+            cell_parent: vec![0, 1, 2, 3],
+            ghost_capacity: 0,
+            // ID 映射与排列字段
+            cell_original_id: Vec::new(),
+            face_original_id: Vec::new(),
+            cell_permutation: Vec::new(),
+            cell_inv_permutation: Vec::new(),
         };
         
         PhysicsMesh::from_frozen(&frozen)

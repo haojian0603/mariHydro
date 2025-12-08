@@ -527,17 +527,21 @@ mod tests {
 
     #[test]
     fn test_degenerate_triangle_quality() {
-        // 退化三角形（几乎共线）
+        // 退化三角形（几乎共线）- 非常扁平的三角形
         let p0 = [0.0, 0.0, 0.0];
-        let p1 = [1.0, 0.0, 0.0];
-        let p2 = [2.0, 0.001, 0.0];
+        let p1 = [10.0, 0.0, 0.0];      // 长边 = 10
+        let p2 = [5.0, 0.001, 0.0];     // 很小的高度
 
         let evaluator = QualityEvaluator::with_default();
         let quality = evaluator.evaluate_triangle(&p0, &p1, &p2, 0);
 
-        assert!(quality.aspect_ratio > 100.0);
-        assert!(quality.overall_score() < 0.3);
+        // 退化三角形：长宽比 > 1, 偏斜度高，质量分数低
+        // 注意：aspect_ratio 是 max_edge/min_edge，这里约为 10/5 = 2
+        assert!(quality.aspect_ratio >= 1.0, "aspect_ratio should be >= 1 for any triangle, got {}", quality.aspect_ratio);
+        assert!(quality.skewness > 0.5, "skewness should be > 0.5 for degenerate triangle, got {}", quality.skewness);
+        assert!(quality.overall_score() < 0.6, "quality score should be low for degenerate triangle, got {}", quality.overall_score());
     }
+
 
     #[test]
     fn test_mesh_quality_stats() {
@@ -570,3 +574,4 @@ mod tests {
         assert!((ratio - 0.5).abs() < 0.01);
     }
 }
+

@@ -1136,6 +1136,110 @@ impl SolverConfig {
 }
 
 // ============================================================
+// 边界值提供者基础 trait
+// ============================================================
+
+/// 边界值提供者基础 trait
+///
+/// 用于提供边界条件的时变值，可用于水位、流量、浓度等。
+/// 实现者需要是 Send + Sync 以支持并行计算。
+///
+/// # 泛型参数
+///
+/// - `T`: 边界值的类型（如 f64 表示标量，DVec2 表示向量）
+///
+/// # 示例
+///
+/// ```ignore
+/// use mh_physics::types::BoundaryValueProvider;
+///
+/// struct ConstantWaterLevel(f64);
+///
+/// impl BoundaryValueProvider<f64> for ConstantWaterLevel {
+///     fn get_value(&self, _face_idx: usize, _time: f64) -> Option<f64> {
+///         Some(self.0)
+///     }
+/// }
+/// ```
+pub trait BoundaryValueProvider<T>: Send + Sync {
+    /// 获取指定边界面在给定时间的边界值
+    ///
+    /// # 参数
+    ///
+    /// - `face_idx`: 边界面索引
+    /// - `time`: 模拟时间 [s]
+    ///
+    /// # 返回
+    ///
+    /// 边界值，若该面无边界值则返回 None
+    fn get_value(&self, face_idx: usize, time: f64) -> Option<T>;
+
+    /// 批量获取边界值
+    ///
+    /// 默认实现逐个调用 `get_value`，可重写以优化性能。
+    fn get_values_batch(&self, face_indices: &[usize], time: f64, out: &mut [Option<T>])
+    where
+        T: Clone,
+    {
+        for (i, &face_idx) in face_indices.iter().enumerate() {
+            out[i] = self.get_value(face_idx, time);
+        }
+    }
+
+    /// 检查是否为指定面提供边界值
+    fn provides_for(&self, face_idx: usize) -> bool {
+        // 默认实现：尝试获取 t=0 时的值
+        self.get_value(face_idx, 0.0).is_some()
+    }
+}
+
+/// 常量边界值提供者
+///
+/// 为所有边界面提供相同的常量值。
+#[derive(Debug, Clone)]
+pub struct ConstantBoundaryProvider<T: Clone + Send + Sync> {
+    value: T,
+}
+
+impl<T: Clone + Send + Sync> ConstantBoundaryProvider<T> {
+    /// 创建常量边界值提供者
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+
+    /// 获取常量值
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T: Clone + Send + Sync> BoundaryValueProvider<T> for ConstantBoundaryProvider<T> {
+    fn get_value(&self, _face_idx: usize, _time: f64) -> Option<T> {
+        Some(self.value.clone())
+    }
+
+    fn provides_for(&self, _face_idx: usize) -> bool {
+        true
+    }
+}
+
+/// 零边界值提供者
+///
+/// 为所有边界面提供零值（适用于标量）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ZeroBoundaryProvider;
+
+impl BoundaryValueProvider<f64> for ZeroBoundaryProvider {
+    fn get_value(&self, _face_idx: usize, _time: f64) -> Option<f64> {
+        Some(0.0)
+    }
+
+    fn provides_for(&self, _face_idx: usize) -> bool {
+        true
+    }
+}
+
+// ============================================================
 // 单元测试
 // ============================================================
 

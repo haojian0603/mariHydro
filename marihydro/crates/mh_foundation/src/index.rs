@@ -495,3 +495,223 @@ mod tests {
         assert_eq!(idx, deserialized);
     }
 }
+
+// ============================================================================
+// 轻量级索引类型（用于 FrozenMesh 和计算路径）
+// ============================================================================
+
+/// 无效索引常量（用于哨兵值）
+pub const INVALID_IDX: u32 = u32::MAX;
+
+/// 轻量级单元索引（4 字节，用于计算路径）
+/// 
+/// 比 `CellIndex` 更轻量，不带代际验证。
+/// 适用于 FrozenMesh 等静态拓扑结构。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct CellIdx(pub u32);
+
+impl CellIdx {
+    /// 无效索引哨兵值
+    pub const INVALID: Self = Self(INVALID_IDX);
+    
+    /// 创建新索引
+    #[inline]
+    pub const fn new(idx: u32) -> Self { Self(idx) }
+    
+    /// 从 usize 创建
+    #[inline]
+    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    
+    /// 是否有效
+    #[inline]
+    pub const fn is_valid(self) -> bool { self.0 != INVALID_IDX }
+    
+    /// 是否无效
+    #[inline]
+    pub const fn is_invalid(self) -> bool { self.0 == INVALID_IDX }
+    
+    /// 转换为 usize
+    #[inline]
+    pub const fn as_usize(self) -> usize { self.0 as usize }
+    
+    /// 获取原始值
+    #[inline]
+    pub const fn raw(self) -> u32 { self.0 }
+    
+    /// 转换为 Option（无效则返回 None）
+    #[inline]
+    pub fn to_option(self) -> Option<usize> {
+        if self.is_valid() { Some(self.as_usize()) } else { None }
+    }
+}
+
+impl From<u32> for CellIdx {
+    #[inline] fn from(v: u32) -> Self { Self(v) }
+}
+
+impl From<usize> for CellIdx {
+    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+}
+
+/// 轻量级面索引（4 字节，用于计算路径）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct FaceIdx(pub u32);
+
+impl FaceIdx {
+    /// 无效索引哨兵值
+    pub const INVALID: Self = Self(INVALID_IDX);
+    
+    /// 创建新索引
+    #[inline]
+    pub const fn new(idx: u32) -> Self { Self(idx) }
+    
+    /// 从 usize 创建
+    #[inline]
+    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    
+    /// 是否有效
+    #[inline]
+    pub const fn is_valid(self) -> bool { self.0 != INVALID_IDX }
+    
+    /// 是否无效
+    #[inline]
+    pub const fn is_invalid(self) -> bool { self.0 == INVALID_IDX }
+    
+    /// 转换为 usize
+    #[inline]
+    pub const fn as_usize(self) -> usize { self.0 as usize }
+    
+    /// 获取原始值
+    #[inline]
+    pub const fn raw(self) -> u32 { self.0 }
+    
+    /// 转换为 Option
+    #[inline]
+    pub fn to_option(self) -> Option<usize> {
+        if self.is_valid() { Some(self.as_usize()) } else { None }
+    }
+}
+
+impl From<u32> for FaceIdx {
+    #[inline] fn from(v: u32) -> Self { Self(v) }
+}
+
+impl From<usize> for FaceIdx {
+    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+}
+
+/// 轻量级节点索引（4 字节，用于计算路径）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct NodeIdx(pub u32);
+
+impl NodeIdx {
+    /// 无效索引哨兵值
+    pub const INVALID: Self = Self(INVALID_IDX);
+    
+    /// 创建新索引
+    #[inline]
+    pub const fn new(idx: u32) -> Self { Self(idx) }
+    
+    /// 从 usize 创建
+    #[inline]
+    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    
+    /// 是否有效
+    #[inline]
+    pub const fn is_valid(self) -> bool { self.0 != INVALID_IDX }
+    
+    /// 是否无效
+    #[inline]
+    pub const fn is_invalid(self) -> bool { self.0 == INVALID_IDX }
+    
+    /// 转换为 usize
+    #[inline]
+    pub const fn as_usize(self) -> usize { self.0 as usize }
+    
+    /// 获取原始值
+    #[inline]
+    pub const fn raw(self) -> u32 { self.0 }
+    
+    /// 转换为 Option
+    #[inline]
+    pub fn to_option(self) -> Option<usize> {
+        if self.is_valid() { Some(self.as_usize()) } else { None }
+    }
+}
+
+impl From<u32> for NodeIdx {
+    #[inline] fn from(v: u32) -> Self { Self(v) }
+}
+
+impl From<usize> for NodeIdx {
+    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+}
+
+/// 边界条件 ID（4 字节）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct BoundaryId(pub u32);
+
+impl BoundaryId {
+    /// 无效边界 ID（非边界面）
+    pub const INVALID: Self = Self(INVALID_IDX);
+    
+    /// 创建新边界 ID
+    #[inline]
+    pub const fn new(id: u32) -> Self { Self(id) }
+    
+    /// 是否有效边界
+    #[inline]
+    pub const fn is_valid(self) -> bool { self.0 != INVALID_IDX }
+    
+    /// 获取原始值
+    #[inline]
+    pub const fn raw(self) -> u32 { self.0 }
+}
+
+impl From<u32> for BoundaryId {
+    #[inline] fn from(v: u32) -> Self { Self(v) }
+}
+
+#[cfg(test)]
+mod simple_idx_tests {
+    use super::*;
+    
+    #[test]
+    fn test_cell_idx() {
+        let idx = CellIdx::new(10);
+        assert!(idx.is_valid());
+        assert_eq!(idx.as_usize(), 10);
+        assert_eq!(idx.to_option(), Some(10));
+        
+        let invalid = CellIdx::INVALID;
+        assert!(invalid.is_invalid());
+        assert_eq!(invalid.to_option(), None);
+    }
+    
+    #[test]
+    fn test_face_idx() {
+        let idx = FaceIdx::from_usize(42);
+        assert!(idx.is_valid());
+        assert_eq!(idx.raw(), 42);
+    }
+    
+    #[test]
+    fn test_node_idx() {
+        let idx: NodeIdx = 100u32.into();
+        assert!(idx.is_valid());
+        assert_eq!(idx.as_usize(), 100);
+    }
+    
+    #[test]
+    fn test_boundary_id() {
+        let bid = BoundaryId::new(0);
+        assert!(bid.is_valid());
+        
+        let invalid = BoundaryId::INVALID;
+        assert!(!invalid.is_valid());
+    }
+}

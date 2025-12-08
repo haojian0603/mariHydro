@@ -11,7 +11,7 @@ members = [
     "crates/mh_physics",
     "crates/mh_io",
     "crates/mh_workflow",
-    "apps/mh_desktop/src-tauri",
+    # "apps/mh_desktop/src-tauri",  # Tauri app 目录为空，暂时禁用
     "apps/mh_cli",
 ]
 

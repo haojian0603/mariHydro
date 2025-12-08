@@ -6,6 +6,9 @@
 //!
 //! # 模块概览
 //!
+//! - scalar: 统一标量类型（f64/f32）和物理常量
+//! - dimension: 编译期维度系统（2D/3D）
+//! - memory: 对齐内存容器和预分配策略
 //! - index: 强类型索引系统，带代际验证
 //! - arena: 泛型 Arena 内存池
 //! - float: 安全浮点数类型和数值常量
@@ -14,7 +17,7 @@
 //!
 //! # 设计原则
 //!
-//! 1. **零外部依赖**: 仅依赖 serde 和 thiserror
+//! 1. **零外部依赖**: 仅依赖 serde、thiserror、bytemuck
 //! 2. **类型安全**: 编译期防止索引误用
 //! 3. **零开销抽象**: release 模式下最小化运行时开销
 //! 4. **悬垂检测**: 通过代际机制检测已删除元素的访问
@@ -45,28 +48,41 @@
 #![warn(clippy::all)]
 
 pub mod arena;
+pub mod dimension;
 pub mod error;
 pub mod float;
 pub mod index;
+pub mod memory;
+pub mod metrics;
+pub mod scalar;
 pub mod validation;
 
 // 重导出常用类型
 pub use arena::Arena;
+pub use dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
 pub use error::{MhError, MhResult};
 pub use float::SafeF64;
 pub use index::{
     BoundaryIndex, CellIndex, FaceIndex, HalfEdgeIndex, Idx, NodeIndex, VertexIndex,
+    CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,
 };
+pub use memory::{AlignedVec, Alignment, CpuAlign, GpuAlign};
+pub use scalar::{Scalar, ScalarOps};
 
 /// Prelude 模块，包含常用类型
 pub mod prelude {
     pub use crate::arena::Arena;
+    pub use crate::dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
     pub use crate::error::{MhError, MhResult};
     pub use crate::float::{SafeF64, safe_div, safe_sqrt};
     pub use crate::index::{
         BoundaryIndex, CellIndex, FaceIndex, HalfEdgeIndex, Idx, NodeIndex, VertexIndex,
+        CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,
         cell, face, halfedge, node, vertex,
     };
+    pub use crate::memory::{AlignedVec, CpuAlign, GpuAlign};
+    pub use crate::scalar::{Scalar, ScalarOps};
     pub use crate::validation::{ValidationReport, ValidationError, ValidationWarning};
     pub use crate::{ensure, require};
 }
+

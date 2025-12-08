@@ -86,7 +86,30 @@ pub struct FrozenMesh {
     pub min_cell_size: f64,
     /// 最大单元尺寸
     pub max_cell_size: f64,
+
+    // ===== AMR 预分配字段 (Phase 2+) =====
+    /// 单元细化级别 (0=基础网格, 1,2,3=细化级别)
+    pub cell_refinement_level: Vec<u8>,
+    /// 父单元索引 (顶层单元指向自身)
+    pub cell_parent: Vec<u32>,
+    /// Ghost 单元容量 (用于 MPI 边界交换)
+    pub ghost_capacity: usize,
+
+    // ===== ID 映射与排列 =====
+    /// 原始单元 ID（例如从 MSH 文件中读取的 physical entity id）
+    #[serde(default)]
+    pub cell_original_id: Vec<u32>,
+    /// 原始面 ID（边界标识）
+    #[serde(default)]
+    pub face_original_id: Vec<u32>,
+    /// 单元排列索引（frozen_idx -> 原始索引）
+    #[serde(default)]
+    pub cell_permutation: Vec<u32>,
+    /// 逆排列（原始索引 -> frozen_idx）
+    #[serde(default)]
+    pub cell_inv_permutation: Vec<u32>,
 }
+
 
 impl Default for FrozenMesh {
     fn default() -> Self {
@@ -127,6 +150,15 @@ impl FrozenMesh {
             face_boundary_id: Vec::new(),
             min_cell_size: f64::MAX,
             max_cell_size: 0.0,
+            // AMR 预分配字段
+            cell_refinement_level: Vec::new(),
+            cell_parent: Vec::new(),
+            ghost_capacity: 0,
+            // ID 映射与排列
+            cell_original_id: Vec::new(),
+            face_original_id: Vec::new(),
+            cell_permutation: Vec::new(),
+            cell_inv_permutation: Vec::new(),
         }
     }
 
@@ -164,6 +196,15 @@ impl FrozenMesh {
             face_boundary_id: Vec::new(),
             min_cell_size: 1.0,
             max_cell_size: 1.0,
+            // AMR 预分配字段
+            cell_refinement_level: vec![0; n_cells],
+            cell_parent: (0..n_cells as u32).collect(),
+            ghost_capacity: 0,
+            // ID 映射与排列
+            cell_original_id: (0..n_cells as u32).collect(),
+            face_original_id: Vec::new(),
+            cell_permutation: (0..n_cells as u32).collect(),
+            cell_inv_permutation: (0..n_cells as u32).collect(),
         }
     }
 
@@ -290,6 +331,47 @@ impl FrozenMesh {
     #[inline]
     pub fn is_boundary_face(&self, face: usize) -> bool {
         face >= self.n_interior_faces
+    }
+
+    // =========================================================================
+    // ID 映射与排列访问
+    // =========================================================================
+
+    /// 获取单元的原始 ID（从网格文件读取）
+    #[inline]
+    pub fn cell_original_id(&self, cell: usize) -> u32 {
+        self.cell_original_id.get(cell).copied().unwrap_or(cell as u32)
+    }
+
+    /// 获取面的原始 ID（边界标识）
+    #[inline]
+    pub fn face_original_id(&self, face: usize) -> u32 {
+        self.face_original_id.get(face).copied().unwrap_or(face as u32)
+    }
+
+    /// 从 frozen 索引获取原始索引
+    #[inline]
+    pub fn to_original_cell(&self, frozen_idx: usize) -> u32 {
+        self.cell_permutation.get(frozen_idx).copied().unwrap_or(frozen_idx as u32)
+    }
+
+    /// 从原始索引获取 frozen 索引
+    #[inline]
+    pub fn from_original_cell(&self, original_idx: usize) -> u32 {
+        self.cell_inv_permutation.get(original_idx).copied().unwrap_or(original_idx as u32)
+    }
+
+    /// 设置单元排列（用于网格重排序后更新映射）
+    pub fn set_permutation(&mut self, perm: Vec<u32>) {
+        let n = perm.len();
+        let mut inv = vec![0u32; n];
+        for (frozen, &orig) in perm.iter().enumerate() {
+            if (orig as usize) < n {
+                inv[orig as usize] = frozen as u32;
+            }
+        }
+        self.cell_permutation = perm;
+        self.cell_inv_permutation = inv;
     }
 
     // =========================================================================

@@ -614,6 +614,15 @@ mod tests {
             face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
             min_cell_size: 1.0,
             max_cell_size: 1.0,
+            // AMR 预分配字段
+            cell_refinement_level: vec![0; 2],
+            cell_parent: vec![0, 1],
+            ghost_capacity: 0,
+            // ID 映射与排列字段
+            cell_original_id: Vec::new(),
+            face_original_id: Vec::new(),
+            cell_permutation: Vec::new(),
+            cell_inv_permutation: Vec::new(),
         }
     }
 }

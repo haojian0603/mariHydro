@@ -11,13 +11,16 @@
 //! - `timestep` - CFL时间步控制
 //! - `solver` - 主求解器
 //! - `parallel` - 并行通量计算
+//! - `semi_implicit` - 半隐式时间推进策略
 //!
 //! # 迁移说明
 //!
 //! 从 legacy_src/physics/engine 迁移，保持算法不变。
 
 pub mod flux_accumulator;
+pub mod friction;
 pub mod parallel;
+pub mod semi_implicit;
 pub mod solver;
 pub mod time_integrator;
 pub mod timestep;
@@ -41,3 +44,5 @@ pub use parallel::{
     ParallelFluxCalculator, ParallelFluxConfig, ParallelFluxConfigBuilder,
     ParallelStrategy, FluxComputeMetrics,
 };
+pub use friction::{ManningFriction, FrictionConfig};
+pub use semi_implicit::{SemiImplicitConfig, SemiImplicitStats, SemiImplicitStrategy};
