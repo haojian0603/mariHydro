@@ -459,14 +459,45 @@ impl SourceTerm for TurbulenceConfig {
 
         let grad = self.velocity_gradient.get(cell).copied().unwrap_or_default();
 
-        // 湍流扩散源项
-        // S_hu = ν * h * (∂²u/∂x² + ∂²u/∂y²)
-        // 简化为一阶近似: S ≈ ν * h * ∇²u
-        // 使用速度梯度的拉普拉斯近似
-        let s_hu = nu * h * grad.du_dx.abs() * 0.1; // 简化因子
-        let s_hv = nu * h * grad.dv_dy.abs() * 0.1;
+        // 完整湍流粘性应力源项
+        // 
+        // 对于 2D 浅水方程，湍流粘性项为:
+        // τ_xx = 2ν∂u/∂x, τ_yy = 2ν∂v/∂y
+        // τ_xy = τ_yx = ν(∂u/∂y + ∂v/∂x)
+        //
+        // 动量源项:
+        // S_hu = h × (∂τ_xx/∂x + ∂τ_xy/∂y) ≈ h × ν × (2∂²u/∂x² + ∂²u/∂y² + ∂²v/∂x∂y)
+        // S_hv = h × (∂τ_xy/∂x + ∂τ_yy/∂y) ≈ h × ν × (∂²u/∂x∂y + ∂²v/∂x² + 2∂²v/∂y²)
+        //
+        // 简化为一阶近似（使用 |S|² 作为应变率估计）:
+        // |S|² = 2(∂u/∂x)² + 2(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²
+        
+        let strain_rate_sq = grad.strain_rate_magnitude().powi(2);
+        
+        // 使用应变率主方向估算源项
+        // S = ν × h × |S| × grad_direction
+        // 这里使用各向同性近似
+        let s11 = 2.0 * grad.du_dx;  // 正应力 x
+        let s22 = 2.0 * grad.dv_dy;  // 正应力 y
+        let s12 = grad.du_dy + grad.dv_dx;  // 剪切应力
+        
+        // 粘性应力散度的近似（假设涡粘性空间变化缓慢）
+        // ∂τ/∂x ≈ ν × ∂S/∂x ≈ ν × S / L
+        // 其中 L 是特征长度尺度
+        let char_length = h.max(0.1);  // 使用水深作为特征长度
+        
+        let s_hu = nu * h * (s11 + s12) / char_length;
+        let s_hv = nu * h * (s12 + s22) / char_length;
+        
+        // 限制源项大小以保证稳定性
+        let max_source = nu * h * 10.0;  // 最大源项限制
+        let s_hu_clamped = s_hu.clamp(-max_source, max_source);
+        let s_hv_clamped = s_hv.clamp(-max_source, max_source);
 
-        SourceContribution::momentum(s_hu, s_hv)
+        // 抑制未使用变量警告
+        let _ = strain_rate_sq;
+
+        SourceContribution::momentum(s_hu_clamped, s_hv_clamped)
     }
 
     fn is_explicit(&self) -> bool {

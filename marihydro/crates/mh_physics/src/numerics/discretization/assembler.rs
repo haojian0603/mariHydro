@@ -155,8 +155,13 @@ impl PressureMatrixAssembler {
             let owner = face.owner;
             let neighbor = face.neighbor.expect("interior face must have neighbor");
 
-            // 面水深（算术平均）
-            let h_f = 0.5 * (state.h[owner] + state.h[neighbor]);
+            // 对称系数：使用调和平均保证对称性
+            let h_o = state.h[owner].max(self.config.h_min);
+            let h_n = state.h[neighbor].max(self.config.h_min);
+            
+            // 调和平均水深（对称）
+            let h_f = 2.0 * h_o * h_n / (h_o + h_n);
+            
             if h_f < self.config.h_min {
                 continue;
             }
@@ -166,7 +171,7 @@ impl PressureMatrixAssembler {
                 continue;
             }
 
-            // 系数 = g * dt² * H_f * L_f / d_{ON}
+            // 对称系数 = g * dt² * H_f * L_f / d_{ON}
             let a_coef = coef * h_f * face.length / dist;
 
             // 如果使用面积加权
@@ -182,9 +187,25 @@ impl PressureMatrixAssembler {
             self.matrix.add(owner, owner, a_o);
             self.matrix.add(owner, neighbor, -a_o);
 
-            // Neighbor 行
+            // Neighbor 行（对称）
             self.matrix.add(neighbor, neighbor, a_n);
             self.matrix.add(neighbor, owner, -a_n);
+
+            // 床面坡度贡献到 RHS
+            let dz = state.z[neighbor] - state.z[owner];
+            let bed_slope_flux = g * h_f * dz * face.length / dist;
+            let rhs_o = if self.config.area_weighted {
+                bed_slope_flux / mesh.cell_area_unchecked(owner)
+            } else {
+                bed_slope_flux
+            };
+            let rhs_n = if self.config.area_weighted {
+                bed_slope_flux / mesh.cell_area_unchecked(neighbor)
+            } else {
+                bed_slope_flux
+            };
+            self.rhs[owner] -= rhs_o * dt;
+            self.rhs[neighbor] += rhs_n * dt;
         }
 
         // 处理边界面（假设零梯度）
@@ -206,8 +227,11 @@ impl PressureMatrixAssembler {
             let diag_idx = self.diag_indices[i];
             let diag = self.matrix.values()[diag_idx];
 
-            if diag.abs() < self.config.dry_factor {
-                // 干单元：设置为单位矩阵行
+            // 干单元判断：水深小于阈值或对角元太小
+            let is_dry = state.h[i] < self.config.h_min || diag.abs() < self.config.dry_factor;
+            
+            if is_dry {
+                // 干单元：设置为单位矩阵行，解耦
                 let start = self.pattern.row_ptr()[i];
                 let end = self.pattern.row_ptr()[i + 1];
                 for idx in start..end {
@@ -216,6 +240,44 @@ impl PressureMatrixAssembler {
                 self.matrix.values_mut()[diag_idx] = 1.0;
                 self.rhs[i] = 0.0;
             }
+        }
+    }
+
+    /// 组装压力矩阵（带预测速度散度 RHS）
+    pub fn assemble_with_divergence(
+        &mut self,
+        mesh: &PhysicsMesh,
+        topo: &CellFaceTopology,
+        state: &ShallowWaterState,
+        hu_star: &[Scalar],
+        hv_star: &[Scalar],
+        dt: Scalar,
+        g: Scalar,
+    ) {
+        // 先组装矩阵
+        self.assemble(mesh, topo, state, dt, g);
+
+        // 计算预测速度散度加入 RHS
+        for &face_idx in topo.interior_faces() {
+            let face = topo.face(face_idx);
+            let owner = face.owner;
+            let neighbor = face.neighbor.expect("interior face must have neighbor");
+
+            let h_f = 0.5 * (state.h[owner] + state.h[neighbor]);
+            if h_f < self.config.h_min {
+                continue;
+            }
+
+            // 面法向通量
+            let hu_f = 0.5 * (hu_star[owner] + hu_star[neighbor]);
+            let hv_f = 0.5 * (hv_star[owner] + hv_star[neighbor]);
+            let flux = (face.normal.x * hu_f + face.normal.y * hv_f) * face.length;
+
+            let area_o = mesh.cell_area_unchecked(owner);
+            let area_n = mesh.cell_area_unchecked(neighbor);
+
+            self.rhs[owner] -= flux / area_o / dt;
+            self.rhs[neighbor] += flux / area_n / dt;
         }
     }
 

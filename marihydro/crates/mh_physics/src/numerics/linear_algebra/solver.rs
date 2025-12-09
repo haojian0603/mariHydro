@@ -148,14 +148,30 @@ impl CgWorkspace {
         }
     }
 
-    /// 调整工作区大小
+    /// 调整工作区大小并清零
+    ///
+    /// 无论大小是否变化，均清零防止历史数据污染。
     pub fn resize(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r.resize(n, 0.0);
-            self.p.resize(n, 0.0);
-            self.ap.resize(n, 0.0);
-            self.z.resize(n, 0.0);
+            self.r = vec![0.0; n];
+            self.p = vec![0.0; n];
+            self.ap = vec![0.0; n];
+            self.z = vec![0.0; n];
+        } else {
+            // 即使大小不变也要清零
+            self.r.fill(0.0);
+            self.p.fill(0.0);
+            self.ap.fill(0.0);
+            self.z.fill(0.0);
         }
+    }
+
+    /// 清零工作区
+    pub fn clear(&mut self) {
+        self.r.fill(0.0);
+        self.p.fill(0.0);
+        self.ap.fill(0.0);
+        self.z.fill(0.0);
     }
 }
 
@@ -195,18 +211,34 @@ impl BiCgStabWorkspace {
         }
     }
 
-    /// 调整工作区大小
+    /// 调整工作区大小并清零
+    ///
+    /// 无论大小是否变化，均清零防止历史数据污染。
     pub fn resize(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r.resize(n, 0.0);
-            self.r0.resize(n, 0.0);
-            self.p.resize(n, 0.0);
-            self.v.resize(n, 0.0);
-            self.s.resize(n, 0.0);
-            self.t.resize(n, 0.0);
-            self.p_hat.resize(n, 0.0);
-            self.s_hat.resize(n, 0.0);
+            self.r = vec![0.0; n];
+            self.r0 = vec![0.0; n];
+            self.p = vec![0.0; n];
+            self.v = vec![0.0; n];
+            self.s = vec![0.0; n];
+            self.t = vec![0.0; n];
+            self.p_hat = vec![0.0; n];
+            self.s_hat = vec![0.0; n];
+        } else {
+            self.clear();
         }
+    }
+
+    /// 清零工作区
+    pub fn clear(&mut self) {
+        self.r.fill(0.0);
+        self.r0.fill(0.0);
+        self.p.fill(0.0);
+        self.v.fill(0.0);
+        self.s.fill(0.0);
+        self.t.fill(0.0);
+        self.p_hat.fill(0.0);
+        self.s_hat.fill(0.0);
     }
 }
 
@@ -714,17 +746,8 @@ impl IterativeSolver for BiCgStabSolver {
         // r0 = r (shadow residual) - 固定为初始残差，在迭代中保持不变
         copy(&self.r, &mut self.r0);
 
-        // 修复：rho 初始化为 (r0, r) 而非 1.0
-        let mut rho = dot(&self.r0, &self.r);
-        if rho.abs() < 1e-30 {
-            return SolverResult {
-                status: SolverStatus::Converged,
-                iterations: 0,
-                residual_norm: initial_norm,
-                initial_residual_norm: initial_norm,
-                relative_residual: 0.0,
-            };
-        }
+        // 标准 BiCGStab: rho_old 用于计算 beta
+        let mut rho_old = 1.0;
         let mut alpha = 1.0;
         let mut omega = 1.0;
 
@@ -732,24 +755,41 @@ impl IterativeSolver for BiCgStabSolver {
         self.p.fill(0.0);
 
         for iter in 0..self.config.max_iter {
-            // 计算 beta（第一次迭代时使用特殊处理）
-            let beta = if iter == 0 {
-                0.0
-            } else {
-                let rho_new = dot(&self.r0, &self.r);
-                if rho_new.abs() < 1e-30 {
+            // 计算 rho = (r0, r)
+            let rho = dot(&self.r0, &self.r);
+            
+            // 检查 rho breakdown
+            if rho.abs() < 1e-30 {
+                if iter == 0 {
+                    // 初始残差与影子残差正交，已经收敛
                     return SolverResult {
-                        status: SolverStatus::Stagnated,
-                        iterations: iter,
-                        residual_norm: norm2(&self.r),
+                        status: SolverStatus::Converged,
+                        iterations: 0,
+                        residual_norm: initial_norm,
                         initial_residual_norm: initial_norm,
-                        relative_residual: norm2(&self.r) / initial_norm,
+                        relative_residual: 0.0,
                     };
                 }
-                let b = (rho_new / rho) * (alpha / omega);
-                rho = rho_new;
-                b
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter,
+                    residual_norm: norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: norm2(&self.r) / initial_norm,
+                };
+            }
+
+            // 计算 beta（第一次迭代时 beta = 0，因为 rho_old = 1, omega = 1）
+            let beta = if iter == 0 {
+                // 首次迭代: p = r
+                0.0
+            } else {
+                // 标准公式: beta = (rho / rho_old) * (alpha / omega)
+                (rho / rho_old) * (alpha / omega)
             };
+            
+            // 保存 rho 供下次迭代使用
+            rho_old = rho;
 
             // p = r + beta * (p - omega * v)
             for i in 0..n {
@@ -806,6 +846,20 @@ impl IterativeSolver for BiCgStabSolver {
                 omega = 1.0;
             } else {
                 omega = dot(&self.t, &self.s) / tt;
+            }
+            
+            // 检查 omega breakdown（omega 过小会导致算法不稳定）
+            if omega.abs() < 1e-30 {
+                // 只更新 x 的 alpha 部分后返回
+                precond.apply(&self.p, &mut self.z);
+                axpy(alpha, &self.z, x);
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter + 1,
+                    residual_norm: norm2(&self.s),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: norm2(&self.s) / initial_norm,
+                };
             }
 
             // x = x + alpha * (M^{-1} p) + omega * (M^{-1} s)

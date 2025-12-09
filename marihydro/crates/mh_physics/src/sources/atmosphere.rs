@@ -54,21 +54,21 @@ pub fn wind_drag_coefficient_wu82(wind_speed: f64) -> f64 {
 }
 
 /// 风阻系数计算方法
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum DragCoefficientMethod {
     /// Large & Pond (1981)
     #[default]
     LargePond1981,
     /// Wu (1982)
     Wu1982,
-    /// 常数
-    Constant(u32), // 使用 u32 存储 (value * 1e6) 以便 Copy
+    /// 常数（直接存储 f64）
+    Constant(u64), // 使用 u64 存储位模式以保持 Copy + Eq
 }
 
 impl DragCoefficientMethod {
     /// 创建常数风阻系数
     pub fn constant(cd: f64) -> Self {
-        Self::Constant((cd * 1e6) as u32)
+        Self::Constant(cd.to_bits())
     }
 
     /// 计算风阻系数
@@ -76,7 +76,7 @@ impl DragCoefficientMethod {
         match self {
             Self::LargePond1981 => wind_drag_coefficient_lp81(wind_speed),
             Self::Wu1982 => wind_drag_coefficient_wu82(wind_speed),
-            Self::Constant(cd_scaled) => *cd_scaled as f64 * 1e-6,
+            Self::Constant(bits) => f64::from_bits(*bits),
         }
     }
 }

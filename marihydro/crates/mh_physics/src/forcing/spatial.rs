@@ -180,6 +180,74 @@ impl SpatialTimeSeries {
         }
     }
 
+    /// 高精度 IDW 插值（使用 Kahan 求和）
+    ///
+    /// 当站点数量很多或权重差异很大时使用此方法。
+    pub fn get_value_at_precise(&self, pos: DVec2, time: f64) -> f64 {
+        // 只有一个站点时直接返回
+        if self.stations.len() == 1 {
+            return self.stations[0].series.get_value(time);
+        }
+
+        // Kahan 求和状态
+        let mut sum_weight = 0.0;
+        let mut comp_weight = 0.0;
+        let mut sum_weighted = 0.0;
+        let mut comp_weighted = 0.0;
+
+        for station in &self.stations {
+            let loc = station.position();
+            let dist = pos.distance(loc);
+
+            // 距离极小时直接返回该站点值
+            if dist < self.min_distance {
+                return station.series.get_value(time);
+            }
+
+            let weight = 1.0 / dist.powf(self.power);
+            let value = station.series.get_value(time);
+
+            // Kahan 本: 权重求和
+            let y_w = weight - comp_weight;
+            let t_w = sum_weight + y_w;
+            comp_weight = (t_w - sum_weight) - y_w;
+            sum_weight = t_w;
+
+            // Kahan 加: 加权值求和
+            let wv = weight * value;
+            let y_wv = wv - comp_weighted;
+            let t_wv = sum_weighted + y_wv;
+            comp_weighted = (t_wv - sum_weighted) - y_wv;
+            sum_weighted = t_wv;
+        }
+
+        if sum_weight < 1e-14 {
+            // 回退到简单平均
+            let mut sum = 0.0;
+            let mut comp = 0.0;
+            for station in &self.stations {
+                let v = station.series.get_value(time);
+                let y = v - comp;
+                let t = sum + y;
+                comp = (t - sum) - y;
+                sum = t;
+            }
+            sum / self.stations.len() as f64
+        } else {
+            sum_weighted / sum_weight
+        }
+    }
+
+    /// 批量计算多个位置的 IDW 插值值（并行）
+    pub fn get_values_at_parallel(&self, positions: &[DVec2], time: f64) -> Vec<f64> {
+        use rayon::prelude::*;
+
+        positions
+            .par_iter()
+            .map(|&pos| self.get_value_at(pos, time))
+            .collect()
+    }
+
     /// 获取最近站点的值（无插值）
     pub fn get_nearest_value(&self, pos: DVec2, time: f64) -> f64 {
         let mut min_dist = f64::MAX;

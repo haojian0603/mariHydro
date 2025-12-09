@@ -37,7 +37,9 @@ use crate::numerics::discretization::{
 use crate::numerics::linear_algebra::{
     JacobiPreconditioner, PcgSolver, SolverConfig, SolverResult, SolverStatus,
 };
+use crate::schemes::riemann::{HllcSolver, RiemannSolver, SolverParams as RiemannParams};
 use crate::state::ShallowWaterState;
+use glam::DVec2;
 use mh_foundation::{AlignedVec, Scalar};
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +172,8 @@ pub struct SemiImplicitStrategy {
     cfl_history: Vec<Scalar>,
     /// 最新统计
     stats: SemiImplicitStats,
+    /// Riemann 求解器（用于面通量计算）
+    riemann_solver: HllcSolver,
 }
 
 impl SemiImplicitStrategy {
@@ -197,6 +201,16 @@ impl SemiImplicitStrategy {
         let depth_corrector = DepthCorrector::new(n_cells).with_h_min(config.h_min);
         let velocity_corrector = VelocityCorrector::new(&topo).with_h_min(config.h_dry);
 
+        // 初始化 Riemann 求解器
+        let riemann_params = RiemannParams {
+            gravity: config.gravity,
+            h_dry: config.h_dry,
+            h_min: config.h_min,
+            flux_eps: 1e-14,
+            entropy_ratio: 0.1,
+        };
+        let riemann_solver = HllcSolver::from_params(riemann_params);
+
         Self {
             config,
             topo,
@@ -220,6 +234,7 @@ impl SemiImplicitStrategy {
             prev_wet_mask: vec![false; n_cells],
             cfl_history: Vec::new(),
             stats: SemiImplicitStats::default(),
+            riemann_solver,
         }
     }
 
@@ -371,41 +386,42 @@ impl SemiImplicitStrategy {
 
         let h_dry = self.config.h_dry;
 
-        // 对流通量计算（一阶迎风格式）
+        // 对流通量计算（使用 HLLC Riemann 求解器）
         for &face_idx in self.topo.interior_faces() {
             let face = self.topo.face(face_idx);
             let owner = face.owner;
             let neighbor = face.neighbor.expect("interior face");
 
-            let (u_o, v_o) = (self.u_n[owner], self.v_n[owner]);
-            let (u_n, v_n) = (self.u_n[neighbor], self.v_n[neighbor]);
+            let h_o = state.h[owner];
+            let h_n = state.h[neighbor];
 
-            // 面法向速度（算术平均）
-            let un_face = 0.5 * ((u_o + u_n) * face.normal.x + (v_o + v_n) * face.normal.y);
-
-            // 迎风选择
-            let (u_up, v_up) = if un_face >= 0.0 {
-                (u_o, v_o)
-            } else {
-                (u_n, v_n)
-            };
-
-            // 面水深
-            let h_face = 0.5 * (state.h[owner] + state.h[neighbor]);
-            if h_face < h_dry {
+            // 跳过干面
+            if h_o < h_dry && h_n < h_dry {
                 continue;
             }
 
-            // 对流通量
-            let flux_mass = h_face * un_face * face.length;
+            let vel_o = DVec2::new(self.u_n[owner], self.v_n[owner]);
+            let vel_n = DVec2::new(self.u_n[neighbor], self.v_n[neighbor]);
+            let normal = DVec2::new(face.normal.x, face.normal.y);
 
-            let h_o_safe = state.h[owner].max(1e-10);
-            let h_n_safe = state.h[neighbor].max(1e-10);
+            // 使用 Riemann 求解器计算面通量
+            let flux = match self.riemann_solver.solve(h_o, h_n, vel_o, vel_n, normal) {
+                Ok(f) => f,
+                Err(_) => continue, // 数值问题时跳过
+            };
 
-            self.advection_flux_u[owner] -= flux_mass * u_up / h_o_safe;
-            self.advection_flux_v[owner] -= flux_mass * v_up / h_o_safe;
-            self.advection_flux_u[neighbor] += flux_mass * u_up / h_n_safe;
-            self.advection_flux_v[neighbor] += flux_mass * v_up / h_n_safe;
+            // 通量乘以面长度
+            let face_length = face.length;
+            let cell_area_o = mesh.cell_area_unchecked(owner);
+            let cell_area_n = mesh.cell_area_unchecked(neighbor);
+
+            // 动量通量累加（注意：flux.momentum 已是守恒形式 h*u*u + g*h²/2）
+            // 对于 owner: 通量为正（流出）时减小动量
+            // 对于 neighbor: 通量为负（流入）时增加动量
+            self.advection_flux_u[owner] -= flux.momentum_x * face_length / cell_area_o;
+            self.advection_flux_v[owner] -= flux.momentum_y * face_length / cell_area_o;
+            self.advection_flux_u[neighbor] += flux.momentum_x * face_length / cell_area_n;
+            self.advection_flux_v[neighbor] += flux.momentum_y * face_length / cell_area_n;
         }
 
         // 边界面处理（自由滑移）
@@ -651,6 +667,16 @@ impl SemiImplicitStrategy {
         self.cfl_history.clear();
 
         self.precond = JacobiPreconditioner::from_diagonal(&vec![1.0; n_cells]);
+
+        // 重新初始化 Riemann 求解器
+        let riemann_params = RiemannParams {
+            gravity: self.config.gravity,
+            h_dry: self.config.h_dry,
+            h_min: self.config.h_min,
+            flux_eps: 1e-14,
+            entropy_ratio: 0.1,
+        };
+        self.riemann_solver = HllcSolver::from_params(riemann_params);
     }
 }
 

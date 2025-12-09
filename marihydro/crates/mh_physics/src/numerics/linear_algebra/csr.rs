@@ -342,6 +342,104 @@ impl CsrMatrix {
     pub fn frobenius_norm(&self) -> Scalar {
         self.values.iter().map(|&v| v * v).sum::<Scalar>().sqrt()
     }
+
+    /// 高精度矩阵-向量乘法（Kahan 累加 + 4x 循环展开）
+    ///
+    /// 使用 Kahan 求和算法减少浮点累加误差，适用于需要高精度的场景。
+    /// 4x 循环展开提高 CPU 流水线利用率。
+    pub fn mul_vec_kahan(&self, x: &[Scalar], y: &mut [Scalar]) {
+        use mh_foundation::KahanSum;
+
+        assert_eq!(x.len(), self.n_cols());
+        assert_eq!(y.len(), self.n_rows());
+
+        for row in 0..self.n_rows() {
+            let start = self.pattern.row_ptr[row];
+            let end = self.pattern.row_ptr[row + 1];
+
+            let mut sum = KahanSum::new();
+            let mut i = start;
+
+            // 4x 循环展开主循环
+            while i + 3 < end {
+                sum.add(self.values[i] * x[self.pattern.col_idx[i]]);
+                sum.add(self.values[i + 1] * x[self.pattern.col_idx[i + 1]]);
+                sum.add(self.values[i + 2] * x[self.pattern.col_idx[i + 2]]);
+                sum.add(self.values[i + 3] * x[self.pattern.col_idx[i + 3]]);
+                i += 4;
+            }
+
+            // 尾部处理
+            while i < end {
+                sum.add(self.values[i] * x[self.pattern.col_idx[i]]);
+                i += 1;
+            }
+
+            y[row] = sum.value();
+        }
+    }
+
+    /// 构建对角元素索引缓存
+    ///
+    /// 返回一个向量，其中第 i 个元素是第 i 行对角元素在 values 数组中的索引。
+    /// 如果该行没有对角元素，则为 None。
+    pub fn build_diagonal_cache(&self) -> Vec<Option<usize>> {
+        let n = self.n_rows();
+        let mut diag_indices = vec![None; n];
+
+        for row in 0..n {
+            let start = self.pattern.row_ptr[row];
+            let end = self.pattern.row_ptr[row + 1];
+            
+            // 使用二分查找（列索引是有序的）
+            let col_slice = &self.pattern.col_idx[start..end];
+            if let Ok(local_idx) = col_slice.binary_search(&row) {
+                diag_indices[row] = Some(start + local_idx);
+            }
+        }
+
+        diag_indices
+    }
+
+    /// 使用缓存快速获取对角元素值
+    #[inline]
+    pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<Scalar> {
+        cache.get(row)?.map(|idx| self.values[idx])
+    }
+
+    /// 检查矩阵是否对称
+    ///
+    /// 验证所有非零元素 A[i,j] == A[j,i]。
+    pub fn is_symmetric(&self, tol: Scalar) -> bool {
+        for i in 0..self.n_rows() {
+            let start = self.pattern.row_ptr[i];
+            let end = self.pattern.row_ptr[i + 1];
+
+            for idx in start..end {
+                let j = self.pattern.col_idx[idx];
+                if j > i {
+                    let a_ij = self.values[idx];
+                    let a_ji = self.get(j, i);
+                    if (a_ij - a_ji).abs() > tol {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// 获取矩阵的无穷范数（行最大绝对值和）
+    pub fn infinity_norm(&self) -> Scalar {
+        let mut max_row_sum: Scalar = 0.0;
+        for row in 0..self.n_rows() {
+            let start = self.pattern.row_ptr[row];
+            let end = self.pattern.row_ptr[row + 1];
+            let row_sum: Scalar = self.values[start..end].iter().map(|v| v.abs()).sum();
+            max_row_sum = max_row_sum.max(row_sum);
+        }
+        max_row_sum
+    }
 }
 
 /// 行视图

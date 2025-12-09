@@ -208,6 +208,79 @@ impl ResolvedBoundaryValue {
             beta,
         }
     }
+
+    /// 计算隐式矩阵贡献（对角项）
+    ///
+    /// 对于 Robin BC: αc + β∂c/∂n = γ
+    /// 隐式化后对角修正为: 1 + dt * α / β
+    pub fn implicit_diagonal_contribution(&self, _dt: Scalar, dx: Scalar) -> Scalar {
+        match self.bc_type {
+            TracerBoundaryType::Robin => {
+                if self.beta.abs() > 1e-14 {
+                    // Robin: α/β * dx 贡献到对角
+                    self.alpha / self.beta * dx
+                } else {
+                    // 退化为 Dirichlet
+                    1e14 // 强制约束
+                }
+            }
+            TracerBoundaryType::Dirichlet => {
+                // Dirichlet 施加于对角
+                1e14
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// 计算隐式 RHS 贡献
+    pub fn implicit_rhs_contribution(&self, dx: Scalar, _c_interior: Scalar) -> Scalar {
+        match self.bc_type {
+            TracerBoundaryType::Robin => {
+                if self.beta.abs() > 1e-14 {
+                    // γ/β * dx
+                    self.value / self.beta * dx
+                } else {
+                    self.value * 1e14
+                }
+            }
+            TracerBoundaryType::Dirichlet => {
+                self.value * 1e14
+            }
+            TracerBoundaryType::Neumann => {
+                // 通量直接加入 RHS
+                self.value * dx
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// 计算边界面浓度值
+    ///
+    /// 使用 Robin 公式反算边界浓度
+    pub fn compute_boundary_concentration(
+        &self,
+        c_interior: Scalar,
+        grad_n: Scalar,
+    ) -> Scalar {
+        match self.bc_type {
+            TracerBoundaryType::Dirichlet => self.value,
+            TracerBoundaryType::ZeroGradient => c_interior,
+            TracerBoundaryType::Neumann => {
+                // c_b = c_i + grad_n * dx (需要外部提供 dx)
+                c_interior
+            }
+            TracerBoundaryType::Robin => {
+                // αc + β·grad_n = γ => c = (γ - β·grad_n) / α
+                if self.alpha.abs() > 1e-14 {
+                    (self.value - self.beta * grad_n) / self.alpha
+                } else {
+                    // 退化为 Neumann
+                    c_interior
+                }
+            }
+            TracerBoundaryType::Internal => c_interior,
+        }
+    }
 }
 
 /// 示踪剂边界条件管理器

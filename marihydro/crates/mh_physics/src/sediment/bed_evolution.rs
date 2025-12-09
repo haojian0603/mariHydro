@@ -1,6 +1,9 @@
 // crates/mh_physics/src/sediment/bed_evolution.rs
 
-//! 床面演变计算
+//! 床面演变计算（已废弃）
+//!
+//! **此模块已废弃**，请使用 [`crate::sediment::morphology`] 替代。
+//!
 //! 基于 Exner 方程的床面高程变化求解器
 
 use serde::{Deserialize, Serialize};

@@ -55,6 +55,7 @@ pub mod index;
 pub mod memory;
 pub mod metrics;
 pub mod scalar;
+pub mod tolerance;
 pub mod validation;
 
 // 重导出常用类型

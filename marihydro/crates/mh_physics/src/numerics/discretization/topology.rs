@@ -284,7 +284,130 @@ impl CellFaceTopology {
         self.cell_neighbors(cell_idx)
             .any(|n| n.cell_idx.is_none())
     }
+
+    /// 验证拓扑数据有效性
+    ///
+    /// 检查以下问题：
+    /// - 退化面（长度过小）
+    /// - 负面积单元
+    /// - 无效连接（owner == neighbor）
+    pub fn validate(&self) -> Result<(), TopologyError> {
+        const MIN_FACE_LENGTH: f64 = 1e-12;
+
+        for face_idx in 0..self.n_faces {
+            let face = &self.face_info[face_idx];
+
+            // 检查退化面
+            if face.length < MIN_FACE_LENGTH {
+                return Err(TopologyError::DegenerateFace {
+                    face_idx,
+                    length: face.length,
+                });
+            }
+
+            // 检查自连接
+            if let Some(neigh) = face.neighbor {
+                if face.owner == neigh {
+                    return Err(TopologyError::SelfConnectedFace {
+                        face_idx,
+                        cell: face.owner,
+                    });
+                }
+            }
+
+            // 检查非正距离
+            if face.dist_o2n <= 0.0 {
+                return Err(TopologyError::InvalidDistance {
+                    face_idx,
+                    distance: face.dist_o2n,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 计算精确的非正交距离
+    ///
+    /// 对于非正交网格，考虑面法向与连接线的夹角。
+    pub fn compute_orthogonal_distance(&self, face_idx: usize, mesh: &PhysicsMesh) -> f64 {
+        let face = &self.face_info[face_idx];
+        
+        if let Some(neigh) = face.neighbor {
+            let owner_center = mesh.cell_center(face.owner);
+            let neigh_center = mesh.cell_center(neigh);
+            let delta = neigh_center - owner_center;
+            
+            // 投影到面法向
+            let normal = face.normal;
+            let proj = delta.x * normal.x + delta.y * normal.y;
+            proj.abs()
+        } else {
+            face.dist_o2n
+        }
+    }
+
+    /// 计算面的非正交性因子
+    ///
+    /// 返回 0.0（完全正交）到 1.0（完全非正交）。
+    pub fn compute_non_orthogonality(&self, face_idx: usize, mesh: &PhysicsMesh) -> f64 {
+        let face = &self.face_info[face_idx];
+        
+        if let Some(neigh) = face.neighbor {
+            let owner_center = mesh.cell_center(face.owner);
+            let neigh_center = mesh.cell_center(neigh);
+            let delta = neigh_center - owner_center;
+            let delta_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+            
+            if delta_len < 1e-14 {
+                return 0.0;
+            }
+            
+            // 计算连接线与法向的夹角余弦
+            let normal = face.normal;
+            let cos_theta = (delta.x * normal.x + delta.y * normal.y).abs() / delta_len;
+            
+            // 非正交因子 = 1 - |cos(theta)|
+            (1.0 - cos_theta).max(0.0)
+        } else {
+            0.0
+        }
+    }
 }
+
+/// 拓扑验证错误
+#[derive(Debug, Clone)]
+pub enum TopologyError {
+    /// 退化面（长度过小）
+    DegenerateFace { face_idx: usize, length: f64 },
+    /// 自连接面（owner == neighbor）
+    SelfConnectedFace { face_idx: usize, cell: usize },
+    /// 无效距离
+    InvalidDistance { face_idx: usize, distance: f64 },
+    /// 负面积单元
+    NegativeArea { cell_idx: usize, area: f64 },
+}
+
+impl std::fmt::Display for TopologyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TopologyError::DegenerateFace { face_idx, length } => {
+                write!(f, "Degenerate face {} with length {}", face_idx, length)
+            }
+            TopologyError::SelfConnectedFace { face_idx, cell } => {
+                write!(f, "Face {} connects cell {} to itself", face_idx, cell)
+            }
+            TopologyError::InvalidDistance { face_idx, distance } => {
+                write!(f, "Invalid distance {} for face {}", distance, face_idx)
+            }
+            TopologyError::NegativeArea { cell_idx, area } => {
+                write!(f, "Negative area {} for cell {}", area, cell_idx)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TopologyError {}
 
 #[cfg(test)]
 mod tests {

@@ -5,9 +5,7 @@
 //! HLLC (Harten-Lax-van Leer-Contact) 求解器是一种高精度的近似黎曼求解器，
 //! 能够正确处理接触间断。
 //!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/schemes/riemann/hllc.rs 迁移，保持算法完全不变。
+
 
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use glam::DVec2;

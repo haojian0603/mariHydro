@@ -38,17 +38,60 @@ use super::traits::{LimiterContext, SlopeLimiter};
 pub struct BarthJespersen {
     /// 判断梯度为零的容差
     eps: f64,
+    /// 干单元水深阈值（可选）
+    h_dry: Option<f64>,
 }
 
 impl BarthJespersen {
     /// 创建新的 Barth-Jespersen 限制器
     pub fn new() -> Self {
-        Self { eps: 1e-12 }
+        Self { eps: 1e-12, h_dry: None }
     }
     
     /// 创建具有自定义容差的限制器
     pub fn with_tolerance(eps: f64) -> Self {
-        Self { eps }
+        Self { eps, h_dry: None }
+    }
+
+    /// 设置干单元阈值
+    ///
+    /// 当单元水深低于此阈值时，使用更保守的限制。
+    pub fn with_dry_threshold(mut self, h_dry: f64) -> Self {
+        self.h_dry = Some(h_dry);
+        self
+    }
+
+    /// 计算对称限制器
+    ///
+    /// 对于面两侧的单元，使用相同的限制因子以保证通量一致性。
+    /// 返回两侧限制因子的最小值。
+    #[inline]
+    pub fn compute_symmetric(
+        &self,
+        ctx_owner: &LimiterContext,
+        ctx_neighbor: &LimiterContext,
+    ) -> f64 {
+        let alpha_o = self.compute_limiter(ctx_owner);
+        let alpha_n = self.compute_limiter(ctx_neighbor);
+        alpha_o.min(alpha_n)
+    }
+
+    /// 对干单元应用额外保守策略
+    #[inline]
+    fn adjust_for_dry(&self, alpha: f64, depth: f64) -> f64 {
+        if let Some(h_dry) = self.h_dry {
+            if depth < h_dry {
+                // 干单元：更激进地限制梯度
+                return alpha * (depth / h_dry).max(0.0).min(1.0);
+            }
+        }
+        alpha
+    }
+
+    /// 计算限制器（带水深参数）
+    pub fn compute_limiter_with_depth(&self, ctx: &LimiterContext, depth: f64) -> f64 {
+        let alpha = self.compute_limiter(ctx);
+        self.adjust_for_dry(alpha, depth)
     }
 }
 

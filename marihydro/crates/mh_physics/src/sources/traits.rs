@@ -203,6 +203,56 @@ pub trait SourceTerm: Send + Sync {
     fn requires_implicit_treatment(&self) -> bool {
         false
     }
+
+    // ========== 半隐式分裂方法 ==========
+
+    /// 计算预测步源项贡献
+    ///
+    /// 用于半隐式方法的预测阶段。默认返回完整源项。
+    fn compute_prediction(
+        &self,
+        state: &ShallowWaterState,
+        cell: usize,
+        ctx: &SourceContext,
+    ) -> SourceContribution {
+        self.compute_cell(state, cell, ctx)
+    }
+
+    /// 计算校正步源项贡献
+    ///
+    /// 用于半隐式方法的校正阶段。默认返回零贡献。
+    fn compute_correction(
+        &self,
+        _state: &ShallowWaterState,
+        _cell: usize,
+        _ctx: &SourceContext,
+    ) -> SourceContribution {
+        SourceContribution::ZERO
+    }
+
+    /// 校正步是否需要此源项
+    fn requires_correction(&self) -> bool {
+        false
+    }
+
+    /// 获取隐式因子
+    ///
+    /// 返回 0.0 表示完全显式，1.0 表示完全隐式。
+    /// 用于时间步长控制和稳定性分析。
+    fn implicit_factor(&self) -> f64 {
+        if self.requires_implicit_treatment() {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// 获取稳定性限制时间步长
+    ///
+    /// 返回 None 表示无限制，Some(dt) 表示最大允许时间步长。
+    fn stability_limit(&self, _state: &ShallowWaterState, _ctx: &SourceContext) -> Option<f64> {
+        None
+    }
 }
 
 /// 源项辅助函数

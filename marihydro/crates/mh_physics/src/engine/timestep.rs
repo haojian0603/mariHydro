@@ -342,6 +342,97 @@ impl TimeStepController {
             adaptive_growth_enabled: self.adaptive_growth,
         }
     }
+
+    /// 半隐式方法迭代次数自适应
+    ///
+    /// 根据压力求解器迭代次数调整时间步长。
+    ///
+    /// # 参数
+    ///
+    /// - `iterations`: 实际迭代次数
+    /// - `target_iterations`: 目标迭代次数（通常为求解器最大迭代的 50%）
+    pub fn adapt_from_iterations(
+        &mut self,
+        iterations: usize,
+        target_iterations: usize,
+    ) -> f64 {
+        let ratio = iterations as f64 / target_iterations.max(1) as f64;
+
+        if ratio < 0.5 {
+            // 收敛太快，可以增大时间步长
+            let growth = (1.0 + (1.0 - ratio * 2.0) * 0.2).min(self.max_growth_factor);
+            self.current_dt *= growth;
+            self.stable_steps += 1;
+        } else if ratio > 1.5 {
+            // 收敛太慢，减小时间步长
+            let shrink = (1.0 - (ratio - 1.5) * 0.3).max(0.5);
+            self.current_dt *= shrink;
+            self.stable_steps = 0;
+        } else if ratio > 1.0 {
+            // 接近边界，保守增长
+            self.stable_steps = self.stable_steps.saturating_sub(1);
+        }
+
+        self.current_dt = self.current_dt.clamp(self.calculator.dt_min, self.calculator.dt_max);
+        self.current_dt
+    }
+
+    /// 应用源项稳定性限制
+    ///
+    /// 将所有源项的稳定性限制应用于时间步长。
+    ///
+    /// # 参数
+    ///
+    /// - `limits`: 各源项返回的稳定性限制时间步长
+    pub fn apply_source_limits(&mut self, limits: &[Option<f64>]) -> f64 {
+        let mut min_dt = self.current_dt;
+
+        for &limit in limits {
+            if let Some(dt_limit) = limit {
+                min_dt = min_dt.min(dt_limit);
+            }
+        }
+
+        if min_dt < self.current_dt * 0.9 {
+            self.stable_steps = 0;
+        }
+
+        self.current_dt = min_dt.clamp(self.calculator.dt_min, self.calculator.dt_max);
+        self.current_dt
+    }
+
+    /// 计算科氏力稳定性限制
+    ///
+    /// 返回 dt < 2π / |f| 以保证惯性振荡稳定
+    pub fn coriolis_stability_limit(&self, f: f64) -> Option<f64> {
+        if f.abs() < 1e-14 {
+            None
+        } else {
+            Some(std::f64::consts::PI / f.abs())
+        }
+    }
+
+    /// 计算摩擦稳定性限制
+    ///
+    /// 对于曼宁公式的隐式摩擦
+    pub fn friction_stability_limit(&self, max_cf: f64) -> Option<f64> {
+        if max_cf < 1e-14 {
+            None
+        } else {
+            // 显式稳定性限制
+            Some(2.0 / max_cf)
+        }
+    }
+
+    /// 获取 CFL 数
+    pub fn cfl(&self) -> f64 {
+        self.calculator.cfl
+    }
+
+    /// 设置 CFL 数
+    pub fn set_cfl(&mut self, cfl: f64) {
+        self.calculator.cfl = cfl.clamp(0.1, 1.0);
+    }
 }
 
 /// 时间步长统计

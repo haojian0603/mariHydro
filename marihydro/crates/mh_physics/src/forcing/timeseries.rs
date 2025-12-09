@@ -430,6 +430,64 @@ impl TimeSeries {
         (v_plus - v_minus) / (2.0 * eps)
     }
 
+    /// 获取高精度导数（5 点自适应有限差分）
+    ///
+    /// 使用 5 点中心差分公式: f'(x) ≈ (-f(x+2h) + 8f(x+h) - 8f(x-h) + f(x-2h)) / 12h
+    /// 参考 Richardson 外推法增强精度。
+    pub fn get_derivative_precise(&self, t: Scalar) -> Scalar {
+        let (t_start, t_end) = self.time_range();
+        let span = t_end - t_start;
+        
+        // 自适应步长
+        let h = if span > 0.0 {
+            (span / 1000.0).max(1e-8).min(1e-4)
+        } else {
+            1e-6
+        };
+
+        let v_m2 = self.get_value(t - 2.0 * h);
+        let v_m1 = self.get_value(t - h);
+        let v_p1 = self.get_value(t + h);
+        let v_p2 = self.get_value(t + 2.0 * h);
+
+        (-v_p2 + 8.0 * v_p1 - 8.0 * v_m1 + v_m2) / (12.0 * h)
+    }
+
+    /// 高精度循环外推
+    ///
+    /// 使用整数周期分解避免浮点累积误差。
+    pub fn get_value_cyclic_precise(&self, t: Scalar) -> Scalar {
+        let n = self.times.len();
+        if n == 0 {
+            return 0.0;
+        }
+        if n == 1 {
+            return self.values[0];
+        }
+
+        let t_start = self.times[0];
+        let t_end = self.times[n - 1];
+        let duration = t_end - t_start;
+
+        if duration < 1e-12 {
+            return self.values[0];
+        }
+
+        // 整数周期分解
+        let offset = t - t_start;
+        let n_periods = (offset / duration).floor();
+        let local_offset = offset - n_periods * duration;
+        
+        // 处理负偏移
+        let normalized_t = if local_offset < 0.0 {
+            t_start + local_offset + duration
+        } else {
+            t_start + local_offset
+        };
+
+        self.interpolate_internal(normalized_t)
+    }
+
     /// 获取积分（梯形法则）
     ///
     /// 计算从 t_start 到 t_end 的定积分。

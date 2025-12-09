@@ -287,6 +287,73 @@ impl SafeF64 {
     pub fn approx_eq(self, other: Self, epsilon: f64) -> bool {
         (self.0 - other.0).abs() < epsilon
     }
+
+    /// 安全正弦（大数周期归约）
+    ///
+    /// 对于绝对值超过 1e15 的大数，先进行周期归约避免精度损失。
+    #[inline]
+    pub fn sin_safe(self) -> Self {
+        if self.0.abs() > 1e15 {
+            let reduced = self.0.rem_euclid(2.0 * std::f64::consts::PI);
+            Self::new_or(reduced.sin(), 0.0)
+        } else {
+            Self::new_or(self.0.sin(), 0.0)
+        }
+    }
+
+    /// 安全余弦（大数周期归约 + 正交性保证）
+    ///
+    /// 对于绝对值超过 1e15 的大数，先进行周期归约避免精度损失。
+    #[inline]
+    pub fn cos_safe(self) -> Self {
+        if self.0.abs() > 1e15 {
+            let reduced = self.0.rem_euclid(2.0 * std::f64::consts::PI);
+            Self::new_or(reduced.cos(), 1.0)
+        } else {
+            Self::new_or(self.0.cos(), 1.0)
+        }
+    }
+
+    /// 安全正弦余弦对（保证正交性）
+    ///
+    /// 返回 (sin, cos) 对，保证 sin² + cos² ≈ 1。
+    #[inline]
+    pub fn sin_cos_safe(self) -> (Self, Self) {
+        let angle = if self.0.abs() > 1e15 {
+            self.0.rem_euclid(2.0 * std::f64::consts::PI)
+        } else {
+            self.0
+        };
+        let (s, c) = angle.sin_cos();
+        (Self::new_or(s, 0.0), Self::new_or(c, 1.0))
+    }
+
+    /// 批量有限性验证
+    ///
+    /// 检查切片中的所有值是否都是有限数。
+    /// 返回第一个非有限值的索引和值，或 Ok(()) 如果全部有效。
+    pub fn validate_slice(data: &[f64]) -> Result<(), (usize, f64)> {
+        for (i, &v) in data.iter().enumerate() {
+            if !v.is_finite() {
+                return Err((i, v));
+            }
+        }
+        Ok(())
+    }
+
+    /// 批量有限性验证（多个切片）
+    ///
+    /// 验证多个切片，返回第一个非有限值的位置。
+    pub fn validate_slices(slices: &[&[f64]]) -> Result<(), (usize, usize, f64)> {
+        for (slice_idx, &slice) in slices.iter().enumerate() {
+            for (i, &v) in slice.iter().enumerate() {
+                if !v.is_finite() {
+                    return Err((slice_idx, i, v));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for SafeF64 {

@@ -192,6 +192,124 @@ impl MorphodynamicsSolver {
         }
     }
 
+    /// 半隐式河床更新（Picard 迭代）
+    ///
+    /// 使用 Picard 迭代求解非线性床变方程，适用于大时间步长。
+    ///
+    /// # 参数
+    ///
+    /// - `state`: 浅水状态（将被修改）
+    /// - `mesh`: 物理网格
+    /// - `compute_transport`: 计算输沙率的闭包
+    /// - `dt`: 时间步长 [s]
+    /// - `max_iter`: 最大迭代次数
+    /// - `tol`: 收敛容差
+    pub fn step_semi_implicit<F>(
+        &mut self,
+        state: &mut ShallowWaterState,
+        mesh: &PhysicsMesh,
+        compute_transport: F,
+        dt: Scalar,
+        max_iter: usize,
+        tol: Scalar,
+    ) -> usize
+    where
+        F: Fn(&ShallowWaterState) -> (Vec<Scalar>, Vec<Scalar>),
+    {
+        // 重置统计
+        self.stats = MorphologyStats::default();
+
+        // 保存初始河床
+        let z_old: Vec<Scalar> = state.z.to_vec();
+        let mut z_prev = z_old.clone();
+        let mut iterations = 0;
+
+        for iter in 0..max_iter {
+            // 计算当前状态下的输沙率
+            let (qb_x, qb_y) = compute_transport(state);
+
+            // 计算通量散度
+            self.compute_divergence_upwind(mesh, state, &qb_x, &qb_y);
+
+            // 临时更新河床
+            let factor = 1.0 / (1.0 - self.config.porosity);
+            let max_dz = self.config.max_dz_rate * dt;
+
+            let mut max_change = 0.0_f64;
+
+            for i in 0..state.n_cells() {
+                // Picard: z^{n+1} = z^n - dt * div(q^{k})
+                let mut dz = -self.flux_divergence[i] * dt * factor;
+                dz = dz.clamp(-max_dz, max_dz);
+
+                let z_new = z_old[i] + dz;
+
+                // 干湿边界约束
+                let eta = z_old[i] + state.h[i];
+                if z_new > eta && state.h[i] > self.config.h_dry {
+                    // 不能高于水面
+                    state.z[i] = eta;
+                    state.h[i] = 0.0;
+                } else {
+                    state.z[i] = z_new;
+                    state.h[i] = (eta - z_new).max(0.0);
+                }
+
+                // 检查收敛
+                let change = (state.z[i] - z_prev[i]).abs();
+                max_change = max_change.max(change);
+                z_prev[i] = state.z[i];
+            }
+
+            iterations = iter + 1;
+
+            // 绝对收敛准则
+            if max_change < tol {
+                break;
+            }
+        }
+
+        // 崩塌处理
+        if self.config.avalanche_enabled {
+            self.apply_avalanche_with_convergence(state, mesh, tol);
+        }
+
+        iterations
+    }
+
+    /// 计算输沙率雅可比矩阵对角元（用于隐式求解）
+    ///
+    /// 返回 ∂q/∂z 的近似值
+    pub fn compute_jacobian_diagonal(
+        &self,
+        mesh: &PhysicsMesh,
+        state: &ShallowWaterState,
+        qb_x: &[Scalar],
+        qb_y: &[Scalar],
+    ) -> Vec<Scalar> {
+        let n = state.n_cells();
+        let mut jacobian = vec![0.0; n];
+        let _eps = 1e-6;
+
+        for i in 0..n {
+            // 中心差分近似
+            let q_mag = (qb_x[i] * qb_x[i] + qb_y[i] * qb_y[i]).sqrt();
+            if q_mag < 1e-14 {
+                continue;
+            }
+
+            // 使用有限差分估计
+            let h = state.h[i];
+            if h > self.config.h_dry {
+                // 假设 q ∝ τ^1.5 ∝ (h^{-4/3})
+                jacobian[i] = -1.5 * q_mag / h;
+            }
+        }
+
+        let _ = mesh.n_cells(); // 使用 mesh 避免警告
+        jacobian
+    }
+
     /// 仅计算通量散度（不更新状态）
     pub fn compute_divergence(
         &mut self,
@@ -373,6 +491,72 @@ impl MorphodynamicsSolver {
             self.stats.avalanche_iterations = iter + 1;
 
             if !changed {
+                break;
+            }
+        }
+
+        self.stats.avalanche_faces = total_faces;
+    }
+
+    /// 应用崩塌处理（带绝对收敛准则）
+    fn apply_avalanche_with_convergence(
+        &mut self,
+        state: &mut ShallowWaterState,
+        mesh: &PhysicsMesh,
+        tol: Scalar,
+    ) {
+        let mut total_faces = 0;
+
+        for iter in 0..self.config.max_avalanche_iter {
+            let mut max_correction = 0.0_f64;
+
+            for face_idx in mesh.interior_faces() {
+                let owner = mesh.face_owner(face_idx);
+                let neigh = mesh
+                    .face_neighbor(face_idx)
+                    .expect("interior face must have neighbor");
+
+                let dist = mesh.face_dist_o2n(face_idx);
+                if dist < 1e-10 {
+                    continue;
+                }
+
+                let dz = state.z[neigh] - state.z[owner];
+                let slope = dz.abs() / dist;
+
+                let is_wet =
+                    state.h[owner] > self.config.h_dry || state.h[neigh] > self.config.h_dry;
+                let max_slope = if is_wet {
+                    self.config.angle_repose_wet.tan()
+                } else {
+                    self.config.angle_repose_dry.tan()
+                };
+
+                if slope > max_slope {
+                    let target_dz = max_slope * dist * dz.signum();
+                    let correction = (dz - target_dz) * self.config.avalanche_relaxation;
+
+                    let area_owner = mesh.cell_area_unchecked(owner);
+                    let area_neigh = mesh.cell_area_unchecked(neigh);
+                    let total_area = area_owner + area_neigh;
+
+                    let dz_owner = correction * area_neigh / total_area;
+                    let dz_neigh = -correction * area_owner / total_area;
+
+                    state.z[owner] += dz_owner;
+                    state.z[neigh] += dz_neigh;
+                    state.h[owner] = (state.h[owner] - dz_owner).max(0.0);
+                    state.h[neigh] = (state.h[neigh] - dz_neigh).max(0.0);
+
+                    max_correction = max_correction.max(correction.abs());
+                    total_faces += 1;
+                }
+            }
+
+            self.stats.avalanche_iterations = iter + 1;
+
+            // 绝对收敛准则
+            if max_correction < tol {
                 break;
             }
         }

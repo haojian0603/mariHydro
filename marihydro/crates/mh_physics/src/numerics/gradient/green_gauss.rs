@@ -160,6 +160,65 @@ impl GreenGaussGradient {
         grad / area
     }
 
+    /// 计算单个单元的水面高度梯度（C-property 保持）
+    ///
+    /// 对于静水，梯度应精确为零。使用水位 η = h + z_b 作为梯度变量。
+    pub fn compute_water_level_gradient(
+        &self,
+        cell: usize,
+        h: &[f64],
+        z_bed: &[f64],
+        mesh: &PhysicsMesh,
+    ) -> DVec2 {
+        let area = mesh.cell_area_unchecked(cell);
+        if area < 1e-14 {
+            return DVec2::ZERO;
+        }
+
+        let cell_center = mesh.cell_center(cell);
+        let eta_c = h[cell] + z_bed[cell];
+        let mut grad = DVec2::ZERO;
+
+        for face in mesh.cell_faces(cell) {
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
+
+            let is_owner = owner == cell;
+            let is_neighbor = neighbor == Some(cell);
+
+            if !is_owner && !is_neighbor {
+                continue;
+            }
+
+            let normal = mesh.face_normal(face);
+            let length = mesh.face_length(face);
+            let sign = if is_owner { 1.0 } else { -1.0 };
+            let ds = normal * length * sign;
+
+            let eta_face = if let Some(neigh) = neighbor {
+                let other = if is_owner { neigh } else { owner };
+                let eta_other = h[other] + z_bed[other];
+
+                match self.config.face_interpolation {
+                    FaceInterpolation::Arithmetic => 0.5 * (eta_c + eta_other),
+                    FaceInterpolation::DistanceWeighted => {
+                        let face_center = mesh.face_center(face);
+                        let other_center = mesh.cell_center(other);
+                        let d_self = (face_center - cell_center).length();
+                        let d_other = (face_center - other_center).length();
+                        Self::distance_weighted_interpolate(eta_c, eta_other, d_self, d_other)
+                    }
+                }
+            } else {
+                eta_c
+            };
+
+            grad += ds * eta_face;
+        }
+
+        grad / area
+    }
+
     /// 距离加权插值
     ///
     /// phi_face = (phi_n * d_o + phi_o * d_n) / (d_o + d_n)
@@ -202,6 +261,53 @@ impl GreenGaussGradient {
         for (i, g) in grads.into_iter().enumerate() {
             output.set(i, g);
         }
+    }
+
+    /// 并行计算所有单元梯度（返回 (grad_x, grad_y) 向量）
+    pub fn compute_all_parallel(
+        &self,
+        field: &[f64],
+        mesh: &PhysicsMesh,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let grads: Vec<DVec2> = (0..mesh.n_cells())
+            .into_par_iter()
+            .map(|cell| self.compute_cell_gradient(cell, field, mesh))
+            .collect();
+
+        let n = grads.len();
+        let mut grad_x = Vec::with_capacity(n);
+        let mut grad_y = Vec::with_capacity(n);
+
+        for g in grads {
+            grad_x.push(g.x);
+            grad_y.push(g.y);
+        }
+
+        (grad_x, grad_y)
+    }
+
+    /// 并行计算水面梯度（C-property 保持）
+    pub fn compute_water_level_parallel(
+        &self,
+        h: &[f64],
+        z_bed: &[f64],
+        mesh: &PhysicsMesh,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let grads: Vec<DVec2> = (0..mesh.n_cells())
+            .into_par_iter()
+            .map(|cell| self.compute_water_level_gradient(cell, h, z_bed, mesh))
+            .collect();
+
+        let n = grads.len();
+        let mut grad_x = Vec::with_capacity(n);
+        let mut grad_y = Vec::with_capacity(n);
+
+        for g in grads {
+            grad_x.push(g.x);
+            grad_y.push(g.y);
+        }
+
+        (grad_x, grad_y)
     }
 }
 

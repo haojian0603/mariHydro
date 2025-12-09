@@ -107,6 +107,29 @@ impl JacobiPreconditioner {
         Self { inv_diag }
     }
 
+    /// 从 CSR 矩阵创建 Jacobi 预条件器（带干单元检测）
+    ///
+    /// 对于对角元素小于 `h_dry * 1e-6` 的行，使用单位预条件。
+    /// 这避免了干单元导致的数值不稳定。
+    pub fn from_matrix_with_dry_detection(matrix: &CsrMatrix, h_dry: Scalar) -> Self {
+        let n = matrix.n_rows();
+        let mut inv_diag = vec![1.0; n];
+        let threshold = h_dry * 1e-6;
+
+        for i in 0..n {
+            if let Some(diag) = matrix.diagonal_value(i) {
+                if diag.abs() < threshold {
+                    // 干单元：使用单位预条件
+                    inv_diag[i] = 1.0;
+                } else if diag.abs() > 1e-14 {
+                    inv_diag[i] = 1.0 / diag;
+                }
+            }
+        }
+
+        Self { inv_diag }
+    }
+
     /// 从对角向量创建 Jacobi 预条件器
     pub fn from_diagonal(diag: &[Scalar]) -> Self {
         let inv_diag: Vec<_> = diag
@@ -121,6 +144,20 @@ impl JacobiPreconditioner {
         for i in 0..self.inv_diag.len().min(matrix.n_rows()) {
             if let Some(diag) = matrix.diagonal_value(i) {
                 if diag.abs() > 1e-14 {
+                    self.inv_diag[i] = 1.0 / diag;
+                }
+            }
+        }
+    }
+
+    /// 更新预条件器（带干单元检测）
+    pub fn update_with_dry_detection(&mut self, matrix: &CsrMatrix, h_dry: Scalar) {
+        let threshold = h_dry * 1e-6;
+        for i in 0..self.inv_diag.len().min(matrix.n_rows()) {
+            if let Some(diag) = matrix.diagonal_value(i) {
+                if diag.abs() < threshold {
+                    self.inv_diag[i] = 1.0;
+                } else if diag.abs() > 1e-14 {
                     self.inv_diag[i] = 1.0 / diag;
                 }
             }
@@ -361,6 +398,8 @@ impl Ilu0Preconditioner {
     ///
     /// 原地修改 lu 数组，使得 L 的严格下三角部分和 U 的上三角部分（含对角）
     /// 存储在同一数组中。
+    ///
+    /// 使用主元正则化和增长因子限制提高数值稳定性。
     fn factorize(
         row_ptr: &[usize],
         col_idx: &[usize],
@@ -368,6 +407,10 @@ impl Ilu0Preconditioner {
         diag_ptr: &[usize],
         n: usize,
     ) {
+        // 数值稳定性参数
+        const PIVOT_TOL: Scalar = 1e-10;
+        const GROWTH_LIMIT: Scalar = 1e3;
+
         for i in 1..n {
             // 遍历第 i 行的下三角部分 (j < i)
             for k_idx in row_ptr[i]..row_ptr[i + 1] {
@@ -376,12 +419,19 @@ impl Ilu0Preconditioner {
                     break;
                 }
 
-                let diag_k = lu[diag_ptr[k]];
-                if diag_k.abs() < 1e-14 {
-                    continue;
+                // 主元正则化：避免除零
+                let mut diag_k = lu[diag_ptr[k]];
+                if diag_k.abs() < PIVOT_TOL {
+                    diag_k = diag_k.signum() * PIVOT_TOL;
+                    if diag_k == 0.0 {
+                        diag_k = PIVOT_TOL;
+                    }
+                    lu[diag_ptr[k]] = diag_k;
                 }
 
-                let factor = lu[k_idx] / diag_k;
+                // 计算因子并限制增长
+                let mut factor = lu[k_idx] / diag_k;
+                factor = factor.clamp(-GROWTH_LIMIT, GROWTH_LIMIT);
                 lu[k_idx] = factor;
 
                 // 更新第 i 行的其余元素
@@ -390,7 +440,10 @@ impl Ilu0Preconditioner {
                     // 查找 A[k,j]
                     for m_idx in row_ptr[k]..row_ptr[k + 1] {
                         if col_idx[m_idx] == j {
-                            lu[j_idx] -= factor * lu[m_idx];
+                            let update = factor * lu[m_idx];
+                            // 限制更新幅度
+                            let limited_update = update.clamp(-GROWTH_LIMIT, GROWTH_LIMIT);
+                            lu[j_idx] -= limited_update;
                             break;
                         }
                     }
