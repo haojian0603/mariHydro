@@ -516,6 +516,7 @@ mod tests {
     use crate::job::SimulationConfig;
     use crate::storage::MemoryStorage;
 
+    #[allow(dead_code)]
     fn create_runner() -> JobRunner<MemoryStorage> {
         let storage = MemoryStorage::new();
         let manager = Arc::new(WorkflowManager::new(storage));

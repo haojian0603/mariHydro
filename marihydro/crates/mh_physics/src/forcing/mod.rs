@@ -55,7 +55,7 @@ pub use tide::{
 pub use river::{RiverProvider, RiverData, RiverSystem, RiverEntry};
 
 // 时间序列导出
-pub use timeseries::{TimeSeries, VectorTimeSeries, ExtrapolationMode};
+pub use timeseries::{TimeSeries, VectorTimeSeries, ExtrapolationMode, TimeSeriesCursor};
 
 // 空间时序导出
 pub use spatial::{SpatialTimeSeries, SpatialVectorTimeSeries};

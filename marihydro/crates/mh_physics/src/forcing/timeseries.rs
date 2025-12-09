@@ -25,7 +25,6 @@
 //! let cyclic_value = series.get_value(4.0);
 //! ```
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
@@ -66,16 +65,32 @@ impl ExtrapolationMode {
     }
 }
 
+/// 时间序列查找游标
+///
+/// 由调用方持有，用于加速连续时间查询。
+/// 避免在 TimeSeries 内部使用 AtomicUsize 导致的伪共享问题。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TimeSeriesCursor {
+    /// 上次查找的区间索引
+    pub last_index: usize,
+}
+
+impl TimeSeriesCursor {
+    /// 创建新的游标
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// 时间序列数据
 ///
 /// 存储时间-值对，提供线性插值和外推功能。
-/// 使用缓存索引加速连续时间查询。
 ///
 /// # 约束
 ///
 /// - 时间数组必须严格单调递增
 /// - 时间和值数组长度必须相等且非空
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeries {
     /// 时间点 [s]（严格单调递增）
     times: Vec<Scalar>,
@@ -83,20 +98,6 @@ pub struct TimeSeries {
     values: Vec<Scalar>,
     /// 外推模式
     extrap_mode: ExtrapolationMode,
-    /// 缓存的最后查找索引（用于加速顺序查询）
-    #[serde(skip)]
-    last_index: AtomicUsize,
-}
-
-impl Clone for TimeSeries {
-    fn clone(&self) -> Self {
-        Self {
-            times: self.times.clone(),
-            values: self.values.clone(),
-            extrap_mode: self.extrap_mode,
-            last_index: AtomicUsize::new(self.last_index.load(Ordering::Relaxed)),
-        }
-    }
 }
 
 impl TimeSeries {
@@ -136,7 +137,6 @@ impl TimeSeries {
             times,
             values,
             extrap_mode: ExtrapolationMode::Clamp,
-            last_index: AtomicUsize::new(0),
         }
     }
 
@@ -275,24 +275,25 @@ impl TimeSeries {
         }
     }
 
-    /// 内部插值（假设 t 在范围内）
+    /// 内部插值（假设 t 在范围内）- 无状态版本
     fn interpolate_internal(&self, t: Scalar) -> Scalar {
         let n = self.times.len();
 
-        // 利用缓存加速查找
-        let mut idx = self.last_index.load(Ordering::Relaxed);
-        if idx >= n - 1 {
-            idx = 0;
+        // 二分查找
+        let mut lo = 0;
+        let mut hi = n - 1;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.times[mid + 1] <= t {
+                lo = mid + 1;
+            } else if self.times[mid] > t {
+                hi = mid;
+            } else {
+                lo = mid;
+                break;
+            }
         }
-        if t < self.times[idx] {
-            idx = 0;
-        }
-
-        // 向前查找
-        while idx < n - 1 && t >= self.times[idx + 1] {
-            idx += 1;
-        }
-        self.last_index.store(idx, Ordering::Relaxed);
+        let idx = lo;
 
         // 边界检查
         if idx >= n - 1 {
@@ -310,6 +311,112 @@ impl TimeSeries {
             v0
         } else {
             v0 + (t - t0) / dt * (v1 - v0)
+        }
+    }
+
+    /// 内部插值（假设 t 在范围内）- 带游标版本
+    fn interpolate_internal_with_cursor(&self, t: Scalar, cursor: &mut TimeSeriesCursor) -> Scalar {
+        let n = self.times.len();
+
+        // 利用游标加速查找
+        let mut idx = cursor.last_index;
+        if idx >= n - 1 {
+            idx = 0;
+        }
+        if t < self.times[idx] {
+            idx = 0;
+        }
+
+        // 向前查找
+        while idx < n - 1 && t >= self.times[idx + 1] {
+            idx += 1;
+        }
+        cursor.last_index = idx;
+
+        // 边界检查
+        if idx >= n - 1 {
+            return self.values[n - 1];
+        }
+
+        // 线性插值
+        let t0 = self.times[idx];
+        let t1 = self.times[idx + 1];
+        let v0 = self.values[idx];
+        let v1 = self.values[idx + 1];
+
+        let dt = t1 - t0;
+        if dt.abs() < 1e-12 {
+            v0
+        } else {
+            v0 + (t - t0) / dt * (v1 - v0)
+        }
+    }
+
+    /// 获取指定时间的插值（带游标版本，推荐用于连续时间查询）
+    ///
+    /// # 参数
+    ///
+    /// - `t`: 查询时间 [s]
+    /// - `cursor`: 调用方持有的游标，用于加速连续查询
+    ///
+    /// # 返回
+    ///
+    /// 插值后的值。如果 t 超出数据范围，根据外推模式处理。
+    pub fn get_value_with_cursor(&self, t: Scalar, cursor: &mut TimeSeriesCursor) -> Scalar {
+        let n = self.times.len();
+        let t_start = self.times[0];
+        let t_end = self.times[n - 1];
+
+        // 处理超出范围的情况
+        if t < t_start || t > t_end {
+            return self.handle_extrapolation_with_cursor(t, t_start, t_end, cursor);
+        }
+
+        self.interpolate_internal_with_cursor(t, cursor)
+    }
+
+    /// 处理外推（带游标版本）
+    fn handle_extrapolation_with_cursor(
+        &self,
+        t: Scalar,
+        t_start: Scalar,
+        t_end: Scalar,
+        cursor: &mut TimeSeriesCursor,
+    ) -> Scalar {
+        let n = self.times.len();
+
+        match self.extrap_mode {
+            ExtrapolationMode::Clamp => {
+                if t < t_start {
+                    self.values[0]
+                } else {
+                    self.values[n - 1]
+                }
+            }
+            ExtrapolationMode::Cyclic => {
+                let duration = t_end - t_start;
+                if duration < 1e-12 {
+                    return self.values[0];
+                }
+                let offset = (t - t_start).rem_euclid(duration);
+                self.interpolate_internal_with_cursor(t_start + offset, cursor)
+            }
+            ExtrapolationMode::Linear => {
+                if t < t_start {
+                    if n < 2 {
+                        return self.values[0];
+                    }
+                    let slope = (self.values[1] - self.values[0]) / (self.times[1] - t_start);
+                    self.values[0] + slope * (t - t_start)
+                } else {
+                    if n < 2 {
+                        return self.values[n - 1];
+                    }
+                    let slope =
+                        (self.values[n - 1] - self.values[n - 2]) / (t_end - self.times[n - 2]);
+                    self.values[n - 1] + slope * (t - t_end)
+                }
+            }
         }
     }
 

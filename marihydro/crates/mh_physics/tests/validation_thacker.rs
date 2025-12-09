@@ -49,6 +49,7 @@ fn bed_elevation(x: Scalar, y: Scalar, cx: Scalar, cy: Scalar) -> Scalar {
 }
 
 /// 初始水位
+#[allow(dead_code)]
 fn initial_water_surface(x: Scalar, y: Scalar, cx: Scalar, cy: Scalar) -> Scalar {
     let r2 = (x - cx).powi(2) + (y - cy).powi(2);
     let eta = INITIAL_AMPLITUDE * (1.0 - 2.0 * r2 / (BOWL_RADIUS * BOWL_RADIUS));
@@ -60,6 +61,7 @@ fn initial_water_surface(x: Scalar, y: Scalar, cx: Scalar, cy: Scalar) -> Scalar
 // ============================================================
 
 /// Thacker 解析解（简化版）
+#[allow(dead_code)]
 struct ThackerAnalytic {
     omega: Scalar,
     a: Scalar,

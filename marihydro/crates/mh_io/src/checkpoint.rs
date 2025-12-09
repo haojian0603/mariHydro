@@ -623,7 +623,7 @@ impl CheckpointManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    
 
     fn create_test_state() -> StateSnapshot {
         StateSnapshot::from_state_data(

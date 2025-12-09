@@ -69,16 +69,18 @@ fn test_spatial_timeseries() {
 fn test_transport_formula_mpm() {
     use mh_physics::sediment::formulas::{MeyerPeterMullerFormula, TransportFormula};
     use mh_physics::sediment::properties::SedimentProperties;
+    use mh_physics::types::PhysicalConstants;
 
     let formula = MeyerPeterMullerFormula::new();
     let sediment = SedimentProperties::from_d50_mm(1.0);  // 1mm 粒径
+    let physics = PhysicalConstants::seawater();
 
     // 无剪切应力时输沙率为零
-    let qb = formula.compute_from_shear_stress(0.0, &sediment);
+    let qb = formula.compute_from_shear_stress(0.0, &sediment, &physics);
     assert!(qb.abs() < 1e-20);
 
     // 有剪切应力时输沙率为正
-    let qb = formula.compute_from_shear_stress(10.0, &sediment);
+    let qb = formula.compute_from_shear_stress(10.0, &sediment, &physics);
     assert!(qb >= 0.0);
 }
 

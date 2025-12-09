@@ -19,6 +19,7 @@ thiserror = "1.0"
 [dev-dependencies]
 mh_geo = { path = "../mh_geo" }
 mh_mesh = { path = "../mh_mesh" }
+rand = "0.8"
 
 [[test]]
 name = "mass_conservation"

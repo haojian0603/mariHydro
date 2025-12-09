@@ -5,12 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 重力加速度
-const G: f64 = 9.81;
-/// 水的运动粘度
-const NU_WATER: f64 = 1.0e-6;
-/// 水的密度
-const RHO_WATER: f64 = 1000.0;
+use crate::types::PhysicalConstants;
 
 /// 泥沙类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,21 +71,26 @@ pub struct SedimentProperties {
 impl SedimentProperties {
     /// 从 d50 (mm) 创建，自动计算其他属性
     pub fn from_d50_mm(d50_mm: f64) -> Self {
+        Self::from_d50_mm_with_physics(d50_mm, &PhysicalConstants::freshwater())
+    }
+
+    /// 从 d50 (mm) 创建，使用指定物理常数
+    pub fn from_d50_mm_with_physics(d50_mm: f64, physics: &PhysicalConstants) -> Self {
         let d50 = d50_mm * 1e-3;  // mm -> m
         let rho_s = 2650.0;       // 典型石英密度
-        let s = rho_s / RHO_WATER;
+        let s = rho_s / physics.rho_water;
         
         // 无量纲粒径
-        let d_star = Self::compute_dimensionless_diameter(d50, s);
+        let d_star = Self::compute_dimensionless_diameter(d50, s, physics);
         
         // 沉降速度
-        let ws = Self::compute_settling_velocity(d50, s, d_star);
+        let ws = Self::compute_settling_velocity(d50, s, d_star, physics);
         
         // 临界希尔兹数
         let theta_cr = Self::compute_critical_shields(d_star);
         
         // 临界剪切应力
-        let tau_cr = theta_cr * (rho_s - RHO_WATER) * G * d50;
+        let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
             d50,
@@ -107,11 +107,16 @@ impl SedimentProperties {
 
     /// 自定义参数创建
     pub fn custom(d50: f64, rho_s: f64) -> Self {
-        let s = rho_s / RHO_WATER;
-        let d_star = Self::compute_dimensionless_diameter(d50, s);
-        let ws = Self::compute_settling_velocity(d50, s, d_star);
+        Self::custom_with_physics(d50, rho_s, &PhysicalConstants::freshwater())
+    }
+
+    /// 自定义参数创建，使用指定物理常数
+    pub fn custom_with_physics(d50: f64, rho_s: f64, physics: &PhysicalConstants) -> Self {
+        let s = rho_s / physics.rho_water;
+        let d_star = Self::compute_dimensionless_diameter(d50, s, physics);
+        let ws = Self::compute_settling_velocity(d50, s, d_star, physics);
         let theta_cr = Self::compute_critical_shields(d_star);
-        let tau_cr = theta_cr * (rho_s - RHO_WATER) * G * d50;
+        let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
             d50,
@@ -127,26 +132,26 @@ impl SedimentProperties {
     }
 
     /// 计算无量纲粒径 D* = d × [(s-1)g/ν²]^(1/3)
-    fn compute_dimensionless_diameter(d: f64, s: f64) -> f64 {
-        let factor = (s - 1.0) * G / (NU_WATER * NU_WATER);
+    fn compute_dimensionless_diameter(d: f64, s: f64, physics: &PhysicalConstants) -> f64 {
+        let factor = (s - 1.0) * physics.g / (physics.nu_water * physics.nu_water);
         d * factor.powf(1.0 / 3.0)
     }
 
     /// 计算沉降速度 (Van Rijn, 1984)
-    fn compute_settling_velocity(d: f64, s: f64, d_star: f64) -> f64 {
+    fn compute_settling_velocity(d: f64, s: f64, d_star: f64, physics: &PhysicalConstants) -> f64 {
         if d_star < 1.0 {
             // Stokes 沉降
-            (s - 1.0) * G * d * d / (18.0 * NU_WATER)
+            (s - 1.0) * physics.g * d * d / (18.0 * physics.nu_water)
         } else if d_star <= 100.0 {
             // 过渡区
-            let ws_stokes = (s - 1.0) * G * d * d / (18.0 * NU_WATER);
-            let ws_newton = 1.1 * ((s - 1.0) * G * d).sqrt();
+            let ws_stokes = (s - 1.0) * physics.g * d * d / (18.0 * physics.nu_water);
+            let ws_newton = 1.1 * ((s - 1.0) * physics.g * d).sqrt();
             // 插值
             let f = (d_star - 1.0) / 99.0;
             ws_stokes * (1.0 - f) + ws_newton * f
         } else {
             // Newton 沉降
-            1.1 * ((s - 1.0) * G * d).sqrt()
+            1.1 * ((s - 1.0) * physics.g * d).sqrt()
         }
     }
 
@@ -156,18 +161,18 @@ impl SedimentProperties {
     }
 
     /// 计算床面剪切应力对应的希尔兹数
-    pub fn shields_number(&self, tau_b: f64) -> f64 {
-        tau_b / ((self.rho_s - RHO_WATER) * G * self.d50)
+    pub fn shields_number(&self, tau_b: f64, physics: &PhysicalConstants) -> f64 {
+        tau_b / ((self.rho_s - physics.rho_water) * physics.g * self.d50)
     }
 
     /// 判断是否起动
-    pub fn is_mobile(&self, tau_b: f64) -> bool {
-        self.shields_number(tau_b) > self.critical_shields
+    pub fn is_mobile(&self, tau_b: f64, physics: &PhysicalConstants) -> bool {
+        self.shields_number(tau_b, physics) > self.critical_shields
     }
 
     /// 获取超临界希尔兹数
-    pub fn excess_shields(&self, tau_b: f64) -> f64 {
-        (self.shields_number(tau_b) - self.critical_shields).max(0.0)
+    pub fn excess_shields(&self, tau_b: f64, physics: &PhysicalConstants) -> f64 {
+        (self.shields_number(tau_b, physics) - self.critical_shields).max(0.0)
     }
 }
 
@@ -243,32 +248,35 @@ mod tests {
     #[test]
     fn test_shields_number() {
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         let tau_b = 1.0; // Pa
         
-        let theta = props.shields_number(tau_b);
+        let theta = props.shields_number(tau_b, &physics);
         assert!(theta > 0.0);
     }
 
     #[test]
     fn test_is_mobile() {
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         
         // 低剪切应力不起动
-        assert!(!props.is_mobile(0.01));
+        assert!(!props.is_mobile(0.01, &physics));
         
         // 高剪切应力起动
-        assert!(props.is_mobile(10.0));
+        assert!(props.is_mobile(10.0, &physics));
     }
 
     #[test]
     fn test_excess_shields() {
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         
         // 低于临界，返回0
-        assert_eq!(props.excess_shields(0.01), 0.0);
+        assert_eq!(props.excess_shields(0.01, &physics), 0.0);
         
         // 高于临界，返回正值
-        assert!(props.excess_shields(10.0) > 0.0);
+        assert!(props.excess_shields(10.0, &physics) > 0.0);
     }
 
     #[test]

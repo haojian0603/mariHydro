@@ -215,7 +215,7 @@ impl<V, E, F> HalfEdgeMesh<V, E, F> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::mesh::{Face, HalfEdge, Vertex};
+    
     use super::*;
 
     #[test]

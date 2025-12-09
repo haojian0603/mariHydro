@@ -78,10 +78,13 @@ pub use csr::{CsrBuilder, CsrMatrix, CsrPattern};
 pub use vector_ops::{axpy, copy, dot, fill, norm2, scale, xpay};
 
 // 预条件器
-pub use preconditioner::{IdentityPreconditioner, JacobiPreconditioner, Preconditioner};
+pub use preconditioner::{
+    IdentityPreconditioner, Ilu0Preconditioner, JacobiPreconditioner, Preconditioner,
+    SsorPreconditioner,
+};
 
 // 求解器
 pub use solver::{
-    BiCgStabSolver, ConjugateGradient, IterativeSolver, PcgSolver, SolverConfig, SolverResult,
-    SolverStatus,
+    BiCgStabSolver, BiCgStabWorkspace, CgWorkspace, ConjugateGradient, IterativeSolver, PcgSolver,
+    SolverConfig, SolverResult, SolverStatus,
 };

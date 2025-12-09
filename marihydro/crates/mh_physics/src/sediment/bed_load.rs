@@ -4,10 +4,13 @@
 //! 包含 Meyer-Peter-Müller, Van Rijn 等经典公式
 
 use super::properties::SedimentProperties;
+use crate::types::PhysicalConstants;
 use serde::{Deserialize, Serialize};
 
-/// 重力加速度
-const G: f64 = 9.81;
+/// 获取默认物理常数（淡水）
+fn default_physics() -> PhysicalConstants {
+    PhysicalConstants::freshwater()
+}
 
 /// 推移质输沙公式接口
 pub trait BedLoadFormula: Send + Sync {
@@ -19,10 +22,11 @@ pub trait BedLoadFormula: Send + Sync {
     /// # Arguments
     /// * `tau_b` - 床面剪切应力 [Pa]
     /// * `props` - 泥沙属性
+    /// * `physics` - 物理常数
     /// 
     /// # Returns
     /// 单宽推移质输沙率 q_b [m²/s]
-    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties) -> f64;
+    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64;
     
     /// 计算输沙向量（含方向）
     fn compute_transport_vector(
@@ -30,13 +34,14 @@ pub trait BedLoadFormula: Send + Sync {
         tau_bx: f64,
         tau_by: f64,
         props: &SedimentProperties,
+        physics: &PhysicalConstants,
     ) -> (f64, f64) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
         if tau_b < 1e-14 {
             return (0.0, 0.0);
         }
         
-        let qb = self.compute_transport_rate(tau_b, props);
+        let qb = self.compute_transport_rate(tau_b, props, physics);
         let ratio = qb / tau_b;
         (tau_bx * ratio, tau_by * ratio)
     }
@@ -75,8 +80,8 @@ impl BedLoadFormula for MeyerPeterMuller {
         "Meyer-Peter-Müller"
     }
 
-    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties) -> f64 {
-        let excess_theta = props.excess_shields(tau_b);
+    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+        let excess_theta = props.excess_shields(tau_b, physics);
         if excess_theta <= 0.0 {
             return 0.0;
         }
@@ -87,7 +92,7 @@ impl BedLoadFormula for MeyerPeterMuller {
         // 转换为实际输沙率
         let d = props.d50;
         let s = props.relative_density;
-        let scale = ((s - 1.0) * G * d * d * d).sqrt();
+        let scale = ((s - 1.0) * physics.g * d * d * d).sqrt();
         
         phi * scale
     }
@@ -115,7 +120,7 @@ impl BedLoadFormula for VanRijn {
         "Van Rijn"
     }
 
-    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties) -> f64 {
+    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
         let tau_cr = props.critical_shear_stress;
         if tau_b <= tau_cr {
             return 0.0;
@@ -130,7 +135,7 @@ impl BedLoadFormula for VanRijn {
         // 输沙率
         let d = props.d50;
         let s = props.relative_density;
-        let scale = ((s - 1.0) * G * d * d * d).sqrt();
+        let scale = ((s - 1.0) * physics.g * d * d * d).sqrt();
         
         self.coefficient * scale * d_star.powf(-0.3) * t_param.powf(2.1)
     }
@@ -154,7 +159,7 @@ impl BedLoadFormula for Einstein {
         "Einstein"
     }
 
-    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties) -> f64 {
+    fn compute_transport_rate(&self, tau_b: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
         if tau_b < 1e-14 {
             return 0.0;
         }
@@ -163,10 +168,10 @@ impl BedLoadFormula for Einstein {
         let s = props.relative_density;
         
         // 剪切速度
-        let u_star = (tau_b / 1000.0).sqrt();
+        let u_star = (tau_b / physics.rho_water).sqrt();
         
         // Einstein 参数
-        let psi = (s - 1.0) * G * d / (u_star * u_star);
+        let psi = (s - 1.0) * physics.g * d / (u_star * u_star);
         
         if psi > 40.0 {
             return 0.0;  // 无输沙
@@ -179,7 +184,7 @@ impl BedLoadFormula for Einstein {
             0.465 * psi.powf(-2.5)
         };
         
-        let scale = ((s - 1.0) * G * d * d * d).sqrt();
+        let scale = ((s - 1.0) * physics.g * d * d * d).sqrt();
         phi * scale
     }
 }
@@ -229,7 +234,20 @@ impl BedLoadTransport {
         v: &[f64],
         manning_n: f64,
     ) {
-        let rho = 1000.0;
+        self.compute_bed_shear_stress_with_physics(h, u, v, manning_n, &default_physics());
+    }
+
+    /// 计算床面剪切应力（带物理常数）
+    pub fn compute_bed_shear_stress_with_physics(
+        &mut self,
+        h: &[f64],
+        u: &[f64],
+        v: &[f64],
+        manning_n: f64,
+        physics: &PhysicalConstants,
+    ) {
+        let rho = physics.rho_water;
+        let g = physics.g;
         let h_min = 0.01;
 
         for i in 0..self.tau_bx.len().min(h.len()).min(u.len()).min(v.len()) {
@@ -239,7 +257,7 @@ impl BedLoadTransport {
             let speed = (ui * ui + vi * vi).sqrt();
             
             // 床面剪切应力大小
-            let tau_mag = rho * G * manning_n * manning_n * speed * speed / hi.powf(1.0 / 3.0);
+            let tau_mag = rho * g * manning_n * manning_n * speed * speed / hi.powf(1.0 / 3.0);
             
             // 分量
             if speed > 1e-10 {
@@ -254,11 +272,17 @@ impl BedLoadTransport {
 
     /// 计算推移质输沙率
     pub fn compute_transport_rates(&mut self) {
+        self.compute_transport_rates_with_physics(&default_physics());
+    }
+
+    /// 计算推移质输沙率（带物理常数）
+    pub fn compute_transport_rates_with_physics(&mut self, physics: &PhysicalConstants) {
         for i in 0..self.qbx.len() {
             let (qx, qy) = self.formula.compute_transport_vector(
                 self.tau_bx[i],
                 self.tau_by[i],
                 &self.properties,
+                physics,
             );
             self.qbx[i] = qx;
             self.qby[i] = qy;
@@ -289,13 +313,14 @@ mod tests {
     fn test_mpm_formula() {
         let mpm = MeyerPeterMuller::new();
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         
         // 低于临界剪切应力
-        let qb = mpm.compute_transport_rate(0.1, &props);
+        let qb = mpm.compute_transport_rate(0.1, &props, &physics);
         assert!((qb).abs() < 1e-14);
         
         // 高于临界剪切应力
-        let qb = mpm.compute_transport_rate(1.0, &props);
+        let qb = mpm.compute_transport_rate(1.0, &props, &physics);
         assert!(qb > 0.0);
     }
 
@@ -303,9 +328,10 @@ mod tests {
     fn test_van_rijn_formula() {
         let vr = VanRijn::new();
         let props = SedimentProperties::from_d50_mm(0.3);
+        let physics = PhysicalConstants::freshwater();
         
         // 高剪切应力
-        let qb = vr.compute_transport_rate(2.0, &props);
+        let qb = vr.compute_transport_rate(2.0, &props, &physics);
         assert!(qb > 0.0);
     }
 
@@ -313,9 +339,10 @@ mod tests {
     fn test_einstein_formula() {
         let ein = Einstein::new();
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         
         // 高剪切应力
-        let qb = ein.compute_transport_rate(2.0, &props);
+        let qb = ein.compute_transport_rate(2.0, &props, &physics);
         assert!(qb > 0.0);
     }
 
@@ -323,9 +350,10 @@ mod tests {
     fn test_transport_vector() {
         let mpm = MeyerPeterMuller::new();
         let props = SedimentProperties::from_d50_mm(0.5);
+        let physics = PhysicalConstants::freshwater();
         
         // 45度方向
-        let (qx, qy) = mpm.compute_transport_vector(1.0, 1.0, &props);
+        let (qx, qy) = mpm.compute_transport_vector(1.0, 1.0, &props, &physics);
         
         // 两个分量应该相等
         assert!((qx - qy).abs() < 1e-10);

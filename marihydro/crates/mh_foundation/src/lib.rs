@@ -61,7 +61,7 @@ pub mod validation;
 pub use arena::Arena;
 pub use dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
 pub use error::{MhError, MhResult};
-pub use float::SafeF64;
+pub use float::{SafeF64, KahanSum};
 pub use index::{
     BoundaryIndex, CellIndex, FaceIndex, HalfEdgeIndex, Idx, NodeIndex, VertexIndex,
     CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,

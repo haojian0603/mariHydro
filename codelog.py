@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 代码收集器 - 将指定路径下的所有文件收集到codelog文件夹中的txt文件
-使用方法: python collect_code.py /path/to/project
+使用方法: 
+python E:\Documents\mariHydro\codelog.py E:\Documents\mariHydro\marihydro\crates
 """
 
 import sys
@@ -315,6 +316,7 @@ def main():
             ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz",
             # 数据库和锁文件
             ".sqlite", ".db", ".lock",
+            ".md"
         }
         
         custom_excluded_dirs = {

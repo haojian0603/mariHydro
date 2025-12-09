@@ -128,6 +128,25 @@ impl StabilityOptions {
     }
 }
 
+/// 时间积分器类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeIntegrator {
+    /// 显式时间积分
+    #[default]
+    Explicit,
+    /// 半隐式时间积分（压力校正）
+    SemiImplicit,
+}
+
+impl std::fmt::Display for TimeIntegrator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Explicit => write!(f, "显式"),
+            Self::SemiImplicit => write!(f, "半隐式"),
+        }
+    }
+}
+
 /// 求解器配置
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
@@ -151,6 +170,8 @@ pub struct SolverConfig {
     pub max_fallback_attempts: u32,
     /// 时间步减小因子（回退时使用）
     pub timestep_reduction_factor: f64,
+    /// 时间积分器类型
+    pub integrator: TimeIntegrator,
 }
 
 impl Default for SolverConfig {
@@ -166,6 +187,7 @@ impl Default for SolverConfig {
             stability: StabilityOptions::default(),
             max_fallback_attempts: 3,
             timestep_reduction_factor: 0.5,
+            integrator: TimeIntegrator::default(),
         }
     }
 }

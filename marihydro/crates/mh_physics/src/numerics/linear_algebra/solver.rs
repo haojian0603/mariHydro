@@ -115,6 +115,99 @@ impl SolverResult {
     pub fn is_converged(&self) -> bool {
         self.status == SolverStatus::Converged
     }
+
+    /// 返回是否收敛（别名）
+    pub fn converged(&self) -> bool {
+        self.is_converged()
+    }
+}
+
+/// CG 求解器工作区
+///
+/// 预分配的工作向量，避免 solve 内部频繁分配
+#[derive(Debug, Clone, Default)]
+pub struct CgWorkspace {
+    /// 残差向量
+    pub r: Vec<Scalar>,
+    /// 搜索方向
+    pub p: Vec<Scalar>,
+    /// A*p
+    pub ap: Vec<Scalar>,
+    /// 预条件后的残差
+    pub z: Vec<Scalar>,
+}
+
+impl CgWorkspace {
+    /// 创建新的工作区
+    pub fn new(n: usize) -> Self {
+        Self {
+            r: vec![0.0; n],
+            p: vec![0.0; n],
+            ap: vec![0.0; n],
+            z: vec![0.0; n],
+        }
+    }
+
+    /// 调整工作区大小
+    pub fn resize(&mut self, n: usize) {
+        if self.r.len() != n {
+            self.r.resize(n, 0.0);
+            self.p.resize(n, 0.0);
+            self.ap.resize(n, 0.0);
+            self.z.resize(n, 0.0);
+        }
+    }
+}
+
+/// BiCGStab 求解器工作区
+#[derive(Debug, Clone, Default)]
+pub struct BiCgStabWorkspace {
+    /// 残差向量
+    pub r: Vec<Scalar>,
+    /// 影子残差，必须保持不变
+    pub r0: Vec<Scalar>,
+    /// 搜索方向
+    pub p: Vec<Scalar>,
+    /// A*p_hat
+    pub v: Vec<Scalar>,
+    /// 中间残差
+    pub s: Vec<Scalar>,
+    /// A*s_hat
+    pub t: Vec<Scalar>,
+    /// 预条件后的向量
+    pub p_hat: Vec<Scalar>,
+    /// 预条件后的向量
+    pub s_hat: Vec<Scalar>,
+}
+
+impl BiCgStabWorkspace {
+    /// 创建新的工作区
+    pub fn new(n: usize) -> Self {
+        Self {
+            r: vec![0.0; n],
+            r0: vec![0.0; n],
+            p: vec![0.0; n],
+            v: vec![0.0; n],
+            s: vec![0.0; n],
+            t: vec![0.0; n],
+            p_hat: vec![0.0; n],
+            s_hat: vec![0.0; n],
+        }
+    }
+
+    /// 调整工作区大小
+    pub fn resize(&mut self, n: usize) {
+        if self.r.len() != n {
+            self.r.resize(n, 0.0);
+            self.r0.resize(n, 0.0);
+            self.p.resize(n, 0.0);
+            self.v.resize(n, 0.0);
+            self.s.resize(n, 0.0);
+            self.t.resize(n, 0.0);
+            self.p_hat.resize(n, 0.0);
+            self.s_hat.resize(n, 0.0);
+        }
+    }
 }
 
 /// 迭代求解器 trait
@@ -308,6 +401,136 @@ impl PcgSolver {
             self.ap = vec![0.0; n];
         }
     }
+
+    /// 使用外部工作区求解（避免内部分配）
+    ///
+    /// # 参数
+    ///
+    /// - `matrix`: 系数矩阵
+    /// - `b`: 右端项
+    /// - `x`: 解向量
+    /// - `precond`: 预条件器
+    /// - `ws`: 外部工作区
+    pub fn solve_with_workspace<P: Preconditioner>(
+        &self,
+        matrix: &CsrMatrix,
+        b: &[Scalar],
+        x: &mut [Scalar],
+        precond: &P,
+        ws: &mut CgWorkspace,
+    ) -> SolverResult {
+        let n = b.len();
+        ws.resize(n);
+
+        // r = b - A*x
+        matrix.mul_vec(x, &mut ws.r);
+        for i in 0..n {
+            ws.r[i] = b[i] - ws.r[i];
+        }
+
+        let initial_norm = norm2(&ws.r);
+        let b_norm = norm2(b);
+
+        // 鲁棒的收敛判据：处理 b_norm ≈ 0 的情况
+        let effective_tol = if b_norm < f64::MIN_POSITIVE {
+            self.config.atol
+        } else {
+            self.config.atol.max(self.config.rtol * b_norm)
+        };
+
+        if initial_norm < effective_tol {
+            return SolverResult {
+                status: SolverStatus::Converged,
+                iterations: 0,
+                residual_norm: initial_norm,
+                initial_residual_norm: initial_norm,
+                relative_residual: 0.0,
+            };
+        }
+
+        // z = M^{-1} * r
+        precond.apply(&ws.r, &mut ws.z);
+
+        // p = z
+        copy(&ws.z, &mut ws.p);
+
+        let mut rz = dot(&ws.r, &ws.z);
+
+        for iter in 0..self.config.max_iter {
+            // ap = A * p
+            matrix.mul_vec(&ws.p, &mut ws.ap);
+
+            // alpha = r'z / p'Ap
+            let pap = dot(&ws.p, &ws.ap);
+            if pap.abs() < 1e-30 {
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter,
+                    residual_norm: norm2(&ws.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if initial_norm > 0.0 {
+                        norm2(&ws.r) / initial_norm
+                    } else {
+                        0.0
+                    },
+                };
+            }
+
+            let alpha = rz / pap;
+
+            // x = x + alpha * p
+            axpy(alpha, &ws.p, x);
+
+            // r = r - alpha * ap
+            axpy(-alpha, &ws.ap, &mut ws.r);
+
+            let res_norm = norm2(&ws.r);
+
+            if self.config.verbose {
+                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm);
+            }
+
+            // 检查收敛
+            if res_norm < effective_tol {
+                return SolverResult {
+                    status: SolverStatus::Converged,
+                    iterations: iter + 1,
+                    residual_norm: res_norm,
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if initial_norm > 0.0 {
+                        res_norm / initial_norm
+                    } else {
+                        0.0
+                    },
+                };
+            }
+
+            // z = M^{-1} * r
+            precond.apply(&ws.r, &mut ws.z);
+
+            // beta = r'z_new / r'z_old
+            let rz_new = dot(&ws.r, &ws.z);
+            let beta = rz_new / rz;
+            rz = rz_new;
+
+            // p = z + beta * p
+            for i in 0..n {
+                ws.p[i] = ws.z[i] + beta * ws.p[i];
+            }
+        }
+
+        SolverResult {
+            status: SolverStatus::MaxIterationsReached,
+            iterations: self.config.max_iter,
+            residual_norm: norm2(&ws.r),
+            initial_residual_norm: initial_norm,
+            relative_residual: if initial_norm > 0.0 {
+                norm2(&ws.r) / initial_norm
+            } else {
+                0.0
+            },
+        }
+    }
 }
 
 impl IterativeSolver for PcgSolver {
@@ -488,10 +711,20 @@ impl IterativeSolver for BiCgStabSolver {
             };
         }
 
-        // r0 = r (shadow residual)
+        // r0 = r (shadow residual) - 固定为初始残差，在迭代中保持不变
         copy(&self.r, &mut self.r0);
 
-        let mut rho = 1.0;
+        // 修复：rho 初始化为 (r0, r) 而非 1.0
+        let mut rho = dot(&self.r0, &self.r);
+        if rho.abs() < 1e-30 {
+            return SolverResult {
+                status: SolverStatus::Converged,
+                iterations: 0,
+                residual_norm: initial_norm,
+                initial_residual_norm: initial_norm,
+                relative_residual: 0.0,
+            };
+        }
         let mut alpha = 1.0;
         let mut omega = 1.0;
 
@@ -499,19 +732,24 @@ impl IterativeSolver for BiCgStabSolver {
         self.p.fill(0.0);
 
         for iter in 0..self.config.max_iter {
-            let rho_new = dot(&self.r0, &self.r);
-            if rho_new.abs() < 1e-30 {
-                return SolverResult {
-                    status: SolverStatus::Stagnated,
-                    iterations: iter,
-                    residual_norm: norm2(&self.r),
-                    initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.r) / initial_norm,
-                };
-            }
-
-            let beta = (rho_new / rho) * (alpha / omega);
-            rho = rho_new;
+            // 计算 beta（第一次迭代时使用特殊处理）
+            let beta = if iter == 0 {
+                0.0
+            } else {
+                let rho_new = dot(&self.r0, &self.r);
+                if rho_new.abs() < 1e-30 {
+                    return SolverResult {
+                        status: SolverStatus::Stagnated,
+                        iterations: iter,
+                        residual_norm: norm2(&self.r),
+                        initial_residual_norm: initial_norm,
+                        relative_residual: norm2(&self.r) / initial_norm,
+                    };
+                }
+                let b = (rho_new / rho) * (alpha / omega);
+                rho = rho_new;
+                b
+            };
 
             // p = r + beta * (p - omega * v)
             for i in 0..n {

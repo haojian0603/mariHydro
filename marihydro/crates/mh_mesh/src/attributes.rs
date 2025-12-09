@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_attribute_store_basic() {
-        let mut store = AttributeStore::new(10, 5, 15);
+        let store = AttributeStore::new(10, 5, 15);
         
         assert_eq!(store.cell_count(), 10);
         assert_eq!(store.node_count(), 5);

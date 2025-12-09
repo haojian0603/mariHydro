@@ -35,7 +35,7 @@ use crate::numerics::discretization::{
     CellFaceTopology, DepthCorrector, PressureMatrixAssembler, VelocityCorrector,
 };
 use crate::numerics::linear_algebra::{
-    IterativeSolver, JacobiPreconditioner, PcgSolver, SolverConfig, SolverResult, SolverStatus,
+    JacobiPreconditioner, PcgSolver, SolverConfig, SolverResult, SolverStatus,
 };
 use crate::state::ShallowWaterState;
 use mh_foundation::{AlignedVec, Scalar};
@@ -136,18 +136,38 @@ pub struct SemiImplicitStrategy {
     solver: PcgSolver,
     /// 预条件器
     precond: JacobiPreconditioner,
+    /// 求解器工作区
+    workspace: crate::numerics::linear_algebra::CgWorkspace,
     /// 水深校正器
     depth_corrector: DepthCorrector,
     /// 速度校正器
     velocity_corrector: VelocityCorrector,
+    /// 当前时刻速度 u^n
+    u_n: AlignedVec<Scalar>,
+    /// 当前时刻速度 v^n
+    v_n: AlignedVec<Scalar>,
     /// 预测速度 u*
     u_star: AlignedVec<Scalar>,
     /// 预测速度 v*
     v_star: AlignedVec<Scalar>,
+    /// 对流通量累加（u方向）
+    advection_flux_u: AlignedVec<Scalar>,
+    /// 对流通量累加（v方向）
+    advection_flux_v: AlignedVec<Scalar>,
+    /// 扩散通量累加（u方向）
+    diffusion_flux_u: AlignedVec<Scalar>,
+    /// 扩散通量累加（v方向）
+    diffusion_flux_v: AlignedVec<Scalar>,
     /// 水位校正量 η'
     eta_prime: AlignedVec<Scalar>,
+    /// 上一步水位校正量
+    d_eta_prev: AlignedVec<Scalar>,
     /// 右端项
     rhs: AlignedVec<Scalar>,
+    /// 上一步干湿掩码
+    prev_wet_mask: Vec<bool>,
+    /// CFL 历史记录
+    cfl_history: Vec<Scalar>,
     /// 最新统计
     stats: SemiImplicitStats,
 }
@@ -171,6 +191,9 @@ impl SemiImplicitStrategy {
         // 初始化预条件器为单位矩阵
         let precond = JacobiPreconditioner::from_diagonal(&vec![1.0; n_cells]);
 
+        // 初始化求解器工作区
+        let workspace = crate::numerics::linear_algebra::CgWorkspace::new(n_cells);
+
         let depth_corrector = DepthCorrector::new(n_cells).with_h_min(config.h_min);
         let velocity_corrector = VelocityCorrector::new(&topo).with_h_min(config.h_dry);
 
@@ -180,12 +203,22 @@ impl SemiImplicitStrategy {
             pressure_assembler,
             solver,
             precond,
+            workspace,
             depth_corrector,
             velocity_corrector,
+            u_n: AlignedVec::zeros(n_cells),
+            v_n: AlignedVec::zeros(n_cells),
             u_star: AlignedVec::zeros(n_cells),
             v_star: AlignedVec::zeros(n_cells),
+            advection_flux_u: AlignedVec::zeros(n_cells),
+            advection_flux_v: AlignedVec::zeros(n_cells),
+            diffusion_flux_u: AlignedVec::zeros(n_cells),
+            diffusion_flux_v: AlignedVec::zeros(n_cells),
             eta_prime: AlignedVec::zeros(n_cells),
+            d_eta_prev: AlignedVec::zeros(n_cells),
             rhs: AlignedVec::zeros(n_cells),
+            prev_wet_mask: vec![false; n_cells],
+            cfl_history: Vec::new(),
             stats: SemiImplicitStats::default(),
         }
     }
@@ -200,16 +233,27 @@ impl SemiImplicitStrategy {
         &self.stats
     }
 
-    /// 执行半隐式时间推进
+    /// 执行半隐式时间推进（返回是否成功收敛）
     ///
     /// # 参数
     ///
     /// - `state`: 浅水状态（将被修改）
     /// - `mesh`: 物理网格
     /// - `dt`: 时间步长
-    pub fn advance(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: Scalar) {
+    ///
+    /// # 返回
+    ///
+    /// 线性求解器是否收敛
+    pub fn step(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: Scalar) -> bool {
         // 重置统计
         self.stats = SemiImplicitStats::default();
+
+        // 1. CFL 检查
+        let cfl = self.compute_cfl(state, mesh, dt);
+        self.cfl_history.push(cfl);
+        if cfl > 1.0 {
+            log::warn!("半隐式 CFL={:.2} > 1.0，可能影响精度", cfl);
+        }
 
         // 统计干湿单元
         for i in 0..state.n_cells() {
@@ -220,11 +264,13 @@ impl SemiImplicitStrategy {
             }
         }
 
-        // 1. 预测步：u* = u^n (简化版，不计算对流项)
-        self.u_star.as_mut_slice().copy_from_slice(&state.u);
-        self.v_star.as_mut_slice().copy_from_slice(&state.v);
+        // 2. 从动量恢复速度
+        self.extract_velocity(state);
 
-        // 2. 组装压力矩阵
+        // 3. 预测步（对流+扩散）
+        self.compute_prediction_step(mesh, state, dt);
+
+        // 4. 组装压力矩阵
         self.pressure_assembler.assemble(
             mesh,
             &self.topo,
@@ -233,43 +279,248 @@ impl SemiImplicitStrategy {
             self.config.gravity,
         );
 
-        // 3. 计算右端项 (散度)
+        // 5. 计算散度 RHS
         self.compute_divergence_rhs(mesh, state, dt);
 
-        // 4. 更新预条件器
+        // 6. 干单元边界条件
+        let wet_mask = self.compute_wet_mask(state);
+        self.apply_dry_cell_bc(&wet_mask);
+
+        // 7. 更新预条件器并求解
         self.precond.update(self.pressure_assembler.matrix());
 
-        // 5. 求解压力校正方程
         self.eta_prime.as_mut_slice().fill(0.0);
-        let result = self.solver.solve(
+        let result = self.solver.solve_with_workspace(
             self.pressure_assembler.matrix(),
             self.rhs.as_slice(),
             self.eta_prime.as_mut_slice(),
             &self.precond,
+            &mut self.workspace,
         );
 
         self.update_solver_stats(&result);
 
-        // 6. 校正水深
-        let correction_stats =
-            self.depth_corrector
-                .correct_with_stats(&mut state.h, self.eta_prime.as_slice());
-        self.stats.max_depth_correction = correction_stats.max_correction;
+        // 8. 速度和水深校正
+        self.velocity_correction(mesh, state, dt);
+        self.depth_correction(state);
 
-        // 7. 校正速度
-        self.velocity_corrector.correct(
-            &mut state.u,
-            &mut state.v,
-            &state.h,
-            self.eta_prime.as_slice(),
-            &self.topo,
-            mesh,
-            dt,
-            self.config.gravity,
-        );
+        // 更新干湿掩码历史
+        self.prev_wet_mask.copy_from_slice(&wet_mask);
+
+        // 保存上一步校正量
+        self.d_eta_prev
+            .as_mut_slice()
+            .copy_from_slice(self.eta_prime.as_slice());
+
+        result.is_converged()
+    }
+
+    /// 执行半隐式时间推进（兼容旧接口）
+    pub fn advance(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: Scalar) {
+        let _ = self.step(mesh, state, dt);
+    }
+
+    /// 计算 CFL 数
+    fn compute_cfl(&self, state: &ShallowWaterState, mesh: &PhysicsMesh, dt: Scalar) -> Scalar {
+        let g = self.config.gravity;
+        let h_dry = self.config.h_dry;
+
+        (0..state.n_cells())
+            .map(|i| {
+                let h = state.h[i];
+                if h < h_dry {
+                    return 0.0;
+                }
+                let u = state.hu[i] / h;
+                let v = state.hv[i] / h;
+                let c = (g * h).sqrt();
+                let vel = (u * u + v * v).sqrt() + c;
+                // 使用 sqrt(面积) 作为特征尺寸
+                let dx = mesh.cell_area_unchecked(i).sqrt();
+                if dx > 1e-14 {
+                    vel * dt / dx
+                } else {
+                    0.0
+                }
+            })
+            .fold(0.0, Scalar::max)
+    }
+
+    /// 从动量恢复速度场
+    fn extract_velocity(&mut self, state: &ShallowWaterState) {
+        let h_dry = self.config.h_dry;
+        for i in 0..state.n_cells() {
+            let h = state.h[i];
+            if h > h_dry {
+                self.u_n[i] = state.hu[i] / h;
+                self.v_n[i] = state.hv[i] / h;
+            } else {
+                self.u_n[i] = 0.0;
+                self.v_n[i] = 0.0;
+            }
+        }
+    }
+
+    /// 计算预测步（对流+扩散）
+    fn compute_prediction_step(&mut self, mesh: &PhysicsMesh, state: &ShallowWaterState, dt: Scalar) {
+        // 清零通量累加器
+        self.advection_flux_u.as_mut_slice().fill(0.0);
+        self.advection_flux_v.as_mut_slice().fill(0.0);
+        self.diffusion_flux_u.as_mut_slice().fill(0.0);
+        self.diffusion_flux_v.as_mut_slice().fill(0.0);
+
+        let h_dry = self.config.h_dry;
+
+        // 对流通量计算（一阶迎风格式）
+        for &face_idx in self.topo.interior_faces() {
+            let face = self.topo.face(face_idx);
+            let owner = face.owner;
+            let neighbor = face.neighbor.expect("interior face");
+
+            let (u_o, v_o) = (self.u_n[owner], self.v_n[owner]);
+            let (u_n, v_n) = (self.u_n[neighbor], self.v_n[neighbor]);
+
+            // 面法向速度（算术平均）
+            let un_face = 0.5 * ((u_o + u_n) * face.normal.x + (v_o + v_n) * face.normal.y);
+
+            // 迎风选择
+            let (u_up, v_up) = if un_face >= 0.0 {
+                (u_o, v_o)
+            } else {
+                (u_n, v_n)
+            };
+
+            // 面水深
+            let h_face = 0.5 * (state.h[owner] + state.h[neighbor]);
+            if h_face < h_dry {
+                continue;
+            }
+
+            // 对流通量
+            let flux_mass = h_face * un_face * face.length;
+
+            let h_o_safe = state.h[owner].max(1e-10);
+            let h_n_safe = state.h[neighbor].max(1e-10);
+
+            self.advection_flux_u[owner] -= flux_mass * u_up / h_o_safe;
+            self.advection_flux_v[owner] -= flux_mass * v_up / h_o_safe;
+            self.advection_flux_u[neighbor] += flux_mass * u_up / h_n_safe;
+            self.advection_flux_v[neighbor] += flux_mass * v_up / h_n_safe;
+        }
+
+        // 边界面处理（自由滑移）
+        for &face_idx in self.topo.boundary_faces() {
+            let face = self.topo.face(face_idx);
+            let owner = face.owner;
+
+            if state.h[owner] < h_dry {
+                continue;
+            }
+
+            let (u_o, v_o) = (self.u_n[owner], self.v_n[owner]);
+            // 自由滑移：法向速度为零
+            let vn = u_o * face.normal.x + v_o * face.normal.y;
+            let _u_boundary = u_o - 2.0 * vn * face.normal.x;
+            let _v_boundary = v_o - 2.0 * vn * face.normal.y;
+            // 边界面不贡献对流通量（固壁）
+        }
+
+        // 更新预测速度
+        for i in 0..state.n_cells() {
+            if state.h[i] <= h_dry {
+                self.u_star[i] = 0.0;
+                self.v_star[i] = 0.0;
+                continue;
+            }
+            let inv_area = 1.0 / mesh.cell_area_unchecked(i);
+            self.u_star[i] = self.u_n[i]
+                + dt * (self.advection_flux_u[i] + self.diffusion_flux_u[i]) * inv_area;
+            self.v_star[i] = self.v_n[i]
+                + dt * (self.advection_flux_v[i] + self.diffusion_flux_v[i]) * inv_area;
+        }
+    }
+
+    /// 计算干湿掩码
+    fn compute_wet_mask(&self, state: &ShallowWaterState) -> Vec<bool> {
+        (0..state.n_cells())
+            .map(|i| state.h[i] > self.config.h_dry)
+            .collect()
+    }
+
+    /// 应用干单元边界条件
+    fn apply_dry_cell_bc(&mut self, wet_mask: &[bool]) {
+        for i in 0..wet_mask.len() {
+            if !wet_mask[i] {
+                self.rhs[i] = 0.0;
+            }
+        }
+    }
+
+    /// 速度校正（Green-Gauss 梯度）
+    fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: Scalar) {
+        let g = self.config.gravity;
+        let theta = self.config.theta;
+        let coeff = g * theta * dt;
+        let h_dry = self.config.h_dry;
+
+        for i in 0..mesh.n_cells() {
+            if state.h[i] < h_dry {
+                continue;
+            }
+
+            // Green-Gauss 梯度计算
+            let (grad_x, grad_y) = self.compute_gradient(mesh, i);
+
+            let u_new = self.u_star[i] - coeff * grad_x;
+            let v_new = self.v_star[i] - coeff * grad_y;
+            let h_new = (state.h[i] + self.eta_prime[i]).max(0.0);
+
+            state.hu[i] = h_new * u_new;
+            state.hv[i] = h_new * v_new;
+        }
 
         // 计算速度校正统计
         self.compute_velocity_correction_stats(state);
+    }
+
+    /// 使用 Green-Gauss 方法计算水位校正量的梯度
+    fn compute_gradient(&self, mesh: &PhysicsMesh, cell_idx: usize) -> (Scalar, Scalar) {
+        let mut grad_x = 0.0;
+        let mut grad_y = 0.0;
+
+        let cell_faces = self.topo.cell_faces(cell_idx);
+        let area = mesh.cell_area_unchecked(cell_idx);
+
+        if area < 1e-14 {
+            return (0.0, 0.0);
+        }
+
+        for &face_idx in cell_faces {
+            let face = self.topo.face(face_idx);
+            let owner = face.owner;
+
+            // 面上的值（算术平均）
+            let eta_face = if let Some(neigh) = face.neighbor {
+                0.5 * (self.eta_prime[owner] + self.eta_prime[neigh])
+            } else {
+                self.eta_prime[owner]
+            };
+
+            // 根据面方向调整符号
+            let sign = if owner == cell_idx { 1.0 } else { -1.0 };
+
+            grad_x += sign * eta_face * face.normal.x * face.length;
+            grad_y += sign * eta_face * face.normal.y * face.length;
+        }
+
+        (grad_x / area, grad_y / area)
+    }
+
+    /// 水深校正
+    fn depth_correction(&self, state: &mut ShallowWaterState) {
+        for i in 0..state.n_cells() {
+            state.h[i] = (state.h[i] + self.eta_prime[i]).max(0.0);
+        }
     }
 
     /// 计算散度右端项
@@ -339,15 +590,29 @@ impl SemiImplicitStrategy {
     /// 计算速度校正统计
     fn compute_velocity_correction_stats(&mut self, state: &ShallowWaterState) {
         let mut max_correction: Scalar = 0.0;
+        let h_dry = self.config.h_dry;
 
         for i in 0..state.n_cells() {
-            let du = state.u[i] - self.u_star[i];
-            let dv = state.v[i] - self.v_star[i];
+            let h = state.h[i];
+            if h < h_dry {
+                continue;
+            }
+            // 从动量计算当前速度
+            let u_new = state.hu[i] / h;
+            let v_new = state.hv[i] / h;
+            let du = u_new - self.u_star[i];
+            let dv = v_new - self.v_star[i];
             let correction = (du * du + dv * dv).sqrt();
             max_correction = max_correction.max(correction);
         }
 
         self.stats.max_velocity_correction = max_correction;
+        self.stats.max_depth_correction = self
+            .eta_prime
+            .as_slice()
+            .iter()
+            .map(|x| x.abs())
+            .fold(0.0, Scalar::max);
     }
 
     /// 获取拓扑引用
@@ -369,10 +634,21 @@ impl SemiImplicitStrategy {
         self.depth_corrector = DepthCorrector::new(n_cells).with_h_min(self.config.h_min);
         self.velocity_corrector = VelocityCorrector::new(&self.topo).with_h_min(self.config.h_dry);
 
+        self.workspace = crate::numerics::linear_algebra::CgWorkspace::new(n_cells);
+
+        self.u_n = AlignedVec::zeros(n_cells);
+        self.v_n = AlignedVec::zeros(n_cells);
         self.u_star = AlignedVec::zeros(n_cells);
         self.v_star = AlignedVec::zeros(n_cells);
+        self.advection_flux_u = AlignedVec::zeros(n_cells);
+        self.advection_flux_v = AlignedVec::zeros(n_cells);
+        self.diffusion_flux_u = AlignedVec::zeros(n_cells);
+        self.diffusion_flux_v = AlignedVec::zeros(n_cells);
         self.eta_prime = AlignedVec::zeros(n_cells);
+        self.d_eta_prev = AlignedVec::zeros(n_cells);
         self.rhs = AlignedVec::zeros(n_cells);
+        self.prev_wet_mask = vec![false; n_cells];
+        self.cfl_history.clear();
 
         self.precond = JacobiPreconditioner::from_diagonal(&vec![1.0; n_cells]);
     }

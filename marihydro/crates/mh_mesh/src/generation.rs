@@ -16,7 +16,7 @@
 //! let generator = RectMeshGenerator::new(10, 10, 100.0, 100.0);
 //! let mesh = generator.build();
 //!
-//! assert_eq!(mesh.n_cells(), 200); // 10*10*2 triangles
+//! assert_eq!(mesh.n_faces(), 200); // 10*10*2 triangles
 //! ```
 
 use crate::halfedge::HalfEdgeMesh;

@@ -216,13 +216,13 @@ pub fn hadamard(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 ///
 /// # 注意
 ///
-/// y 中元素为零时，z 对应位置设为 0
+/// y 中元素绝对值小于 f64::EPSILON 时，z 对应位置设为 0
 #[inline]
 pub fn hadamard_div(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
-        *zi = if yi.abs() > 1e-14 { xi / yi } else { 0.0 };
+        *zi = if yi.abs() > f64::EPSILON { xi / yi } else { 0.0 };
     }
 }
 
@@ -235,16 +235,24 @@ pub fn hadamard_div(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 ///
 /// # 返回
 ///
-/// 相对残差 ||r|| / ||b||，若 ||b|| ≈ 0 则返回 ||r||
+/// 相对残差 ||r|| / ||b||，若 ||b|| <= f64::MIN_POSITIVE 则返回绝对残差 ||r||
 #[inline]
 pub fn relative_residual(residual: &[Scalar], b: &[Scalar]) -> Scalar {
     let norm_r = norm2(residual);
     let norm_b = norm2(b);
-    if norm_b > 1e-14 {
-        norm_r / norm_b
-    } else {
+    if norm_b <= f64::MIN_POSITIVE {
         norm_r
+    } else {
+        norm_r / norm_b
     }
+}
+
+/// 缩放加法: y = y + alpha * x
+///
+/// 与 axpy 相同，提供语义更清晰的别名
+#[inline]
+pub fn add_scaled(alpha: Scalar, x: &[Scalar], y: &mut [Scalar]) {
+    axpy(alpha, x, y);
 }
 
 #[cfg(test)]

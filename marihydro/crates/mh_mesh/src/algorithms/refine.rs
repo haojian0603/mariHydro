@@ -449,7 +449,7 @@ mod tests {
         let triangles = vec![[0, 1, 2]];
 
         let refiner = Refiner::default_config();
-        let (new_v, new_t) = refiner.refine_levels(&vertices, &triangles, 2);
+        let (_new_v, new_t) = refiner.refine_levels(&vertices, &triangles, 2);
 
         // 2次中点细分: 1 -> 4 -> 16
         assert_eq!(new_t.len(), 16);

@@ -382,6 +382,7 @@ fn validate_state(state: &ShallowWaterState, step: usize) -> Result<(), String> 
 }
 
 /// 运行模拟并收集统计
+#[allow(dead_code)]
 struct SimulationResult {
     initial_mass: f64,
     final_mass: f64,

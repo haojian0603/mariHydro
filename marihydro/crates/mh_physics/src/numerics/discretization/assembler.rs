@@ -321,9 +321,7 @@ impl ImplicitMomentumAssembler {
 
         for i in 0..n {
             let h = state.h[i];
-            let u = state.u[i];
-            let v = state.v[i];
-
+            
             if h < self.config.h_min {
                 // 干单元：单位矩阵
                 self.matrix_u.set(i, i, 1.0);
@@ -332,6 +330,10 @@ impl ImplicitMomentumAssembler {
                 self.rhs_v[i] = 0.0;
                 continue;
             }
+            
+            // 从动量计算速度
+            let u = state.hu[i] / h;
+            let v = state.hv[i] / h;
 
             let speed = (u * u + v * v).sqrt();
             let h43 = h.powf(4.0 / 3.0);

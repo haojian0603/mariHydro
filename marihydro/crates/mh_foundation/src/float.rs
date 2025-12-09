@@ -438,6 +438,107 @@ pub fn clamp_valid(x: f64, min: f64, max: f64, fallback: f64) -> f64 {
 }
 
 // ============================================================================
+// Kahan 求和算法
+// ============================================================================
+
+/// Kahan 求和器
+///
+/// 使用 Kahan 求和算法减少浮点累加误差。适用于需要高精度求和的场景，
+/// 如大量小数相加或存在大数吃小数的情况。
+///
+/// # 算法原理
+///
+/// Kahan 算法通过维护一个补偿项 (compensation) 来跟踪累加过程中丢失的低位精度。
+///
+/// # 示例
+///
+/// ```
+/// use mh_foundation::float::KahanSum;
+///
+/// // 累加大量小数
+/// let mut sum = KahanSum::new();
+/// for _ in 0..10000 {
+///     sum.add(0.1);
+/// }
+/// // 期望值为 1000.0
+/// let expected = 1000.0;
+/// let error = (sum.value() - expected).abs();
+/// assert!(error < 1e-10, "误差应该很小: {}", error);
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KahanSum {
+    /// 累加和
+    sum: f64,
+    /// 补偿项（低位精度损失）
+    compensation: f64,
+}
+
+impl KahanSum {
+    /// 创建新的 Kahan 求和器
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            sum: 0.0,
+            compensation: 0.0,
+        }
+    }
+
+    /// 从初始值创建
+    #[inline]
+    pub fn with_initial(value: f64) -> Self {
+        Self {
+            sum: value,
+            compensation: 0.0,
+        }
+    }
+
+    /// 添加一个值
+    #[inline]
+    pub fn add(&mut self, value: f64) {
+        // 补偿后的值
+        let y = value - self.compensation;
+        // 新的部分和
+        let t = self.sum + y;
+        // 计算新的补偿项：(t - sum) 是 y 的高位部分，
+        // 减去 y 得到丢失的低位部分（取反存储）
+        self.compensation = (t - self.sum) - y;
+        self.sum = t;
+    }
+
+    /// 获取当前求和值
+    #[inline]
+    pub fn value(&self) -> f64 {
+        self.sum
+    }
+
+    /// 重置求和器
+    #[inline]
+    pub fn reset(&mut self) {
+        self.sum = 0.0;
+        self.compensation = 0.0;
+    }
+
+    /// 从迭代器求和
+    pub fn sum_iter<I: IntoIterator<Item = f64>>(iter: I) -> f64 {
+        let mut kahan = Self::new();
+        for v in iter {
+            kahan.add(v);
+        }
+        kahan.value()
+    }
+}
+
+impl std::iter::Sum<f64> for KahanSum {
+    fn sum<I: Iterator<Item = f64>>(iter: I) -> Self {
+        let mut kahan = KahanSum::new();
+        for v in iter {
+            kahan.add(v);
+        }
+        kahan
+    }
+}
+
+// ============================================================================
 // 测试
 // ============================================================================
 

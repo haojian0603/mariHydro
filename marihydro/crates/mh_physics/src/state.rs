@@ -18,9 +18,7 @@
 //! z:  [z_0,  z_1,  z_2,  ...]
 //! ```
 //!
-//! # 迁移说明
-//!
-//! 从 legacy_src/domain/state/shallow_water.rs 迁移，保持算法不变。
+
 
 use glam::DVec2;
 use mh_foundation::memory::AlignedVec;
@@ -316,6 +314,9 @@ impl DynamicScalars {
 /// 浅水方程守恒状态（SoA 布局）
 ///
 /// 存储整个网格的状态变量，采用 SoA 布局优化缓存访问。
+/// 
+/// 速度场通过 `velocity()` 方法从动量和水深实时计算，
+/// 避免存储冗余数据并确保数据一致性。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShallowWaterState {
     /// 单元数量
@@ -329,13 +330,6 @@ pub struct ShallowWaterState {
     pub hv: AlignedVec<f64>,
     /// 底床高程 [m]
     pub z: AlignedVec<f64>,
-
-    /// x 方向速度 [m/s]（预计算，用于半隐式求解器）
-    #[serde(default)]
-    pub u: AlignedVec<f64>,
-    /// y 方向速度 [m/s]（预计算，用于半隐式求解器）
-    #[serde(default)]
-    pub v: AlignedVec<f64>,
 
     /// 动态示踪剂字段
     #[serde(default)]
@@ -355,8 +349,6 @@ impl ShallowWaterState {
             hu: AlignedVec::zeros(n_cells),
             hv: AlignedVec::zeros(n_cells),
             z: AlignedVec::zeros(n_cells),
-            u: AlignedVec::zeros(n_cells),
-            v: AlignedVec::zeros(n_cells),
             tracers: DynamicScalars::new(n_cells),
             field_registry: FieldRegistry::shallow_water(),
         }
@@ -381,8 +373,6 @@ impl ShallowWaterState {
             hu: AlignedVec::zeros(n_cells),
             hv: AlignedVec::zeros(n_cells),
             z: AlignedVec::from_vec(z_bed.to_vec()),
-            u: AlignedVec::zeros(n_cells),
-            v: AlignedVec::zeros(n_cells),
             tracers: DynamicScalars::new(n_cells),
             field_registry: FieldRegistry::shallow_water(),
         }
@@ -398,8 +388,6 @@ impl ShallowWaterState {
             hu: AlignedVec::zeros(self.n_cells),
             hv: AlignedVec::zeros(self.n_cells),
             z: self.z.clone(),
-            u: AlignedVec::zeros(self.n_cells),
-            v: AlignedVec::zeros(self.n_cells),
             tracers,
             field_registry: self.field_registry.clone(),
         }
@@ -534,8 +522,6 @@ impl ShallowWaterState {
         self.h.fill(0.0);
         self.hu.fill(0.0);
         self.hv.fill(0.0);
-        self.u.fill(0.0);
-        self.v.fill(0.0);
         self.tracers.clear_all();
     }
 
@@ -611,8 +597,6 @@ impl ShallowWaterState {
         self.h.copy_from_slice(&other.h);
         self.hu.copy_from_slice(&other.hu);
         self.hv.copy_from_slice(&other.hv);
-        self.u.copy_from_slice(&other.u);
-        self.v.copy_from_slice(&other.v);
         self.tracers.copy_from(&other.tracers);
     }
 
@@ -635,8 +619,6 @@ impl ShallowWaterState {
             self.h[i] = a * state_a.h[i] + b * state_b.h[i];
             self.hu[i] = a * state_a.hu[i] + b * state_b.hu[i];
             self.hv[i] = a * state_a.hv[i] + b * state_b.hv[i];
-            self.u[i] = a * state_a.u[i] + b * state_b.u[i];
-            self.v[i] = a * state_a.v[i] + b * state_b.v[i];
         }
         self.tracers.linear_combine(a, &state_a.tracers, b, &state_b.tracers);
     }
@@ -649,8 +631,6 @@ impl ShallowWaterState {
             self.h[i] = a * self.h[i] + b * other.h[i];
             self.hu[i] = a * self.hu[i] + b * other.hu[i];
             self.hv[i] = a * self.hv[i] + b * other.hv[i];
-            self.u[i] = a * self.u[i] + b * other.u[i];
-            self.v[i] = a * self.v[i] + b * other.v[i];
         }
         self.tracers.axpy(a, b, &other.tracers);
     }

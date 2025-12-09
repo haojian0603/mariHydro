@@ -28,11 +28,9 @@
 //! ```
 
 use super::properties::SedimentProperties;
+use crate::types::PhysicalConstants;
 use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
-
-/// 重力加速度
-const G: Scalar = 9.81;
 
 /// 输沙公式 trait
 ///
@@ -60,7 +58,7 @@ pub trait TransportFormula: Send + Sync {
     /// 计算有量纲输沙率 [m²/s]
     ///
     /// 默认实现：q_b = Φ × √[(s-1)gd³]
-    fn compute_dimensional(&self, theta: Scalar, props: &SedimentProperties) -> Scalar {
+    fn compute_dimensional(&self, theta: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         let phi = self.compute_phi(theta, props.critical_shields, props);
         if phi <= 0.0 {
             return 0.0;
@@ -68,15 +66,15 @@ pub trait TransportFormula: Send + Sync {
 
         let d = props.d50;
         let s = props.relative_density;
-        let scale = ((s - 1.0) * G * d * d * d).sqrt();
+        let scale = ((s - 1.0) * physics.g * d * d * d).sqrt();
 
         phi * scale
     }
 
     /// 从床面剪切应力计算输沙率
-    fn compute_from_shear_stress(&self, tau_b: Scalar, props: &SedimentProperties) -> Scalar {
-        let theta = props.shields_number(tau_b);
-        self.compute_dimensional(theta, props)
+    fn compute_from_shear_stress(&self, tau_b: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
+        let theta = props.shields_number(tau_b, physics);
+        self.compute_dimensional(theta, props, physics)
     }
 
     /// 计算输沙方向向量
@@ -87,13 +85,14 @@ pub trait TransportFormula: Send + Sync {
         tau_bx: Scalar,
         tau_by: Scalar,
         props: &SedimentProperties,
+        physics: &PhysicalConstants,
     ) -> (Scalar, Scalar) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
         if tau_b < 1e-14 {
             return (0.0, 0.0);
         }
 
-        let qb = self.compute_from_shear_stress(tau_b, props);
+        let qb = self.compute_from_shear_stress(tau_b, props, physics);
         let ratio = qb / tau_b;
         (tau_bx * ratio, tau_by * ratio)
     }
@@ -453,9 +452,10 @@ mod tests {
     fn test_dimensional_transport() {
         let formula = MeyerPeterMullerFormula::default();
         let props = make_sand();
+        let physics = PhysicalConstants::freshwater();
 
         let tau_b = 5.0; // Pa
-        let qb = formula.compute_from_shear_stress(tau_b, &props);
+        let qb = formula.compute_from_shear_stress(tau_b, &props, &physics);
 
         // 应该有正输沙率
         if tau_b > props.critical_shear_stress {
@@ -467,10 +467,11 @@ mod tests {
     fn test_transport_vector() {
         let formula = MeyerPeterMullerFormula::default();
         let props = make_sand();
+        let physics = PhysicalConstants::freshwater();
 
         let tau_bx = 3.0;
         let tau_by = 4.0;
-        let (qbx, qby) = formula.compute_transport_vector(tau_bx, tau_by, &props);
+        let (qbx, qby) = formula.compute_transport_vector(tau_bx, tau_by, &props, &physics);
 
         // 方向应与剪切力方向一致
         if qbx.abs() > 1e-14 && qby.abs() > 1e-14 {

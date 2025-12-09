@@ -129,6 +129,48 @@ pub struct CsrMatrix {
 }
 
 impl CsrMatrix {
+    /// 从原始 CSR 数据创建矩阵
+    ///
+    /// # 参数
+    ///
+    /// - `n_rows`: 行数
+    /// - `n_cols`: 列数
+    /// - `row_ptr`: 行指针数组，长度 n_rows + 1
+    /// - `col_idx`: 列索引数组
+    /// - `values`: 非零元值数组
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let matrix = CsrMatrix::from_raw(
+    ///     3, 3,
+    ///     vec![0, 2, 4, 6],
+    ///     vec![0, 1, 0, 1, 1, 2],
+    ///     vec![4.0, -1.0, -1.0, 4.0, -1.0, 4.0],
+    /// );
+    /// ```
+    pub fn from_raw(
+        n_rows: usize,
+        n_cols: usize,
+        row_ptr: Vec<usize>,
+        col_idx: Vec<usize>,
+        values: Vec<Scalar>,
+    ) -> Self {
+        debug_assert_eq!(row_ptr.len(), n_rows + 1, "row_ptr 长度必须为 n_rows + 1");
+        debug_assert_eq!(col_idx.len(), values.len(), "col_idx 和 values 长度必须相等");
+        debug_assert_eq!(row_ptr[n_rows], col_idx.len(), "row_ptr 末尾必须等于 nnz");
+
+        Self {
+            pattern: CsrPattern {
+                n_rows,
+                n_cols,
+                row_ptr,
+                col_idx,
+            },
+            values,
+        }
+    }
+
     /// 创建单位矩阵
     pub fn identity(n: usize) -> Self {
         let mut builder = CsrBuilder::new_square(n);

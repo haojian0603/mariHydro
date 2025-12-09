@@ -102,6 +102,7 @@ fn generate_laplacian_5pt(n: usize) -> CsrMatrix {
 }
 
 /// 生成带权重的测试矩阵（模拟非均匀网格）
+#[allow(dead_code)]
 fn generate_weighted_laplacian(n: usize, weights: &[Scalar]) -> CsrMatrix {
     let size = n * n;
     let mut builder = CsrBuilder::new(size, size);

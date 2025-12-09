@@ -483,7 +483,7 @@ mod tests {
         // 测试内部面
         if mesh.n_interior_faces() > 0 {
             let face = 0;
-            let owner = mesh.face_owner(face);
+            let _owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
             
             assert!(neighbor.is_some(), "内部面应该有邻居");

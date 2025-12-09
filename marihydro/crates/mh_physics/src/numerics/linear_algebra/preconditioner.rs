@@ -42,6 +42,13 @@ pub trait Preconditioner: Send + Sync {
 
     /// 获取预条件器名称
     fn name(&self) -> &'static str;
+
+    /// 更新预条件器（矩阵值变化但结构不变时）
+    ///
+    /// # 参数
+    ///
+    /// - `matrix`: 更新后的系数矩阵
+    fn update(&mut self, matrix: &CsrMatrix);
 }
 
 /// 恒等预条件器（无预条件）
@@ -64,6 +71,10 @@ impl Preconditioner for IdentityPreconditioner {
 
     fn name(&self) -> &'static str {
         "Identity"
+    }
+
+    fn update(&mut self, _matrix: &CsrMatrix) {
+        // 恒等预条件器无需更新
     }
 }
 
@@ -135,6 +146,16 @@ impl Preconditioner for JacobiPreconditioner {
     fn name(&self) -> &'static str {
         "Jacobi"
     }
+
+    fn update(&mut self, matrix: &CsrMatrix) {
+        for i in 0..self.inv_diag.len().min(matrix.n_rows()) {
+            if let Some(diag) = matrix.diagonal_value(i) {
+                if diag.abs() > 1e-14 {
+                    self.inv_diag[i] = 1.0 / diag;
+                }
+            }
+        }
+    }
 }
 
 /// SSOR 预条件器（对称逐次超松弛）
@@ -154,6 +175,7 @@ pub struct SsorPreconditioner {
     /// 松弛因子
     omega: Scalar,
     /// 临时工作向量
+    #[allow(dead_code)]
     work: Vec<Scalar>,
 }
 
@@ -189,6 +211,7 @@ impl SsorPreconditioner {
     }
 
     /// 前向扫描 (D + ωL) y = r
+    #[allow(dead_code)]
     fn forward_sweep(&self, r: &[Scalar], y: &mut [Scalar]) {
         let n = self.diag.len();
         for i in 0..n {
@@ -208,6 +231,7 @@ impl SsorPreconditioner {
     }
 
     /// 后向扫描 (D + ωU) z = D y
+    #[allow(dead_code)]
     fn backward_sweep(&self, y: &[Scalar], z: &mut [Scalar]) {
         let n = self.diag.len();
         for i in (0..n).rev() {
@@ -229,10 +253,9 @@ impl SsorPreconditioner {
 
 impl Preconditioner for SsorPreconditioner {
     fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
-        // 使用不可变借用完成所有计算
         let n = self.diag.len();
 
-        // 前向扫描直接写入 z
+        // 前向扫描: (D + ωL) y = r
         for i in 0..n {
             let start = self.row_ptr[i];
             let end = self.row_ptr[i + 1];
@@ -247,15 +270,18 @@ impl Preconditioner for SsorPreconditioner {
             z[i] = sum / self.diag[i];
         }
 
-        // 保存中间结果
-        let y: Vec<_> = z.to_vec();
+        // 对角缩放: y = D * (2 - ω) * y
+        let scale = 2.0 - self.omega;
+        for i in 0..n {
+            z[i] *= self.diag[i] * scale;
+        }
 
-        // 后向扫描
+        // 后向扫描: (D + ωU) x = scaled_y
         for i in (0..n).rev() {
             let start = self.row_ptr[i];
             let end = self.row_ptr[i + 1];
 
-            let mut sum = self.diag[i] * y[i];
+            let mut sum = z[i];
             for idx in start..end {
                 let j = self.col_idx[idx];
                 if j > i {
@@ -268,6 +294,164 @@ impl Preconditioner for SsorPreconditioner {
 
     fn name(&self) -> &'static str {
         "SSOR"
+    }
+
+    fn update(&mut self, matrix: &CsrMatrix) {
+        self.values.copy_from_slice(matrix.values());
+        for i in 0..self.diag.len().min(matrix.n_rows()) {
+            self.diag[i] = matrix.diagonal_value(i).unwrap_or(1.0);
+        }
+    }
+}
+
+/// ILU(0) 不完全 LU 分解预条件器
+///
+/// 保持原矩阵稀疏模式的不完全 LU 分解。
+/// 比 Jacobi 更强但计算开销也更大。
+#[derive(Debug, Clone)]
+pub struct Ilu0Preconditioner {
+    /// 矩阵维度
+    n: usize,
+    /// 行指针
+    row_ptr: Vec<usize>,
+    /// 列索引
+    col_idx: Vec<usize>,
+    /// LU 分解后的值（L 和 U 共用存储）
+    lu_values: Vec<Scalar>,
+    /// 对角元位置索引
+    diag_ptr: Vec<usize>,
+}
+
+impl Ilu0Preconditioner {
+    /// 从 CSR 矩阵创建 ILU(0) 预条件器
+    ///
+    /// # 参数
+    ///
+    /// - `matrix`: 系数矩阵
+    pub fn new(matrix: &CsrMatrix) -> Self {
+        let n = matrix.n_rows();
+        let mut lu_values = matrix.values().to_vec();
+        let row_ptr = matrix.row_ptr().to_vec();
+        let col_idx = matrix.col_idx().to_vec();
+
+        // 查找对角元位置
+        let mut diag_ptr = vec![0usize; n];
+        for i in 0..n {
+            for k in row_ptr[i]..row_ptr[i + 1] {
+                if col_idx[k] == i {
+                    diag_ptr[i] = k;
+                    break;
+                }
+            }
+        }
+
+        // 执行 ILU(0) 分解
+        Self::factorize(&row_ptr, &col_idx, &mut lu_values, &diag_ptr, n);
+
+        Self {
+            n,
+            row_ptr,
+            col_idx,
+            lu_values,
+            diag_ptr,
+        }
+    }
+
+    /// 执行 ILU(0) 分解
+    ///
+    /// 原地修改 lu 数组，使得 L 的严格下三角部分和 U 的上三角部分（含对角）
+    /// 存储在同一数组中。
+    fn factorize(
+        row_ptr: &[usize],
+        col_idx: &[usize],
+        lu: &mut [Scalar],
+        diag_ptr: &[usize],
+        n: usize,
+    ) {
+        for i in 1..n {
+            // 遍历第 i 行的下三角部分 (j < i)
+            for k_idx in row_ptr[i]..row_ptr[i + 1] {
+                let k = col_idx[k_idx];
+                if k >= i {
+                    break;
+                }
+
+                let diag_k = lu[diag_ptr[k]];
+                if diag_k.abs() < 1e-14 {
+                    continue;
+                }
+
+                let factor = lu[k_idx] / diag_k;
+                lu[k_idx] = factor;
+
+                // 更新第 i 行的其余元素
+                for j_idx in (k_idx + 1)..row_ptr[i + 1] {
+                    let j = col_idx[j_idx];
+                    // 查找 A[k,j]
+                    for m_idx in row_ptr[k]..row_ptr[k + 1] {
+                        if col_idx[m_idx] == j {
+                            lu[j_idx] -= factor * lu[m_idx];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 前向替换: L * y = r
+    fn forward_solve(&self, r: &[Scalar], y: &mut [Scalar]) {
+        y.copy_from_slice(r);
+
+        for i in 0..self.n {
+            for k_idx in self.row_ptr[i]..self.diag_ptr[i] {
+                let j = self.col_idx[k_idx];
+                y[i] -= self.lu_values[k_idx] * y[j];
+            }
+        }
+    }
+
+    /// 后向替换: U * z = y
+    fn backward_solve(&self, y: &[Scalar], z: &mut [Scalar]) {
+        z.copy_from_slice(y);
+
+        for i in (0..self.n).rev() {
+            for k_idx in (self.diag_ptr[i] + 1)..self.row_ptr[i + 1] {
+                let j = self.col_idx[k_idx];
+                z[i] -= self.lu_values[k_idx] * z[j];
+            }
+
+            let diag = self.lu_values[self.diag_ptr[i]];
+            if diag.abs() > 1e-14 {
+                z[i] /= diag;
+            }
+        }
+    }
+}
+
+impl Preconditioner for Ilu0Preconditioner {
+    fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
+        // 解 L * U * z = r
+        // 分两步: L * y = r, 然后 U * z = y
+        let mut y = vec![0.0; self.n];
+        self.forward_solve(r, &mut y);
+        self.backward_solve(&y, z);
+    }
+
+    fn name(&self) -> &'static str {
+        "ILU(0)"
+    }
+
+    fn update(&mut self, matrix: &CsrMatrix) {
+        // 重新复制矩阵值并重新分解
+        self.lu_values.copy_from_slice(matrix.values());
+        Self::factorize(
+            &self.row_ptr,
+            &self.col_idx,
+            &mut self.lu_values,
+            &self.diag_ptr,
+            self.n,
+        );
     }
 }
 
