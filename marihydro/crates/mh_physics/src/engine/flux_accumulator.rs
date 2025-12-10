@@ -9,10 +9,6 @@
 //! - `FluxAccumulator` - 单线程累加器，适用于小规模问题
 //! - `AtomicFluxAccumulator` - 原子操作累加器，支持并行计算
 //!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/engine/flux_accumulator.rs 迁移。
-//! 主要改动：使用新的索引类型系统。
 
 use crate::adapter::PhysicsMesh;
 use crate::schemes::RiemannFlux;

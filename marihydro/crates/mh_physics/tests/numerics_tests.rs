@@ -7,7 +7,7 @@
 use mh_foundation::KahanSum;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, JacobiPreconditioner, SsorPreconditioner,
-    Ilu0Preconditioner, SolverConfig, PcgSolver, BiCgStabSolver, IterativeSolver,
+    Ilu0Preconditioner, SolverConfig, BiCgStabSolver, IterativeSolver,
     Preconditioner,
 };
 use std::time::Instant;

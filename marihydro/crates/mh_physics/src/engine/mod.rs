@@ -12,7 +12,8 @@
 //! - `solver` - 主求解器
 //! - `parallel` - 并行通量计算
 //! - `semi_implicit` - 半隐式时间推进策略
-//! - `strategy` - 时间积分策略模式（新）
+//! - `strategy` - 时间积分策略模式
+//! - `pcg` - 预处理共轭梯度法求解器
 //!
 //! # 迁移说明
 //!
@@ -21,6 +22,7 @@
 pub mod flux_accumulator;
 pub mod friction;
 pub mod parallel;
+pub mod pcg;
 pub mod semi_implicit;
 pub mod solver;
 pub mod strategy;
@@ -48,6 +50,11 @@ pub use parallel::{
 };
 pub use friction::{ManningFriction, FrictionConfig};
 pub use semi_implicit::{SemiImplicitConfig, SemiImplicitStats, SemiImplicitStrategy};
+pub use pcg::{
+    PcgSolver, PcgConfig, PcgResult, PcgWorkspace,
+    PreconditionerType, SparseMvp, DiagonalMatrix, CsrMatrix,
+    PoissonMatrixBuilder,
+};
 
 // 重导出策略模式类型
 pub use strategy::{

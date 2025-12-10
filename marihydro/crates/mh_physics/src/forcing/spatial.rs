@@ -353,13 +353,13 @@ impl SpatialVectorTimeSeries {
 
         let x_stations: Vec<_> = positions
             .iter()
-            .zip(x_series.into_iter())
+            .zip(x_series)
             .map(|(&pos, series)| (pos, series))
             .collect();
 
         let y_stations: Vec<_> = positions
             .into_iter()
-            .zip(y_series.into_iter())
+            .zip(y_series)
             .collect();
 
         Self {

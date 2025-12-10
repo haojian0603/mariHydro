@@ -1296,6 +1296,11 @@ use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
 ///
 /// 使用 Backend trait 抽象存储，支持 CPU/GPU 后端。
 /// 永远只有4个核心字段：h, hu, hv, z。
+///
+/// # 设计说明
+///
+/// 状态持有 Backend 实例的克隆，用于后续的缓冲区操作。
+/// 由于 CpuBackend 是零大小类型，这不会带来额外开销。
 #[derive(Debug, Clone)]
 pub struct ShallowWaterStateGeneric<B: Backend> {
     /// 单元数量
@@ -1308,17 +1313,20 @@ pub struct ShallowWaterStateGeneric<B: Backend> {
     pub hv: B::Buffer<B::Scalar>,
     /// 底床高程 [m]
     pub z: B::Buffer<B::Scalar>,
+    /// 后端实例
+    backend: B,
 }
 
 impl<B: Backend> ShallowWaterStateGeneric<B> {
-    /// 创建新状态
-    pub fn new(n_cells: usize) -> Self {
+    /// 使用后端实例创建新状态
+    pub fn new_with_backend(backend: B, n_cells: usize) -> Self {
         Self {
             n_cells,
-            h: B::alloc(n_cells),
-            hu: B::alloc(n_cells),
-            hv: B::alloc(n_cells),
-            z: B::alloc(n_cells),
+            h: backend.alloc(n_cells),
+            hu: backend.alloc(n_cells),
+            hv: backend.alloc(n_cells),
+            z: backend.alloc(n_cells),
+            backend,
         }
     }
     
@@ -1326,6 +1334,12 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     #[inline]
     pub fn n_cells(&self) -> usize {
         self.n_cells
+    }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
     
     /// 重置为零
@@ -1346,8 +1360,13 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     }
 }
 
-/// 从传统 ShallowWaterState 转换的便捷方法
+/// CPU f64 后端的便捷方法
 impl ShallowWaterStateGeneric<CpuBackend<f64>> {
+    /// 使用默认 CPU f64 后端创建（向后兼容）
+    pub fn new(n_cells: usize) -> Self {
+        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells)
+    }
+    
     /// 从传统 ShallowWaterState 创建
     pub fn from_legacy(state: &ShallowWaterState) -> Self {
         let n = state.n_cells();
@@ -1374,6 +1393,99 @@ impl ShallowWaterStateGeneric<CpuBackend<f64>> {
     }
 }
 
+/// CPU f32 后端的便捷方法
+impl ShallowWaterStateGeneric<CpuBackend<f32>> {
+    /// 使用 CPU f32 后端创建
+    pub fn new_f32(n_cells: usize) -> Self {
+        Self::new_with_backend(CpuBackend::<f32>::new(), n_cells)
+    }
+}
+
 /// 类型别名：默认后端的状态
 pub type ShallowWaterStateDefault = ShallowWaterStateGeneric<CpuBackend<f64>>;
+
+// ============================================================
+// 泛型状态的统计计算
+// ============================================================
+
+/// 状态统计信息
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StateStatisticsData<S> {
+    /// 最大水深
+    pub h_max: S,
+    /// 最小水深（非零）
+    pub h_min: S,
+    /// 平均水深
+    pub h_mean: S,
+    /// 最大速度
+    pub velocity_max: S,
+    /// 水体总体积
+    pub total_volume: S,
+    /// 湿单元数量
+    pub wet_cells: usize,
+}
+
+impl<B: Backend> ShallowWaterStateGeneric<B> {
+    /// 计算状态统计信息（仅 CPU 后端有效）
+    pub fn compute_statistics(&self, cell_areas: &[B::Scalar], h_dry: B::Scalar) -> Option<StateStatisticsData<B::Scalar>> {
+        let h_slice = self.h.as_slice()?;
+        let hu_slice = self.hu.as_slice()?;
+        let hv_slice = self.hv.as_slice()?;
+        
+        let mut stats = StateStatisticsData {
+            h_max: B::Scalar::from_f64(0.0),
+            h_min: B::Scalar::from_f64(f64::MAX),
+            h_mean: B::Scalar::from_f64(0.0),
+            velocity_max: B::Scalar::from_f64(0.0),
+            total_volume: B::Scalar::from_f64(0.0),
+            wet_cells: 0,
+        };
+        
+        for i in 0..self.n_cells {
+            let h = h_slice[i];
+            
+            if h > h_dry {
+                stats.wet_cells += 1;
+                stats.h_max = stats.h_max.max(h);
+                stats.h_min = stats.h_min.min(h);
+                
+                // 计算速度
+                let u = hu_slice[i] / h;
+                let v = hv_slice[i] / h;
+                let speed = (u * u + v * v).sqrt();
+                stats.velocity_max = stats.velocity_max.max(speed);
+                
+                // 累加体积
+                if i < cell_areas.len() {
+                    stats.total_volume += h * cell_areas[i];
+                }
+            }
+        }
+        
+        if stats.wet_cells > 0 {
+            stats.h_mean = stats.total_volume / B::Scalar::from_f64(stats.wet_cells as f64);
+        }
+        
+        Some(stats)
+    }
+    
+    /// 复制状态数据到另一个状态
+    pub fn copy_to(&self, other: &mut Self) {
+        debug_assert_eq!(self.n_cells, other.n_cells, "状态复制: 单元数量不匹配");
+        
+        // CPU 后端直接复制
+        if let (Some(src_h), Some(dst_h)) = (self.h.as_slice(), other.h.as_slice_mut()) {
+            dst_h.copy_from_slice(src_h);
+        }
+        if let (Some(src_hu), Some(dst_hu)) = (self.hu.as_slice(), other.hu.as_slice_mut()) {
+            dst_hu.copy_from_slice(src_hu);
+        }
+        if let (Some(src_hv), Some(dst_hv)) = (self.hv.as_slice(), other.hv.as_slice_mut()) {
+            dst_hv.copy_from_slice(src_hv);
+        }
+        if let (Some(src_z), Some(dst_z)) = (self.z.as_slice(), other.z.as_slice_mut()) {
+            dst_z.copy_from_slice(src_z);
+        }
+    }
+}
 

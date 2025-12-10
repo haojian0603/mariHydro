@@ -105,8 +105,8 @@ impl BoundingBox {
     #[must_use]
     pub fn center(&self) -> Point2D {
         Point2D::new(
-            (self.min_x + self.max_x) / 2.0,
-            (self.min_y + self.max_y) / 2.0,
+            f64::midpoint(self.min_x, self.max_x),
+            f64::midpoint(self.min_y, self.max_y),
         )
     }
 

@@ -63,9 +63,9 @@ fn test_cproperty_static_water() {
         }
 
         // 计算水位变化
-        for i in 0..n_cells {
+        for (i, &init_eta) in initial_eta.iter().enumerate().take(n_cells) {
             let eta = state.h[i] + state.z[i];
-            let change = (eta - initial_eta[i]).abs();
+            let change = (eta - init_eta).abs();
             max_eta_change = max_eta_change.max(change);
         }
 
@@ -106,7 +106,7 @@ fn test_mass_conservation_semi_implicit() {
     // 测试目的：验证半隐式格式质量守恒
 
     let n_cells = 100;
-    let dt = 0.01;
+    let _dt = 0.01; // 保留用于未来实际时间步进
     let n_steps = 100;
 
     let start = Instant::now();

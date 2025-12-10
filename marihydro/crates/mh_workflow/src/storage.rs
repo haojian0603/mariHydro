@@ -189,7 +189,7 @@ impl FileStorage {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 if let Ok(job) = self.load_from_file(&path) {
                     cache.insert(job.id, job);
                 }
@@ -283,7 +283,7 @@ impl Storage for FileStorage {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 if let Ok(job) = self.load_from_file(&path) {
                     jobs.push(job);
                 }
@@ -301,7 +301,7 @@ impl Storage for FileStorage {
         let mut count = 0;
         for entry in std::fs::read_dir(&self.dir)? {
             let entry = entry?;
-            if entry.path().extension().map_or(false, |ext| ext == "json") {
+            if entry.path().extension().is_some_and(|ext| ext == "json") {
                 count += 1;
             }
         }
@@ -313,7 +313,7 @@ impl Storage for FileStorage {
         for entry in std::fs::read_dir(&self.dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 std::fs::remove_file(path)?;
             }
         }

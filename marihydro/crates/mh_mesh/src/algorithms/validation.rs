@@ -555,7 +555,7 @@ pub fn validate_boundary(
 ) -> Vec<ValidationError> {
     let errors = Vec::new();
 
-    for (_he_idx, he) in halfedges.iter().enumerate() {
+    for he in halfedges.iter() {
         // 边界半边应该没有 twin
         if he.0.is_none() {
             // 检查边界半边是否属于边界面

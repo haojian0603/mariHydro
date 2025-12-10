@@ -2,6 +2,19 @@
 //!
 //! Provides a truly aligned AlignedVec backed by std::alloc for SIMD/GPU-friendly access.
 //! Includes parallel iterators and Serde support.
+//!
+//! # 废弃通知
+//!
+//! **AlignedVec 将在未来版本中废弃**
+//!
+//! 推荐使用 `mh_physics::core::DeviceBuffer` trait 进行设备无关的缓冲区管理。
+//! `DeviceBuffer` 提供统一的 CPU/GPU 缓冲区抽象，支持更灵活的后端切换。
+//!
+//! ```ignore
+//! // 推荐方式
+//! use mh_physics::core::{Backend, CpuBackend};
+//! let buffer: <CpuBackend<f64> as Backend>::Buffer<f64> = CpuBackend::<f64>::alloc(100);
+//! ```
 
 use bytemuck::Pod;
 use rayon::prelude::*;
@@ -38,6 +51,11 @@ impl Alignment for DefaultAlign {
 }
 
 /// 对齐连续缓冲区
+///
+/// # 废弃通知
+///
+/// 此类型将在未来版本中废弃。推荐使用 `mh_physics::core::DeviceBuffer` trait
+/// 进行设备无关的缓冲区管理。
 #[derive(Debug)]
 pub struct AlignedVec<T: Pod + Default, A: Alignment = CpuAlign> {
     ptr: *mut T,
@@ -402,10 +420,10 @@ mod tests {
     #[test]
     fn test_clone() {
         let mut v1: AlignedVec<f64, CpuAlign> = AlignedVec::zeros(5);
-        v1[0] = 3.14;
+        v1[0] = 1.234;
         let v2 = v1.clone();
         assert_eq!(v1.len(), v2.len());
-        assert!((v2[0] - 3.14).abs() < 1e-12);
+        assert!((v2[0] - 1.234).abs() < 1e-12);
     }
 
     #[test]

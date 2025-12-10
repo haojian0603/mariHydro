@@ -208,17 +208,11 @@ impl DampingCoefficient for ChezyDamping {
 ///
 /// 求解 d(hu)/dt = -γ * hu
 #[derive(Debug)]
+#[derive(Default)]
 pub struct ImplicitMomentumDecay {
     config: ImplicitConfig,
 }
 
-impl Default for ImplicitMomentumDecay {
-    fn default() -> Self {
-        Self {
-            config: ImplicitConfig::default(),
-        }
-    }
-}
 
 impl ImplicitMomentumDecay {
     /// 创建求解器

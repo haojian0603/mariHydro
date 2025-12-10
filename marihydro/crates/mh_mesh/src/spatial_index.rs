@@ -718,7 +718,7 @@ mod tests {
 
         // 与左下角单元相交的矩形（完全包含单元0的bounding box）
         let cells = index.locate_in_rect(0.0, 0.0, 1.0, 1.0);
-        assert!(cells.len() >= 1, "should find at least 1 cell, found {}", cells.len());
+        assert!(!cells.is_empty(), "should find at least 1 cell, found {}", cells.len());
         assert!(cells.contains(&0), "should contain cell 0");
     }
 
@@ -767,6 +767,6 @@ mod tests {
         // (单元中心分别在 (0.5, 0.5), (1.5, 0.5), (0.5, 1.5), (1.5, 1.5)，距离 (1,1) 约 0.707)
         let cells = index.locate_in_circle(1.0, 1.0, 1.0);
         // 由于 locate_in_circle 检查包围盒中心是否在圆内，至少应该有一些单元
-        assert!(cells.len() >= 1, "should find at least 1 cell in circle, found {}", cells.len());
+        assert!(!cells.is_empty(), "should find at least 1 cell in circle, found {}", cells.len());
     }
 }

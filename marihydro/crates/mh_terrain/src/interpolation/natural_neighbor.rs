@@ -351,7 +351,7 @@ mod tests {
         // 中点应该在合理范围内 (0.0 到 10.0)
         // 由于 Wendland C2 核函数的权重分布，结果可能不是精确的 5.0
         let result = nn.interpolate(1.0, 0.0).unwrap();
-        assert!(result >= 0.0 && result <= 10.0, "result should be in [0, 10], got {}", result);
+        assert!((0.0..=10.0).contains(&result), "result should be in [0, 10], got {}", result);
     }
 
     #[test]

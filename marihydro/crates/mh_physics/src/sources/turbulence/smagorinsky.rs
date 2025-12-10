@@ -63,8 +63,10 @@ pub const MAX_EDDY_VISCOSITY: Scalar = 1e3;
 /// 如果确实需要水平扩散，建议使用 `ConstantViscosity` 配合
 /// 较小的涡粘性值（0.1-10 m²/s），或使用 `Disabled` 模式。
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum TurbulenceModel {
     /// 无湍流（推荐用于浅水方程）
+    #[default]
     None,
     /// 显式禁用（带警告）
     /// 
@@ -75,12 +77,6 @@ pub enum TurbulenceModel {
     ConstantViscosity(Scalar),
 }
 
-impl Default for TurbulenceModel {
-    fn default() -> Self {
-        // 默认禁用湍流模型 - 浅水方程不应使用 3D 湍流
-        Self::None
-    }
-}
 
 impl TurbulenceModel {
     /// 创建禁用模式（推荐）

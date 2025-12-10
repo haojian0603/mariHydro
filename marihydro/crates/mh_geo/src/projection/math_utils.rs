@@ -1,4 +1,4 @@
-//! High-precision math utilities ported from GeographicLib
+//! High-precision math utilities ported from `GeographicLib`
 
 /// 误差补偿求和 (Kahan summation)
 #[inline]
@@ -83,7 +83,7 @@ pub fn sincosd(x: f64) -> (f64, f64) {
         r += 360.0;
     }
     let q = (r / 90.0 + 0.5).floor() as i32;
-    r -= 90.0 * q as f64;
+    r -= 90.0 * f64::from(q);
     let r = r.to_radians();
     let (s, c) = r.sin_cos();
     

@@ -109,10 +109,12 @@ impl std::fmt::Display for JobStatus {
 /// 任务优先级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum JobPriority {
     /// 低优先级
     Low = 0,
     /// 普通优先级
+    #[default]
     Normal = 1,
     /// 高优先级
     High = 2,
@@ -120,11 +122,6 @@ pub enum JobPriority {
     Critical = 3,
 }
 
-impl Default for JobPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 impl std::fmt::Display for JobPriority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -662,7 +662,7 @@ mod tests {
             for &h in &test_h {
                 let t = calc.transition(h);
                 assert!(
-                    t >= 0.0 && t <= 1.0,
+                    (0.0..=1.0).contains(&t),
                     "{:?} at h={}: t={}",
                     func_type,
                     h,

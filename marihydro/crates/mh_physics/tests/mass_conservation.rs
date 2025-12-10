@@ -974,7 +974,7 @@ fn test_first_vs_second_order_conservation() {
         state.hv = AlignedVec::from_vec(vec![0.0; 4]);
         
         let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
-            .expect(&format!("{} 模拟失败", name));
+            .unwrap_or_else(|_| panic!("{} 模拟失败", name));
         
         println!("{}: 误差={:.2e}", name, result.relative_error);
         
@@ -1018,7 +1018,7 @@ fn test_conservation_various_thresholds() {
         state.hv = AlignedVec::from_vec(vec![0.0; 4]);
         
         let result = run_simulation(&mut solver, &mut state, &mesh, 0.001, 100)
-            .expect(&format!("h_dry={:.0e} 模拟失败", h_dry));
+            .unwrap_or_else(|_| panic!("h_dry={:.0e} 模拟失败", h_dry));
         
         println!("h_dry={:.0e}: 误差={:.2e}", h_dry, result.relative_error);
         
@@ -1056,7 +1056,7 @@ fn test_conservation_various_cfl() {
         let dt = solver.compute_dt(&state);
         
         let result = run_simulation(&mut solver, &mut state, &mesh, dt, 100)
-            .expect(&format!("CFL={} 模拟失败", cfl));
+            .unwrap_or_else(|_| panic!("CFL={} 模拟失败", cfl));
         
         println!("CFL={}: dt={:.4}, 误差={:.2e}", cfl, dt, result.relative_error);
         

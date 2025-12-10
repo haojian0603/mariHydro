@@ -12,8 +12,10 @@ const G: f64 = 9.81;
 
 /// 波浪底摩擦模型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum WaveBottomFrictionModel {
     /// JONSWAP 经验公式
+    #[default]
     Jonswap,
     /// Madsen (1988) 公式
     Madsen,
@@ -23,11 +25,6 @@ pub enum WaveBottomFrictionModel {
     Constant,
 }
 
-impl Default for WaveBottomFrictionModel {
-    fn default() -> Self {
-        Self::Jonswap
-    }
-}
 
 /// 波浪轨道速度计算器
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -274,10 +271,10 @@ impl WaveBottomFriction {
         
         // Soulsby 非线性公式
         let tau_mean = tau_current * (1.0 + 1.2 * (tau_wave / (tau_current + tau_wave + 1e-14)).powf(3.2));
-        let tau_max = ((tau_mean + tau_wave * cos_phi).powi(2) 
-            + (tau_wave * angle_between.sin()).powi(2)).sqrt();
         
-        tau_max
+        
+        ((tau_mean + tau_wave * cos_phi).powi(2) 
+            + (tau_wave * angle_between.sin()).powi(2)).sqrt()
     }
 }
 

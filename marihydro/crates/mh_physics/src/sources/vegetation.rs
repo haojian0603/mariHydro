@@ -28,8 +28,10 @@ use crate::state::ShallowWaterState;
 
 /// 植被类型
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum VegetationType {
     /// 无植被
+    #[default]
     None,
     /// 刚性植被（如树干、芦苇杆）
     Rigid {
@@ -62,11 +64,6 @@ pub enum VegetationType {
     },
 }
 
-impl Default for VegetationType {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl VegetationType {
     /// 创建刚性植被

@@ -1,7 +1,12 @@
 //! marihydro\crates\mh_foundation\src\scalar.rs
-//! 统一标量类型系统
+//! 标量类型系统（兼容层）
 //!
-//! 通过 feature 控制精度，为 GPU 和混合精度预留接口。
+//! # 注意
+//!
+//! **推荐使用 `mh_physics::core::Scalar`**
+//!
+//! 此模块保留用于向后兼容。对于新代码，请使用 mh_physics::core::Scalar，
+//! 它提供更完善的物理常量和数学运算支持。
 //!
 //! # 用法
 //!
@@ -20,6 +25,8 @@
 use std::ops::{Add, Sub, Mul, Div, Neg};
 
 /// 计算用标量类型（默认 f64，启用 gpu-f32 feature 时为 f32）
+///
+/// **注意**: 推荐使用 `mh_physics::core::Scalar` trait 进行泛型编程
 #[cfg(not(feature = "gpu-f32"))]
 pub type Scalar = f64;
 
@@ -27,6 +34,9 @@ pub type Scalar = f64;
 pub type Scalar = f32;
 
 /// 标量 trait：所有物理量必须满足的约束
+///
+/// **注意**: 推荐使用 `mh_physics::core::Scalar` trait，
+/// 它提供更完善的物理常量支持（如 GRAVITY, VON_KARMAN 等）
 pub trait ScalarOps: 
     Copy + Clone + Default + PartialOrd +
     Add<Output = Self> + Sub<Output = Self> + 
@@ -134,7 +144,7 @@ pub mod convert {
     /// 计算精度 -> 高精度（无损）
     #[inline]
     pub fn to_f64(v: Scalar) -> f64 {
-        v as f64
+        v
     }
     
     /// 批量转换为 f32（用于可视化）
@@ -168,7 +178,7 @@ mod tests {
     #[test]
     fn test_scalar_constants() {
         assert!((constants::GRAVITY - 9.81).abs() < 1e-10);
-        assert!((constants::PI - 3.14159).abs() < 0.001);
+        assert!((constants::PI - std::f64::consts::PI).abs() < 1e-10);
     }
     
     #[test]

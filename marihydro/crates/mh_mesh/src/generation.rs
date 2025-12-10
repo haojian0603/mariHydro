@@ -289,7 +289,7 @@ impl CircularMeshGenerator {
 
         // 添加各环的顶点
         let dr = self.radius / self.n_radial as Scalar;
-        let dtheta = 2.0 * std::f64::consts::PI / self.n_angular as Scalar;
+        let dtheta: Scalar = 2.0 * std::f64::consts::PI as Scalar / self.n_angular as Scalar;
 
         let mut rings: Vec<Vec<_>> = Vec::with_capacity(self.n_radial);
 

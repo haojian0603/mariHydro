@@ -5,6 +5,8 @@
 use crate::core::{Backend, DeviceBuffer, Scalar};
 
 /// 泛型求解器工作区
+///
+/// 持有 Backend 实例以支持后续缓冲区操作。
 #[derive(Debug)]
 pub struct SolverWorkspaceGeneric<B: Backend> {
     /// 单元数量
@@ -43,27 +45,37 @@ pub struct SolverWorkspaceGeneric<B: Backend> {
     pub face_flux_hv: B::Buffer<B::Scalar>,
     /// 面最大波速
     pub face_wave_speed: B::Buffer<B::Scalar>,
+    
+    /// 后端实例
+    backend: B,
 }
 
 impl<B: Backend> SolverWorkspaceGeneric<B> {
-    /// 创建工作区
-    pub fn new(n_cells: usize, n_faces: usize) -> Self {
+    /// 使用后端实例创建工作区
+    pub fn new_with_backend(backend: B, n_cells: usize, n_faces: usize) -> Self {
         Self {
             n_cells,
             n_faces,
-            flux_h: B::alloc(n_cells),
-            flux_hu: B::alloc(n_cells),
-            flux_hv: B::alloc(n_cells),
-            source_hu: B::alloc(n_cells),
-            source_hv: B::alloc(n_cells),
-            vel_u: B::alloc(n_cells),
-            vel_v: B::alloc(n_cells),
-            eta: B::alloc(n_cells),
-            face_flux_h: B::alloc(n_faces),
-            face_flux_hu: B::alloc(n_faces),
-            face_flux_hv: B::alloc(n_faces),
-            face_wave_speed: B::alloc(n_faces),
+            flux_h: backend.alloc(n_cells),
+            flux_hu: backend.alloc(n_cells),
+            flux_hv: backend.alloc(n_cells),
+            source_hu: backend.alloc(n_cells),
+            source_hv: backend.alloc(n_cells),
+            vel_u: backend.alloc(n_cells),
+            vel_v: backend.alloc(n_cells),
+            eta: backend.alloc(n_cells),
+            face_flux_h: backend.alloc(n_faces),
+            face_flux_hu: backend.alloc(n_faces),
+            face_flux_hv: backend.alloc(n_faces),
+            face_wave_speed: backend.alloc(n_faces),
+            backend,
         }
+    }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
     
     /// 重置通量

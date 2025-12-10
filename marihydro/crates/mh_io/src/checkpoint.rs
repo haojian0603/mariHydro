@@ -585,7 +585,7 @@ impl CheckpointManager {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "mhck") {
+            if path.extension().is_some_and(|ext| ext == "mhck") {
                 if let Ok(header) = Checkpoint::read_header(&path) {
                     results.push((path, header));
                 }

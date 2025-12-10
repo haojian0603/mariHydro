@@ -231,7 +231,7 @@ mod tests {
         let mut transport = SuspendedTransport::new(10, props, physics);
         
         // 设置初始浓度
-        transport.set_concentration(&vec![1.0; 10]);
+        transport.set_concentration(&[1.0; 10]);
         
         let tau_b = vec![2.0; 10];
         let h = vec![1.0; 10];

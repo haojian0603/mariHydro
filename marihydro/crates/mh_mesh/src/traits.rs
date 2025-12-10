@@ -462,7 +462,7 @@ pub trait MeshAccessExt: MeshAccess {
     ///     .collect();
     /// ```
     #[cfg(feature = "parallel")]
-    fn par_cells(&self) -> rayon::iter::IntoParallelIterator<std::ops::Range<usize>> 
+    fn par_cells(&self) -> impl rayon::iter::ParallelIterator<Item = usize>
     where
         Self: Sync,
     {
@@ -480,7 +480,7 @@ pub trait MeshAccessExt: MeshAccess {
     ///     .sum();
     /// ```
     #[cfg(feature = "parallel")]
-    fn par_faces(&self) -> rayon::iter::IntoParallelIterator<std::ops::Range<usize>> 
+    fn par_faces(&self) -> impl rayon::iter::ParallelIterator<Item = usize>
     where
         Self: Sync,
     {
@@ -492,7 +492,7 @@ pub trait MeshAccessExt: MeshAccess {
     ///
     /// 仅遍历内部面（连接两个单元的面），不包括边界面。
     #[cfg(feature = "parallel")]
-    fn par_internal_faces(&self) -> rayon::iter::IntoParallelIterator<std::ops::Range<usize>> 
+    fn par_internal_faces(&self) -> impl rayon::iter::ParallelIterator<Item = usize>
     where
         Self: Sync,
     {
@@ -502,7 +502,7 @@ pub trait MeshAccessExt: MeshAccess {
 
     /// 并行遍历所有边界面
     #[cfg(feature = "parallel")]
-    fn par_boundary_faces(&self) -> rayon::iter::IntoParallelIterator<std::ops::Range<usize>> 
+    fn par_boundary_faces(&self) -> impl rayon::iter::ParallelIterator<Item = usize>
     where
         Self: Sync,
     {

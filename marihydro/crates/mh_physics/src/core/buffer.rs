@@ -55,7 +55,7 @@ impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for Vec<T> {
     }
     
     fn fill(&mut self, value: T) {
-        self.iter_mut().for_each(|x| *x = value.clone());
+        self.iter_mut().for_each(|x| *x = value);
     }
 }
 

@@ -232,7 +232,7 @@ mod tests {
         for (q, g, q_min, q_max) in test_cases {
             let ctx = LimiterContext::new(q, g, q_min, q_max, 0.1);
             let alpha = limiter.compute_limiter(&ctx);
-            assert!(alpha >= 0.0 && alpha <= 1.0, 
+            assert!((0.0..=1.0).contains(&alpha), 
                 "Alpha {} out of bounds for q={}, g={}", alpha, q, g);
         }
     }

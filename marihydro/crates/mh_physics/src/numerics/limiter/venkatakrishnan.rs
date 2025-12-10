@@ -287,7 +287,7 @@ mod tests {
         let ctx = LimiterContext::new(1.0, 0.1, 0.5, 1.5, 0.1);
         let alpha = limiter.compute_limiter(&ctx);
         // 限制器应该返回 [0, 1] 范围内的值
-        assert!(alpha >= 0.0 && alpha <= 1.0, "Alpha {} out of bounds", alpha);
+        assert!((0.0..=1.0).contains(&alpha), "Alpha {} out of bounds", alpha);
         
         // 测试零梯度应该返回 1.0
         let ctx_zero = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
@@ -365,15 +365,15 @@ mod tests {
             alpha_vk_large, alpha_vk_small);
         
         // 验证所有结果都在有效范围内
-        assert!(alpha_vk_large >= 0.0 && alpha_vk_large <= 1.0, 
+        assert!((0.0..=1.0).contains(&alpha_vk_large), 
             "alpha_vk_large out of bounds: {}", alpha_vk_large);
-        assert!(alpha_vk_medium >= 0.0 && alpha_vk_medium <= 1.0,
+        assert!((0.0..=1.0).contains(&alpha_vk_medium),
             "alpha_vk_medium out of bounds: {}", alpha_vk_medium);
-        assert!(alpha_vk_small >= 0.0 && alpha_vk_small <= 1.0,
+        assert!((0.0..=1.0).contains(&alpha_vk_small),
             "alpha_vk_small out of bounds: {}", alpha_vk_small);
         
         // 验证 BJ 在有效范围
-        assert!(alpha_bj >= 0.0 && alpha_bj <= 1.0,
+        assert!((0.0..=1.0).contains(&alpha_bj),
             "alpha_bj out of bounds: {}", alpha_bj);
     }
     
@@ -451,7 +451,7 @@ mod tests {
         for (q, g, q_min, q_max) in test_cases {
             let ctx = LimiterContext::new(q, g, q_min, q_max, 0.1);
             let alpha = limiter.compute_limiter(&ctx);
-            assert!(alpha >= 0.0 && alpha <= 1.0, 
+            assert!((0.0..=1.0).contains(&alpha), 
                 "Alpha {} out of bounds for q={}, g={}", alpha, q, g);
         }
     }

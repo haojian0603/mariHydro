@@ -108,7 +108,7 @@ impl AffineTransform {
         }
     }
 
-    /// 从 GDAL GeoTransform 数组创建
+    /// 从 GDAL `GeoTransform` 数组创建
     ///
     /// GDAL 格式: [c, a, b, f, d, e]
     #[must_use]
@@ -123,7 +123,7 @@ impl AffineTransform {
         }
     }
 
-    /// 转换为 GDAL GeoTransform 格式
+    /// 转换为 GDAL `GeoTransform` 格式
     #[must_use]
     pub fn to_gdal_geotransform(&self) -> [f64; 6] {
         [self.c, self.a, self.b, self.f, self.d, self.e]
@@ -422,7 +422,7 @@ impl GeoTransformer {
 
 /// 快捷转换函数
 pub mod conversions {
-    use super::*;
+    use super::MhResult;
     use crate::projection;
 
     /// WGS84 经纬度转 UTM

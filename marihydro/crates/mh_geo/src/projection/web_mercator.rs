@@ -134,7 +134,7 @@ pub fn tile_to_lonlat(x: u32, y: u32, zoom: u8) -> (f64, f64) {
 
 /// 瓦片范围 -> 边界框 (Web Mercator 坐标)
 ///
-/// 返回瓦片的 (min_x, min_y, max_x, max_y)
+/// 返回瓦片的 (`min_x`, `min_y`, `max_x`, `max_y`)
 #[must_use]
 pub fn tile_to_bbox(x: u32, y: u32, zoom: u8) -> (f64, f64, f64, f64) {
     let (lon_min, lat_max) = tile_to_lonlat(x, y, zoom);

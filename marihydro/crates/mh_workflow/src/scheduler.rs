@@ -8,18 +8,15 @@
 
 /// 设备类型（现在仅保留 CPU）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum DeviceType {
     /// CPU
+    #[default]
     Cpu,
     /// 其他 / 未知（保留以便将来扩展）
     Other,
 }
 
-impl Default for DeviceType {
-    fn default() -> Self {
-        Self::Cpu
-    }
-}
 
 impl std::fmt::Display for DeviceType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,18 +29,15 @@ impl std::fmt::Display for DeviceType {
 
 /// 混合计算策略（GPU相关策略移除）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum HybridStrategy {
     /// 仅使用CPU
     CpuOnly,
     /// 自动选择（当前等同于 CPU）
+    #[default]
     Auto,
 }
 
-impl Default for HybridStrategy {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 impl std::fmt::Display for HybridStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -399,7 +393,7 @@ impl HybridScheduler {
 
         println!("========== 调度器诊断报告 ==========");
         println!("配置: {}", diag.config_summary);
-        println!("");
+        println!();
         // GPU support removed; skip GPU diagnostics
         println!("性能统计:");
         println!("  CPU 调用: {}", diag.performance.cpu_invocations);
@@ -407,11 +401,11 @@ impl HybridScheduler {
         if let Some(speedup) = diag.performance.actual_speedup() {
             println!("  实测加速比: {:.2}x", speedup);
         }
-        println!("");
+        println!();
         println!("选择统计:");
         // GPU selection rate not available in CPU-only mode
         println!("  回退率: {:.1}%", diag.selection_stats.fallback_rate() * 100.0);
-        println!("");
+        println!();
         println!("建议:");
         for (i, rec) in diag.recommendations.iter().enumerate() {
             println!("  {}. {}", i + 1, rec);

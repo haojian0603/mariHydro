@@ -28,20 +28,17 @@ use serde::{Deserialize, Serialize};
 /// CRS 策略配置（用于配置文件）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "mode", content = "value")]
+#[derive(Default)]
 pub enum CrsStrategy {
     /// 手动指定 CRS 定义
     Manual(String),
     /// 从第一个文件自动检测
+    #[default]
     FromFirstFile,
     /// 强制使用 WGS84
     ForceWGS84,
 }
 
-impl Default for CrsStrategy {
-    fn default() -> Self {
-        Self::FromFirstFile
-    }
-}
 
 // ============================================================================
 // CRS 定义类型
@@ -111,7 +108,7 @@ impl CrsDefinition {
     /// 高斯-克吕格 3度带
     #[must_use]
     pub fn gauss_kruger_3(zone: u8) -> Self {
-        if zone >= 25 && zone <= 45 {
+        if (25..=45).contains(&zone) {
             CrsDefinition::Epsg(4534 + u32::from(zone - 25))
         } else {
             // 返回自定义 PROJ4 字符串
@@ -125,7 +122,7 @@ impl CrsDefinition {
     /// 高斯-克吕格 6度带
     #[must_use]
     pub fn gauss_kruger_6(zone: u8) -> Self {
-        if zone >= 13 && zone <= 23 {
+        if (13..=23).contains(&zone) {
             CrsDefinition::Epsg(4502 + u32::from(zone - 13))
         } else {
             let cm = f64::from(zone) * 6.0 - 3.0;
@@ -407,7 +404,7 @@ impl Crs {
     /// 获取中央子午线（如果是投影坐标系）
     #[must_use]
     pub fn central_meridian(&self) -> Option<f64> {
-        self.projection_type.as_ref().and_then(|pt| pt.central_meridian())
+        self.projection_type.as_ref().and_then(super::projection::ProjectionType::central_meridian)
     }
 }
 
@@ -427,7 +424,7 @@ pub fn crs_from_epsg(code: u32) -> MhResult<Crs> {
 #[must_use]
 pub fn auto_projected_crs(lon: f64, lat: f64) -> Crs {
     // 中国区域使用 CGCS2000 高斯-克吕格
-    if lon >= 73.0 && lon <= 135.0 && lat >= 3.0 && lat <= 54.0 {
+    if (73.0..=135.0).contains(&lon) && (3.0..=54.0).contains(&lat) {
         let zone = (lon / 3.0).round() as u8;
         let code = 4534 + u32::from(zone.saturating_sub(25));
         Crs::from_epsg(code).unwrap_or_else(|_| {

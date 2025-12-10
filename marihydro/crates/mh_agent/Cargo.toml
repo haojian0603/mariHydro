@@ -1,0 +1,20 @@
+[package]
+name = "mh_agent"
+version = "0.1.0"
+edition = "2021"
+description = "AI 代理层 - 遥感驱动的智能预测与同化"
+authors = ["MariHydro Team"]
+license = "MIT"
+
+[dependencies]
+mh_physics = { path = "../mh_physics" }
+thiserror = "1.0"
+
+# 可选：ONNX 推理支持
+ort = { version = "2.0", optional = true }
+
+[features]
+default = []
+onnx = ["ort"]
+
+[dev-dependencies]

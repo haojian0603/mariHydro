@@ -70,9 +70,11 @@
 
 // ==================== 核心 trait ====================
 pub mod traits;
+pub mod traits_generic;
 
 // ==================== 通用源项 ====================
 pub mod friction;
+pub mod friction_generic;
 pub mod coriolis;
 pub mod implicit;
 pub mod inflow;
@@ -91,6 +93,17 @@ pub mod structures;
 // ==================== 核心 trait 导出 ====================
 pub use traits::{
     SourceContribution, SourceContext, SourceTerm, SourceHelpers,
+};
+
+// ==================== 泛型源项导出 ====================
+pub use traits_generic::{
+    SourceContributionGeneric, SourceContextGeneric, SourceTermGeneric,
+    SourceStiffness, SourceRegistryGeneric,
+};
+
+pub use friction_generic::{
+    ManningFrictionGeneric, ManningFrictionConfigGeneric,
+    ChezyFrictionGeneric, ChezyFrictionConfigGeneric,
 };
 
 // ==================== 摩擦模块导出 ====================

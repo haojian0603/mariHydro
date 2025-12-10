@@ -1,4 +1,4 @@
-//! MariHydro 地理空间处理模块
+//! `MariHydro` 地理空间处理模块
 //!
 //! 提供坐标参考系统 (CRS)、投影转换、空间索引等功能。
 //!
@@ -6,7 +6,7 @@
 //!
 //! - `ellipsoid`: 椭球体定义 (WGS84, CGCS2000, GRS80 等)
 //! - `crs`: 坐标参考系统定义和解析
-//! - `geometry`: 几何类型 (Point2D, Point3D) 和地理距离计算
+//! - `geometry`: 几何类型 (`Point2D`, `Point3D`) 和地理距离计算
 //! - `projection`: 高精度投影转换 (UTM, Web Mercator, 高斯-克吕格)
 //! - `transform`: 坐标转换器和仿射变换
 //! - `spatial_index`: 基于 R-tree 的空间索引

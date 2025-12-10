@@ -19,18 +19,21 @@ pub struct VerticalProfile<B: Backend> {
     pub v_layers: B::Buffer<B::Scalar>,
     /// 各层高度 [n_cells * n_layers]
     pub z_layers: B::Buffer<B::Scalar>,
+    /// 后端实例
+    backend: B,
 }
 
 impl<B: Backend> VerticalProfile<B> {
-    /// 创建垂向剖面
-    pub fn new(n_cells: usize, n_layers: usize) -> Self {
+    /// 使用后端创建垂向剖面
+    pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize) -> Self {
         let total = n_cells * n_layers;
         Self {
             n_cells,
             n_layers,
-            u_layers: B::alloc(total),
-            v_layers: B::alloc(total),
-            z_layers: B::alloc(total),
+            u_layers: backend.alloc(total),
+            v_layers: backend.alloc(total),
+            z_layers: backend.alloc(total),
+            backend,
         }
     }
     
@@ -50,6 +53,20 @@ impl<B: Backend> VerticalProfile<B> {
     #[inline]
     pub fn n_layers(&self) -> usize {
         self.n_layers
+    }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+/// CPU f64 后端的便捷方法
+impl VerticalProfile<CpuBackend<f64>> {
+    /// 使用默认后端创建
+    pub fn new(n_cells: usize, n_layers: usize) -> Self {
+        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, n_layers)
     }
 }
 
@@ -80,17 +97,20 @@ pub struct ProfileRestorer<B: Backend> {
     method: ProfileMethod,
     /// von Karman 常数
     von_karman: B::Scalar,
+    /// 后端实例
+    backend: B,
 }
 
 impl<B: Backend> ProfileRestorer<B> {
-    /// 创建恢复器
-    pub fn new(n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
+    /// 使用后端创建恢复器
+    pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
             sigma: SigmaCoordinate::uniform(n_layers),
-            roughness: B::alloc_init(n_cells, B::Scalar::from_f64(0.01)), // 默认糙率
+            roughness: backend.alloc_init(n_cells, B::Scalar::from_f64(0.01)), // 默认糙率
             n_layers,
             method,
             von_karman: B::Scalar::from_f64(VON_KARMAN),
+            backend,
         }
     }
     
@@ -112,9 +132,20 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn n_layers(&self) -> usize {
         self.n_layers
     }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
 }
 
 impl ProfileRestorer<CpuBackend<f64>> {
+    /// 使用默认后端创建
+    pub fn new(n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
+        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, n_layers, method)
+    }
+    
     /// 从2D状态恢复垂向剖面
     pub fn restore(
         &self,

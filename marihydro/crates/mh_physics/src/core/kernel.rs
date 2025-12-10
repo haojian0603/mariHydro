@@ -70,8 +70,10 @@ pub const CORE_KERNELS: &[KernelSpec] = &[
 
 /// 传输策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TransferPolicy {
     /// 延迟传输
+    #[default]
     Lazy,
     /// 即时传输
     Eager,
@@ -79,11 +81,6 @@ pub enum TransferPolicy {
     Pipelined,
 }
 
-impl Default for TransferPolicy {
-    fn default() -> Self {
-        Self::Lazy
-    }
-}
 
 /// 获取未实现的核心 kernel
 pub fn unimplemented_kernels() -> Vec<&'static KernelSpec> {

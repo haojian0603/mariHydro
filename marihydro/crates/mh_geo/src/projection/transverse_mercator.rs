@@ -221,7 +221,12 @@ fn forward_internal(
     // 计算 xi', eta'
     let (xip, etap, mut gamma, mut k);
 
-    if lat != 90.0 {
+    if lat == 90.0 {
+        xip = PI / 2.0;
+        etap = 0.0;
+        gamma = lon_diff;
+        k = f64::midpoint(1.0, tm.e2m.sqrt()) / tm.e2m.sqrt().sqrt();
+    } else {
         let tau = sphi / cphi;
         let taup = taupf(tau, tm.es);
 
@@ -232,11 +237,6 @@ fn forward_internal(
         gamma = (slam * taup).atan2(clam * (1.0 + taup * taup).sqrt()).to_degrees();
         k = (tm.e2m + tm.e2 * cphi * cphi).sqrt() * (1.0 + tau * tau).sqrt()
             / (taup * taup + clam * clam).sqrt();
-    } else {
-        xip = PI / 2.0;
-        etap = 0.0;
-        gamma = lon_diff;
-        k = (1.0 + tm.e2m.sqrt()) / 2.0 / tm.e2m.sqrt().sqrt();
     }
 
     // Clenshaw 算法求和
@@ -342,14 +342,14 @@ pub fn inverse(params: &TransverseMercatorParams, x: f64, y: f64) -> MhResult<(f
     let r = (s * s + c * c).sqrt();
 
     let (lon, lat);
-    if r != 0.0 {
+    if r == 0.0 {
+        lon = 0.0;
+        lat = 90.0;
+    } else {
         lon = s.atan2(c).to_degrees();
         let sxip = xip.sin();
         let tau = tauf(sxip / r, tm.es);
         lat = tau.atan().to_degrees();
-    } else {
-        lon = 0.0;
-        lat = 90.0;
     }
 
     // 应用符号
@@ -434,7 +434,7 @@ mod tests {
 
         const TEST_CASES: &[(f64, f64, f64, f64)] = &[
             // Verified against PROJ 9 (pyproj 3.7.2, EPSG:32651)
-            (121.880356, 29.887703, 391888.0637264130, 3306868.4563851040),
+            (121.880356, 29.887703, 391_888.063_726_413, 3_306_868.456_385_104),
             (121.430427, 28.637151, 346582.4108433011, 3168793.409367069),
             (121.880772, 31.491324, 393700.3650201835, 3484597.440826551),
             (122.625275, 30.246954, 463948.3333072607, 3346209.757229396),

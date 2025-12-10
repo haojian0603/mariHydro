@@ -28,8 +28,10 @@ const G: Scalar = 9.81;
 
 /// 堰类型
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum WeirType {
     /// 宽顶堰（Cd ≈ 0.34-0.36）
+    #[default]
     BroadCrested,
     /// 锐缘堰（Cd ≈ 0.42）
     SharpCrested,
@@ -39,11 +41,6 @@ pub enum WeirType {
     Custom { cd: Scalar },
 }
 
-impl Default for WeirType {
-    fn default() -> Self {
-        Self::BroadCrested
-    }
-}
 
 impl WeirType {
     /// 获取流量系数
@@ -174,9 +171,9 @@ impl WeirFlow {
         let width = self.weir_width[cell];
 
         // 自由出流：Q = Cd × B × H^1.5 × √(2g)
-        let q = cd * width * head.powf(1.5) * (2.0 * G).sqrt();
+        
 
-        q
+        cd * width * head.powf(1.5) * (2.0 * G).sqrt()
     }
 
     /// 计算淹没出流

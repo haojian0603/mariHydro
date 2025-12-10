@@ -130,7 +130,6 @@ pub trait DimensionExt: Dimension {
 impl<D: Dimension> DimensionExt for D {}
 
 /// 常用类型别名
-
 /// 3D 5 层模式
 pub type D3_5 = D3<5>;
 /// 3D 10 层模式
@@ -143,6 +142,7 @@ mod tests {
     use super::*;
     
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_d2_dimension() {
         assert_eq!(D2::N_LAYERS, 1);
         assert!(!D2::IS_3D);
@@ -150,6 +150,7 @@ mod tests {
     }
     
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_d3_dimension() {
         assert_eq!(D3::<5>::N_LAYERS, 5);
         assert!(D3::<5>::IS_3D);

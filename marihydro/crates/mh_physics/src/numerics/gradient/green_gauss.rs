@@ -55,17 +55,11 @@ impl Default for GreenGaussConfig {
 
 /// Green-Gauss 梯度计算器
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct GreenGaussGradient {
     config: GreenGaussConfig,
 }
 
-impl Default for GreenGaussGradient {
-    fn default() -> Self {
-        Self {
-            config: GreenGaussConfig::default(),
-        }
-    }
-}
 
 impl GreenGaussGradient {
     /// 创建新实例

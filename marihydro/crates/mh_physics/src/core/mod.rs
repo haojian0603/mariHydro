@@ -16,12 +16,14 @@
 //! ```ignore
 //! use mh_physics::core::{Backend, CpuBackend, Scalar};
 //!
-//! // 使用 f64 精度的 CPU 后端
-//! type B = CpuBackend<f64>;
+//! // 创建 f64 精度的 CPU 后端实例
+//! let backend = CpuBackend::<f64>::new();
 //!
-//! let x: <B as Backend>::Buffer<f64> = B::alloc_init(100, 1.0);
-//! let mut y: <B as Backend>::Buffer<f64> = B::alloc_init(100, 2.0);
-//! B::axpy(0.5, &x, &mut y);
+//! // 使用实例方法分配和操作缓冲区
+//! let x = backend.alloc_init(100, 1.0);
+//! let mut y = backend.alloc_init(100, 2.0);
+//! backend.axpy(0.5, &x, &mut y);
+//! assert!((y[0] - 2.5).abs() < 1e-10);
 //! ```
 
 pub mod scalar;
@@ -34,7 +36,7 @@ pub mod gpu;
 // 重导出常用类型
 pub use scalar::Scalar;
 pub use buffer::DeviceBuffer;
-pub use backend::{Backend, CpuBackend, DefaultBackend};
+pub use backend::{Backend, CpuBackend, DefaultBackend, MemoryLocation};
 pub use dimension::{Dimension, D2, D3};
 pub use kernel::{KernelSpec, KernelPriority, TransferPolicy, CORE_KERNELS};
 pub use gpu::{CudaError, GpuDeviceInfo, available_gpus, has_cuda};

@@ -28,8 +28,10 @@ use crate::state::ShallowWaterState;
 
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum InflowType {
     /// 无入流
+    #[default]
     None,
     /// 恒定流量 [m³/s]
     ConstantDischarge(f64),
@@ -46,11 +48,6 @@ pub enum InflowType {
     TimeVarying,
 }
 
-impl Default for InflowType {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl InflowType {
     /// 创建恒定流量入流

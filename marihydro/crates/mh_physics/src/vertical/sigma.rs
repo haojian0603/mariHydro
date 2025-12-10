@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 
 /// σ层分布类型
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum SigmaDistribution {
     /// 均匀分布
+    #[default]
     Uniform,
     /// 对数分布（底部加密）
     Logarithmic {
@@ -33,11 +35,6 @@ pub enum SigmaDistribution {
     },
 }
 
-impl Default for SigmaDistribution {
-    fn default() -> Self {
-        Self::Uniform
-    }
-}
 
 /// σ坐标定义
 #[derive(Debug, Clone, Serialize, Deserialize)]

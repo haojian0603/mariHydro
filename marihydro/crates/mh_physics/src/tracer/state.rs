@@ -32,8 +32,10 @@ use thiserror::Error;
 /// 示踪剂类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TracerType {
     /// 盐度 [PSU 或 kg/m³]
+    #[default]
     Salinity,
 
     /// 温度 [°C 或 K]
@@ -89,11 +91,6 @@ impl TracerType {
     }
 }
 
-impl Default for TracerType {
-    fn default() -> Self {
-        Self::Salinity
-    }
-}
 
 // ============================================================
 // 示踪剂属性

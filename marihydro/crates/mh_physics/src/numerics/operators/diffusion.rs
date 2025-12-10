@@ -34,8 +34,10 @@ use crate::adapter::PhysicsMesh;
 
 /// 扩散边界条件类型
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum DiffusionBC {
     /// 零通量 (Neumann): ∂φ/∂n = 0
+    #[default]
     ZeroFlux,
     /// 固定值 (Dirichlet): φ = value
     FixedValue(f64),
@@ -50,11 +52,6 @@ pub enum DiffusionBC {
     SpecifiedFlux(f64),
 }
 
-impl Default for DiffusionBC {
-    fn default() -> Self {
-        Self::ZeroFlux
-    }
-}
 
 impl DiffusionBC {
     /// 创建 Dirichlet 边界条件

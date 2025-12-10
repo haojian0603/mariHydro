@@ -719,5 +719,5 @@ fn test_no_memory_leak_in_solver() {
     }
 
     // 此测试通过valgrind运行，此处仅确保无panic
-    assert!(true, "100次求解无内存泄漏迹象");
+    // 如果执行到这里，说明100次求解无内存泄漏迹象
 }

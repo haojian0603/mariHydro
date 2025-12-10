@@ -227,7 +227,7 @@ mod tests {
     fn test_utm_zone51n_epsg_validation() {
         const EPSG_TEST_CASES: &[(f64, f64, f64, f64)] = &[
             // Verified against PROJ 9 (pyproj 3.7.2, EPSG:32651)
-            (121.880356, 29.887703, 391888.0637264130, 3306868.4563851040),
+            (121.880356, 29.887703, 391_888.063_726_413, 3_306_868.456_385_104),
             (121.430427, 28.637151, 346582.4108433011, 3168793.409367069),
             (121.880772, 31.491324, 393700.3650201835, 3484597.440826551),
             (122.625275, 30.246954, 463948.3333072607, 3346209.757229396),
@@ -288,15 +288,11 @@ mod tests {
 
         assert!(
             max_error_x < TOLERANCE_METERS,
-            "UTM X 坐标误差超过阈值: {:.6}m > {:.3}m",
-            max_error_x,
-            TOLERANCE_METERS
+            "UTM X 坐标误差超过阈值: {max_error_x:.6}m > {TOLERANCE_METERS:.3}m"
         );
         assert!(
             max_error_y < TOLERANCE_METERS,
-            "UTM Y 坐标误差超过阈值: {:.6}m > {:.3}m",
-            max_error_y,
-            TOLERANCE_METERS
+            "UTM Y 坐标误差超过阈值: {max_error_y:.6}m > {TOLERANCE_METERS:.3}m"
         );
     }
 
@@ -335,10 +331,7 @@ mod tests {
             // 往返精度要求：1e-12 度（约 0.0001mm）
             assert!(
                 max_error < 1e-12,
-                "往返误差过大: {:.2e}度 at ({}, {})",
-                max_error,
-                lon,
-                lat
+                "往返误差过大: {max_error:.2e}度 at ({lon}, {lat})"
             );
         }
 

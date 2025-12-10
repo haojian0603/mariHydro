@@ -43,6 +43,7 @@ use std::time::{Duration, Instant};
 /// - `Colored`: 使用图着色实现真正的无锁并行累加
 /// - `Auto`: 根据面数自动选择策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ParallelStrategy {
     /// 串行执行
     Sequential,
@@ -55,14 +56,10 @@ pub enum ParallelStrategy {
     /// 这是推荐的大规模并行策略，需要预先计算面着色
     Colored,
     /// 自动选择（根据问题规模）
+    #[default]
     Auto,
 }
 
-impl Default for ParallelStrategy {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 /// 并行计算配置
 #[derive(Debug, Clone)]
