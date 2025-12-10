@@ -2,63 +2,91 @@
 
 //! 源项模块
 //!
-//! 提供浅水方程的各种物理源项：
-//! - 摩擦源项 (Manning, Chezy)
-//! - 科里奥利力
-//! - 扩散
-//! - 大气强迫
-//! - 湍流（Smagorinsky, k-ε）
-//! - 植被阻力
-//! - 波浪驱动
-//! - 水工结构物（桥墩、堰）
+//! 提供浅水方程和三维模型的各种物理源项：
 //!
-//! # 模块结构 (v0.3+)
+//! # 通用源项（2D/3D）
 //!
-//! - `common`: 2D/3D 通用模块 (friction, coriolis, inflow, implicit, structures)
-//! - `shallow_2d`: 2D 浅水专用 (atmosphere, diffusion, vegetation, wave_forcing)
-//! - `turbulence_3d`: 3D 湍流模型 (k_epsilon) - 保留但不推荐直接用于 2D
+//! - 摩擦源项 ([`friction`]): Manning, Chezy 底床摩擦
+//! - 科氏力 ([`coriolis`]): 地球自转效应
+//! - 入流/出流 ([`inflow`]): 河流入流、降雨、蒸发
+//! - 隐式处理 ([`implicit`]): 刚性源项的隐式时间积分
+//!
+//! # 2D 专用源项
+//!
+//! - 大气强迫 ([`atmosphere`]): 风应力、气压梯度
+//! - 植被阻力 ([`vegetation`]): 刚性/柔性植被
+//! - 波浪驱动 ([`wave_forcing`]): 辐射应力梯度
+//!
+//! # 湍流模型 ([`turbulence`])
+//!
+//! - Smagorinsky 亚格子模型（2D）
+//! - k-ε 模型（3D）
+//!
+//! # 水工结构 ([`structures`])
+//!
+//! - 桥墩、堰等亚网格结构
+//!
+//! # 模块结构 (v0.4+)
+//!
+//! ```text
+//! sources/
+//! ├── traits.rs           # SourceTerm trait 定义
+//! ├── friction.rs         # 摩擦源项
+//! ├── coriolis.rs         # 科氏力
+//! ├── implicit.rs         # 隐式处理
+//! ├── inflow.rs           # 入流/出流
+//! ├── atmosphere.rs       # 大气强迫（2D）
+//! ├── vegetation.rs       # 植被阻力（2D）
+//! ├── wave_forcing.rs     # 波浪驱动（2D）
+//! ├── turbulence/         # 湍流模型子模块
+//! │   ├── smagorinsky.rs  # 2D Smagorinsky
+//! │   └── k_epsilon.rs    # 3D k-ε
+//! └── structures/         # 水工结构
+//!     ├── bridge_pier.rs
+//!     └── weir.rs
+//! ```
 //!
 //! # 设计
 //!
-//! 所有源项实现 `SourceTerm` trait，提供统一的计算接口：
+//! 所有源项实现 [`SourceTerm`] trait，提供统一的计算接口：
 //! - `compute_cell()` - 计算单个单元的源项贡献
 //! - `compute_all()` - 批量计算所有单元
 //!
 //! # 使用示例
 //!
 //! ```ignore
-//! use mh_physics::sources::{ManningFriction, CoriolisSource, KEpsilonModel};
+//! use mh_physics::sources::{ManningFrictionConfig, CoriolisSource};
+//! use mh_physics::sources::turbulence::{SmagorinskySolver, TurbulenceModel};
 //!
 //! // 创建 Manning 摩擦
-//! let friction = ManningFriction::new(9.81, n_cells, 0.025);
+//! let friction = ManningFrictionConfig::new(9.81, n_cells, 0.025);
 //!
 //! // 创建科氏力（北纬 30 度）
 //! let coriolis = CoriolisSource::from_latitude(30.0);
 //!
-//! // 创建 k-ε 湍流模型
-//! let ke = KEpsilonModel::new(n_cells);
+//! // 创建 Smagorinsky 湍流模型（推荐使用常数涡粘性）
+//! let turb = SmagorinskySolver::new(n_cells, TurbulenceModel::constant(1.0));
 //! ```
 
 // ==================== 核心 trait ====================
 pub mod traits;
 
-// ==================== 传统模块（向后兼容） ====================
+// ==================== 通用源项 ====================
 pub mod friction;
 pub mod coriolis;
-pub mod diffusion;
 pub mod implicit;
-pub mod atmosphere;
-pub mod turbulence;
-pub mod vegetation;
 pub mod inflow;
-pub mod k_epsilon;
-pub mod wave_forcing;
-pub mod structures;
 
-// ==================== 新模块结构 (v0.3+) ====================
-pub mod common;
-pub mod shallow_2d;
-pub mod turbulence_3d;
+// ==================== 2D 专用源项 ====================
+pub mod atmosphere;
+pub mod vegetation;
+pub mod wave_forcing;
+
+// ==================== 湍流模型（独立子模块） ====================
+pub mod turbulence;
+
+// ==================== 水工结构 ====================
+pub mod structures;
 
 // ==================== 核心 trait 导出 ====================
 pub use traits::{
@@ -77,13 +105,6 @@ pub use coriolis::{
     CoriolisConfig, CoriolisSource, EARTH_ANGULAR_VELOCITY,
 };
 
-// ==================== 扩散导出 ====================
-pub use diffusion::{
-    DiffusionBC, DiffusionConfig, DiffusionSolver, DiffusionError,
-    VariableDiffusionSolver,
-    estimate_stable_dt, required_substeps,
-};
-
 // ==================== 隐式处理导出 ====================
 pub use implicit::{
     ImplicitMethod, ImplicitConfig, ImplicitMomentumDecay,
@@ -99,13 +120,13 @@ pub use atmosphere::{
 
 // ==================== 湍流模型导出 ====================
 pub use turbulence::{
+    // Smagorinsky (2D)
     TurbulenceModel, TurbulenceConfig, SmagorinskySolver,
     VelocityGradient,
     DEFAULT_SMAGORINSKY_CONSTANT, MIN_EDDY_VISCOSITY, MAX_EDDY_VISCOSITY,
+    // 通用 trait
+    TurbulenceClosure,
 };
-
-// ==================== k-ε 模型导出 ====================
-pub use k_epsilon::{KEpsilonModel, KEpsilonParams};
 
 // ==================== 植被阻力导出 ====================
 pub use vegetation::{
@@ -126,3 +147,13 @@ pub use wave_forcing::{WaveForcing, WaveForcingConfig};
 // ==================== 结构物源项导出 ====================
 pub use structures::{BridgePierDrag, WeirFlow, WeirType};
 
+// ==================== 扩散算子（从 numerics 重导出，保持兼容） ====================
+/// 扩散相关类型（已迁移至 `numerics::operators::diffusion`）
+///
+/// 为保持向后兼容，从 numerics 模块重导出。
+/// 新代码建议直接使用 `mh_physics::numerics::operators::diffusion`。
+pub use crate::numerics::operators::diffusion::{
+    DiffusionBC, DiffusionConfig, DiffusionSolver, DiffusionError,
+    VariableDiffusionSolver,
+    estimate_stable_dt, required_substeps,
+};

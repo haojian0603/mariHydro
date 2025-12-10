@@ -465,12 +465,14 @@ dependencies = [
 name = "mh_physics"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "glam",
  "log",
  "mh_foundation",
  "mh_geo",
  "mh_mesh",
  "ndarray 0.16.1",
+ "num-traits",
  "rand",
  "rayon",
  "serde",

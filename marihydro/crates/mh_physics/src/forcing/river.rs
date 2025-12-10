@@ -385,24 +385,6 @@ impl RiverSystem {
         total
     }
 
-    /// 应用入流到状态（仅质量，不含动量）
-    /// 
-    /// **注意**：此函数已弃用，请使用 `apply_inflow_with_momentum` 替代
-    /// 仅更新水深会导致入流水体携带零动量，不符合物理规律
-    #[deprecated(since = "0.2.0", note = "请使用 apply_inflow_with_momentum 替代")]
-    pub fn apply_inflow(&self, time: f64, dt: f64, h: &mut [f64], cell_areas: &[f64]) {
-        for river in &self.rivers {
-            let q = river.provider.get_discharge_at(time);
-
-            for (i, &cell) in river.cells.iter().enumerate() {
-                if cell < h.len() && cell < cell_areas.len() {
-                    let w = river.weights.get(i).copied().unwrap_or(0.0);
-                    let area = cell_areas[cell].max(1e-6);
-                    h[cell] += q * w * dt / area;
-                }
-            }
-        }
-    }
 
     /// 应用入流到状态（质量和动量同时更新）
     /// 
@@ -611,21 +593,6 @@ mod tests {
         assert!((q - 50.0).abs() < 1e-10);
     }
 
-    #[test]
-    fn test_river_system_apply() {
-        let mut system = RiverSystem::new();
-        system.add_river("River1", vec![0], RiverProvider::constant(100.0));
-
-        let mut h = vec![1.0; 10];
-        let areas = vec![100.0; 10]; // 100 m² 单元
-
-        // dt = 1s, Q = 100 m³/s, A = 100 m²
-        // Δh = Q * dt / A = 100 * 1 / 100 = 1.0 m
-        #[allow(deprecated)]
-        system.apply_inflow(0.0, 1.0, &mut h, &areas);
-
-        assert!((h[0] - 2.0).abs() < 1e-10);
-    }
 
     #[test]
     fn test_river_system_apply_with_momentum() {

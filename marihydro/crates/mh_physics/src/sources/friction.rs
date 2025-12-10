@@ -173,7 +173,7 @@ impl SourceTerm for ManningFrictionConfig {
         false
     }
 
-    fn requires_implicit_treatment(&self) -> bool {
+    fn is_locally_implicit(&self) -> bool {
         true
     }
 }
@@ -253,7 +253,7 @@ impl SourceTerm for ChezyFrictionConfig {
         false
     }
 
-    fn requires_implicit_treatment(&self) -> bool {
+    fn is_locally_implicit(&self) -> bool {
         true
     }
 }
@@ -507,7 +507,7 @@ mod tests {
         assert_eq!(chezy.name(), "ChezyFriction");
 
         assert!(!manning.is_explicit());
-        assert!(manning.requires_implicit_treatment());
+        assert!(manning.is_locally_implicit());
     }
 
     #[test]

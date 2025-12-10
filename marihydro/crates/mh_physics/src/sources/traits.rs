@@ -199,9 +199,18 @@ pub trait SourceTerm: Send + Sync {
         true
     }
 
-    /// 是否需要隐式处理
-    fn requires_implicit_treatment(&self) -> bool {
+    /// 源项是否使用局部隐式处理
+    /// 
+    /// 局部隐式意味着源项内部处理刚性（如摩擦的 1/(1+dt*γ)），
+    /// 而非需要全局隐式求解器。
+    fn is_locally_implicit(&self) -> bool {
         false
+    }
+
+    /// 是否需要隐式处理（已废弃，使用 is_locally_implicit）
+    #[deprecated(since = "0.5.0", note = "use is_locally_implicit() instead")]
+    fn requires_implicit_treatment(&self) -> bool {
+        self.is_locally_implicit()
     }
 
     // ========== 半隐式分裂方法 ==========
@@ -240,7 +249,7 @@ pub trait SourceTerm: Send + Sync {
     /// 返回 0.0 表示完全显式，1.0 表示完全隐式。
     /// 用于时间步长控制和稳定性分析。
     fn implicit_factor(&self) -> f64 {
-        if self.requires_implicit_treatment() {
+        if self.is_locally_implicit() {
             1.0
         } else {
             0.0

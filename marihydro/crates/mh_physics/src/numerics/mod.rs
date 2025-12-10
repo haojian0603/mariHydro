@@ -8,11 +8,13 @@
 //! - reconstruction/ - MUSCL 二阶重构
 //! - linear_algebra/ - 稀疏线性代数 (CSR, PCG, BiCGStab)
 //! - discretization/ - 有限体积离散化 (拓扑, 组装, 回代)
+//! - operators/ - 数值算子 (扩散等)
 
 pub mod discretization;
 pub mod gradient;
 pub mod limiter;
 pub mod linear_algebra;
+pub mod operators;
 pub mod reconstruction;
 
 pub use gradient::{

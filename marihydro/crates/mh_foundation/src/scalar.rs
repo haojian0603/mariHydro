@@ -1,3 +1,4 @@
+//! marihydro\crates\mh_foundation\src\scalar.rs
 //! 统一标量类型系统
 //!
 //! 通过 feature 控制精度，为 GPU 和混合精度预留接口。

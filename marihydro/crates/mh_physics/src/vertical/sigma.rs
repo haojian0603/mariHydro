@@ -1,3 +1,4 @@
+//! marihydro\crates\mh_physics\src\vertical\sigma.rs
 //! σ坐标系统
 //!
 //! 实现地形跟随的 σ 坐标用于垂向分层：

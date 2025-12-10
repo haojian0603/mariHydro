@@ -328,6 +328,6 @@ mod tests {
         assert_eq!(config.name(), "Coriolis");
         assert!(config.is_enabled());
         assert!(config.is_explicit());
-        assert!(!config.requires_implicit_treatment());
+        assert!(!config.is_locally_implicit());
     }
 }

@@ -6,7 +6,8 @@
 //! - 泥沙物理属性 (`properties`)
 //! - 推移质输沙 (`bed_load`)
 //! - 悬移质输沙 (`suspended`)
-//! - 床面演变 (`morphology`) - **推荐**
+//! - 床面演变 (`morphology`)
+//! - 2.5D 泥沙输运 (`transport_2_5d`) - 独立扩展
 //!
 //! # 模块结构
 //!
@@ -14,26 +15,23 @@
 //! - `bed_load`: 推移质输沙公式和计算器
 //! - `suspended`: 悬移质输沙（沉降、再悬浮、输运）
 //! - `formulas`: 输沙公式库（MPM, Van Rijn, Einstein, Engelund-Hansen）
-//! - `morphology`: 河床演变求解器（Exner 方程）- **推荐使用**
-//! - `bed_evolution`: 旧版床面演变（已废弃）
+//! - `morphology`: 河床演变求解器（Exner 方程）
+//! - `transport_2_5d`: 2.5D 垂向分层泥沙输运
 
 // 旧版模块（保留向后兼容）
 #[path = "bed_load.rs"]
 mod bed_load_legacy;
-#[deprecated(since = "0.3.0", note = "使用 morphology 模块替代")]
-pub mod bed_evolution;
 pub mod formulas;
 pub mod morphology;
 pub mod properties;
+pub mod transport_2_5d;
 
 // 新版子模块
 #[path = "bed_load/mod.rs"]
 pub mod bed_load_new;
 pub mod suspended;
 
-// 传统导出（向后兼容，已废弃）
-#[deprecated(since = "0.3.0", note = "使用 MorphodynamicsSolver 和 MorphologyConfig 替代")]
-pub use bed_evolution::{BedEvolutionSolver, BedEvolutionStats, ExnerConfig};
+// 传统导出（向后兼容）
 pub use bed_load_legacy::{BedLoadFormula, BedLoadTransport, Einstein, MeyerPeterMuller, VanRijn};
 pub use properties::{SedimentClass, SedimentProperties, SedimentType};
 
@@ -50,4 +48,3 @@ pub use suspended::{
     SmithMcLean, SuspendedTransport,
 };
 pub use suspended::{DietrichSettling, StokesSettling, VanRijnSettling};
-

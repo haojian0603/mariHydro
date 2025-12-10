@@ -1285,3 +1285,95 @@ mod tests {
         assert_eq!(from_prim, state);
     }
 }
+
+// ============================================================
+// 泛型浅水状态 (Backend 抽象)
+// ============================================================
+
+use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
+
+/// 泛型浅水状态
+///
+/// 使用 Backend trait 抽象存储，支持 CPU/GPU 后端。
+/// 永远只有4个核心字段：h, hu, hv, z。
+#[derive(Debug, Clone)]
+pub struct ShallowWaterStateGeneric<B: Backend> {
+    /// 单元数量
+    n_cells: usize,
+    /// 水深 [m]
+    pub h: B::Buffer<B::Scalar>,
+    /// x 方向动量 [m²/s]
+    pub hu: B::Buffer<B::Scalar>,
+    /// y 方向动量 [m²/s]
+    pub hv: B::Buffer<B::Scalar>,
+    /// 底床高程 [m]
+    pub z: B::Buffer<B::Scalar>,
+}
+
+impl<B: Backend> ShallowWaterStateGeneric<B> {
+    /// 创建新状态
+    pub fn new(n_cells: usize) -> Self {
+        Self {
+            n_cells,
+            h: B::alloc(n_cells),
+            hu: B::alloc(n_cells),
+            hv: B::alloc(n_cells),
+            z: B::alloc(n_cells),
+        }
+    }
+    
+    /// 单元数量
+    #[inline]
+    pub fn n_cells(&self) -> usize {
+        self.n_cells
+    }
+    
+    /// 重置为零
+    pub fn reset(&mut self) {
+        self.h.fill(B::Scalar::from_f64(0.0));
+        self.hu.fill(B::Scalar::from_f64(0.0));
+        self.hv.fill(B::Scalar::from_f64(0.0));
+    }
+    
+    /// 验证状态有效性
+    pub fn is_valid(&self) -> bool {
+        if let Some(h) = self.h.as_slice() {
+            h.iter().all(|&x| x.to_f64().is_finite() && x.to_f64() >= 0.0)
+        } else {
+            // GPU 缓冲区需要同步检查
+            true
+        }
+    }
+}
+
+/// 从传统 ShallowWaterState 转换的便捷方法
+impl ShallowWaterStateGeneric<CpuBackend<f64>> {
+    /// 从传统 ShallowWaterState 创建
+    pub fn from_legacy(state: &ShallowWaterState) -> Self {
+        let n = state.n_cells();
+        let mut new_state = Self::new(n);
+        
+        new_state.h.copy_from_slice(state.h.as_slice());
+        new_state.hu.copy_from_slice(state.hu.as_slice());
+        new_state.hv.copy_from_slice(state.hv.as_slice());
+        new_state.z.copy_from_slice(state.z.as_slice());
+        
+        new_state
+    }
+    
+    /// 转换回传统 ShallowWaterState
+    pub fn to_legacy(&self) -> ShallowWaterState {
+        let mut state = ShallowWaterState::new(self.n_cells);
+        
+        state.h.as_mut_slice().copy_from_slice(&self.h);
+        state.hu.as_mut_slice().copy_from_slice(&self.hu);
+        state.hv.as_mut_slice().copy_from_slice(&self.hv);
+        state.z.as_mut_slice().copy_from_slice(&self.z);
+        
+        state
+    }
+}
+
+/// 类型别名：默认后端的状态
+pub type ShallowWaterStateDefault = ShallowWaterStateGeneric<CpuBackend<f64>>;
+

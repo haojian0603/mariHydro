@@ -8,12 +8,7 @@
 //! - 数值参数配置 (NumericalParams)
 //! - 物理常数 (PhysicalConstants)
 //!
-//! # 迁移说明
-//!
-//! 本模块从 legacy_src/core/types 迁移而来，保持算法不变，仅调整接口。
-//! 主要变化：
-//! - 使用 mh_geo::Point2D 替代部分 DVec2 场景
-//! - 保留 glam::DVec2 用于向量运算
+
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};

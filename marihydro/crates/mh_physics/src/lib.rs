@@ -3,6 +3,7 @@
 //! 物理求解器模块
 //!
 //! 提供浅水方程数值求解功能，包括：
+//! - 核心抽象层 (core) - Backend, Buffer, Scalar 抽象
 //! - 网格适配层 (adapter)
 //! - 核心类型定义 (types)
 //! - 状态管理 (state)
@@ -18,6 +19,11 @@
 //! - [`StateAccessMut`]: 状态可变访问接口
 //!
 
+// 核心抽象层
+pub mod core;
+
+// 网格抽象层
+pub mod mesh;
 
 pub mod adapter;
 pub mod boundary;
@@ -40,6 +46,12 @@ pub mod waves;
 pub mod fields;
 pub mod operators;
 
+// 重导出核心抽象
+pub use core::{Backend, CpuBackend, DefaultBackend, Scalar, DeviceBuffer, D2, D3};
+
+// 重导出网格抽象
+pub use mesh::{MeshTopology, MeshKind, UnstructuredMeshAdapter};
+
 // 重导出常用类型
 pub use adapter::PhysicsMesh;
 pub use engine::{
@@ -53,6 +65,7 @@ pub use schemes::{
 };
 pub use state::{
     ConservedState, Flux, GradientState, RhsBuffers, ShallowWaterState, StateError,
+    ShallowWaterStateGeneric, ShallowWaterStateDefault,
 };
 pub use traits::{StateAccess, StateAccessExt, StateAccessMut, StateStatistics, StateView, StateViewMut};
 pub use types::{

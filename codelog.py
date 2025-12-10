@@ -217,7 +217,7 @@ class CodeCollector:
 排除的文件类型: {', '.join(sorted(self.excluded_extensions))}
 排除的目录: {', '.join(sorted(self.excluded_dirs))}
 {"=" * 80}
-            """)
+""")
 
             # 写入文件树
             f.write(file_tree_str)

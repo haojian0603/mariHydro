@@ -12,6 +12,7 @@
 //! - `solver` - 主求解器
 //! - `parallel` - 并行通量计算
 //! - `semi_implicit` - 半隐式时间推进策略
+//! - `strategy` - 时间积分策略模式（新）
 //!
 //! # 迁移说明
 //!
@@ -22,6 +23,7 @@ pub mod friction;
 pub mod parallel;
 pub mod semi_implicit;
 pub mod solver;
+pub mod strategy;
 pub mod time_integrator;
 pub mod timestep;
 
@@ -46,3 +48,11 @@ pub use parallel::{
 };
 pub use friction::{ManningFriction, FrictionConfig};
 pub use semi_implicit::{SemiImplicitConfig, SemiImplicitStats, SemiImplicitStrategy};
+
+// 重导出策略模式类型
+pub use strategy::{
+    TimeIntegrationStrategy, StrategyKind, StepResult,
+    ExplicitStrategy, ExplicitConfig,
+    SemiImplicitStrategyGeneric, SemiImplicitConfig as SemiImplicitStrategyConfig,
+    SolverWorkspaceGeneric,
+};

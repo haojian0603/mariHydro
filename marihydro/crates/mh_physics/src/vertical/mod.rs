@@ -5,6 +5,7 @@
 //! - 垂向速度计算 (`velocity`)
 //! - 垂向混合 (`mixing`)
 //! - 分层状态 (`state`)
+//! - 垂向剖面恢复 (`profile`) - 2.5D 扩展
 //!
 //! # 设计理念
 //!
@@ -30,8 +31,10 @@ pub mod sigma;
 pub mod velocity;
 pub mod mixing;
 pub mod state;
+pub mod profile;
 
 pub use sigma::{SigmaCoordinate, SigmaDistribution};
 pub use velocity::VerticalVelocity;
 pub use mixing::{VerticalMixing, VerticalMixingModel};
 pub use state::{LayeredScalar, LayeredState};
+pub use profile::{ProfileRestorer, VerticalProfile, ProfileMethod};

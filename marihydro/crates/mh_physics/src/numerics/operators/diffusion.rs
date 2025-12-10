@@ -1,8 +1,13 @@
-// crates/mh_physics/src/sources/diffusion.rs
+// crates/mh_physics/src/numerics/operators/diffusion.rs
 
-//! 扩散源项
+//! 扩散算子
 //!
 //! 实现标量场的显式扩散求解，支持多种边界条件。
+//! 
+//! # 模块说明
+//!
+//! 这是一个**数值算子**而非物理源项。可应用于任意标量场
+//! （温度、盐度、示踪剂、动量等）的扩散计算。
 //!
 //! # 算法
 //!
