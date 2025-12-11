@@ -6,7 +6,6 @@
 //!
 //! # 模块概览
 //!
-//! - scalar: 统一标量类型（f64/f32）和物理常量
 //! - dimension: 编译期维度系统（2D/3D）
 //! - memory: 对齐内存容器和预分配策略
 //! - index: 强类型索引系统，带代际验证
@@ -54,7 +53,6 @@ pub mod float;
 pub mod index;
 pub mod memory;
 pub mod metrics;
-pub mod scalar;
 pub mod tolerance;
 pub mod validation;
 
@@ -68,7 +66,6 @@ pub use index::{
     CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,
 };
 pub use memory::{AlignedVec, Alignment, CpuAlign, GpuAlign};
-pub use scalar::{Scalar, ScalarOps};
 
 /// Prelude 模块，包含常用类型
 pub mod prelude {
@@ -82,7 +79,6 @@ pub mod prelude {
         cell, face, halfedge, node, vertex,
     };
     pub use crate::memory::{AlignedVec, CpuAlign, GpuAlign};
-    pub use crate::scalar::{Scalar, ScalarOps};
     pub use crate::validation::{ValidationReport, ValidationError, ValidationWarning};
     pub use crate::{ensure, require};
 }

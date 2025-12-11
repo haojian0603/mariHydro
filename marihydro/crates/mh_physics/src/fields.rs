@@ -1,61 +1,61 @@
-// marihydro\crates\mh_physics\src\fields.rs
+﻿// marihydro\crates\mh_physics\src\fields.rs
 //! 动态字段注册系统
 //!
 //! 为物理计算提供可扩展的字段管理。
 //!
 //! # 设计说明
 //!
-//! 允许运行时动态注册新字段，支持：
-//! - 用户自定义湍流模型变量
-//! - 插件注入的新物理量
-//! - 不同模拟场景的不同字段需求
+//! å…è®¸è¿è¡Œæ—¶åŠ¨æ€æ³¨å†Œæ–°å­—æ®µï¼Œæ”¯æŒï¼š
+//! - ç”¨æˆ·è‡ªå®šä¹‰æ¹æµæ¨¡åž‹å˜é‡
+//! - æ’ä»¶æ³¨å…¥çš„æ–°ç‰©ç†é‡
+//! - ä¸åŒæ¨¡æ‹Ÿåœºæ™¯çš„ä¸åŒå­—æ®µéœ€æ±‚
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// 字段类型
+/// å­—æ®µç±»åž‹
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
-    /// 标量场（水深、高程等）
+    /// æ ‡é‡åœºï¼ˆæ°´æ·±ã€é«˜ç¨‹ç­‰ï¼‰
     Scalar,
-    /// 向量场 2D（流速等）
+    /// å‘é‡åœº 2Dï¼ˆæµé€Ÿç­‰ï¼‰
     Vector2D,
-    /// 向量场 3D
+    /// å‘é‡åœº 3D
     Vector3D,
 }
 
-/// 字段位置
+/// å­—æ®µä½ç½®
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldLocation {
-    /// 单元中心
+    /// å•å…ƒä¸­å¿ƒ
     Cell,
-    /// 面中心
+    /// é¢ä¸­å¿ƒ
     Face,
-    /// 节点
+    /// èŠ‚ç‚¹
     Node,
 }
 
-/// 字段元数据
+/// å­—æ®µå…ƒæ•°æ®
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldMeta {
-    /// 字段名称
+    /// å­—æ®µåç§°
     pub name: String,
-    /// 字段类型
+    /// å­—æ®µç±»åž‹
     pub field_type: FieldType,
-    /// 存储位置
+    /// å­˜å‚¨ä½ç½®
     pub location: FieldLocation,
-    /// 单位
+    /// å•ä½
     pub unit: String,
-    /// 描述
+    /// æè¿°
     pub description: String,
-    /// 是否为物理守恒量
+    /// æ˜¯å¦ä¸ºç‰©ç†å®ˆæ’é‡
     pub is_conserved: bool,
-    /// 是否需要边界条件
+    /// æ˜¯å¦éœ€è¦è¾¹ç•Œæ¡ä»¶
     pub needs_bc: bool,
 }
 
 impl FieldMeta {
-    /// 创建单元标量场元数据
+    /// åˆ›å»ºå•å…ƒæ ‡é‡åœºå…ƒæ•°æ®
     pub fn cell_scalar(name: impl Into<String>, unit: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -68,7 +68,7 @@ impl FieldMeta {
         }
     }
 
-    /// 创建单元向量场元数据
+    /// åˆ›å»ºå•å…ƒå‘é‡åœºå…ƒæ•°æ®
     pub fn cell_vector2d(name: impl Into<String>, unit: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -81,43 +81,43 @@ impl FieldMeta {
         }
     }
 
-    /// 标记为守恒量
+    /// æ ‡è®°ä¸ºå®ˆæ’é‡
     pub fn conserved(mut self) -> Self {
         self.is_conserved = true;
         self
     }
 
-    /// 标记需要边界条件
+    /// æ ‡è®°éœ€è¦è¾¹ç•Œæ¡ä»¶
     pub fn with_bc(mut self) -> Self {
         self.needs_bc = true;
         self
     }
 
-    /// 添加描述
+    /// æ·»åŠ æè¿°
     pub fn with_desc(mut self, desc: impl Into<String>) -> Self {
         self.description = desc.into();
         self
     }
 }
 
-/// 字段注册表
+/// å­—æ®µæ³¨å†Œè¡¨
 ///
-/// 管理所有已注册的物理场。
+/// ç®¡ç†æ‰€æœ‰å·²æ³¨å†Œçš„ç‰©ç†åœºã€‚
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FieldRegistry {
-    /// 所有字段元数据
+    /// æ‰€æœ‰å­—æ®µå…ƒæ•°æ®
     fields: HashMap<String, FieldMeta>,
-    /// 字段注册顺序
+    /// å­—æ®µæ³¨å†Œé¡ºåº
     order: Vec<String>,
 }
 
 impl FieldRegistry {
-    /// 创建空注册表
+    /// åˆ›å»ºç©ºæ³¨å†Œè¡¨
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 创建带有标准浅水方程字段的注册表
+    /// åˆ›å»ºå¸¦æœ‰æ ‡å‡†æµ…æ°´æ–¹ç¨‹å­—æ®µçš„æ³¨å†Œè¡¨
     pub fn shallow_water() -> Self {
         let mut registry = Self::new();
         

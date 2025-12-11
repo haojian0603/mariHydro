@@ -31,16 +31,15 @@ use super::topology::CellFaceTopology;
 use crate::adapter::PhysicsMesh;
 use crate::numerics::linear_algebra::{CsrBuilder, CsrMatrix, CsrPattern};
 use crate::state::ShallowWaterState;
-use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
 /// 组装器配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssemblerConfig {
     /// 最小水深阈值 [m]
-    pub h_min: Scalar,
+    pub h_min: f64,
     /// 干单元处理因子
-    pub dry_factor: Scalar,
+    pub dry_factor: f64,
     /// 是否使用面积加权
     pub area_weighted: bool,
 }
@@ -70,7 +69,7 @@ pub struct PressureMatrixAssembler {
     /// 系数矩阵
     matrix: CsrMatrix,
     /// 右端项
-    rhs: Vec<Scalar>,
+    rhs: Vec<f64>,
     /// 对角元素索引缓存
     diag_indices: Vec<usize>,
 }
@@ -139,8 +138,8 @@ impl PressureMatrixAssembler {
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
         state: &ShallowWaterState,
-        dt: Scalar,
-        g: Scalar,
+        dt: f64,
+        g: f64,
     ) {
         let n = topo.n_cells();
         let coef = g * dt * dt;
@@ -249,10 +248,10 @@ impl PressureMatrixAssembler {
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
         state: &ShallowWaterState,
-        hu_star: &[Scalar],
-        hv_star: &[Scalar],
-        dt: Scalar,
-        g: Scalar,
+        hu_star: &[f64],
+        hv_star: &[f64],
+        dt: f64,
+        g: f64,
     ) {
         // 先组装矩阵
         self.assemble(mesh, topo, state, dt, g);
@@ -282,7 +281,7 @@ impl PressureMatrixAssembler {
     }
 
     /// 设置右端项
-    pub fn set_rhs(&mut self, rhs: &[Scalar]) {
+    pub fn set_rhs(&mut self, rhs: &[f64]) {
         self.rhs.copy_from_slice(rhs);
     }
 
@@ -297,17 +296,17 @@ impl PressureMatrixAssembler {
     }
 
     /// 获取右端项引用
-    pub fn rhs(&self) -> &[Scalar] {
+    pub fn rhs(&self) -> &[f64] {
         &self.rhs
     }
 
     /// 获取可变右端项引用
-    pub fn rhs_mut(&mut self) -> &mut [Scalar] {
+    pub fn rhs_mut(&mut self) -> &mut [f64] {
         &mut self.rhs
     }
 
     /// 获取对角元素
-    pub fn diagonal(&self) -> Vec<Scalar> {
+    pub fn diagonal(&self) -> Vec<f64> {
         self.diag_indices
             .iter()
             .map(|&idx| self.matrix.values()[idx])
@@ -326,9 +325,9 @@ pub struct ImplicitMomentumAssembler {
     /// y 方向矩阵
     matrix_v: CsrMatrix,
     /// x 方向右端项
-    rhs_u: Vec<Scalar>,
+    rhs_u: Vec<f64>,
     /// y 方向右端项
-    rhs_v: Vec<Scalar>,
+    rhs_v: Vec<f64>,
 }
 
 impl ImplicitMomentumAssembler {
@@ -369,9 +368,9 @@ impl ImplicitMomentumAssembler {
         &mut self,
         topo: &CellFaceTopology,
         state: &ShallowWaterState,
-        manning_n: Scalar,
-        dt: Scalar,
-        g: Scalar,
+        manning_n: f64,
+        dt: f64,
+        g: f64,
     ) {
         let n = topo.n_cells();
 
@@ -424,12 +423,12 @@ impl ImplicitMomentumAssembler {
     }
 
     /// 获取 u 方向右端项
-    pub fn rhs_u(&self) -> &[Scalar] {
+    pub fn rhs_u(&self) -> &[f64] {
         &self.rhs_u
     }
 
     /// 获取 v 方向右端项
-    pub fn rhs_v(&self) -> &[Scalar] {
+    pub fn rhs_v(&self) -> &[f64] {
         &self.rhs_v
     }
 }

@@ -11,7 +11,7 @@
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
 /// 桥墩拖曳力配置
@@ -20,11 +20,11 @@ pub struct BridgePierConfig {
     /// 是否启用
     pub enabled: bool,
     /// 默认拖曳系数
-    pub default_cd: Scalar,
+    pub default_cd: f64,
     /// 水密度 [kg/m³]
-    pub rho_water: Scalar,
+    pub rho_water: f64,
     /// 最小水深 [m]
-    pub h_min: Scalar,
+    pub h_min: f64,
 }
 
 impl Default for BridgePierConfig {
@@ -43,9 +43,9 @@ pub struct BridgePierDrag {
     /// 配置
     config: BridgePierConfig,
     /// 阻塞率场 (0~1)：桥墩占单元面积的比例
-    pub blockage: AlignedVec<Scalar>,
+    pub blockage: AlignedVec<f64>,
     /// 拖曳系数场
-    pub drag_coeff: AlignedVec<Scalar>,
+    pub drag_coeff: AlignedVec<f64>,
 }
 
 impl BridgePierDrag {
@@ -69,7 +69,7 @@ impl BridgePierDrag {
     /// - `cell`: 单元索引
     /// - `blockage`: 阻塞率 (0~1)
     /// - `cd`: 拖曳系数（None 使用默认值）
-    pub fn set_pier(&mut self, cell: usize, blockage: Scalar, cd: Option<Scalar>) {
+    pub fn set_pier(&mut self, cell: usize, blockage: f64, cd: Option<f64>) {
         if cell < self.blockage.len() {
             self.blockage[cell] = blockage.clamp(0.0, 1.0);
             if let Some(c) = cd {
@@ -84,7 +84,7 @@ impl BridgePierDrag {
     /// - `cell`: 单元索引
     /// - `pier_diameter`: 桥墩直径 [m]
     /// - `cell_width`: 单元宽度 [m]
-    pub fn set_from_geometry(&mut self, cell: usize, pier_diameter: Scalar, cell_width: Scalar) {
+    pub fn set_from_geometry(&mut self, cell: usize, pier_diameter: f64, cell_width: f64) {
         if cell < self.blockage.len() {
             let blockage = (pier_diameter / cell_width).clamp(0.0, 0.9);
             self.blockage[cell] = blockage;
@@ -92,13 +92,13 @@ impl BridgePierDrag {
     }
 
     /// 批量设置阻塞率
-    pub fn set_blockage_field(&mut self, blockage: &[Scalar]) {
+    pub fn set_blockage_field(&mut self, blockage: &[f64]) {
         let n = self.blockage.len().min(blockage.len());
         self.blockage[..n].copy_from_slice(&blockage[..n]);
     }
 
     /// 计算单元的拖曳力 [N/m²]
-    fn compute_drag_force(&self, cell: usize, h: Scalar, u: Scalar, v: Scalar) -> (Scalar, Scalar) {
+    fn compute_drag_force(&self, cell: usize, h: f64, u: f64, v: f64) -> (f64, f64) {
         let ab = self.blockage[cell];
         if ab < 1e-10 {
             return (0.0, 0.0);
@@ -157,7 +157,7 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: Scalar, u: Scalar, v: Scalar) -> ShallowWaterState {
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState {
         let mut state = ShallowWaterState::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;

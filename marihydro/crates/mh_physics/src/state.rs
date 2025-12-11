@@ -22,6 +22,7 @@
 
 use glam::DVec2;
 use mh_foundation::memory::AlignedVec;
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
@@ -1344,9 +1345,9 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     
     /// 重置为零
     pub fn reset(&mut self) {
-        self.h.fill(B::Scalar::from_f64(0.0));
-        self.hu.fill(B::Scalar::from_f64(0.0));
-        self.hv.fill(B::Scalar::from_f64(0.0));
+        self.h.fill(<B::Scalar as Scalar>::from_f64(0.0));
+        self.hu.fill(<B::Scalar as Scalar>::from_f64(0.0));
+        self.hv.fill(<B::Scalar as Scalar>::from_f64(0.0));
     }
     
     /// 验证状态有效性
@@ -1433,11 +1434,11 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         let hv_slice = self.hv.as_slice()?;
         
         let mut stats = StateStatisticsData {
-            h_max: B::Scalar::from_f64(0.0),
-            h_min: B::Scalar::from_f64(f64::MAX),
-            h_mean: B::Scalar::from_f64(0.0),
-            velocity_max: B::Scalar::from_f64(0.0),
-            total_volume: B::Scalar::from_f64(0.0),
+            h_max: <B::Scalar as Scalar>::from_f64(0.0),
+            h_min: <B::Scalar as Scalar>::from_f64(f64::MAX),
+            h_mean: <B::Scalar as Scalar>::from_f64(0.0),
+            velocity_max: <B::Scalar as Scalar>::from_f64(0.0),
+            total_volume: <B::Scalar as Scalar>::from_f64(0.0),
             wet_cells: 0,
         };
         
@@ -1446,24 +1447,24 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
             
             if h > h_dry {
                 stats.wet_cells += 1;
-                stats.h_max = stats.h_max.max(h);
-                stats.h_min = stats.h_min.min(h);
+                stats.h_max = Float::max(stats.h_max, h);
+                stats.h_min = Float::min(stats.h_min, h);
                 
                 // 计算速度
                 let u = hu_slice[i] / h;
                 let v = hv_slice[i] / h;
-                let speed = (u * u + v * v).sqrt();
-                stats.velocity_max = stats.velocity_max.max(speed);
+                let speed = Float::sqrt(u * u + v * v);
+                stats.velocity_max = Float::max(stats.velocity_max, speed);
                 
                 // 累加体积
                 if i < cell_areas.len() {
-                    stats.total_volume += h * cell_areas[i];
+                    stats.total_volume = stats.total_volume + h * cell_areas[i];
                 }
             }
         }
         
         if stats.wet_cells > 0 {
-            stats.h_mean = stats.total_volume / B::Scalar::from_f64(stats.wet_cells as f64);
+            stats.h_mean = stats.total_volume / <B::Scalar as Scalar>::from_f64(stats.wet_cells as f64);
         }
         
         Some(stats)

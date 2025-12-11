@@ -78,14 +78,14 @@ pub struct SedimentConfigGeneric<S: Scalar> {
 impl<S: Scalar> Default for SedimentConfigGeneric<S> {
     fn default() -> Self {
         Self {
-            tau_critical: Scalar::from_f64(0.1),
-            erosion_rate: Scalar::from_f64(1e-4),
-            settling_velocity: Scalar::from_f64(0.001),
-            sediment_density: Scalar::from_f64(2650.0),
-            water_density: S::WATER_DENSITY,
-            porosity: Scalar::from_f64(0.4),
-            conservation_tolerance: Scalar::from_f64(1e-10),
-            min_depth: Scalar::from_f64(1e-4),
+            tau_critical: <S as Scalar>::from_f64(0.1),
+            erosion_rate: <S as Scalar>::from_f64(1e-4),
+            settling_velocity: <S as Scalar>::from_f64(0.001),
+            sediment_density: <S as Scalar>::from_f64(2650.0),
+            water_density: <S as Scalar>::from_f64(998.2),
+            porosity: <S as Scalar>::from_f64(0.4),
+            conservation_tolerance: <S as Scalar>::from_f64(1e-10),
+            min_depth: <S as Scalar>::from_f64(1e-4),
         }
     }
 }

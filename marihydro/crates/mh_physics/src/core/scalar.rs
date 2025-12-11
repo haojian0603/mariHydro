@@ -1,301 +1,217 @@
-// marihydro\crates\mh_physics\src\core\scalar.rs
-//! 统一标量类型抽象 - 项目唯一权威定义
+//! marihydro\crates\mh_physics\src\core\scalar.rs
+//! 统一标量类型抽象 - 项目唯一权威定义 - 禁止更改此代码文件
 //!
-//! 提供 f32/f64 的统一接口，支持编译期精度选择。
+//! 本模块提供**编译期精度选择**的唯一接口，支持物理算法在 `f32` 和 `f64` 之间零成本切换。
+//! 这是项目中**唯一**的精度控制层，所有运行时精度相关代码必须通过此 trait 实现泛型化。
 //!
-//! # 物理常量
+//! # 核心理念
 //!
-//! Scalar trait 包含物理模拟所需的关联常量：
-//! - `ZERO`, `ONE`: 基本常量
-//! - `GRAVITY`: 重力加速度 (9.81 m/s²)
-//! - `PI`: 圆周率
-//! - `VON_KARMAN`: 冯卡门常数 (0.41)
-//! - `WATER_DENSITY`: 水密度 (1000 kg/m³)
+//! **架构分层原则**：
+//! - **配置层**：物理常量硬编码为 `f64`（精度无关，确保配置数据权威）
+//! - **运行层**：算法实现泛型化为 `<S: Scalar>`（精度相关，编译期自动适配）
 //!
-//! # 使用示例
+//! # 设计哲学
 //!
-//! ```ignore
+//! 1. **单一职责**：仅解决精度切换问题，不定义物理常量，不重复数学运算
+//! 2. **零成本抽象**：`#[inline]` + 编译期单态化，性能与手写具体类型完全相同
+//! 3. **架构红线**：
+//!    - 本 trait 定义在 `mh_physics::core`，不属于 `mh_foundation`
+//!    - `mh_mesh` 必须硬编码 `f64`，**禁止使用本 trait**（几何精度独立于计算精度）
+//!    - **GPU 内存操作**：需在 `mh_gpu` 模块中显式添加 `+ Pod` 约束
+//! 4. **可扩展性**：移除 `Pod` 后，未来可支持 `f16`、`rug::Float` 等类型
+//!
+//! # 正确用法示例
+//!
+//! ```
 //! use mh_physics::core::Scalar;
+//! use num_traits::Float;
+//! 
+//! // 运行层：泛型算法
+//! fn compute_wave_speed<S: Scalar>(depth: S) -> S {
+//!     let g = S::from_f64(9.81);  // 配置层f64 → 运行层S
+//!     (g * depth).sqrt()          // sqrt() 来自 Float trait
+//! }
 //!
-//! fn compute_wave_speed<S: Scalar>(h: S) -> S {
-//!     (S::GRAVITY * h).sqrt()
+//! // 配置层：硬编码f64
+//! const GRAVITY_F64: f64 = 9.81;  // 权威配置值
+//! ```
+//!
+//! # GPU 内存操作
+//!
+//! 由于 trait 已移除 `Pod`，GPU 上传需显式约束：
+//!
+//! ```no_run
+//! // mh_gpu/src/buffer.rs
+//! use bytemuck::Pod;
+//!
+//! fn upload_to_gpu<S: Scalar + Pod>(data: &[S]) -> GpuBuffer {
+//!     bytemuck::cast_slice(data) // 零拷贝
 //! }
 //! ```
 
-use bytemuck::Pod;
-use num_traits::{Float, FromPrimitive, NumAssign};
 use std::fmt::{Debug, Display};
 use std::iter::Sum;
 
-/// 统一标量类型约束 - 项目唯一权威定义
+use num_traits::{Float, FromPrimitive, NumAssign};
+
+/// 统一标量类型约束 - 项目唯一权威接口
 ///
-/// 所有物理计算应使用此 trait 作为泛型约束。
-/// 提供 f32 和 f64 的统一接口以及物理常量。
+/// 所有物理计算必须使用此 trait 作为泛型边界。**禁止**直接引用 `f32` 或 `f64` 类型。
+/// 数学运算（`sqrt`/`sin` 等）全部继承自 `Float` trait，无需重复定义。
+///
+/// **特殊值获取**：使用 `Float` trait 的 `infinity()`、`neg_infinity()`、`min_positive_value()` 方法
+///
+/// # 架构约束
+///
+/// - **必须**：作为泛型约束使用，如 `<S: Scalar>`
+/// - **禁止**：作为 trait 对象使用，如 `&dyn Scalar`
+/// - **禁止**：`mh_mesh` 等几何库硬编码使用
+///
+/// # 实现类型
+///
+/// - `f32`：GPU 加速模式，内存占用减半，精度约 7 位有效数字
+/// - `f64`：CPU 高精度模式（默认），精度约 15 位有效数字
 pub trait Scalar:
     Float
-    + Pod
-    + Default
+    + FromPrimitive
+    + NumAssign
+    // + Pod // ❌ 已移除：职责分离，GPU 场景显式添加
+    + Copy
+    + Clone
     + Debug
     + Display
     + Send
     + Sync
-    + NumAssign
-    + FromPrimitive
     + Sum
     + 'static
 {
-    // ========== 基本常量 ==========
-    
-    /// 零值
+    // ========== 基本数学常量 ==========
+
+    /// 零值：`0.0`
     const ZERO: Self;
-    /// 单位值
+
+    /// 单位值：`1.0`
     const ONE: Self;
-    /// 机器精度常量
+
+    /// 机器精度（Machine epsilon）
+    ///
+    /// - f32: `1.1920929e-7`
+    /// - f64: `2.220446049250313e-16`
     const EPSILON: Self;
-    /// 圆周率
-    const PI: Self;
-    
-    // ========== 物理常量 ==========
-    
-    /// 重力加速度 [m/s²]
-    const GRAVITY: Self;
-    /// 冯卡门常数（对数速度剖面）
-    const VON_KARMAN: Self;
-    /// 标准水密度 [kg/m³]
-    const WATER_DENSITY: Self;
-    /// 标准海水密度 [kg/m³]
-    const SEAWATER_DENSITY: Self;
-    /// 空气密度 [kg/m³]
-    const AIR_DENSITY: Self;
-    
-    // ========== 类型方法 ==========
-    
-    /// 类型名称
-    fn type_name() -> &'static str;
-    
-    /// 机器精度（方法版本，与 EPSILON 常量相同）
-    fn epsilon() -> Self;
-    
-    /// 最小正规数
-    fn min_positive() -> Self;
-    
-    /// 负无穷大
-    fn neg_infinity() -> Self;
-    
-    /// 正无穷大
-    fn pos_infinity() -> Self;
-    
-    /// 从 f64 转换
+
+    // ========== 类型转换（唯一入口） ==========
+
+    /// 从 **配置层** `f64` 转换到 **运行层** `S`（可能丢失精度）
+    ///
+    /// # Panics
+    /// Debug 模式下，若 `v` 超出 `S` 范围则 panic
     fn from_f64(v: f64) -> Self;
-    
-    /// 转换为 f64
+
+    /// 转换回 `f64`（用于输出或跨模块接口）
     fn to_f64(self) -> f64;
-    
-    // ========== 数学运算 ==========
-    
-    /// 平方根
-    fn sqrt(self) -> Self;
-    
-    /// 绝对值
-    fn abs(self) -> Self;
-    
-    /// 最大值
-    fn max(self, other: Self) -> Self;
-    
-    /// 最小值
-    fn min(self, other: Self) -> Self;
-    
-    /// 钳位到范围 [min, max]
-    fn clamp(self, min: Self, max: Self) -> Self;
-    
-    /// 幂运算 self^n
-    fn powf(self, n: Self) -> Self;
-    
-    /// 自然指数 e^self
-    fn exp(self) -> Self;
-    
-    /// 自然对数 ln(self)
-    fn ln(self) -> Self;
-    
-    /// 正弦
-    fn sin(self) -> Self;
-    
-    /// 余弦
-    fn cos(self) -> Self;
-    
-    /// 反正切（双参数）
-    fn atan2(self, other: Self) -> Self;
-    
-    /// 是否有限
-    fn is_finite(self) -> bool;
-    
-    /// 是否为 NaN
-    fn is_nan(self) -> bool;
-    
-    /// 符号函数: -1, 0, 1
-    fn signum(self) -> Self;
-    
-    /// 向下取整
-    fn floor(self) -> Self;
-    
-    /// 向上取整
-    fn ceil(self) -> Self;
 }
+
+// ============================================================================
+// f32 实现
+// ============================================================================
 
 impl Scalar for f32 {
-    // 基本常量
     const ZERO: f32 = 0.0;
     const ONE: f32 = 1.0;
-    const EPSILON: f32 = 1e-6;
-    const PI: f32 = std::f32::consts::PI;
-    
-    // 物理常量
-    const GRAVITY: f32 = 9.81;
-    const VON_KARMAN: f32 = 0.41;
-    const WATER_DENSITY: f32 = 1000.0;
-    const SEAWATER_DENSITY: f32 = 1025.0;
-    const AIR_DENSITY: f32 = 1.225;
-    
-    fn type_name() -> &'static str { "f32" }
-    fn epsilon() -> Self { Self::EPSILON }
-    fn min_positive() -> Self { f32::MIN_POSITIVE }
-    fn neg_infinity() -> Self { f32::NEG_INFINITY }
-    fn pos_infinity() -> Self { f32::INFINITY }
-    fn from_f64(v: f64) -> Self { v as f32 }
-    fn to_f64(self) -> f64 { self as f64 }
-    fn sqrt(self) -> Self { f32::sqrt(self) }
-    fn abs(self) -> Self { f32::abs(self) }
-    fn max(self, other: Self) -> Self { f32::max(self, other) }
-    fn min(self, other: Self) -> Self { f32::min(self, other) }
-    fn clamp(self, min: Self, max: Self) -> Self { f32::clamp(self, min, max) }
-    fn powf(self, n: Self) -> Self { f32::powf(self, n) }
-    fn exp(self) -> Self { f32::exp(self) }
-    fn ln(self) -> Self { f32::ln(self) }
-    fn sin(self) -> Self { f32::sin(self) }
-    fn cos(self) -> Self { f32::cos(self) }
-    fn atan2(self, other: Self) -> Self { f32::atan2(self, other) }
-    fn is_finite(self) -> bool { f32::is_finite(self) }
-    fn is_nan(self) -> bool { f32::is_nan(self) }
-    fn signum(self) -> Self { f32::signum(self) }
-    fn floor(self) -> Self { f32::floor(self) }
-    fn ceil(self) -> Self { f32::ceil(self) }
+    const EPSILON: f32 = f32::EPSILON; // 正确机器精度
+
+    #[inline]
+    fn from_f64(v: f64) -> Self {
+        debug_assert!(
+            v >= f64::from(f32::MIN) && v <= f64::from(f32::MAX),
+            "f64 值 {} 超出 f32 范围 [{}, {}]",
+            v,
+            f32::MIN,
+            f32::MAX
+        );
+        v as f32
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
 }
 
+// ============================================================================
+// f64 实现
+// ============================================================================
+
 impl Scalar for f64 {
-    // 基本常量
     const ZERO: f64 = 0.0;
     const ONE: f64 = 1.0;
-    const EPSILON: f64 = 1e-12;
-    const PI: f64 = std::f64::consts::PI;
-    
-    // 物理常量
-    const GRAVITY: f64 = 9.81;
-    const VON_KARMAN: f64 = 0.41;
-    const WATER_DENSITY: f64 = 1000.0;
-    const SEAWATER_DENSITY: f64 = 1025.0;
-    const AIR_DENSITY: f64 = 1.225;
-    
-    fn type_name() -> &'static str { "f64" }
-    fn epsilon() -> Self { Self::EPSILON }
-    fn min_positive() -> Self { f64::MIN_POSITIVE }
-    fn neg_infinity() -> Self { f64::NEG_INFINITY }
-    fn pos_infinity() -> Self { f64::INFINITY }
-    fn from_f64(v: f64) -> Self { v }
-    fn to_f64(self) -> f64 { self }
-    fn sqrt(self) -> Self { f64::sqrt(self) }
-    fn abs(self) -> Self { f64::abs(self) }
-    fn max(self, other: Self) -> Self { f64::max(self, other) }
-    fn min(self, other: Self) -> Self { f64::min(self, other) }
-    fn clamp(self, min: Self, max: Self) -> Self { f64::clamp(self, min, max) }
-    fn powf(self, n: Self) -> Self { f64::powf(self, n) }
-    fn exp(self) -> Self { f64::exp(self) }
-    fn ln(self) -> Self { f64::ln(self) }
-    fn sin(self) -> Self { f64::sin(self) }
-    fn cos(self) -> Self { f64::cos(self) }
-    fn atan2(self, other: Self) -> Self { f64::atan2(self, other) }
-    fn is_finite(self) -> bool { f64::is_finite(self) }
-    fn is_nan(self) -> bool { f64::is_nan(self) }
-    fn signum(self) -> Self { f64::signum(self) }
-    fn floor(self) -> Self { f64::floor(self) }
-    fn ceil(self) -> Self { f64::ceil(self) }
+    const EPSILON: f64 = f64::EPSILON; 
+
+    #[inline]
+    fn from_f64(v: f64) -> Self {
+        v // 精确转换
+    }
+
+    #[inline]
+    fn to_f64(self) -> f64 {
+        self
+    }
 }
+
+// ============================================================================
+// 单元测试（系统化容差）
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::Float;
+
+    // 容差标准：f32用绝对误差，f64用相对误差
+    const TOL_F32: f32 = 1e-6;
+    const TOL_F64: f64 = 1e-14;
 
     #[test]
-    fn test_scalar_f32_basic() {
-        let x: f32 = Scalar::from_f64(1.234);
-        assert!((x - 1.234f32).abs() < 1e-5);
-        assert!((f32::ZERO - 0.0f32).abs() < 1e-10);
-        assert!((f32::ONE - 1.0f32).abs() < 1e-10);
+    fn test_f32_basic() {
+        let v: f32 = <f32 as Scalar>::from_f64(1.23456789012345);
+        assert!((v - 1.2345679).abs() < TOL_F32);
     }
 
     #[test]
-    fn test_scalar_f64_basic() {
-        let x: f64 = Scalar::from_f64(1.234);
-        assert!((x - 1.234f64).abs() < 1e-14);
-        assert!((f64::ZERO - 0.0f64).abs() < 1e-14);
-        assert!((f64::ONE - 1.0f64).abs() < 1e-14);
+    fn test_f64_basic() {
+        let v: f64 = <f64 as Scalar>::from_f64(1.23456789012345);
+        assert_eq!(v, 1.23456789012345);
     }
-    
+
     #[test]
-    fn test_physical_constants_f64() {
-        assert!((f64::GRAVITY - 9.81).abs() < 1e-10);
-        assert!((f64::VON_KARMAN - 0.41).abs() < 1e-10);
-        assert!((f64::WATER_DENSITY - 1000.0).abs() < 1e-10);
-        assert!((f64::SEAWATER_DENSITY - 1025.0).abs() < 1e-10);
-        assert!((f64::AIR_DENSITY - 1.225).abs() < 1e-10);
-        assert!((f64::PI - std::f64::consts::PI).abs() < 1e-14);
-    }
-    
-    #[test]
-    fn test_physical_constants_f32() {
-        assert!((f32::GRAVITY - 9.81f32).abs() < 1e-5);
-        assert!((f32::VON_KARMAN - 0.41f32).abs() < 1e-5);
-        assert!((f32::WATER_DENSITY - 1000.0f32).abs() < 1e-3);
-    }
-    
-    #[test]
-    fn test_math_operations() {
-        // 测试 f64
-        let x: f64 = 4.0;
-        assert!((x.sqrt() - 2.0).abs() < 1e-14);
-        assert!(((-3.0f64).abs() - 3.0).abs() < 1e-14);
-        assert!((1.0f64.exp() - std::f64::consts::E).abs() < 1e-10);
-        assert!((std::f64::consts::E.ln() - 1.0).abs() < 1e-14);
+    fn test_float_operations() {
+        // 验证 Float trait 方法可用
+        let x: f32 = <f32 as Scalar>::from_f64(9.0);
+        assert!((x.sqrt() - 3.0).abs() < TOL_F32); // sqrt() 来自 Float
         
-        // 测试 f32
-        let y: f32 = 9.0;
-        assert!((y.sqrt() - 3.0f32).abs() < 1e-5);
-        assert!((2.0f32.powf(3.0f32) - 8.0f32).abs() < 1e-5);
+        let y: f64 = <f64 as Scalar>::from_f64(2.0);
+        assert!((y.powf(3.0) - 8.0).abs() < TOL_F64); // powf() 来自 Float
     }
-    
-    #[test]
-    fn test_trigonometric() {
-        let angle: f64 = f64::PI / 4.0;
-        let sin_val = angle.sin();
-        let cos_val = angle.cos();
-        assert!((sin_val - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-10);
-        assert!((cos_val - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-10);
-    }
-    
+
     #[test]
     fn test_special_values() {
-        assert!(<f64 as Scalar>::neg_infinity() < f64::ZERO);
-        assert!(<f64 as Scalar>::pos_infinity() > f64::ZERO);
-        assert!(<f64 as Scalar>::neg_infinity().is_infinite());
-        assert!(!f64::NAN.is_finite());
-        assert!(f64::NAN.is_nan());
+        // 验证 Float trait 的方法
+        assert!(f32::neg_infinity().is_sign_negative());
+        assert!(f64::infinity().is_sign_positive());
+        assert!(f64::min_positive_value().is_normal());
     }
-    
+
     #[test]
-    fn test_clamp_and_signum() {
-        let x: f64 = 5.0;
-        assert!((x.clamp(0.0, 3.0) - 3.0).abs() < 1e-14);
-        assert!((x.clamp(6.0, 10.0) - 6.0).abs() < 1e-14);
-        assert!((-3.5f64).signum() < 0.0);
-        assert!((3.5f64).signum() > 0.0);
+    fn test_pod_constraint_removed() {
+        // 验证 Scalar 不再强制要求 Pod
+        fn pure_computation<S: Scalar>(x: S) -> S {
+            x * S::from_f64(2.0)
+        }
+
+        let result_f32 = pure_computation(10.0f32);
+        let result_f64 = pure_computation(10.0f64);
+        
+        assert_eq!(result_f32, 20.0);
+        assert_eq!(result_f64, 20.0);
     }
 }

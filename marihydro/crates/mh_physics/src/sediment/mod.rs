@@ -28,6 +28,7 @@ pub mod manager;
 pub mod morphology;
 pub mod properties;
 pub mod transport_2_5d;
+pub mod exchange;
 
 // 新版子模块
 #[path = "bed_load/mod.rs"]
@@ -57,3 +58,4 @@ pub use manager::{
     SedimentManagerGeneric, SedimentStateGeneric, SedimentConfigGeneric,
     SedimentError, SedimentFluxStats,
 };
+pub use exchange::{SedimentExchange, ExchangeParams};

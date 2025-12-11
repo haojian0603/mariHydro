@@ -42,7 +42,8 @@ pub enum MemoryLocation {
 /// 所有方法使用 `&self` 实例方法，以支持 GPU 后端持有设备状态。
 pub trait Backend: Clone + Send + Sync + Debug + 'static {
     /// 标量类型 (f32 或 f64)
-    type Scalar: Scalar;
+    /// 注意：添加 Pod + Default 约束以支持 Buffer 操作
+    type Scalar: Scalar + Pod + Default;
     
     /// 设备缓冲区类型
     type Buffer<T: Pod + Send + Sync>: DeviceBuffer<T>;

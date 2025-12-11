@@ -16,7 +16,7 @@
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
 /// 波浪驱动源项配置
@@ -25,9 +25,9 @@ pub struct WaveForcingConfig {
     /// 是否启用
     pub enabled: bool,
     /// 水密度 [kg/m³]
-    pub rho_water: Scalar,
+    pub rho_water: f64,
     /// 最小水深 [m]
-    pub h_min: Scalar,
+    pub h_min: f64,
 }
 
 impl Default for WaveForcingConfig {
@@ -49,13 +49,13 @@ pub struct WaveForcing {
     /// 单元数
     n_cells: usize,
     /// x 方向辐射应力梯度 ∂S_xx/∂x + ∂S_xy/∂y [N/m²]
-    grad_sxx_sxy: AlignedVec<Scalar>,
+    grad_sxx_sxy: AlignedVec<f64>,
     /// y 方向辐射应力梯度 ∂S_xy/∂x + ∂S_yy/∂y [N/m²]
-    grad_sxy_syy: AlignedVec<Scalar>,
+    grad_sxy_syy: AlignedVec<f64>,
     /// 波浪轨道速度 [m/s]
-    orbital_velocity: AlignedVec<Scalar>,
+    orbital_velocity: AlignedVec<f64>,
     /// 有效（波流联合）剪切应力 [Pa]
-    effective_shear: AlignedVec<Scalar>,
+    effective_shear: AlignedVec<f64>,
 }
 
 impl WaveForcing {
@@ -83,11 +83,11 @@ impl WaveForcing {
     /// - `dx`, `dy`: 网格间距（简化版，假设均匀网格）
     pub fn update_from_radiation_stress(
         &mut self,
-        s_xx: &[Scalar],
-        s_xy: &[Scalar],
-        s_yy: &[Scalar],
-        grad_x: &[Scalar], // ∂/∂x 算子结果
-        grad_y: &[Scalar], // ∂/∂y 算子结果
+        s_xx: &[f64],
+        s_xy: &[f64],
+        s_yy: &[f64],
+        grad_x: &[f64], // ∂/∂x 算子结果
+        grad_y: &[f64], // ∂/∂y 算子结果
     ) {
         let n = self.n_cells.min(s_xx.len()).min(s_xy.len()).min(s_yy.len());
 
@@ -102,8 +102,8 @@ impl WaveForcing {
     /// 设置辐射应力梯度
     pub fn set_stress_gradients(
         &mut self,
-        grad_sxx_sxy: &[Scalar],
-        grad_sxy_syy: &[Scalar],
+        grad_sxx_sxy: &[f64],
+        grad_sxy_syy: &[f64],
     ) {
         let n = self.n_cells.min(grad_sxx_sxy.len()).min(grad_sxy_syy.len());
         self.grad_sxx_sxy[..n].copy_from_slice(&grad_sxx_sxy[..n]);
@@ -111,7 +111,7 @@ impl WaveForcing {
     }
 
     /// 设置波浪轨道速度
-    pub fn set_orbital_velocity(&mut self, u_orb: &[Scalar]) {
+    pub fn set_orbital_velocity(&mut self, u_orb: &[f64]) {
         let n = self.n_cells.min(u_orb.len());
         self.orbital_velocity[..n].copy_from_slice(&u_orb[..n]);
     }
@@ -120,7 +120,7 @@ impl WaveForcing {
     ///
     /// # 参数
     /// - `tau_current`: 流动引起的床面剪切应力 [Pa]
-    pub fn compute_effective_shear(&mut self, tau_current: &[Scalar]) {
+    pub fn compute_effective_shear(&mut self, tau_current: &[f64]) {
         for i in 0..self.n_cells.min(tau_current.len()) {
             let u_orb = self.orbital_velocity[i];
             
@@ -134,12 +134,12 @@ impl WaveForcing {
     }
 
     /// 获取有效剪切应力（用于泥沙计算）
-    pub fn effective_shear(&self) -> &[Scalar] {
+    pub fn effective_shear(&self) -> &[f64] {
         &self.effective_shear
     }
 
     /// 获取波浪轨道速度
-    pub fn orbital_velocity(&self) -> &[Scalar] {
+    pub fn orbital_velocity(&self) -> &[f64] {
         &self.orbital_velocity
     }
 
@@ -157,11 +157,11 @@ impl WaveForcing {
     /// - `neighbors`: 邻域信息 (邻居索引, 面长度, 法向量x, 法向量y)
     pub fn compute_stress_gradients(
         &mut self,
-        s_xx: &[Scalar],
-        s_xy: &[Scalar],
-        s_yy: &[Scalar],
-        cell_areas: &[Scalar],
-        neighbors: &[Vec<(usize, Scalar, Scalar, Scalar)>],
+        s_xx: &[f64],
+        s_xy: &[f64],
+        s_yy: &[f64],
+        cell_areas: &[f64],
+        neighbors: &[Vec<(usize, f64, f64, f64)>],
     ) {
         let n = self.n_cells.min(s_xx.len()).min(s_xy.len()).min(s_yy.len());
 
@@ -205,12 +205,12 @@ impl WaveForcing {
     }
 
     /// 获取 x 方向应力梯度
-    pub fn grad_x(&self) -> &[Scalar] {
+    pub fn grad_x(&self) -> &[f64] {
         &self.grad_sxx_sxy
     }
 
     /// 获取 y 方向应力梯度
-    pub fn grad_y(&self) -> &[Scalar] {
+    pub fn grad_y(&self) -> &[f64] {
         &self.grad_sxy_syy
     }
 }
@@ -254,7 +254,7 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: Scalar) -> ShallowWaterState {
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState {
         let mut state = ShallowWaterState::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;

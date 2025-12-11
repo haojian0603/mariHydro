@@ -1,5 +1,4 @@
-// crates/mh_physics/src/tracer/boundary.rs
-
+//! marihydro\crates\mh_physics\src\tracer\boundary.rs
 //! 示踪剂边界条件模块
 //!
 //! 提供示踪剂输运的边界条件管理，支持：
@@ -10,26 +9,36 @@
 //!
 //! # 使用示例
 //!
-//! ```ignore
+//! ```rust
+//! use mh_physics::core::Scalar;
 //! use mh_physics::tracer::boundary::{
 //!     TracerBoundaryManager, TracerBoundaryCondition, TracerBoundaryType
 //! };
 //!
-//! let mut manager = TracerBoundaryManager::new(100);
+//! // 显式指定运行时精度（推荐）
+//! let mut manager: TracerBoundaryManager<f64> = TracerBoundaryManager::new(100);
 //!
-//! // 设置入口固定浓度
+//! // 设置入口固定浓度（35 psu）
 //! manager.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0));
 //!
 //! // 设置出口零梯度
 //! manager.set_boundary(99, TracerBoundaryCondition::zero_gradient());
 //!
-//! // 获取边界值
-//! let bc = manager.get(5, time);
+//! // 获取边界值（需先更新时间缓存）
+//! let time = 0.0; // 模拟时间
+//! manager.update_cache(time);
+//! let bc = manager.get(0, time);
+//! assert_eq!(bc.bc_type, TracerBoundaryType::Dirichlet);
+//! assert!((bc.value - 35.0).abs() < 1e-10);
+//!
+//! // GPU 加速模式（f32）
+//! let mut manager_f32: TracerBoundaryManager<f32> = TracerBoundaryManager::new(50);
+//! manager_f32.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0f32));
 //! ```
 
 use crate::forcing::timeseries::TimeSeries;
 use crate::types::BoundaryValueProvider;
-use mh_foundation::Scalar;
+use crate::core::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,35 +58,35 @@ pub enum TracerBoundaryType {
     Internal,
 }
 
-/// 边界条件数据
+/// 边界条件数据（配置层，硬编码 f64）
 #[derive(Debug, Clone)]
-pub enum TracerBoundaryCondition {
+pub enum TracerBoundaryConditionConfig {
     /// Dirichlet: 固定浓度值
-    Dirichlet(Scalar),
+    Dirichlet(f64),
 
     /// Dirichlet (时变): 浓度随时间变化
     DirichletTimeSeries(Arc<TimeSeries>),
 
     /// Neumann: 固定法向通量 [单位/s]
-    Neumann(Scalar),
+    Neumann(f64),
 
     /// Neumann (时变): 通量随时间变化
     NeumannTimeSeries(Arc<TimeSeries>),
 
     /// Robin: α*c + β*∂c/∂n = γ
     Robin {
-        alpha: Scalar,
-        beta: Scalar,
-        gamma: Scalar,
+        alpha: f64,
+        beta: f64,
+        gamma: f64,
     },
 
     /// 零梯度边界
     ZeroGradient,
 }
 
-impl TracerBoundaryCondition {
+impl TracerBoundaryConditionConfig {
     /// 创建 Dirichlet 边界条件（固定浓度）
-    pub fn dirichlet(value: Scalar) -> Self {
+    pub fn dirichlet(value: f64) -> Self {
         Self::Dirichlet(value)
     }
 
@@ -87,7 +96,7 @@ impl TracerBoundaryCondition {
     }
 
     /// 创建 Neumann 边界条件（固定通量）
-    pub fn neumann(flux: Scalar) -> Self {
+    pub fn neumann(flux: f64) -> Self {
         Self::Neumann(flux)
     }
 
@@ -97,7 +106,7 @@ impl TracerBoundaryCondition {
     }
 
     /// 创建 Robin 边界条件
-    pub fn robin(alpha: Scalar, beta: Scalar, gamma: Scalar) -> Self {
+    pub fn robin(alpha: f64, beta: f64, gamma: f64) -> Self {
         Self::Robin { alpha, beta, gamma }
     }
 
@@ -122,7 +131,7 @@ impl TracerBoundaryCondition {
     /// 对于 Neumann: 返回通量值
     /// 对于 Robin: 返回 gamma 值
     /// 对于 ZeroGradient: 返回 0.0
-    pub fn evaluate(&self, time: Scalar) -> Scalar {
+    pub fn evaluate(&self, time: f64) -> f64 {
         match self {
             Self::Dirichlet(v) => *v,
             Self::DirichletTimeSeries(ts) => ts.get_value(time),
@@ -134,7 +143,121 @@ impl TracerBoundaryCondition {
     }
 
     /// 获取 Robin 系数
-    pub fn robin_coefficients(&self) -> Option<(Scalar, Scalar, Scalar)> {
+    pub fn robin_coefficients(&self) -> Option<(f64, f64, f64)> {
+        if let Self::Robin { alpha, beta, gamma } = self {
+            Some((*alpha, *beta, *gamma))
+        } else {
+            None
+        }
+    }
+
+    /// 转换为运行时精度
+    pub fn to_precision<S: Scalar>(&self) -> TracerBoundaryCondition<S> {
+        match *self {
+            Self::Dirichlet(v) => TracerBoundaryCondition::Dirichlet(<S as Scalar>::from_f64(v)),
+            Self::DirichletTimeSeries(ref ts) => {
+                TracerBoundaryCondition::DirichletTimeSeries(ts.clone())
+            }
+            Self::Neumann(flux) => TracerBoundaryCondition::Neumann(<S as Scalar>::from_f64(flux)),
+            Self::NeumannTimeSeries(ref ts) => {
+                TracerBoundaryCondition::NeumannTimeSeries(ts.clone())
+            }
+            Self::Robin { alpha, beta, gamma } => TracerBoundaryCondition::Robin {
+                alpha: <S as Scalar>::from_f64(alpha),
+                beta: <S as Scalar>::from_f64(beta),
+                gamma: <S as Scalar>::from_f64(gamma),
+            },
+            Self::ZeroGradient => TracerBoundaryCondition::ZeroGradient,
+        }
+    }
+}
+
+/// 边界条件数据（运行层，泛型化）
+#[derive(Debug, Clone)]
+pub enum TracerBoundaryCondition<S: Scalar> {
+    /// Dirichlet: 固定浓度值
+    Dirichlet(S),
+
+    /// Dirichlet (时变): 浓度随时间变化
+    DirichletTimeSeries(Arc<TimeSeries>),
+
+    /// Neumann: 固定法向通量 [单位/s]
+    Neumann(S),
+
+    /// Neumann (时变): 通量随时间变化
+    NeumannTimeSeries(Arc<TimeSeries>),
+
+    /// Robin: α*c + β*∂c/∂n = γ
+    Robin {
+        alpha: S,
+        beta: S,
+        gamma: S,
+    },
+
+    /// 零梯度边界
+    ZeroGradient,
+}
+
+impl<S: Scalar> TracerBoundaryCondition<S> {
+    /// 创建 Dirichlet 边界条件（固定浓度）
+    pub fn dirichlet(value: S) -> Self {
+        Self::Dirichlet(value)
+    }
+
+    /// 创建时变 Dirichlet 边界条件
+    pub fn dirichlet_timeseries(ts: TimeSeries) -> Self {
+        Self::DirichletTimeSeries(Arc::new(ts))
+    }
+
+    /// 创建 Neumann 边界条件（固定通量）
+    pub fn neumann(flux: S) -> Self {
+        Self::Neumann(flux)
+    }
+
+    /// 创建时变 Neumann 边界条件
+    pub fn neumann_timeseries(ts: TimeSeries) -> Self {
+        Self::NeumannTimeSeries(Arc::new(ts))
+    }
+
+    /// 创建 Robin 边界条件
+    pub fn robin(alpha: S, beta: S, gamma: S) -> Self {
+        Self::Robin { alpha, beta, gamma }
+    }
+
+    /// 创建零梯度边界条件
+    pub fn zero_gradient() -> Self {
+        Self::ZeroGradient
+    }
+
+    /// 获取边界类型
+    pub fn boundary_type(&self) -> TracerBoundaryType {
+        match self {
+            Self::Dirichlet(_) | Self::DirichletTimeSeries(_) => TracerBoundaryType::Dirichlet,
+            Self::Neumann(_) | Self::NeumannTimeSeries(_) => TracerBoundaryType::Neumann,
+            Self::Robin { .. } => TracerBoundaryType::Robin,
+            Self::ZeroGradient => TracerBoundaryType::ZeroGradient,
+        }
+    }
+
+    /// 在给定时刻评估边界值
+    ///
+    /// 对于 Dirichlet: 返回浓度值
+    /// 对于 Neumann: 返回通量值
+    /// 对于 Robin: 返回 gamma 值
+    /// 对于 ZeroGradient: 返回 0.0
+    pub fn evaluate(&self, time: f64) -> S {
+        match self {
+            Self::Dirichlet(v) => *v,
+            Self::DirichletTimeSeries(ts) => <S as Scalar>::from_f64(ts.get_value(time)),
+            Self::Neumann(flux) => *flux,
+            Self::NeumannTimeSeries(ts) => <S as Scalar>::from_f64(ts.get_value(time)),
+            Self::Robin { gamma, .. } => *gamma,
+            Self::ZeroGradient => S::ZERO,
+        }
+    }
+
+    /// 获取 Robin 系数
+    pub fn robin_coefficients(&self) -> Option<(S, S, S)> {
         if let Self::Robin { alpha, beta, gamma } = self {
             Some((*alpha, *beta, *gamma))
         } else {
@@ -143,64 +266,58 @@ impl TracerBoundaryCondition {
     }
 }
 
-impl BoundaryValueProvider<Scalar> for TracerBoundaryCondition {
-    fn get_value(&self, _face_idx: usize, time: f64) -> Option<Scalar> {
-        Some(self.evaluate(time))
-    }
-}
-
-/// 已解析的边界值
+/// 已解析的边界值（泛型化）
 #[derive(Debug, Clone, Copy)]
-pub struct ResolvedBoundaryValue {
+pub struct ResolvedBoundaryValue<S: Scalar> {
     /// 边界类型
     pub bc_type: TracerBoundaryType,
     /// 主值（浓度/通量/gamma）
-    pub value: Scalar,
+    pub value: S,
     /// Robin alpha 系数（仅 Robin 类型有效）
-    pub alpha: Scalar,
+    pub alpha: S,
     /// Robin beta 系数（仅 Robin 类型有效）
-    pub beta: Scalar,
+    pub beta: S,
 }
 
-impl Default for ResolvedBoundaryValue {
+impl<S: Scalar> Default for ResolvedBoundaryValue<S> {
     fn default() -> Self {
         Self {
             bc_type: TracerBoundaryType::ZeroGradient,
-            value: 0.0,
-            alpha: 0.0,
-            beta: 0.0,
+            value: S::ZERO,
+            alpha: S::ZERO,
+            beta: S::ZERO,
         }
     }
 }
 
-impl ResolvedBoundaryValue {
+impl<S: Scalar> ResolvedBoundaryValue<S> {
     /// 创建零梯度边界
     pub fn zero_gradient() -> Self {
         Self::default()
     }
 
     /// 创建 Dirichlet 边界
-    pub fn dirichlet(value: Scalar) -> Self {
+    pub fn dirichlet(value: S) -> Self {
         Self {
             bc_type: TracerBoundaryType::Dirichlet,
             value,
-            alpha: 0.0,
-            beta: 0.0,
+            alpha: S::ZERO,
+            beta: S::ZERO,
         }
     }
 
     /// 创建 Neumann 边界
-    pub fn neumann(flux: Scalar) -> Self {
+    pub fn neumann(flux: S) -> Self {
         Self {
             bc_type: TracerBoundaryType::Neumann,
             value: flux,
-            alpha: 0.0,
-            beta: 0.0,
+            alpha: S::ZERO,
+            beta: S::ZERO,
         }
     }
 
     /// 创建 Robin 边界
-    pub fn robin(alpha: Scalar, beta: Scalar, gamma: Scalar) -> Self {
+    pub fn robin(alpha: S, beta: S, gamma: S) -> Self {
         Self {
             bc_type: TracerBoundaryType::Robin,
             value: gamma,
@@ -213,44 +330,44 @@ impl ResolvedBoundaryValue {
     ///
     /// 对于 Robin BC: αc + β∂c/∂n = γ
     /// 隐式化后对角修正为: 1 + dt * α / β
-    pub fn implicit_diagonal_contribution(&self, _dt: Scalar, dx: Scalar) -> Scalar {
+    pub fn implicit_diagonal_contribution(&self, _dt: S, dx: S) -> S {
         match self.bc_type {
             TracerBoundaryType::Robin => {
-                if self.beta.abs() > 1e-14 {
+                if self.beta.abs() > <S as Scalar>::from_f64(1e-14) {
                     // Robin: α/β * dx 贡献到对角
                     self.alpha / self.beta * dx
                 } else {
                     // 退化为 Dirichlet
-                    1e14 // 强制约束
+                    <S as Scalar>::from_f64(1e14) // 强制约束
                 }
             }
             TracerBoundaryType::Dirichlet => {
                 // Dirichlet 施加于对角
-                1e14
+                <S as Scalar>::from_f64(1e14)
             }
-            _ => 0.0,
+            _ => S::ZERO,
         }
     }
 
     /// 计算隐式 RHS 贡献
-    pub fn implicit_rhs_contribution(&self, dx: Scalar, _c_interior: Scalar) -> Scalar {
+    pub fn implicit_rhs_contribution(&self, dx: S, _c_interior: S) -> S {
         match self.bc_type {
             TracerBoundaryType::Robin => {
-                if self.beta.abs() > 1e-14 {
+                if self.beta.abs() > <S as Scalar>::from_f64(1e-14) {
                     // γ/β * dx
                     self.value / self.beta * dx
                 } else {
-                    self.value * 1e14
+                    self.value * <S as Scalar>::from_f64(1e14)
                 }
             }
             TracerBoundaryType::Dirichlet => {
-                self.value * 1e14
+                self.value * <S as Scalar>::from_f64(1e14)
             }
             TracerBoundaryType::Neumann => {
                 // 通量直接加入 RHS
                 self.value * dx
             }
-            _ => 0.0,
+            _ => S::ZERO,
         }
     }
 
@@ -259,9 +376,9 @@ impl ResolvedBoundaryValue {
     /// 使用 Robin 公式反算边界浓度
     pub fn compute_boundary_concentration(
         &self,
-        c_interior: Scalar,
-        grad_n: Scalar,
-    ) -> Scalar {
+        c_interior: S,
+        grad_n: S,
+    ) -> S {
         match self.bc_type {
             TracerBoundaryType::Dirichlet => self.value,
             TracerBoundaryType::ZeroGradient => c_interior,
@@ -271,7 +388,7 @@ impl ResolvedBoundaryValue {
             }
             TracerBoundaryType::Robin => {
                 // αc + β·grad_n = γ => c = (γ - β·grad_n) / α
-                if self.alpha.abs() > 1e-14 {
+                if self.alpha.abs() > <S as Scalar>::from_f64(1e-14) {
                     (self.value - self.beta * grad_n) / self.alpha
                 } else {
                     // 退化为 Neumann
@@ -283,23 +400,35 @@ impl ResolvedBoundaryValue {
     }
 }
 
-/// 示踪剂边界条件管理器
+impl BoundaryValueProvider<f64> for TracerBoundaryConditionConfig {
+    fn get_value(&self, _face_idx: usize, time: f64) -> Option<f64> {
+        Some(self.evaluate(time))
+    }
+}
+
+impl<S: Scalar> BoundaryValueProvider<S> for TracerBoundaryCondition<S> {
+    fn get_value(&self, _face_idx: usize, time: f64) -> Option<S> {
+        Some(self.evaluate(time))
+    }
+}
+
+/// 示踪剂边界条件管理器（泛型化）
 ///
 /// 管理边界面上的示踪剂边界条件，支持时变边界
-pub struct TracerBoundaryManager {
+pub struct TracerBoundaryManager<S: Scalar> {
     /// 边界面数量
     n_boundary_faces: usize,
     /// 边界条件映射：面索引 -> 边界条件
-    conditions: HashMap<usize, TracerBoundaryCondition>,
+    conditions: HashMap<usize, TracerBoundaryCondition<S>>,
     /// 默认边界条件
-    default_condition: TracerBoundaryCondition,
+    default_condition: TracerBoundaryCondition<S>,
     /// 缓存的解析值
-    resolved_cache: Vec<ResolvedBoundaryValue>,
+    resolved_cache: Vec<ResolvedBoundaryValue<S>>,
     /// 缓存时间戳
-    cache_time: Option<Scalar>,
+    cache_time: Option<f64>,
 }
 
-impl TracerBoundaryManager {
+impl<S: Scalar> TracerBoundaryManager<S> {
     /// 创建新的边界条件管理器
     ///
     /// # 参数
@@ -316,7 +445,7 @@ impl TracerBoundaryManager {
     }
 
     /// 设置默认边界条件
-    pub fn set_default(&mut self, condition: TracerBoundaryCondition) {
+    pub fn set_default(&mut self, condition: TracerBoundaryCondition<S>) {
         self.default_condition = condition;
         self.invalidate_cache();
     }
@@ -327,7 +456,7 @@ impl TracerBoundaryManager {
     ///
     /// - `boundary_face_idx`: 边界面索引
     /// - `condition`: 边界条件
-    pub fn set_boundary(&mut self, boundary_face_idx: usize, condition: TracerBoundaryCondition) {
+    pub fn set_boundary(&mut self, boundary_face_idx: usize, condition: TracerBoundaryCondition<S>) {
         if boundary_face_idx < self.n_boundary_faces {
             self.conditions.insert(boundary_face_idx, condition);
             self.invalidate_cache();
@@ -340,7 +469,7 @@ impl TracerBoundaryManager {
     ///
     /// - `face_indices`: 边界面索引列表
     /// - `condition`: 边界条件
-    pub fn set_boundaries(&mut self, face_indices: &[usize], condition: TracerBoundaryCondition) {
+    pub fn set_boundaries(&mut self, face_indices: &[usize], condition: TracerBoundaryCondition<S>) {
         for &idx in face_indices {
             if idx < self.n_boundary_faces {
                 self.conditions.insert(idx, condition.clone());
@@ -362,7 +491,7 @@ impl TracerBoundaryManager {
     }
 
     /// 获取边界条件引用
-    pub fn get_condition(&self, boundary_face_idx: usize) -> &TracerBoundaryCondition {
+    pub fn get_condition(&self, boundary_face_idx: usize) -> &TracerBoundaryCondition<S> {
         self.conditions
             .get(&boundary_face_idx)
             .unwrap_or(&self.default_condition)
@@ -374,21 +503,21 @@ impl TracerBoundaryManager {
     ///
     /// - `boundary_face_idx`: 边界面索引
     /// - `time`: 当前时间
-    pub fn get(&self, boundary_face_idx: usize, time: Scalar) -> ResolvedBoundaryValue {
+    pub fn get(&self, boundary_face_idx: usize, time: f64) -> ResolvedBoundaryValue<S> {
         self.resolve_at(boundary_face_idx, time)
     }
 
     /// 解析单个边界值
-    fn resolve_at(&self, boundary_face_idx: usize, time: Scalar) -> ResolvedBoundaryValue {
+    fn resolve_at(&self, boundary_face_idx: usize, time: f64) -> ResolvedBoundaryValue<S> {
         let cond = self.get_condition(boundary_face_idx);
         match cond {
             TracerBoundaryCondition::Dirichlet(v) => ResolvedBoundaryValue::dirichlet(*v),
             TracerBoundaryCondition::DirichletTimeSeries(ts) => {
-                ResolvedBoundaryValue::dirichlet(ts.get_value(time))
+                ResolvedBoundaryValue::dirichlet(<S as Scalar>::from_f64(ts.get_value(time)))
             }
             TracerBoundaryCondition::Neumann(flux) => ResolvedBoundaryValue::neumann(*flux),
             TracerBoundaryCondition::NeumannTimeSeries(ts) => {
-                ResolvedBoundaryValue::neumann(ts.get_value(time))
+                ResolvedBoundaryValue::neumann(<S as Scalar>::from_f64(ts.get_value(time)))
             }
             TracerBoundaryCondition::Robin { alpha, beta, gamma } => {
                 ResolvedBoundaryValue::robin(*alpha, *beta, *gamma)
@@ -400,7 +529,7 @@ impl TracerBoundaryManager {
     /// 更新缓存
     ///
     /// 对于时变边界，需要在每个时间步调用以更新缓存
-    pub fn update_cache(&mut self, time: Scalar) {
+    pub fn update_cache(&mut self, time: f64) {
         // 检查是否需要更新
         if let Some(cached_time) = self.cache_time {
             if (cached_time - time).abs() < 1e-14 {
@@ -419,7 +548,7 @@ impl TracerBoundaryManager {
     /// 获取缓存的边界值切片
     ///
     /// 注意：需要先调用 `update_cache` 更新缓存
-    pub fn cached_values(&self) -> &[ResolvedBoundaryValue] {
+    pub fn cached_values(&self) -> &[ResolvedBoundaryValue<S>] {
         &self.resolved_cache
     }
 
@@ -468,18 +597,18 @@ impl TracerBoundaryManager {
     }
 }
 
-impl Default for TracerBoundaryManager {
+impl<S: Scalar> Default for TracerBoundaryManager<S> {
     fn default() -> Self {
         Self::new(0)
     }
 }
 
 /// 边界条件构建器
-pub struct TracerBoundaryBuilder {
-    manager: TracerBoundaryManager,
+pub struct TracerBoundaryBuilder<S: Scalar> {
+    manager: TracerBoundaryManager<S>,
 }
 
-impl TracerBoundaryBuilder {
+impl<S: Scalar> TracerBoundaryBuilder<S> {
     /// 创建新的构建器
     pub fn new(n_boundary_faces: usize) -> Self {
         Self {
@@ -488,25 +617,25 @@ impl TracerBoundaryBuilder {
     }
 
     /// 设置默认边界条件
-    pub fn default_condition(mut self, condition: TracerBoundaryCondition) -> Self {
+    pub fn default_condition(mut self, condition: TracerBoundaryCondition<S>) -> Self {
         self.manager.set_default(condition);
         self
     }
 
     /// 添加单个边界条件
-    pub fn add(mut self, face_idx: usize, condition: TracerBoundaryCondition) -> Self {
+    pub fn add(mut self, face_idx: usize, condition: TracerBoundaryCondition<S>) -> Self {
         self.manager.set_boundary(face_idx, condition);
         self
     }
 
     /// 添加批量边界条件
-    pub fn add_many(mut self, face_indices: &[usize], condition: TracerBoundaryCondition) -> Self {
+    pub fn add_many(mut self, face_indices: &[usize], condition: TracerBoundaryCondition<S>) -> Self {
         self.manager.set_boundaries(face_indices, condition);
         self
     }
 
     /// 构建边界管理器
-    pub fn build(self) -> TracerBoundaryManager {
+    pub fn build(self) -> TracerBoundaryManager<S> {
         self.manager
     }
 }
@@ -604,5 +733,29 @@ mod tests {
         let ts = TimeSeries::from_points(vec![(0.0, 30.0), (10.0, 35.0)]);
         manager.set_boundary(0, TracerBoundaryCondition::dirichlet_timeseries(ts));
         assert!(manager.has_time_varying());
+    }
+
+    #[test]
+    fn test_precision_conversion_f32() {
+        let config_bc = TracerBoundaryCondition::dirichlet(35.0);
+        let runtime_bc: TracerBoundaryCondition<f32> = config_bc.to_precision();
+        assert!((runtime_bc.evaluate(0.0) - 35.0_f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_precision_conversion_f64() {
+        let config_bc = TracerBoundaryCondition::dirichlet(35.0);
+        let runtime_bc: TracerBoundaryCondition<f64> = config_bc.to_precision();
+        assert!((runtime_bc.evaluate(0.0) - 35.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_robin_precision_conversion() {
+        let config_bc = TracerBoundaryCondition::robin(1.0, 0.1, 5.0);
+        let runtime_bc: TracerBoundaryCondition<f32> = config_bc.to_precision();
+        let coeffs = runtime_bc.robin_coefficients().unwrap();
+        assert!((coeffs.0 - 1.0_f32).abs() < 1e-6);
+        assert!((coeffs.1 - 0.1_f32).abs() < 1e-6);
+        assert!((coeffs.2 - 5.0_f32).abs() < 1e-6);
     }
 }

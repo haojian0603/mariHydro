@@ -32,16 +32,15 @@
 use super::csr::CsrMatrix;
 use super::preconditioner::Preconditioner;
 use super::vector_ops::{axpy, copy, dot, norm2};
-use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
 /// 求解器配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {
     /// 相对收敛容差
-    pub rtol: Scalar,
+    pub rtol: f64,
     /// 绝对收敛容差
-    pub atol: Scalar,
+    pub atol: f64,
     /// 最大迭代次数
     pub max_iter: usize,
     /// 是否打印迭代信息
@@ -61,7 +60,7 @@ impl Default for SolverConfig {
 
 impl SolverConfig {
     /// 创建求解器配置
-    pub fn new(rtol: Scalar, max_iter: usize) -> Self {
+    pub fn new(rtol: f64, max_iter: usize) -> Self {
         Self {
             rtol,
             max_iter,
@@ -70,7 +69,7 @@ impl SolverConfig {
     }
 
     /// 设置绝对容差
-    pub fn with_atol(mut self, atol: Scalar) -> Self {
+    pub fn with_atol(mut self, atol: f64) -> Self {
         self.atol = atol;
         self
     }
@@ -103,11 +102,11 @@ pub struct SolverResult {
     /// 迭代次数
     pub iterations: usize,
     /// 最终残差范数
-    pub residual_norm: Scalar,
+    pub residual_norm: f64,
     /// 初始残差范数
-    pub initial_residual_norm: Scalar,
+    pub initial_residual_norm: f64,
     /// 相对残差
-    pub relative_residual: Scalar,
+    pub relative_residual: f64,
 }
 
 impl SolverResult {
@@ -128,13 +127,13 @@ impl SolverResult {
 #[derive(Debug, Clone, Default)]
 pub struct CgWorkspace {
     /// 残差向量
-    pub r: Vec<Scalar>,
+    pub r: Vec<f64>,
     /// 搜索方向
-    pub p: Vec<Scalar>,
+    pub p: Vec<f64>,
     /// A*p
-    pub ap: Vec<Scalar>,
+    pub ap: Vec<f64>,
     /// 预条件后的残差
-    pub z: Vec<Scalar>,
+    pub z: Vec<f64>,
 }
 
 impl CgWorkspace {
@@ -179,21 +178,21 @@ impl CgWorkspace {
 #[derive(Debug, Clone, Default)]
 pub struct BiCgStabWorkspace {
     /// 残差向量
-    pub r: Vec<Scalar>,
+    pub r: Vec<f64>,
     /// 影子残差，必须保持不变
-    pub r0: Vec<Scalar>,
+    pub r0: Vec<f64>,
     /// 搜索方向
-    pub p: Vec<Scalar>,
+    pub p: Vec<f64>,
     /// A*p_hat
-    pub v: Vec<Scalar>,
+    pub v: Vec<f64>,
     /// 中间残差
-    pub s: Vec<Scalar>,
+    pub s: Vec<f64>,
     /// A*s_hat
-    pub t: Vec<Scalar>,
+    pub t: Vec<f64>,
     /// 预条件后的向量
-    pub p_hat: Vec<Scalar>,
+    pub p_hat: Vec<f64>,
     /// 预条件后的向量
-    pub s_hat: Vec<Scalar>,
+    pub s_hat: Vec<f64>,
 }
 
 impl BiCgStabWorkspace {
@@ -259,8 +258,8 @@ pub trait IterativeSolver {
     fn solve<P: Preconditioner>(
         &mut self,
         matrix: &CsrMatrix,
-        b: &[Scalar],
-        x: &mut [Scalar],
+        b: &[f64],
+        x: &mut [f64],
         precond: &P,
     ) -> SolverResult;
 
@@ -274,9 +273,9 @@ pub trait IterativeSolver {
 pub struct ConjugateGradient {
     config: SolverConfig,
     // 工作向量
-    r: Vec<Scalar>,
-    p: Vec<Scalar>,
-    ap: Vec<Scalar>,
+    r: Vec<f64>,
+    p: Vec<f64>,
+    ap: Vec<f64>,
 }
 
 impl ConjugateGradient {
@@ -304,8 +303,8 @@ impl IterativeSolver for ConjugateGradient {
     fn solve<P: Preconditioner>(
         &mut self,
         matrix: &CsrMatrix,
-        b: &[Scalar],
-        x: &mut [Scalar],
+        b: &[f64],
+        x: &mut [f64],
         _precond: &P,
     ) -> SolverResult {
         let n = b.len();
@@ -406,10 +405,10 @@ impl IterativeSolver for ConjugateGradient {
 pub struct PcgSolver {
     config: SolverConfig,
     // 工作向量
-    r: Vec<Scalar>,
-    z: Vec<Scalar>,
-    p: Vec<Scalar>,
-    ap: Vec<Scalar>,
+    r: Vec<f64>,
+    z: Vec<f64>,
+    p: Vec<f64>,
+    ap: Vec<f64>,
 }
 
 impl PcgSolver {
@@ -446,8 +445,8 @@ impl PcgSolver {
     pub fn solve_with_workspace<P: Preconditioner>(
         &self,
         matrix: &CsrMatrix,
-        b: &[Scalar],
-        x: &mut [Scalar],
+        b: &[f64],
+        x: &mut [f64],
         precond: &P,
         ws: &mut CgWorkspace,
     ) -> SolverResult {
@@ -569,8 +568,8 @@ impl IterativeSolver for PcgSolver {
     fn solve<P: Preconditioner>(
         &mut self,
         matrix: &CsrMatrix,
-        b: &[Scalar],
-        x: &mut [Scalar],
+        b: &[f64],
+        x: &mut [f64],
         precond: &P,
     ) -> SolverResult {
         let n = b.len();
@@ -677,13 +676,13 @@ impl IterativeSolver for PcgSolver {
 pub struct BiCgStabSolver {
     config: SolverConfig,
     // 工作向量
-    r: Vec<Scalar>,
-    r0: Vec<Scalar>,
-    p: Vec<Scalar>,
-    v: Vec<Scalar>,
-    s: Vec<Scalar>,
-    t: Vec<Scalar>,
-    z: Vec<Scalar>,
+    r: Vec<f64>,
+    r0: Vec<f64>,
+    p: Vec<f64>,
+    v: Vec<f64>,
+    s: Vec<f64>,
+    t: Vec<f64>,
+    z: Vec<f64>,
 }
 
 impl BiCgStabSolver {
@@ -719,8 +718,8 @@ impl IterativeSolver for BiCgStabSolver {
     fn solve<P: Preconditioner>(
         &mut self,
         matrix: &CsrMatrix,
-        b: &[Scalar],
-        x: &mut [Scalar],
+        b: &[f64],
+        x: &mut [f64],
         precond: &P,
     ) -> SolverResult {
         let n = b.len();

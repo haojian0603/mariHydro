@@ -25,7 +25,6 @@
 //! let cyclic_value = series.get_value(4.0);
 //! ```
 
-use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
 /// 外推模式
@@ -93,9 +92,9 @@ impl TimeSeriesCursor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeries {
     /// 时间点 [s]（严格单调递增）
-    times: Vec<Scalar>,
+    times: Vec<f64>,
     /// 对应的值
-    values: Vec<Scalar>,
+    values: Vec<f64>,
     /// 外推模式
     extrap_mode: ExtrapolationMode,
 }
@@ -113,7 +112,7 @@ impl TimeSeries {
     /// - 如果 times 和 values 长度不同
     /// - 如果 times 为空
     /// - 如果 times 不是严格单调递增
-    pub fn new(times: Vec<Scalar>, values: Vec<Scalar>) -> Self {
+    pub fn new(times: Vec<f64>, values: Vec<f64>) -> Self {
         assert_eq!(
             times.len(),
             values.len(),
@@ -150,7 +149,7 @@ impl TimeSeries {
     ///
     /// - 如果 points 为空
     /// - 如果时间不是严格单调递增
-    pub fn from_points(points: Vec<(Scalar, Scalar)>) -> Self {
+    pub fn from_points(points: Vec<(f64, f64)>) -> Self {
         let (times, values): (Vec<_>, Vec<_>) = points.into_iter().unzip();
         Self::new(times, values)
     }
@@ -172,15 +171,15 @@ impl TimeSeries {
     }
 
     /// 获取时间范围
-    pub fn time_range(&self) -> (Scalar, Scalar) {
+    pub fn time_range(&self) -> (f64, f64) {
         let n = self.times.len();
         (self.times[0], self.times[n - 1])
     }
 
     /// 获取值范围
-    pub fn value_range(&self) -> (Scalar, Scalar) {
-        let min = self.values.iter().cloned().fold(Scalar::INFINITY, Scalar::min);
-        let max = self.values.iter().cloned().fold(Scalar::NEG_INFINITY, Scalar::max);
+    pub fn value_range(&self) -> (f64, f64) {
+        let min = self.values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = self.values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         (min, max)
     }
 
@@ -195,12 +194,12 @@ impl TimeSeries {
     }
 
     /// 获取时间点数组引用
-    pub fn times(&self) -> &[Scalar] {
+    pub fn times(&self) -> &[f64] {
         &self.times
     }
 
     /// 获取值数组引用
-    pub fn values(&self) -> &[Scalar] {
+    pub fn values(&self) -> &[f64] {
         &self.values
     }
 
@@ -213,7 +212,7 @@ impl TimeSeries {
     /// # 返回
     ///
     /// 插值后的值。如果 t 超出数据范围，根据外推模式处理。
-    pub fn get_value(&self, t: Scalar) -> Scalar {
+    pub fn get_value(&self, t: f64) -> f64 {
         let n = self.times.len();
         let t_start = self.times[0];
         let t_end = self.times[n - 1];
@@ -230,12 +229,12 @@ impl TimeSeries {
     ///
     /// 为兼容性保留的方法别名。
     #[inline]
-    pub fn interpolate(&self, t: Scalar) -> Scalar {
+    pub fn interpolate(&self, t: f64) -> f64 {
         self.get_value(t)
     }
 
     /// 处理外推
-    fn handle_extrapolation(&self, t: Scalar, t_start: Scalar, t_end: Scalar) -> Scalar {
+    fn handle_extrapolation(&self, t: f64, t_start: f64, t_end: f64) -> f64 {
         let n = self.times.len();
 
         match self.extrap_mode {
@@ -276,7 +275,7 @@ impl TimeSeries {
     }
 
     /// 内部插值（假设 t 在范围内）- 无状态版本
-    fn interpolate_internal(&self, t: Scalar) -> Scalar {
+    fn interpolate_internal(&self, t: f64) -> f64 {
         let n = self.times.len();
 
         // 二分查找
@@ -315,7 +314,7 @@ impl TimeSeries {
     }
 
     /// 内部插值（假设 t 在范围内）- 带游标版本
-    fn interpolate_internal_with_cursor(&self, t: Scalar, cursor: &mut TimeSeriesCursor) -> Scalar {
+    fn interpolate_internal_with_cursor(&self, t: f64, cursor: &mut TimeSeriesCursor) -> f64 {
         let n = self.times.len();
 
         // 利用游标加速查找
@@ -362,7 +361,7 @@ impl TimeSeries {
     /// # 返回
     ///
     /// 插值后的值。如果 t 超出数据范围，根据外推模式处理。
-    pub fn get_value_with_cursor(&self, t: Scalar, cursor: &mut TimeSeriesCursor) -> Scalar {
+    pub fn get_value_with_cursor(&self, t: f64, cursor: &mut TimeSeriesCursor) -> f64 {
         let n = self.times.len();
         let t_start = self.times[0];
         let t_end = self.times[n - 1];
@@ -378,11 +377,11 @@ impl TimeSeries {
     /// 处理外推（带游标版本）
     fn handle_extrapolation_with_cursor(
         &self,
-        t: Scalar,
-        t_start: Scalar,
-        t_end: Scalar,
+        t: f64,
+        t_start: f64,
+        t_end: f64,
         cursor: &mut TimeSeriesCursor,
-    ) -> Scalar {
+    ) -> f64 {
         let n = self.times.len();
 
         match self.extrap_mode {
@@ -423,7 +422,7 @@ impl TimeSeries {
     /// 获取导数（有限差分）
     ///
     /// 在指定时间点使用中心差分计算导数。
-    pub fn get_derivative(&self, t: Scalar) -> Scalar {
+    pub fn get_derivative(&self, t: f64) -> f64 {
         let eps = 1e-6;
         let v_plus = self.get_value(t + eps);
         let v_minus = self.get_value(t - eps);
@@ -434,7 +433,7 @@ impl TimeSeries {
     ///
     /// 使用 5 点中心差分公式: f'(x) ≈ (-f(x+2h) + 8f(x+h) - 8f(x-h) + f(x-2h)) / 12h
     /// 参考 Richardson 外推法增强精度。
-    pub fn get_derivative_precise(&self, t: Scalar) -> Scalar {
+    pub fn get_derivative_precise(&self, t: f64) -> f64 {
         let (t_start, t_end) = self.time_range();
         let span = t_end - t_start;
         
@@ -456,7 +455,7 @@ impl TimeSeries {
     /// 高精度循环外推
     ///
     /// 使用整数周期分解避免浮点累积误差。
-    pub fn get_value_cyclic_precise(&self, t: Scalar) -> Scalar {
+    pub fn get_value_cyclic_precise(&self, t: f64) -> f64 {
         let n = self.times.len();
         if n == 0 {
             return 0.0;
@@ -491,14 +490,14 @@ impl TimeSeries {
     /// 获取积分（梯形法则）
     ///
     /// 计算从 t_start 到 t_end 的定积分。
-    pub fn integrate(&self, t_start: Scalar, t_end: Scalar) -> Scalar {
+    pub fn integrate(&self, t_start: f64, t_end: f64) -> f64 {
         if t_start >= t_end {
             return 0.0;
         }
 
         // 简单实现：使用固定步数的梯形法则
         let n_steps = 100;
-        let dt = (t_end - t_start) / n_steps as Scalar;
+        let dt = (t_end - t_start) / n_steps as f64;
 
         let mut integral = 0.0;
         let mut t = t_start;
@@ -514,20 +513,20 @@ impl TimeSeries {
     }
 
     /// 重采样到新的时间点
-    pub fn resample(&self, new_times: &[Scalar]) -> Self {
-        let new_values: Vec<Scalar> = new_times.iter().map(|&t| self.get_value(t)).collect();
+    pub fn resample(&self, new_times: &[f64]) -> Self {
+        let new_values: Vec<f64> = new_times.iter().map(|&t| self.get_value(t)).collect();
         Self::new(new_times.to_vec(), new_values).with_extrapolation(self.extrap_mode)
     }
 
     /// 缩放值
-    pub fn scale(&mut self, factor: Scalar) {
+    pub fn scale(&mut self, factor: f64) {
         for v in &mut self.values {
             *v *= factor;
         }
     }
 
     /// 偏移值
-    pub fn offset(&mut self, offset: Scalar) {
+    pub fn offset(&mut self, offset: f64) {
         for v in &mut self.values {
             *v += offset;
         }
@@ -557,7 +556,7 @@ impl VectorTimeSeries {
     }
 
     /// 从时间和分量数组创建
-    pub fn from_components(times: Vec<Scalar>, x: Vec<Scalar>, y: Vec<Scalar>) -> Self {
+    pub fn from_components(times: Vec<f64>, x: Vec<f64>, y: Vec<f64>) -> Self {
         let x_series = TimeSeries::new(times.clone(), x);
         let y_series = TimeSeries::new(times, y);
         Self { x_series, y_series }
@@ -571,18 +570,18 @@ impl VectorTimeSeries {
     }
 
     /// 获取指定时间的向量值
-    pub fn get_value(&self, t: Scalar) -> (Scalar, Scalar) {
+    pub fn get_value(&self, t: f64) -> (f64, f64) {
         (self.x_series.get_value(t), self.y_series.get_value(t))
     }
 
     /// 获取指定时间的模长
-    pub fn get_magnitude(&self, t: Scalar) -> Scalar {
+    pub fn get_magnitude(&self, t: f64) -> f64 {
         let (x, y) = self.get_value(t);
         (x * x + y * y).sqrt()
     }
 
     /// 获取指定时间的方向（弧度）
-    pub fn get_direction(&self, t: Scalar) -> Scalar {
+    pub fn get_direction(&self, t: f64) -> f64 {
         let (x, y) = self.get_value(t);
         y.atan2(x)
     }
@@ -663,14 +662,14 @@ mod tests {
     #[test]
     fn test_cache_acceleration() {
         let n = 1000;
-        let times: Vec<Scalar> = (0..n).map(|i| i as Scalar).collect();
-        let values: Vec<Scalar> = (0..n).map(|i| (i as Scalar).sin()).collect();
+        let times: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let values: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
 
         let series = TimeSeries::new(times, values);
 
         // 顺序访问应该利用缓存
         for i in 0..n - 1 {
-            let t = i as Scalar + 0.5;
+            let t = i as f64 + 0.5;
             let _ = series.get_value(t);
         }
     }

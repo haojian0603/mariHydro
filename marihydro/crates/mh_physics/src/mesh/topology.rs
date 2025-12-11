@@ -116,7 +116,7 @@ impl MeshGeometry {
     pub fn distance<S: Scalar>(p1: [S; 2], p2: [S; 2]) -> S {
         let dx = p2[0] - p1[0];
         let dy = p2[1] - p1[1];
-        <S as Scalar>::sqrt(dx * dx + dy * dy)
+        (dx * dx + dy * dy).sqrt()
     }
     
     /// 计算单位法向量
@@ -124,8 +124,8 @@ impl MeshGeometry {
     pub fn unit_normal<S: Scalar>(p1: [S; 2], p2: [S; 2]) -> [S; 2] {
         let dx = p2[0] - p1[0];
         let dy = p2[1] - p1[1];
-        let length = <S as Scalar>::sqrt(dx * dx + dy * dy);
-        if length > S::min_positive() {
+        let length = (dx * dx + dy * dy).sqrt();
+        if length > S::min_positive_value() {
             [-dy / length, dx / length]
         } else {
             [<S as Scalar>::from_f64(0.0), <S as Scalar>::from_f64(0.0)]

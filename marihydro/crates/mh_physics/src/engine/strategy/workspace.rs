@@ -80,7 +80,7 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     
     /// 重置通量
     pub fn reset_fluxes(&mut self) {
-        let zero = B::Scalar::from_f64(0.0);
+        let zero = <B::Scalar as Scalar>::from_f64(0.0);
         self.flux_h.fill(zero);
         self.flux_hu.fill(zero);
         self.flux_hv.fill(zero);
@@ -88,7 +88,7 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     
     /// 重置源项
     pub fn reset_sources(&mut self) {
-        let zero = B::Scalar::from_f64(0.0);
+        let zero = <B::Scalar as Scalar>::from_f64(0.0);
         self.source_hu.fill(zero);
         self.source_hv.fill(zero);
     }

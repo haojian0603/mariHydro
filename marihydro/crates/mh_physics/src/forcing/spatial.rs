@@ -35,7 +35,6 @@ use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use super::timeseries::TimeSeries;
-use mh_foundation::Scalar;
 
 /// 可序列化的站点数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,9 +305,9 @@ impl SpatialTimeSeries {
     }
 
     /// 获取时间范围
-    pub fn time_range(&self) -> (Scalar, Scalar) {
-        let mut t_min = Scalar::MAX;
-        let mut t_max = Scalar::MIN;
+    pub fn time_range(&self) -> (f64, f64) {
+        let mut t_min = f64::MAX;
+        let mut t_max = f64::MIN;
 
         for station in &self.stations {
             let (t0, t1) = station.series.time_range();

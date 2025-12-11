@@ -1,138 +1,137 @@
-// crates/mh_physics/src/sources/turbulence/smagorinsky.rs
+﻿// crates/mh_physics/src/sources/turbulence/smagorinsky.rs
 
-//! Smagorinsky 亚格子尺度湍流模型
+//! Smagorinsky äºšæ ¼å­å°ºåº¦æ¹æµæ¨¡åž‹
 //!
-//! 实现 2D 浅水方程的水平湍流闭合，主要用于水平涡粘性计算。
+//! å®žçŽ° 2D æµ…æ°´æ–¹ç¨‹çš„æ°´å¹³æ¹æµé—­åˆï¼Œä¸»è¦ç”¨äºŽæ°´å¹³æ¶¡ç²˜æ€§è®¡ç®—ã€‚
 //!
-//! # Smagorinsky 模型
+//! # Smagorinsky æ¨¡åž‹
 //!
-//! Smagorinsky (1963) 模型假设亚格子湍流粘性：
+//! Smagorinsky (1963) æ¨¡åž‹å‡è®¾äºšæ ¼å­æ¹æµç²˜æ€§ï¼š
 //! ```text
-//! ν_t = (C_s * Δ)² * |S|
+//! Î½_t = (C_s * Î”)Â² * |S|
 //! ```
 //!
-//! 其中：
-//! - C_s 是 Smagorinsky 常数（通常 0.1-0.2）
-//! - Δ 是网格尺度 (√A)
-//! - |S| 是应变率张量的模
+//! å…¶ä¸­ï¼š
+//! - C_s æ˜¯ Smagorinsky å¸¸æ•°ï¼ˆé€šå¸¸ 0.1-0.2ï¼‰
+//! - Î” æ˜¯ç½‘æ ¼å°ºåº¦ (âˆšA)
+//! - |S| æ˜¯åº”å˜çŽ‡å¼ é‡çš„æ¨¡
 //!
-//! # 应变率张量
+//! # åº”å˜çŽ‡å¼ é‡
 //!
-//! 对于二维流动：
+//! å¯¹äºŽäºŒç»´æµåŠ¨ï¼š
 //! ```text
-//! |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
+//! |S| = âˆš(2*(âˆ‚u/âˆ‚x)Â² + 2*(âˆ‚v/âˆ‚y)Â² + (âˆ‚u/âˆ‚y + âˆ‚v/âˆ‚x)Â²)
 //! ```
 //!
-//! # 物理适用性
+//! # ç‰©ç†é€‚ç”¨æ€§
 //!
-//! **重要警告**：Smagorinsky 模型原本设计用于 3D LES。
-//! 在 2D 浅水方程中，其物理意义有限，因为：
+//! **é‡è¦è­¦å‘Š**ï¼šSmagorinsky æ¨¡åž‹åŽŸæœ¬è®¾è®¡ç”¨äºŽ 3D LESã€‚
+//! åœ¨ 2D æµ…æ°´æ–¹ç¨‹ä¸­ï¼Œå…¶ç‰©ç†æ„ä¹‰æœ‰é™ï¼Œå› ä¸ºï¼š
 //!
-//! 1. 深度平均消除了垂向湍流结构
-//! 2. 底部摩擦通常是主导耗散机制
-//! 3. 2D 湍流动力学与 3D 本质不同
+//! 1. æ·±åº¦å¹³å‡æ¶ˆé™¤äº†åž‚å‘æ¹æµç»“æž„
+//! 2. åº•éƒ¨æ‘©æ“¦é€šå¸¸æ˜¯ä¸»å¯¼è€—æ•£æœºåˆ¶
+//! 3. 2D æ¹æµåŠ¨åŠ›å­¦ä¸Ž 3D æœ¬è´¨ä¸åŒ
 //!
-//! 推荐用法：
-//! - 使用 `TurbulenceModel::None` 或 `TurbulenceModel::Disabled`
-//! - 如需水平扩散，使用 `TurbulenceModel::ConstantViscosity(0.1~10.0)`
+//! æŽ¨èç”¨æ³•ï¼š
+//! - ä½¿ç”¨ `TurbulenceModel::None` æˆ– `TurbulenceModel::Disabled`
+//! - å¦‚éœ€æ°´å¹³æ‰©æ•£ï¼Œä½¿ç”¨ `TurbulenceModel::ConstantViscosity(0.1~10.0)`
 
 use super::traits::{TurbulenceClosure, VelocityGradient};
 use crate::adapter::PhysicsMesh;
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use mh_foundation::Scalar;
 
-/// Smagorinsky 常数的默认值
-pub const DEFAULT_SMAGORINSKY_CONSTANT: Scalar = 0.15;
+/// Smagorinsky å¸¸æ•°çš„é»˜è®¤å€¼
+pub const DEFAULT_SMAGORINSKY_CONSTANT: f64 = 0.15;
 
-/// 最小涡粘性系数 [m²/s]
-pub const MIN_EDDY_VISCOSITY: Scalar = 1e-6;
+/// æœ€å°æ¶¡ç²˜æ€§ç³»æ•° [mÂ²/s]
+pub const MIN_EDDY_VISCOSITY: f64 = 1e-6;
 
-/// 最大涡粘性系数 [m²/s]
-pub const MAX_EDDY_VISCOSITY: Scalar = 1e3;
+/// æœ€å¤§æ¶¡ç²˜æ€§ç³»æ•° [mÂ²/s]
+pub const MAX_EDDY_VISCOSITY: f64 = 1e3;
 
-/// 湍流模型类型
+/// æ¹æµæ¨¡åž‹ç±»åž‹
 /// 
-/// **重要警告**：浅水方程是深度平均方程，直接添加 3D 湍流扩散项
-/// 在物理上是不恰当的。深度平均后的湍流效应通常通过以下方式处理：
+/// **é‡è¦è­¦å‘Š**ï¼šæµ…æ°´æ–¹ç¨‹æ˜¯æ·±åº¦å¹³å‡æ–¹ç¨‹ï¼Œç›´æŽ¥æ·»åŠ  3D æ¹æµæ‰©æ•£é¡¹
+/// åœ¨ç‰©ç†ä¸Šæ˜¯ä¸æ°å½“çš„ã€‚æ·±åº¦å¹³å‡åŽçš„æ¹æµæ•ˆåº”é€šå¸¸é€šè¿‡ä»¥ä¸‹æ–¹å¼å¤„ç†ï¼š
 /// 
-/// 1. **底部摩擦**：已包含在摩擦模块中，占主导作用
-/// 2. **水平扩散**：使用适当的水平涡粘性（不是 Smagorinsky 的 3D 公式）
-/// 3. **色散项**：如 Boussinesq 方程的色散修正
+/// 1. **åº•éƒ¨æ‘©æ“¦**ï¼šå·²åŒ…å«åœ¨æ‘©æ“¦æ¨¡å—ä¸­ï¼Œå ä¸»å¯¼ä½œç”¨
+/// 2. **æ°´å¹³æ‰©æ•£**ï¼šä½¿ç”¨é€‚å½“çš„æ°´å¹³æ¶¡ç²˜æ€§ï¼ˆä¸æ˜¯ Smagorinsky çš„ 3D å…¬å¼ï¼‰
+/// 3. **è‰²æ•£é¡¹**ï¼šå¦‚ Boussinesq æ–¹ç¨‹çš„è‰²æ•£ä¿®æ­£
 /// 
-/// 如果确实需要水平扩散，建议使用 `ConstantViscosity` 配合
-/// 较小的涡粘性值（0.1-10 m²/s），或使用 `Disabled` 模式。
+/// å¦‚æžœç¡®å®žéœ€è¦æ°´å¹³æ‰©æ•£ï¼Œå»ºè®®ä½¿ç”¨ `ConstantViscosity` é…åˆ
+/// è¾ƒå°çš„æ¶¡ç²˜æ€§å€¼ï¼ˆ0.1-10 mÂ²/sï¼‰ï¼Œæˆ–ä½¿ç”¨ `Disabled` æ¨¡å¼ã€‚
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[derive(Default)]
 pub enum TurbulenceModel {
-    /// 无湍流（推荐用于浅水方程）
+    /// æ— æ¹æµï¼ˆæŽ¨èç”¨äºŽæµ…æ°´æ–¹ç¨‹ï¼‰
     #[default]
     None,
-    /// 显式禁用（带警告）
+    /// æ˜¾å¼ç¦ç”¨ï¼ˆå¸¦è­¦å‘Šï¼‰
     /// 
-    /// 使用此模式时，代码会输出一次警告日志，
-    /// 提醒用户浅水方程不应使用 3D 湍流模型
+    /// ä½¿ç”¨æ­¤æ¨¡å¼æ—¶ï¼Œä»£ç ä¼šè¾“å‡ºä¸€æ¬¡è­¦å‘Šæ—¥å¿—ï¼Œ
+    /// æé†’ç”¨æˆ·æµ…æ°´æ–¹ç¨‹ä¸åº”ä½¿ç”¨ 3D æ¹æµæ¨¡åž‹
     Disabled,
-    /// 常数涡粘性（仅用于水平扩散，建议值 0.1-10 m²/s）
-    ConstantViscosity(Scalar),
+    /// å¸¸æ•°æ¶¡ç²˜æ€§ï¼ˆä»…ç”¨äºŽæ°´å¹³æ‰©æ•£ï¼Œå»ºè®®å€¼ 0.1-10 mÂ²/sï¼‰
+    ConstantViscosity(f64),
 }
 
 
 impl TurbulenceModel {
-    /// 创建禁用模式（推荐）
+    /// åˆ›å»ºç¦ç”¨æ¨¡å¼ï¼ˆæŽ¨èï¼‰
     pub fn disabled() -> Self {
         Self::Disabled
     }
 
-    /// 创建常数涡粘性模型（仅用于水平扩散）
+    /// åˆ›å»ºå¸¸æ•°æ¶¡ç²˜æ€§æ¨¡åž‹ï¼ˆä»…ç”¨äºŽæ°´å¹³æ‰©æ•£ï¼‰
     /// 
-    /// # 参数
-    /// - `nu`: 涡粘性系数 [m²/s]，建议范围 0.1-10
-    pub fn constant(nu: Scalar) -> Self {
+    /// # å‚æ•°
+    /// - `nu`: æ¶¡ç²˜æ€§ç³»æ•° [mÂ²/s]ï¼Œå»ºè®®èŒƒå›´ 0.1-10
+    pub fn constant(nu: f64) -> Self {
         Self::ConstantViscosity(nu.max(MIN_EDDY_VISCOSITY).min(MAX_EDDY_VISCOSITY))
     }
 
-    /// 检查模型是否实际启用
+    /// æ£€æŸ¥æ¨¡åž‹æ˜¯å¦å®žé™…å¯ç”¨
     pub fn is_active(&self) -> bool {
         !matches!(self, Self::None | Self::Disabled)
     }
 }
 
-/// Smagorinsky 湍流求解器
+/// Smagorinsky æ¹æµæ±‚è§£å™¨
 ///
-/// 2D 水平涡粘性计算器。
+/// 2D æ°´å¹³æ¶¡ç²˜æ€§è®¡ç®—å™¨ã€‚
 #[derive(Debug, Clone)]
 pub struct SmagorinskySolver {
-    /// 模型配置
+    /// æ¨¡åž‹é…ç½®
     pub model: TurbulenceModel,
-    /// 网格尺度 [m]（每个单元）
-    pub grid_scale: Vec<Scalar>,
-    /// 计算得到的涡粘性 [m²/s]（每个单元）
-    pub eddy_viscosity: Vec<Scalar>,
-    /// 速度梯度（每个单元）
+    /// ç½‘æ ¼å°ºåº¦ [m]ï¼ˆæ¯ä¸ªå•å…ƒï¼‰
+    pub grid_scale: Vec<f64>,
+    /// è®¡ç®—å¾—åˆ°çš„æ¶¡ç²˜æ€§ [mÂ²/s]ï¼ˆæ¯ä¸ªå•å…ƒï¼‰
+    pub eddy_viscosity: Vec<f64>,
+    /// é€Ÿåº¦æ¢¯åº¦ï¼ˆæ¯ä¸ªå•å…ƒï¼‰
     pub velocity_gradient: Vec<VelocityGradient>,
-    /// 最小水深
-    pub h_min: Scalar,
+    /// æœ€å°æ°´æ·±
+    pub h_min: f64,
 }
 
 impl SmagorinskySolver {
-    /// 创建新的求解器
+    /// åˆ›å»ºæ–°çš„æ±‚è§£å™¨
     pub fn new(n_cells: usize, model: TurbulenceModel) -> Self {
         Self {
             model,
-            grid_scale: vec![10.0; n_cells], // 默认网格尺度
+            grid_scale: vec![10.0; n_cells], // é»˜è®¤ç½‘æ ¼å°ºåº¦
             eddy_viscosity: vec![0.0; n_cells],
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
             h_min: 1e-4,
         }
     }
 
-    /// 从网格初始化
+    /// ä»Žç½‘æ ¼åˆå§‹åŒ–
     pub fn from_mesh(mesh: &PhysicsMesh, model: TurbulenceModel) -> Self {
         let n_cells = mesh.n_cells();
         let mut solver = Self::new(n_cells, model);
 
-        // 计算网格尺度（使用单元面积的平方根）
+        // è®¡ç®—ç½‘æ ¼å°ºåº¦ï¼ˆä½¿ç”¨å•å…ƒé¢ç§¯çš„å¹³æ–¹æ ¹ï¼‰
         for i in 0..n_cells {
             if let Some(area) = mesh.cell_area(i) {
                 solver.grid_scale[i] = area.sqrt();
@@ -142,29 +141,29 @@ impl SmagorinskySolver {
         solver
     }
 
-    /// 设置网格尺度
-    pub fn set_grid_scale(&mut self, i: usize, scale: Scalar) {
+    /// è®¾ç½®ç½‘æ ¼å°ºåº¦
+    pub fn set_grid_scale(&mut self, i: usize, scale: f64) {
         if i < self.grid_scale.len() {
             self.grid_scale[i] = scale.max(1e-3);
         }
     }
 
-    /// 设置速度梯度（外部计算）
+    /// è®¾ç½®é€Ÿåº¦æ¢¯åº¦ï¼ˆå¤–éƒ¨è®¡ç®—ï¼‰
     pub fn set_velocity_gradient(&mut self, i: usize, grad: VelocityGradient) {
         if i < self.velocity_gradient.len() {
             self.velocity_gradient[i] = grad;
         }
     }
 
-    /// 批量设置速度梯度
+    /// æ‰¹é‡è®¾ç½®é€Ÿåº¦æ¢¯åº¦
     pub fn set_velocity_gradients(&mut self, gradients: &[VelocityGradient]) {
         let n = self.velocity_gradient.len().min(gradients.len());
         self.velocity_gradient[..n].copy_from_slice(&gradients[..n]);
     }
 
-    /// 使用简单差分估算速度梯度（适用于结构化网格）
+    /// ä½¿ç”¨ç®€å•å·®åˆ†ä¼°ç®—é€Ÿåº¦æ¢¯åº¦ï¼ˆé€‚ç”¨äºŽç»“æž„åŒ–ç½‘æ ¼ï¼‰
     ///
-    /// 对于非结构化网格，应使用外部梯度求解器
+    /// å¯¹äºŽéžç»“æž„åŒ–ç½‘æ ¼ï¼Œåº”ä½¿ç”¨å¤–éƒ¨æ¢¯åº¦æ±‚è§£å™¨
     pub fn estimate_gradient_from_neighbors(
         &mut self,
         state: &ShallowWaterState,
@@ -182,7 +181,7 @@ impl SmagorinskySolver {
             let u = state.hu[i] / h;
             let v = state.hv[i] / h;
 
-            // 简单的最近邻梯度估计
+            // ç®€å•çš„æœ€è¿‘é‚»æ¢¯åº¦ä¼°è®¡
             let mut du_dx = 0.0;
             let mut du_dy = 0.0;
             let mut dv_dx = 0.0;
@@ -190,7 +189,7 @@ impl SmagorinskySolver {
             let mut weight_sum = 0.0;
 
             for face_id in mesh.cell_faces(i) {
-                // 使用 face_neighbor 获取邻居
+                // ä½¿ç”¨ face_neighbor èŽ·å–é‚»å±…
                 if let Some(neighbor) = mesh.face_neighbor(face_id) {
                     if neighbor == i {
                         continue;
@@ -230,7 +229,7 @@ impl SmagorinskySolver {
         }
     }
 
-    /// 更新涡粘性系数
+    /// æ›´æ–°æ¶¡ç²˜æ€§ç³»æ•°
     pub fn update_eddy_viscosity(&mut self) {
         match &self.model {
             TurbulenceModel::None | TurbulenceModel::Disabled => {
@@ -242,15 +241,15 @@ impl SmagorinskySolver {
         }
     }
 
-    /// 获取单元涡粘性
-    pub fn get_eddy_viscosity(&self, cell: usize) -> Scalar {
+    /// èŽ·å–å•å…ƒæ¶¡ç²˜æ€§
+    pub fn get_eddy_viscosity(&self, cell: usize) -> f64 {
         self.eddy_viscosity.get(cell).copied().unwrap_or(0.0)
     }
 
-    /// 计算湍流扩散通量
+    /// è®¡ç®—æ¹æµæ‰©æ•£é€šé‡
     ///
-    /// 返回 (Fx, Fy) 动量扩散通量
-    pub fn compute_diffusion_flux(&self, cell: usize, state: &ShallowWaterState) -> (Scalar, Scalar) {
+    /// è¿”å›ž (Fx, Fy) åŠ¨é‡æ‰©æ•£é€šé‡
+    pub fn compute_diffusion_flux(&self, cell: usize, state: &ShallowWaterState) -> (f64, f64) {
         let h = state.h[cell];
         if h < self.h_min {
             return (0.0, 0.0);
@@ -266,21 +265,21 @@ impl SmagorinskySolver {
     }
 }
 
-// 实现 TurbulenceClosure trait
+// å®žçŽ° TurbulenceClosure trait
 impl TurbulenceClosure for SmagorinskySolver {
     fn name(&self) -> &'static str {
         "Smagorinsky"
     }
     
     fn is_3d(&self) -> bool {
-        false // Smagorinsky 适用于 2D
+        false // Smagorinsky é€‚ç”¨äºŽ 2D
     }
     
-    fn eddy_viscosity(&self) -> &[Scalar] {
+    fn eddy_viscosity(&self) -> &[f64] {
         &self.eddy_viscosity
     }
     
-    fn update(&mut self, velocity_gradients: &[VelocityGradient], cell_sizes: &[Scalar]) {
+    fn update(&mut self, velocity_gradients: &[VelocityGradient], cell_sizes: &[f64]) {
         self.set_velocity_gradients(velocity_gradients);
         let n = self.grid_scale.len().min(cell_sizes.len());
         self.grid_scale[..n].copy_from_slice(&cell_sizes[..n]);
@@ -292,23 +291,23 @@ impl TurbulenceClosure for SmagorinskySolver {
     }
 }
 
-/// 湍流源项配置
+/// æ¹æµæºé¡¹é…ç½®
 #[derive(Debug, Clone)]
 pub struct TurbulenceConfig {
-    /// 是否启用
+    /// æ˜¯å¦å¯ç”¨
     pub enabled: bool,
-    /// 湍流模型
+    /// æ¹æµæ¨¡åž‹
     pub model: TurbulenceModel,
-    /// 涡粘性 [m²/s]（预计算或常数）
-    pub eddy_viscosity: Vec<Scalar>,
-    /// 速度梯度（外部提供）
+    /// æ¶¡ç²˜æ€§ [mÂ²/s]ï¼ˆé¢„è®¡ç®—æˆ–å¸¸æ•°ï¼‰
+    pub eddy_viscosity: Vec<f64>,
+    /// é€Ÿåº¦æ¢¯åº¦ï¼ˆå¤–éƒ¨æä¾›ï¼‰
     pub velocity_gradient: Vec<VelocityGradient>,
-    /// 最小水深
-    pub h_min: Scalar,
+    /// æœ€å°æ°´æ·±
+    pub h_min: f64,
 }
 
 impl TurbulenceConfig {
-    /// 创建新配置
+    /// åˆ›å»ºæ–°é…ç½®
     pub fn new(n_cells: usize, model: TurbulenceModel) -> Self {
         Self {
             enabled: true,
@@ -319,22 +318,22 @@ impl TurbulenceConfig {
         }
     }
 
-    /// 创建常数涡粘性配置
-    pub fn constant(n_cells: usize, nu: Scalar) -> Self {
+    /// åˆ›å»ºå¸¸æ•°æ¶¡ç²˜æ€§é…ç½®
+    pub fn constant(n_cells: usize, nu: f64) -> Self {
         let mut config = Self::new(n_cells, TurbulenceModel::constant(nu));
         config.eddy_viscosity.fill(nu);
         config
     }
 
-    /// 设置涡粘性
-    pub fn set_eddy_viscosity(&mut self, cell: usize, nu: Scalar) {
+    /// è®¾ç½®æ¶¡ç²˜æ€§
+    pub fn set_eddy_viscosity(&mut self, cell: usize, nu: f64) {
         if cell < self.eddy_viscosity.len() {
             self.eddy_viscosity[cell] = nu.max(0.0);
         }
     }
 
-    /// 批量设置涡粘性
-    pub fn set_eddy_viscosity_field(&mut self, nu: &[Scalar]) {
+    /// æ‰¹é‡è®¾ç½®æ¶¡ç²˜æ€§
+    pub fn set_eddy_viscosity_field(&mut self, nu: &[f64]) {
         let n = self.eddy_viscosity.len().min(nu.len());
         self.eddy_viscosity[..n].copy_from_slice(&nu[..n]);
     }
@@ -357,7 +356,7 @@ impl SourceTerm for TurbulenceConfig {
     ) -> SourceContribution {
         let h = state.h[cell];
 
-        // 干单元不计算
+        // å¹²å•å…ƒä¸è®¡ç®—
         if h < self.h_min || ctx.is_dry(h) {
             return SourceContribution::ZERO;
         }
@@ -369,7 +368,7 @@ impl SourceTerm for TurbulenceConfig {
 
         let grad = self.velocity_gradient.get(cell).copied().unwrap_or_default();
 
-        // 粘性应力源项（简化形式）
+        // ç²˜æ€§åº”åŠ›æºé¡¹ï¼ˆç®€åŒ–å½¢å¼ï¼‰
         let s11 = 2.0 * grad.du_dx;
         let s22 = 2.0 * grad.dv_dy;
         let s12 = grad.du_dy + grad.dv_dx;
@@ -379,7 +378,7 @@ impl SourceTerm for TurbulenceConfig {
         let s_hu = nu * h * (s11 + s12) / char_length;
         let s_hv = nu * h * (s12 + s22) / char_length;
         
-        // 限制源项大小
+        // é™åˆ¶æºé¡¹å¤§å°
         let max_source = nu * h * 10.0;
         let s_hu_clamped = s_hu.clamp(-max_source, max_source);
         let s_hv_clamped = s_hv.clamp(-max_source, max_source);
@@ -397,7 +396,7 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: Scalar, u: Scalar, v: Scalar) -> ShallowWaterState {
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState {
         let mut state = ShallowWaterState::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;

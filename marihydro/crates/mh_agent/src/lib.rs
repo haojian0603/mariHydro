@@ -38,6 +38,9 @@
 
 pub mod registry;
 pub mod assimilation;
+pub mod remote_sensing;
+pub mod observation;
+pub mod surrogate;
 
 use thiserror::Error;
 
@@ -65,6 +68,10 @@ pub enum AiError {
     /// 代理未初始化
     #[error("代理未初始化")]
     NotInitialized,
+
+    /// 状态尚未准备好
+    #[error("代理未就绪: {0}")]
+    NotReady(String),
     
     /// 观测数据无效
     #[error("观测数据无效: {0}")]
@@ -241,4 +248,7 @@ pub trait Assimilable {
 
 // 重导出
 pub use registry::AgentRegistry;
-pub use assimilation::NudgingAssimilator;
+pub use assimilation::{NudgingAssimilator, NudgingConfig, Observation, AssimilationResult};
+pub use remote_sensing::{RemoteSensingAgent, RemoteSensingConfig, SatelliteImage, SensorType};
+pub use observation::{ObservationOperator, ReflectanceOperator, SAROperator, WaterLevelOperator};
+pub use surrogate::{SurrogateModel, SurrogateConfig, SurrogateType, SurrogatePrediction};

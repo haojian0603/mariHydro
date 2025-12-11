@@ -3,7 +3,7 @@
 //! 物理求解器模块
 //!
 //! 提供浅水方程数值求解功能，包括：
-//! - 核心抽象层 (core) - Backend, Buffer, Scalar 抽象
+//! - 核心抽象层 (core) - Backend, Buffer, f64 抽象
 //! - 网格适配层 (adapter)
 //! - 核心类型定义 (types)
 //! - 状态管理 (state)
@@ -31,6 +31,7 @@ pub mod engine;
 pub mod schemes;
 pub mod state;
 pub mod tracer;
+pub mod assimilation;
 pub mod traits;
 pub mod types;
 pub mod vertical;

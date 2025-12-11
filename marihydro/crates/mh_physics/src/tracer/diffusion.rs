@@ -1,5 +1,4 @@
-// crates/mh_physics/src/tracer/diffusion.rs
-
+//! marihydro\crates\mh_physics\src\tracer\diffusion.rs
 //! 扩散算子模块
 //!
 //! 提供示踪剂输运的扩散计算，支持：
@@ -24,51 +23,53 @@
 //! use mh_physics::tracer::diffusion::{DiffusionOperator, DiffusionCoefficient};
 //!
 //! // 创建各向同性扩散算子
-//! let op = DiffusionOperator::new(n_cells, DiffusionCoefficient::Constant(10.0));
+//! let op = DiffusionOperator::new(n_cells, n_faces, DiffusionConfig::constant(10.0));
 //!
 //! // 计算扩散通量
 //! let fluxes = op.compute_face_fluxes(&mesh, &concentration);
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use mh_foundation::{AlignedVec, Scalar};
+use crate::core::scalar::Scalar;
+use bytemuck::Pod;
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
-/// 扩散系数类型
+/// 扩散系数类型（配置层，硬编码 f64）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DiffusionCoefficient {
+pub enum DiffusionCoefficientConfig {
     /// 常数扩散系数 [m²/s]
-    Constant(Scalar),
+    Constant(f64),
 
     /// 空间变化的扩散系数（每单元一个值）
-    Variable(Vec<Scalar>),
+    Variable(Vec<f64>),
 
     /// 各向异性扩散（纵向、横向系数）
     Anisotropic {
         /// 纵向扩散系数 [m²/s]
-        longitudinal: Scalar,
+        longitudinal: f64,
         /// 横向扩散系数 [m²/s]
-        transverse: Scalar,
+        transverse: f64,
     },
 
     /// 基于湍流的扩散（涡粘度 / Schmidt 数）
     Turbulent {
         /// 分子扩散系数 [m²/s]
-        molecular: Scalar,
+        molecular: f64,
         /// 湍流 Schmidt 数（无量纲）
-        schmidt_number: Scalar,
+        schmidt_number: f64,
     },
 }
 
-impl Default for DiffusionCoefficient {
+impl Default for DiffusionCoefficientConfig {
     fn default() -> Self {
         Self::Constant(1.0)
     }
 }
 
-impl DiffusionCoefficient {
+impl DiffusionCoefficientConfig {
     /// 创建常数扩散系数
-    pub fn constant(d: Scalar) -> Self {
+    pub fn constant(d: f64) -> Self {
         Self::Constant(d)
     }
 
@@ -78,7 +79,7 @@ impl DiffusionCoefficient {
     }
 
     /// 创建各向异性扩散
-    pub fn anisotropic(longitudinal: Scalar, transverse: Scalar) -> Self {
+    pub fn anisotropic(longitudinal: f64, transverse: f64) -> Self {
         Self::Anisotropic {
             longitudinal,
             transverse,
@@ -86,53 +87,97 @@ impl DiffusionCoefficient {
     }
 
     /// 创建湍流扩散
-    pub fn turbulent(molecular: Scalar, schmidt_number: Scalar) -> Self {
+    pub fn turbulent(molecular: f64, schmidt_number: f64) -> Self {
         Self::Turbulent {
             molecular,
             schmidt_number,
         }
     }
 
+    /// 转换为运行时精度（供算子使用）
+    pub fn to_precision<S: Scalar>(&self) -> DiffusionCoefficient<S> {
+        match *self {
+            Self::Constant(d) => DiffusionCoefficient::Constant(<S as Scalar>::from_f64(d)),
+            Self::Variable(ref values) => DiffusionCoefficient::Variable(
+                values.iter().map(|&v| <S as Scalar>::from_f64(v)).collect()
+            ),
+            Self::Anisotropic { longitudinal, transverse } => {
+                DiffusionCoefficient::Anisotropic {
+                    longitudinal: <S as Scalar>::from_f64(longitudinal),
+                    transverse: <S as Scalar>::from_f64(transverse),
+                }
+            }
+            Self::Turbulent { molecular, schmidt_number } => {
+                DiffusionCoefficient::Turbulent {
+                    molecular: <S as Scalar>::from_f64(molecular),
+                    schmidt_number: <S as Scalar>::from_f64(schmidt_number),
+                }
+            }
+        }
+    }
+}
+
+/// 扩散系数类型（运行层，泛型化）
+#[derive(Debug, Clone)]
+pub enum DiffusionCoefficient<S: Scalar> {
+    /// 常数扩散系数 [m²/s]
+    Constant(S),
+
+    /// 空间变化的扩散系数（每单元一个值）
+    Variable(Vec<S>),
+
+    /// 各向异性扩散（纵向、横向系数）
+    Anisotropic {
+        /// 纵向扩散系数 [m²/s]
+        longitudinal: S,
+        /// 横向扩散系数 [m²/s]
+        transverse: S,
+    },
+
+    /// 基于湍流的扩散（涡粘度 / Schmidt 数）
+    Turbulent {
+        /// 分子扩散系数 [m²/s]
+        molecular: S,
+        /// 湍流 Schmidt 数（无量纲）
+        schmidt_number: S,
+    },
+}
+
+impl<S: Scalar> DiffusionCoefficient<S> {
     /// 获取单元的有效扩散系数（各向同性等效）
-    pub fn effective_at(&self, cell_idx: usize, eddy_viscosity: Option<Scalar>) -> Scalar {
-        match self {
-            Self::Constant(d) => *d,
-            Self::Variable(values) => values.get(cell_idx).copied().unwrap_or(0.0),
-            Self::Anisotropic {
-                longitudinal,
-                transverse,
-            } => {
+    pub fn effective_at(&self, cell_idx: usize, eddy_viscosity: Option<S>) -> S {
+        match *self {
+            Self::Constant(d) => d,
+            Self::Variable(ref values) => values.get(cell_idx).copied().unwrap_or(S::ZERO),
+            Self::Anisotropic { longitudinal, transverse } => {
                 // 几何平均作为各向同性等效
                 (longitudinal * transverse).sqrt()
             }
-            Self::Turbulent {
-                molecular,
-                schmidt_number,
-            } => {
-                let nu_t = eddy_viscosity.unwrap_or(0.0);
+            Self::Turbulent { molecular, schmidt_number } => {
+                let nu_t = eddy_viscosity.unwrap_or(S::ZERO);
                 molecular + nu_t / schmidt_number
             }
         }
     }
 }
 
-/// 扩散配置
+/// 扩散配置（硬编码 f64，精度无关）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffusionConfig {
-    /// 扩散系数
-    pub coefficient: DiffusionCoefficient,
+    /// 扩散系数（配置层，f64）
+    pub coefficient: DiffusionCoefficientConfig,
     /// 是否启用扩散
     pub enabled: bool,
-    /// 最小扩散系数（数值稳定性）
-    pub min_diffusivity: Scalar,
-    /// 最大扩散系数（限制）
-    pub max_diffusivity: Scalar,
+    /// 最小扩散系数（数值稳定性，f64）
+    pub min_diffusivity: f64,
+    /// 最大扩散系数（限制，f64）
+    pub max_diffusivity: f64,
 }
 
 impl Default for DiffusionConfig {
     fn default() -> Self {
         Self {
-            coefficient: DiffusionCoefficient::default(),
+            coefficient: DiffusionCoefficientConfig::default(),
             enabled: true,
             min_diffusivity: 0.0,
             max_diffusivity: 1000.0,
@@ -150,39 +195,67 @@ impl DiffusionConfig {
     }
 
     /// 创建常数扩散配置
-    pub fn constant(d: Scalar) -> Self {
+    pub fn constant(d: f64) -> Self {
         Self {
-            coefficient: DiffusionCoefficient::Constant(d),
+            coefficient: DiffusionCoefficientConfig::constant(d),
+            ..Default::default()
+        }
+    }
+
+    /// 创建各向异性扩散配置
+    pub fn anisotropic(longitudinal: f64, transverse: f64) -> Self {
+        Self {
+            coefficient: DiffusionCoefficientConfig::anisotropic(longitudinal, transverse),
+            ..Default::default()
+        }
+    }
+
+    /// 创建湛流扩散配置
+    pub fn turbulent(molecular: f64, schmidt_number: f64) -> Self {
+        Self {
+            coefficient: DiffusionCoefficientConfig::turbulent(molecular, schmidt_number),
             ..Default::default()
         }
     }
 }
 
-/// 扩散算子
+/// 扩散算子（泛型化，支持多精度）
 ///
 /// 计算扩散通量和扩散项对浓度场的贡献
-pub struct DiffusionOperator {
-    /// 配置
+pub struct DiffusionOperator<S: Scalar + Pod + Default> {
+    /// 配置（硬编码 f64，存储时）
     config: DiffusionConfig,
+    /// 配置（运行时精度，计算时）
+    coefficient: DiffusionCoefficient<S>,
+    min_diffusivity: S,
+    max_diffusivity: S,
     /// 面扩散系数缓存
-    face_diffusivity: AlignedVec<Scalar>,
+    face_diffusivity: AlignedVec<S>,
     /// 扩散通量缓存
-    face_flux: AlignedVec<Scalar>,
+    face_flux: AlignedVec<S>,
     /// 扩散源项（单元体积分）
-    cell_diffusion: AlignedVec<Scalar>,
+    cell_diffusion: AlignedVec<S>,
 }
 
-impl DiffusionOperator {
+impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
     /// 创建新的扩散算子
     ///
     /// # 参数
     ///
     /// - `n_cells`: 单元数量
     /// - `n_faces`: 面数量
-    /// - `config`: 扩散配置
+    /// - `config`: 扩散配置（f64）
     pub fn new(n_cells: usize, n_faces: usize, config: DiffusionConfig) -> Self {
+        // 转换配置到运行时精度
+        let coefficient = config.coefficient.to_precision();
+        let min_diffusivity = <S as Scalar>::from_f64(config.min_diffusivity);
+        let max_diffusivity = <S as Scalar>::from_f64(config.max_diffusivity);
+        
         Self {
             config,
+            coefficient,
+            min_diffusivity,
+            max_diffusivity,
             face_diffusivity: AlignedVec::zeros(n_faces),
             face_flux: AlignedVec::zeros(n_faces),
             cell_diffusion: AlignedVec::zeros(n_cells),
@@ -194,9 +267,9 @@ impl DiffusionOperator {
         &self.config
     }
 
-    /// 获取可变配置引用
-    pub fn config_mut(&mut self) -> &mut DiffusionConfig {
-        &mut self.config
+    /// 获取扩散系数配置引用（运行时精度）
+    pub fn coefficient(&self) -> &DiffusionCoefficient<S> {
+        &self.coefficient
     }
 
     /// 更新面扩散系数
@@ -208,10 +281,10 @@ impl DiffusionOperator {
     pub fn update_face_diffusivity(
         &mut self,
         mesh: &PhysicsMesh,
-        eddy_viscosity: Option<&[Scalar]>,
+        eddy_viscosity: Option<&[S]>,
     ) {
         if !self.config.enabled {
-            self.face_diffusivity.as_mut_slice().fill(0.0);
+            self.face_diffusivity.as_mut_slice().fill(S::ZERO);
             return;
         }
 
@@ -220,12 +293,12 @@ impl DiffusionOperator {
             let neighbor = mesh.face_neighbor(face_idx);
 
             let nu_t_o = eddy_viscosity.map(|nu| nu[owner]);
-            let d_owner = self.config.coefficient.effective_at(owner, nu_t_o);
+            let d_owner = self.coefficient.effective_at(owner, nu_t_o);
 
             let d_face = if let Some(neigh) = neighbor {
                 // 内部面：调和平均
                 let nu_t_n = eddy_viscosity.map(|nu| nu[neigh]);
-                let d_neigh = self.config.coefficient.effective_at(neigh, nu_t_n);
+                let d_neigh = self.coefficient.effective_at(neigh, nu_t_n);
                 harmonic_mean(d_owner, d_neigh)
             } else {
                 // 边界面：使用内部值
@@ -234,8 +307,8 @@ impl DiffusionOperator {
 
             // 应用限制
             self.face_diffusivity[face_idx] = d_face
-                .max(self.config.min_diffusivity)
-                .min(self.config.max_diffusivity);
+                .max(self.min_diffusivity)
+                .min(self.max_diffusivity);
         }
     }
 
@@ -252,10 +325,10 @@ impl DiffusionOperator {
     pub fn compute_face_fluxes(
         &mut self,
         mesh: &PhysicsMesh,
-        concentration: &[Scalar],
-    ) -> &[Scalar] {
+        concentration: &[S],
+    ) -> &[S] {
         if !self.config.enabled {
-            self.face_flux.as_mut_slice().fill(0.0);
+            self.face_flux.as_mut_slice().fill(S::ZERO);
             return self.face_flux.as_slice();
         }
 
@@ -264,20 +337,20 @@ impl DiffusionOperator {
             let neighbor = mesh.face_neighbor(face_idx);
 
             let d = self.face_diffusivity[face_idx];
-            let length = mesh.face_length(face_idx);
+            let length = <S as Scalar>::from_f64(mesh.face_length(face_idx) as f64);
 
             let flux = if let Some(neigh) = neighbor {
                 // 内部面：中心差分
-                let dist = mesh.face_dist_o2n(face_idx);
-                if dist > 1e-14 {
+                let dist = <S as Scalar>::from_f64(mesh.face_dist_o2n(face_idx) as f64);
+                if dist > <S as Scalar>::from_f64(1e-14) {
                     let grad_n = (concentration[neigh] - concentration[owner]) / dist;
                     -d * grad_n * length
                 } else {
-                    0.0
+                    S::ZERO
                 }
             } else {
                 // 边界面：假设零梯度（由边界条件处理）
-                0.0
+                S::ZERO
             };
 
             self.face_flux[face_idx] = flux;
@@ -299,13 +372,13 @@ impl DiffusionOperator {
     pub fn compute_cell_diffusion(
         &mut self,
         mesh: &PhysicsMesh,
-        concentration: &[Scalar],
-    ) -> &[Scalar] {
+        concentration: &[S],
+    ) -> &[S] {
         // 先计算面通量
         self.compute_face_fluxes(mesh, concentration);
 
         // 清零
-        self.cell_diffusion.as_mut_slice().fill(0.0);
+        self.cell_diffusion.as_mut_slice().fill(S::ZERO);
 
         // 累加面通量到单元
         for face_idx in 0..mesh.n_faces() {
@@ -313,11 +386,11 @@ impl DiffusionOperator {
             let neighbor = mesh.face_neighbor(face_idx);
             let flux = self.face_flux[face_idx];
 
-            let area_o = mesh.cell_area_unchecked(owner);
+            let area_o = <S as Scalar>::from_f64(mesh.cell_area_unchecked(owner) as f64);
             self.cell_diffusion[owner] -= flux / area_o;
 
             if let Some(neigh) = neighbor {
-                let area_n = mesh.cell_area_unchecked(neigh);
+                let area_n = <S as Scalar>::from_f64(mesh.cell_area_unchecked(neigh) as f64);
                 self.cell_diffusion[neigh] += flux / area_n;
             }
         }
@@ -326,36 +399,36 @@ impl DiffusionOperator {
     }
 
     /// 获取面扩散系数
-    pub fn face_diffusivity(&self) -> &[Scalar] {
+    pub fn face_diffusivity(&self) -> &[S] {
         self.face_diffusivity.as_slice()
     }
 
     /// 获取面扩散通量
-    pub fn face_flux(&self) -> &[Scalar] {
+    pub fn face_flux(&self) -> &[S] {
         self.face_flux.as_slice()
     }
 
     /// 获取单元扩散率
-    pub fn cell_diffusion(&self) -> &[Scalar] {
+    pub fn cell_diffusion(&self) -> &[S] {
         self.cell_diffusion.as_slice()
     }
 }
 
-/// 各向异性扩散算子
+/// 各向异性扩散算子（泛型化）
 ///
 /// 考虑流向（纵向）和垂直流向（横向）的不同扩散系数
-pub struct AnisotropicDiffusionOperator {
+pub struct AnisotropicDiffusionOperator<S: Scalar + Pod + Default> {
     /// 纵向扩散系数 [m²/s]
-    longitudinal: Scalar,
+    longitudinal: S,
     /// 横向扩散系数 [m²/s]
-    transverse: Scalar,
+    transverse: S,
     /// 面扩散通量缓存
-    face_flux: AlignedVec<Scalar>,
+    face_flux: AlignedVec<S>,
 }
 
-impl AnisotropicDiffusionOperator {
+impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
     /// 创建新的各向异性扩散算子
-    pub fn new(n_faces: usize, longitudinal: Scalar, transverse: Scalar) -> Self {
+    pub fn new(n_faces: usize, longitudinal: S, transverse: S) -> Self {
         Self {
             longitudinal,
             transverse,
@@ -374,21 +447,23 @@ impl AnisotropicDiffusionOperator {
     pub fn compute_face_fluxes(
         &mut self,
         mesh: &PhysicsMesh,
-        concentration: &[Scalar],
-        velocity_x: &[Scalar],
-        velocity_y: &[Scalar],
-    ) -> &[Scalar] {
+        concentration: &[S],
+        velocity_x: &[S],
+        velocity_y: &[S],
+    ) -> &[S] {
         for face_idx in 0..mesh.n_faces() {
             let owner = mesh.face_owner(face_idx);
             let neighbor = mesh.face_neighbor(face_idx);
 
             let flux = if let Some(neigh) = neighbor {
                 let normal = mesh.face_normal(face_idx);
-                let length = mesh.face_length(face_idx);
-                let dist = mesh.face_dist_o2n(face_idx);
+                let normal_x = <S as Scalar>::from_f64(normal.x as f64);
+                let normal_y = <S as Scalar>::from_f64(normal.y as f64);
+                let length = <S as Scalar>::from_f64(mesh.face_length(face_idx) as f64);
+                let dist = <S as Scalar>::from_f64(mesh.face_dist_o2n(face_idx) as f64);
 
-                if dist < 1e-14 {
-                    0.0
+                if dist < <S as Scalar>::from_f64(1e-14) {
+                    S::ZERO
                 } else {
                     // 计算流向单位向量
                     let u_o = velocity_x[owner];
@@ -396,18 +471,19 @@ impl AnisotropicDiffusionOperator {
                     let u_n = velocity_x[neigh];
                     let v_n = velocity_y[neigh];
 
-                    let u_avg = 0.5 * (u_o + u_n);
-                    let v_avg = 0.5 * (v_o + v_n);
+                    let half = <S as Scalar>::from_f64(0.5);
+                    let u_avg = half * (u_o + u_n);
+                    let v_avg = half * (v_o + v_n);
                     let speed = (u_avg * u_avg + v_avg * v_avg).sqrt();
 
                     // 有效扩散系数（投影到面法向）
-                    let d_eff = if speed > 1e-8 {
+                    let d_eff = if speed > <S as Scalar>::from_f64(1e-8) {
                         let e_x = u_avg / speed;
                         let e_y = v_avg / speed;
 
                         // 法向方向的流向分量
-                        let cos_theta = e_x * normal.x + e_y * normal.y;
-                        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+                        let cos_theta = e_x * normal_x + e_y * normal_y;
+                        let sin_theta = (S::ONE - cos_theta * cos_theta).sqrt();
 
                         self.longitudinal * cos_theta.abs() + self.transverse * sin_theta
                     } else {
@@ -419,7 +495,7 @@ impl AnisotropicDiffusionOperator {
                     -d_eff * grad_n * length
                 }
             } else {
-                0.0
+                S::ZERO
             };
 
             self.face_flux[face_idx] = flux;
@@ -429,18 +505,18 @@ impl AnisotropicDiffusionOperator {
     }
 
     /// 获取面扩散通量
-    pub fn face_flux(&self) -> &[Scalar] {
+    pub fn face_flux(&self) -> &[S] {
         self.face_flux.as_slice()
     }
 }
 
 /// 计算调和平均
 #[inline]
-fn harmonic_mean(a: Scalar, b: Scalar) -> Scalar {
-    if a.abs() < 1e-14 || b.abs() < 1e-14 {
-        0.0
+fn harmonic_mean<S: Scalar>(a: S, b: S) -> S {
+    if a.abs() < <S as Scalar>::from_f64(1e-14) || b.abs() < <S as Scalar>::from_f64(1e-14) {
+        S::ZERO
     } else {
-        2.0 * a * b / (a + b)
+        <S as Scalar>::from_f64(2.0) * a * b / (a + b)
     }
 }
 
@@ -450,13 +526,13 @@ mod tests {
 
     #[test]
     fn test_constant_coefficient() {
-        let coef = DiffusionCoefficient::constant(10.0);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::constant(10.0);
         assert!((coef.effective_at(0, None) - 10.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_variable_coefficient() {
-        let coef = DiffusionCoefficient::Variable(vec![1.0, 2.0, 3.0]);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Variable(vec![1.0, 2.0, 3.0]);
         assert!((coef.effective_at(0, None) - 1.0).abs() < 1e-10);
         assert!((coef.effective_at(1, None) - 2.0).abs() < 1e-10);
         assert!((coef.effective_at(2, None) - 3.0).abs() < 1e-10);
@@ -465,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_anisotropic_coefficient() {
-        let coef = DiffusionCoefficient::anisotropic(100.0, 10.0);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::anisotropic(100.0, 10.0);
         let effective = coef.effective_at(0, None);
         // 几何平均 = sqrt(100 * 10) ≈ 31.62
         assert!((effective - 31.622776601683793).abs() < 1e-10);
@@ -473,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_turbulent_coefficient() {
-        let coef = DiffusionCoefficient::turbulent(1.0, 0.7);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::turbulent(1.0, 0.7);
 
         // 无涡粘度时只有分子扩散
         assert!((coef.effective_at(0, None) - 1.0).abs() < 1e-10);
@@ -495,5 +571,31 @@ mod tests {
     fn test_config_disabled() {
         let config = DiffusionConfig::disabled();
         assert!(!config.enabled);
+    }
+
+    #[test]
+    fn test_config_constant_f64_to_f32() {
+        let config = DiffusionConfig::constant(10.0);
+        let operator = DiffusionOperator::<f32>::new(100, 200, config);
+        assert_eq!(operator.face_diffusivity().len(), 200);
+    }
+
+    #[test]
+    fn test_config_f64_to_f32_conversion() {
+        let config = DiffusionConfig {
+            coefficient: DiffusionCoefficient::turbulent(1.5, 0.8),
+            enabled: true,
+            min_diffusivity: 0.1,
+            max_diffusivity: 100.0,
+        };
+        
+        let operator_f64 = DiffusionOperator::<f64>::new(50, 100, config.clone());
+        let operator_f32 = DiffusionOperator::<f32>::new(50, 100, config);
+        
+        // f64 版本
+        assert_eq!(operator_f64.face_diffusivity().len(), 100);
+        
+        // f32 版本
+        assert_eq!(operator_f32.face_diffusivity().len(), 100);
     }
 }

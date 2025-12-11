@@ -56,8 +56,8 @@ impl<B: Backend> ExplicitStrategy<B> {
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
             backend,
-            gravity: B::Scalar::from_f64(config.gravity),
-            h_dry: B::Scalar::from_f64(config.h_dry),
+            gravity: <B::Scalar as Scalar>::from_f64(config.gravity),
+            h_dry: <B::Scalar as Scalar>::from_f64(config.h_dry),
             config,
         }
     }
@@ -396,5 +396,252 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
     fn recommended_cfl(&self) -> f64 {
         // 显式方法通常使用 0.5 左右的 CFL 数以确保稳定性
         self.config.cfl.max(0.5)
+    }
+}
+
+// =============================================================================
+// f32 后端实现
+// =============================================================================
+
+/// 计算 HLL 数值通量（f32 版本）
+#[inline]
+fn compute_hll_flux_f32(
+    h_l: f32, u_l: f32, v_l: f32,
+    h_r: f32, u_r: f32, v_r: f32,
+    normal: [f32; 2],
+    gravity: f32,
+    h_dry: f32,
+) -> (f32, f32, f32, f32) {
+    // 投影到法向的速度分量
+    let un_l = u_l * normal[0] + v_l * normal[1];
+    let un_r = u_r * normal[0] + v_r * normal[1];
+    
+    // 波速估计
+    let c_l = if h_l > h_dry { (gravity * h_l).sqrt() } else { 0.0 };
+    let c_r = if h_r > h_dry { (gravity * h_r).sqrt() } else { 0.0 };
+    
+    // HLL 波速边界
+    let s_l = (un_l - c_l).min(un_r - c_r).min(0.0);
+    let s_r = (un_l + c_l).max(un_r + c_r).max(0.0);
+    
+    let max_speed = s_l.abs().max(s_r.abs());
+    
+    // 计算左右通量
+    let f_l_h = h_l * un_l;
+    let f_l_hu = h_l * u_l * un_l + 0.5 * gravity * h_l * h_l * normal[0];
+    let f_l_hv = h_l * v_l * un_l + 0.5 * gravity * h_l * h_l * normal[1];
+    
+    let f_r_h = h_r * un_r;
+    let f_r_hu = h_r * u_r * un_r + 0.5 * gravity * h_r * h_r * normal[0];
+    let f_r_hv = h_r * v_r * un_r + 0.5 * gravity * h_r * h_r * normal[1];
+    
+    // HLL 通量公式
+    let (f_h, f_hu, f_hv) = if s_l >= 0.0 {
+        (f_l_h, f_l_hu, f_l_hv)
+    } else if s_r <= 0.0 {
+        (f_r_h, f_r_hu, f_r_hv)
+    } else {
+        let denom = s_r - s_l;
+        if denom.abs() < 1e-7 {
+            (0.0, 0.0, 0.0)
+        } else {
+            let f_h = (s_r * f_l_h - s_l * f_r_h + s_l * s_r * (h_r - h_l)) / denom;
+            let f_hu = (s_r * f_l_hu - s_l * f_r_hu + s_l * s_r * (h_r * u_r - h_l * u_l)) / denom;
+            let f_hv = (s_r * f_l_hv - s_l * f_r_hv + s_l * s_r * (h_r * v_r - h_l * v_l)) / denom;
+            (f_h, f_hu, f_hv)
+        }
+    };
+    
+    (f_h, f_hu, f_hv, max_speed)
+}
+
+impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f32>> {
+    fn name(&self) -> &'static str {
+        "显式 Godunov (HLL) [f32]"
+    }
+    
+    fn step(
+        &mut self,
+        state: &mut ShallowWaterStateGeneric<CpuBackend<f32>>,
+        mesh: &dyn MeshTopology<CpuBackend<f32>>,
+        workspace: &mut SolverWorkspaceGeneric<CpuBackend<f32>>,
+        dt: f32,
+    ) -> StepResult<f32> {
+        workspace.reset();
+        
+        let n_cells = mesh.n_cells();
+        
+        let h: &[f32] = &state.h;
+        let hu: &[f32] = &state.hu;
+        let hv: &[f32] = &state.hv;
+        let z: &[f32] = &state.z;
+        
+        let flux_h: &mut [f32] = &mut workspace.flux_h;
+        let flux_hu: &mut [f32] = &mut workspace.flux_hu;
+        let flux_hv: &mut [f32] = &mut workspace.flux_hv;
+        
+        let h_dry = self.config.h_dry as f32;
+        let gravity = self.config.gravity as f32;
+        
+        let mut max_wave_speed = 0.0f32;
+        let mut dry_cells = 0usize;
+        
+        // 计算内部面通量
+        for face in mesh.interior_faces() {
+            let owner = mesh.face_owner(*face);
+            let neighbor = mesh.face_neighbor(*face).unwrap();
+            
+            let normal_f64 = mesh.face_normal(*face);
+            let normal = [normal_f64[0] as f32, normal_f64[1] as f32];
+            let length = mesh.face_length(*face) as f32;
+            
+            let h_l = h[owner];
+            let h_r = h[neighbor];
+            let z_l = z[owner];
+            let z_r = z[neighbor];
+            
+            let (u_l, v_l) = if h_l > h_dry {
+                (hu[owner] / h_l, hv[owner] / h_l)
+            } else {
+                (0.0, 0.0)
+            };
+            
+            let (u_r, v_r) = if h_r > h_dry {
+                (hu[neighbor] / h_r, hv[neighbor] / h_r)
+            } else {
+                (0.0, 0.0)
+            };
+            
+            // 静水重构
+            let eta_l = h_l + z_l;
+            let eta_r = h_r + z_r;
+            let z_star = z_l.max(z_r);
+            
+            let h_l_star = (eta_l - z_star).max(0.0);
+            let h_r_star = (eta_r - z_star).max(0.0);
+            
+            let (f_h, f_hu, f_hv, wave_speed) = compute_hll_flux_f32(
+                h_l_star, u_l, v_l,
+                h_r_star, u_r, v_r,
+                normal, gravity, h_dry,
+            );
+            
+            max_wave_speed = max_wave_speed.max(wave_speed);
+            
+            let flux_mag_h = f_h * length;
+            let flux_mag_hu = f_hu * length;
+            let flux_mag_hv = f_hv * length;
+            
+            flux_h[owner] -= flux_mag_h;
+            flux_h[neighbor] += flux_mag_h;
+            flux_hu[owner] -= flux_mag_hu;
+            flux_hu[neighbor] += flux_mag_hu;
+            flux_hv[owner] -= flux_mag_hv;
+            flux_hv[neighbor] += flux_mag_hv;
+        }
+        
+        // 边界面处理
+        for face in mesh.boundary_faces() {
+            let owner = mesh.face_owner(*face);
+            let normal_f64 = mesh.face_normal(*face);
+            let normal = [normal_f64[0] as f32, normal_f64[1] as f32];
+            let length = mesh.face_length(*face) as f32;
+            
+            let h_l = h[owner];
+            
+            if h_l <= h_dry {
+                continue;
+            }
+            
+            let u_l = hu[owner] / h_l;
+            let v_l = hv[owner] / h_l;
+            let un_l = u_l * normal[0] + v_l * normal[1];
+            
+            let f_hu = 0.5 * gravity * h_l * h_l * normal[0] * length;
+            let f_hv = 0.5 * gravity * h_l * h_l * normal[1] * length;
+            
+            flux_hu[owner] -= f_hu;
+            flux_hv[owner] -= f_hv;
+            
+            let c = (gravity * h_l).sqrt();
+            max_wave_speed = max_wave_speed.max(un_l.abs() + c);
+        }
+        
+        // 更新状态
+        let h_mut: &mut [f32] = &mut state.h;
+        let hu_mut: &mut [f32] = &mut state.hu;
+        let hv_mut: &mut [f32] = &mut state.hv;
+        
+        for i in 0..n_cells {
+            let area = mesh.cell_area(i) as f32;
+            if area <= 0.0 {
+                continue;
+            }
+            let inv_area = 1.0 / area;
+            
+            h_mut[i] += dt * flux_h[i] * inv_area;
+            hu_mut[i] += dt * flux_hu[i] * inv_area;
+            hv_mut[i] += dt * flux_hv[i] * inv_area;
+            
+            if h_mut[i] < h_dry {
+                h_mut[i] = 0.0;
+                hu_mut[i] = 0.0;
+                hv_mut[i] = 0.0;
+                dry_cells += 1;
+            }
+        }
+        
+        StepResult {
+            dt_used: dt,
+            max_wave_speed,
+            dry_cells,
+            limited_cells: 0,
+            converged: true,
+            iterations: 0,
+        }
+    }
+    
+    fn compute_stable_dt(
+        &self,
+        state: &ShallowWaterStateGeneric<CpuBackend<f32>>,
+        mesh: &dyn MeshTopology<CpuBackend<f32>>,
+        cfl: f32,
+    ) -> f32 {
+        let h: &[f32] = &state.h;
+        let hu: &[f32] = &state.hu;
+        let hv: &[f32] = &state.hv;
+        
+        let h_dry = self.config.h_dry as f32;
+        let gravity = self.config.gravity as f32;
+        
+        let mut dt_min = f32::MAX;
+        
+        for i in 0..mesh.n_cells() {
+            if h[i] <= h_dry {
+                continue;
+            }
+            
+            let u = hu[i] / h[i];
+            let v = hv[i] / h[i];
+            let c = (gravity * h[i]).sqrt();
+            let speed = (u * u + v * v).sqrt() + c;
+            
+            if speed > 1e-6 {
+                let area = mesh.cell_area(i) as f32;
+                let dx = area.sqrt();
+                let dt_local = cfl * dx / speed;
+                dt_min = dt_min.min(dt_local);
+            }
+        }
+        
+        if dt_min == f32::MAX {
+            dt_min = 1e-6;
+        }
+        
+        dt_min
+    }
+    
+    fn recommended_cfl(&self) -> f32 {
+        (self.config.cfl as f32).max(0.5)
     }
 }

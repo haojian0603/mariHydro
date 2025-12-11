@@ -4,8 +4,6 @@
 //!
 //! 定义湍流模型的公共接口，为不同湍流闭合提供统一抽象。
 
-use mh_foundation::Scalar;
-
 /// 速度梯度张量
 ///
 /// 用于计算应变率、涡度等湍流相关量。
@@ -25,19 +23,19 @@ use mh_foundation::Scalar;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VelocityGradient {
     /// ∂u/∂x
-    pub du_dx: Scalar,
+    pub du_dx: f64,
     /// ∂u/∂y
-    pub du_dy: Scalar,
+    pub du_dy: f64,
     /// ∂v/∂x
-    pub dv_dx: Scalar,
+    pub dv_dx: f64,
     /// ∂v/∂y
-    pub dv_dy: Scalar,
+    pub dv_dy: f64,
 }
 
 impl VelocityGradient {
     /// 创建新的速度梯度
     #[inline]
-    pub fn new(du_dx: Scalar, du_dy: Scalar, dv_dx: Scalar, dv_dy: Scalar) -> Self {
+    pub fn new(du_dx: f64, du_dy: f64, dv_dx: f64, dv_dy: f64) -> Self {
         Self { du_dx, du_dy, dv_dx, dv_dy }
     }
 
@@ -45,7 +43,7 @@ impl VelocityGradient {
     ///
     /// |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
     #[inline]
-    pub fn strain_rate_magnitude(&self) -> Scalar {
+    pub fn strain_rate_magnitude(&self) -> f64 {
         let s11 = self.du_dx;
         let s22 = self.dv_dy;
         let s12 = 0.5 * (self.du_dy + self.dv_dx);
@@ -57,7 +55,7 @@ impl VelocityGradient {
     ///
     /// ω_z = ∂v/∂x - ∂u/∂y
     #[inline]
-    pub fn vorticity(&self) -> Scalar {
+    pub fn vorticity(&self) -> f64 {
         self.dv_dx - self.du_dy
     }
 
@@ -65,7 +63,7 @@ impl VelocityGradient {
     ///
     /// div(u) = ∂u/∂x + ∂v/∂y
     #[inline]
-    pub fn divergence(&self) -> Scalar {
+    pub fn divergence(&self) -> f64 {
         self.du_dx + self.dv_dy
     }
     
@@ -95,10 +93,10 @@ pub trait TurbulenceClosure: Send + Sync {
     fn is_3d(&self) -> bool;
     
     /// 获取涡粘性场
-    fn eddy_viscosity(&self) -> &[Scalar];
+    fn eddy_viscosity(&self) -> &[f64];
     
     /// 获取单个单元的涡粘性
-    fn get_eddy_viscosity(&self, cell: usize) -> Scalar {
+    fn get_eddy_viscosity(&self, cell: usize) -> f64 {
         self.eddy_viscosity().get(cell).copied().unwrap_or(0.0)
     }
     
@@ -107,7 +105,7 @@ pub trait TurbulenceClosure: Send + Sync {
     /// # 参数
     /// - `velocity_gradients`: 速度梯度场
     /// - `cell_sizes`: 网格尺度（用于 Smagorinsky 等模型）
-    fn update(&mut self, velocity_gradients: &[VelocityGradient], cell_sizes: &[Scalar]);
+    fn update(&mut self, velocity_gradients: &[VelocityGradient], cell_sizes: &[f64]);
     
     /// 是否启用
     fn is_enabled(&self) -> bool {

@@ -8,7 +8,7 @@
 
 use super::sigma::SigmaCoordinate;
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 
 /// 垂向速度计算器
 pub struct VerticalVelocity {
@@ -18,7 +18,7 @@ pub struct VerticalVelocity {
     n_cells: usize,
     /// 垂向速度场 [m/s]（n_cells × n_layers+1）
     /// w[cell][k] = 层界面 k 的垂向速度
-    w: Vec<AlignedVec<Scalar>>,
+    w: Vec<AlignedVec<f64>>,
 }
 
 impl VerticalVelocity {
@@ -42,7 +42,7 @@ impl VerticalVelocity {
     /// 从底部积分：w(σ=0) = 0, w(k) = w(k+1) - ∫ h×∇·u dσ
     pub fn compute_from_divergence(
         &mut self,
-        div_hu: &[Scalar],
+        div_hu: &[f64],
         state: &ShallowWaterState,
     ) {
         let n_layers = self.sigma.n_layers();
@@ -77,10 +77,10 @@ impl VerticalVelocity {
     /// 更精确的版本，使用每层的实际速度
     pub fn compute_from_layered_velocity(
         &mut self,
-        u_layers: &[&[Scalar]],
-        v_layers: &[&[Scalar]],
-        du_dx: &[&[Scalar]],
-        dv_dy: &[&[Scalar]],
+        u_layers: &[&[f64]],
+        v_layers: &[&[f64]],
+        du_dx: &[&[f64]],
+        dv_dy: &[&[f64]],
         state: &ShallowWaterState,
     ) {
         let n_layers = self.sigma.n_layers();
@@ -119,12 +119,12 @@ impl VerticalVelocity {
     }
 
     /// 获取特定层界面的垂向速度
-    pub fn w_at_interface(&self, k: usize) -> &[Scalar] {
+    pub fn w_at_interface(&self, k: usize) -> &[f64] {
         &self.w[k]
     }
 
     /// 获取特定单元、层界面的垂向速度
-    pub fn get(&self, cell: usize, k: usize) -> Scalar {
+    pub fn get(&self, cell: usize, k: usize) -> f64 {
         self.w[k][cell]
     }
 
@@ -148,7 +148,7 @@ impl VerticalVelocity {
 mod tests {
     use super::*;
 
-    fn create_test_state(n_cells: usize, h: Scalar) -> ShallowWaterState {
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState {
         let mut state = ShallowWaterState::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;

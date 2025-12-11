@@ -6,7 +6,7 @@
 //! - `LayeredState`: 完整的 3D 状态（速度、标量）
 
 use super::sigma::SigmaCoordinate;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
 /// 分层标量场
@@ -19,7 +19,7 @@ pub struct LayeredScalar {
     /// 单元数
     n_cells: usize,
     /// 数据存储 [层索引][单元索引]
-    data: Vec<AlignedVec<Scalar>>,
+    data: Vec<AlignedVec<f64>>,
 }
 
 impl LayeredScalar {
@@ -53,49 +53,49 @@ impl LayeredScalar {
 
     /// 获取特定层的切片
     #[inline]
-    pub fn layer(&self, k: usize) -> &[Scalar] {
+    pub fn layer(&self, k: usize) -> &[f64] {
         &self.data[k]
     }
 
     /// 获取特定层的可变切片
     #[inline]
-    pub fn layer_mut(&mut self, k: usize) -> &mut [Scalar] {
+    pub fn layer_mut(&mut self, k: usize) -> &mut [f64] {
         &mut self.data[k]
     }
 
     /// 获取特定单元、层的值
     #[inline]
-    pub fn get(&self, cell: usize, k: usize) -> Scalar {
+    pub fn get(&self, cell: usize, k: usize) -> f64 {
         self.data[k][cell]
     }
 
     /// 设置特定单元、层的值
     #[inline]
-    pub fn set(&mut self, cell: usize, k: usize, value: Scalar) {
+    pub fn set(&mut self, cell: usize, k: usize, value: f64) {
         self.data[k][cell] = value;
     }
 
     /// 设置整个单元柱的值（所有层相同）
-    pub fn set_column(&mut self, cell: usize, value: Scalar) {
+    pub fn set_column(&mut self, cell: usize, value: f64) {
         for k in 0..self.n_layers {
             self.data[k][cell] = value;
         }
     }
 
     /// 设置整层的值
-    pub fn fill_layer(&mut self, k: usize, value: Scalar) {
+    pub fn fill_layer(&mut self, k: usize, value: f64) {
         self.data[k].fill(value);
     }
 
     /// 设置所有值
-    pub fn fill(&mut self, value: Scalar) {
+    pub fn fill(&mut self, value: f64) {
         for layer in &mut self.data {
             layer.fill(value);
         }
     }
 
     /// 深度加权平均（计算 2D 表示）
-    pub fn depth_average(&self, layer_weights: &[Scalar]) -> AlignedVec<Scalar> {
+    pub fn depth_average(&self, layer_weights: &[f64]) -> AlignedVec<f64> {
         let mut avg = AlignedVec::zeros(self.n_cells);
         let mut total_weight = 0.0;
 
@@ -116,7 +116,7 @@ impl LayeredScalar {
     }
 
     /// 从 2D 场初始化（所有层相同）
-    pub fn from_2d(values: &[Scalar], n_layers: usize) -> Self {
+    pub fn from_2d(values: &[f64], n_layers: usize) -> Self {
         let n_cells = values.len();
         let mut layered = Self::zeros(n_cells, n_layers);
         for k in 0..n_layers {
@@ -213,7 +213,7 @@ impl LayeredState {
     }
 
     /// 从 2D 速度初始化（所有层相同）
-    pub fn init_from_2d(&mut self, u_2d: &[Scalar], v_2d: &[Scalar]) {
+    pub fn init_from_2d(&mut self, u_2d: &[f64], v_2d: &[f64]) {
         for k in 0..self.n_layers() {
             let n = self.n_cells.min(u_2d.len()).min(v_2d.len());
             self.u.layer_mut(k)[..n].copy_from_slice(&u_2d[..n]);
@@ -222,8 +222,8 @@ impl LayeredState {
     }
 
     /// 计算深度平均速度
-    pub fn depth_average_velocity(&self) -> (AlignedVec<Scalar>, AlignedVec<Scalar>) {
-        let weights: Vec<Scalar> = (0..self.n_layers())
+    pub fn depth_average_velocity(&self) -> (AlignedVec<f64>, AlignedVec<f64>) {
+        let weights: Vec<f64> = (0..self.n_layers())
             .map(|k| self.sigma.layer_thickness_sigma(k))
             .collect();
         
@@ -231,7 +231,7 @@ impl LayeredState {
     }
 
     /// 计算动能
-    pub fn kinetic_energy(&self, cell: usize, k: usize) -> Scalar {
+    pub fn kinetic_energy(&self, cell: usize, k: usize) -> f64 {
         let u = self.u.get(cell, k);
         let v = self.v.get(cell, k);
         0.5 * (u * u + v * v)
@@ -244,40 +244,40 @@ mod tests {
 
     #[test]
     fn test_layered_scalar_creation() {
-        let scalar = LayeredScalar::zeros(10, 5);
-        assert_eq!(scalar.n_cells(), 10);
-        assert_eq!(scalar.n_layers(), 5);
+        let f64 = LayeredScalar::zeros(10, 5);
+        assert_eq!(f64.n_cells(), 10);
+        assert_eq!(f64.n_layers(), 5);
     }
 
     #[test]
     fn test_layered_scalar_access() {
-        let mut scalar = LayeredScalar::zeros(10, 5);
-        scalar.set(3, 2, 1.5);
-        assert!((scalar.get(3, 2) - 1.5).abs() < 1e-10);
+        let mut f64 = LayeredScalar::zeros(10, 5);
+        f64.set(3, 2, 1.5);
+        assert!((f64.get(3, 2) - 1.5).abs() < 1e-10);
     }
 
     #[test]
     fn test_layered_scalar_from_2d() {
         let values_2d = vec![1.0, 2.0, 3.0];
-        let scalar = LayeredScalar::from_2d(&values_2d, 5);
+        let f64 = LayeredScalar::from_2d(&values_2d, 5);
 
         for k in 0..5 {
-            assert!((scalar.get(0, k) - 1.0).abs() < 1e-10);
-            assert!((scalar.get(1, k) - 2.0).abs() < 1e-10);
+            assert!((f64.get(0, k) - 1.0).abs() < 1e-10);
+            assert!((f64.get(1, k) - 2.0).abs() < 1e-10);
         }
     }
 
     #[test]
     fn test_depth_average() {
-        let mut scalar = LayeredScalar::zeros(2, 5);
+        let mut f64 = LayeredScalar::zeros(2, 5);
         // 设置从表层到底层线性增加的值
         for k in 0..5 {
-            scalar.set(0, k, k as Scalar);
+            f64.set(0, k, k as f64);
         }
 
         // 均匀权重
         let weights = vec![0.2; 5];
-        let avg = scalar.depth_average(&weights);
+        let avg = f64.depth_average(&weights);
         
         // 平均值应该是 (0+1+2+3+4)/5 = 2
         assert!((avg[0] - 2.0).abs() < 1e-10);

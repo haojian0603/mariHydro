@@ -20,7 +20,7 @@
 //! ```
 
 use crate::halfedge::HalfEdgeMesh;
-use mh_foundation::Scalar;
+// f64 hardcoded for mesh geometry
 
 /// 矩形结构化网格生成器
 ///
@@ -31,13 +31,13 @@ pub struct RectMeshGenerator {
     /// y 方向单元数
     ny: usize,
     /// x 方向域长度 [m]
-    lx: Scalar,
+    lx: f64,
     /// y 方向域长度 [m]
-    ly: Scalar,
+    ly: f64,
     /// x 方向起点
-    x0: Scalar,
+    x0: f64,
     /// y 方向起点
-    y0: Scalar,
+    y0: f64,
 }
 
 impl RectMeshGenerator {
@@ -49,7 +49,7 @@ impl RectMeshGenerator {
     /// - `ny`: y 方向单元数
     /// - `lx`: x 方向域长度
     /// - `ly`: y 方向域长度
-    pub fn new(nx: usize, ny: usize, lx: Scalar, ly: Scalar) -> Self {
+    pub fn new(nx: usize, ny: usize, lx: f64, ly: f64) -> Self {
         Self {
             nx,
             ny,
@@ -61,25 +61,25 @@ impl RectMeshGenerator {
     }
 
     /// 创建方形网格生成器
-    pub fn square(n: usize, length: Scalar) -> Self {
+    pub fn square(n: usize, length: f64) -> Self {
         Self::new(n, n, length, length)
     }
 
     /// 设置原点偏移
-    pub fn with_origin(mut self, x0: Scalar, y0: Scalar) -> Self {
+    pub fn with_origin(mut self, x0: f64, y0: f64) -> Self {
         self.x0 = x0;
         self.y0 = y0;
         self
     }
 
     /// 获取 x 方向网格间距
-    pub fn dx(&self) -> Scalar {
-        self.lx / self.nx as Scalar
+    pub fn dx(&self) -> f64 {
+        self.lx / self.nx as f64
     }
 
     /// 获取 y 方向网格间距
-    pub fn dy(&self) -> Scalar {
-        self.ly / self.ny as Scalar
+    pub fn dy(&self) -> f64 {
+        self.ly / self.ny as f64
     }
 
     /// 获取顶点总数
@@ -103,8 +103,8 @@ impl RectMeshGenerator {
         let mut vertex_ids = Vec::with_capacity(self.n_vertices());
         for j in 0..=self.ny {
             for i in 0..=self.nx {
-                let x = self.x0 + i as Scalar * dx;
-                let y = self.y0 + j as Scalar * dy;
+                let x = self.x0 + i as f64 * dx;
+                let y = self.y0 + j as f64 * dy;
                 let vid = mesh.add_vertex_xyz(x, y, 0.0);
                 vertex_ids.push(vid);
             }
@@ -143,11 +143,11 @@ impl RectMeshGenerator {
     /// # 参数
     ///
     /// - `depth_fn`: 返回给定 (x, y) 坐标处水深的函数
-    pub fn build_with_depth<F>(&self, depth_fn: F) -> (HalfEdgeMesh<(), (), Scalar>, Vec<Scalar>)
+    pub fn build_with_depth<F>(&self, depth_fn: F) -> (HalfEdgeMesh<(), (), f64>, Vec<f64>)
     where
-        F: Fn(Scalar, Scalar) -> Scalar,
+        F: Fn(f64, f64) -> f64,
     {
-        let mut mesh: HalfEdgeMesh<(), (), Scalar> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), (), f64> = HalfEdgeMesh::new();
 
         let dx = self.dx();
         let dy = self.dy();
@@ -156,8 +156,8 @@ impl RectMeshGenerator {
         let mut vertex_ids = Vec::with_capacity(self.n_vertices());
         for j in 0..=self.ny {
             for i in 0..=self.nx {
-                let x = self.x0 + i as Scalar * dx;
-                let y = self.y0 + j as Scalar * dy;
+                let x = self.x0 + i as f64 * dx;
+                let y = self.y0 + j as f64 * dy;
                 let vid = mesh.add_vertex_xyz(x, y, 0.0);
                 vertex_ids.push(vid);
             }
@@ -176,18 +176,18 @@ impl RectMeshGenerator {
                 let v11 = vertex_ids[vertex_idx(i + 1, j + 1)];
 
                 // 两个三角形的中心
-                let cx1: Scalar;
-                let cy1: Scalar;
-                let cx2: Scalar;
-                let cy2: Scalar;
+                let cx1: f64;
+                let cy1: f64;
+                let cx2: f64;
+                let cy2: f64;
 
                 if (i + j) % 2 == 0 {
                     // 三角形 1: v00, v10, v11
-                    cx1 = self.x0 + (i as Scalar + 2.0 / 3.0) * dx;
-                    cy1 = self.y0 + (j as Scalar + 1.0 / 3.0) * dy;
+                    cx1 = self.x0 + (i as f64 + 2.0 / 3.0) * dx;
+                    cy1 = self.y0 + (j as f64 + 1.0 / 3.0) * dy;
                     // 三角形 2: v00, v11, v01
-                    cx2 = self.x0 + (i as Scalar + 1.0 / 3.0) * dx;
-                    cy2 = self.y0 + (j as Scalar + 2.0 / 3.0) * dy;
+                    cx2 = self.x0 + (i as f64 + 1.0 / 3.0) * dx;
+                    cy2 = self.y0 + (j as f64 + 2.0 / 3.0) * dy;
 
                     let depth1 = depth_fn(cx1, cy1);
                     let depth2 = depth_fn(cx2, cy2);
@@ -208,11 +208,11 @@ impl RectMeshGenerator {
                     cell_depths.push(depth2);
                 } else {
                     // 三角形 1: v00, v10, v01
-                    cx1 = self.x0 + (i as Scalar + 1.0 / 3.0) * dx;
-                    cy1 = self.y0 + (j as Scalar + 1.0 / 3.0) * dy;
+                    cx1 = self.x0 + (i as f64 + 1.0 / 3.0) * dx;
+                    cy1 = self.y0 + (j as f64 + 1.0 / 3.0) * dy;
                     // 三角形 2: v10, v11, v01
-                    cx2 = self.x0 + (i as Scalar + 2.0 / 3.0) * dx;
-                    cy2 = self.y0 + (j as Scalar + 2.0 / 3.0) * dy;
+                    cx2 = self.x0 + (i as f64 + 2.0 / 3.0) * dx;
+                    cy2 = self.y0 + (j as f64 + 2.0 / 3.0) * dy;
 
                     let depth1 = depth_fn(cx1, cy1);
                     let depth2 = depth_fn(cx2, cy2);
@@ -244,15 +244,15 @@ impl RectMeshGenerator {
 /// 生成圆形域上的三角形网格，适用于 Thacker 测试等
 pub struct CircularMeshGenerator {
     /// 半径 [m]
-    radius: Scalar,
+    radius: f64,
     /// 径向分割数
     n_radial: usize,
     /// 周向分割数
     n_angular: usize,
     /// 中心 x 坐标
-    cx: Scalar,
+    cx: f64,
     /// 中心 y 坐标
-    cy: Scalar,
+    cy: f64,
 }
 
 impl CircularMeshGenerator {
@@ -263,7 +263,7 @@ impl CircularMeshGenerator {
     /// - `radius`: 圆半径
     /// - `n_radial`: 径向分割数
     /// - `n_angular`: 周向分割数
-    pub fn new(radius: Scalar, n_radial: usize, n_angular: usize) -> Self {
+    pub fn new(radius: f64, n_radial: usize, n_angular: usize) -> Self {
         Self {
             radius,
             n_radial,
@@ -274,7 +274,7 @@ impl CircularMeshGenerator {
     }
 
     /// 设置圆心
-    pub fn with_center(mut self, cx: Scalar, cy: Scalar) -> Self {
+    pub fn with_center(mut self, cx: f64, cy: f64) -> Self {
         self.cx = cx;
         self.cy = cy;
         self
@@ -288,17 +288,17 @@ impl CircularMeshGenerator {
         let center = mesh.add_vertex_xyz(self.cx, self.cy, 0.0);
 
         // 添加各环的顶点
-        let dr = self.radius / self.n_radial as Scalar;
-        let dtheta: Scalar = 2.0 * std::f64::consts::PI as Scalar / self.n_angular as Scalar;
+        let dr = self.radius / self.n_radial as f64;
+        let dtheta: f64 = 2.0 * std::f64::consts::PI as f64 / self.n_angular as f64;
 
         let mut rings: Vec<Vec<_>> = Vec::with_capacity(self.n_radial);
 
         for ir in 1..=self.n_radial {
-            let r = ir as Scalar * dr;
+            let r = ir as f64 * dr;
             let mut ring = Vec::with_capacity(self.n_angular);
 
             for ia in 0..self.n_angular {
-                let theta = ia as Scalar * dtheta;
+                let theta = ia as f64 * dtheta;
                 let x = self.cx + r * theta.cos();
                 let y = self.cy + r * theta.sin();
                 let vid = mesh.add_vertex_xyz(x, y, 0.0);

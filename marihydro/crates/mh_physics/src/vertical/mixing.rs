@@ -6,7 +6,7 @@
 //! - k-ε 模型驱动（需外部提供 k, ε）
 
 use super::sigma::SigmaCoordinate;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
 /// 垂向混合模型类型
@@ -15,22 +15,22 @@ pub enum VerticalMixingModel {
     /// 常数混合系数
     Constant {
         /// 动量涡粘性 [m²/s]
-        nu_v: Scalar,
+        nu_v: f64,
         /// 标量扩散系数 [m²/s]
-        kappa_v: Scalar,
+        kappa_v: f64,
     },
     /// Pacanowski-Philander (1981) 模型
     /// 
     /// ν_v = ν_0 + ν_max / (1 + α × Ri)^n
     PacanowskiPhilander {
         /// 背景粘性 [m²/s]
-        nu_0: Scalar,
+        nu_0: f64,
         /// 最大粘性增量 [m²/s]
-        nu_max: Scalar,
+        nu_max: f64,
         /// Richardson 数系数 α
-        alpha: Scalar,
+        alpha: f64,
         /// 指数 n
-        n: Scalar,
+        n: f64,
     },
     /// 由 k-ε 模型驱动
     /// 
@@ -56,11 +56,11 @@ pub struct VerticalMixing {
     /// 混合模型
     model: VerticalMixingModel,
     /// 动量涡粘性场 [m²/s]（n_cells × n_layers）
-    nu_v: Vec<AlignedVec<Scalar>>,
+    nu_v: Vec<AlignedVec<f64>>,
     /// 标量扩散系数场 [m²/s]（n_cells × n_layers）
-    kappa_v: Vec<AlignedVec<Scalar>>,
+    kappa_v: Vec<AlignedVec<f64>>,
     /// Richardson 数（可选）
-    ri: Option<Vec<AlignedVec<Scalar>>>,
+    ri: Option<Vec<AlignedVec<f64>>>,
 }
 
 impl VerticalMixing {
@@ -119,10 +119,10 @@ impl VerticalMixing {
     /// - `du_dz`: 速度垂向梯度 [1/s]
     pub fn update_pp(
         &mut self,
-        drho_dz: &[&[Scalar]],
-        du_dz: &[&[Scalar]],
-        rho_0: Scalar,
-        g: Scalar,
+        drho_dz: &[&[f64]],
+        du_dz: &[&[f64]],
+        rho_0: f64,
+        g: f64,
     ) {
         if let VerticalMixingModel::PacanowskiPhilander { nu_0, nu_max, alpha, n } = self.model {
             let n_layers = self.sigma.n_layers();
@@ -157,9 +157,9 @@ impl VerticalMixing {
     /// ν_v = c_μ × k² / ε
     pub fn update_from_k_epsilon(
         &mut self,
-        k_field: &[&[Scalar]],
-        epsilon_field: &[&[Scalar]],
-        c_mu: Scalar,
+        k_field: &[&[f64]],
+        epsilon_field: &[&[f64]],
+        c_mu: f64,
     ) {
         let n_layers = self.sigma.n_layers();
 
@@ -176,22 +176,22 @@ impl VerticalMixing {
     }
 
     /// 获取特定层的涡粘性
-    pub fn nu_v_at_layer(&self, k: usize) -> &[Scalar] {
+    pub fn nu_v_at_layer(&self, k: usize) -> &[f64] {
         &self.nu_v[k]
     }
 
     /// 获取特定层的扩散系数
-    pub fn kappa_v_at_layer(&self, k: usize) -> &[Scalar] {
+    pub fn kappa_v_at_layer(&self, k: usize) -> &[f64] {
         &self.kappa_v[k]
     }
 
     /// 获取特定单元、层的涡粘性
-    pub fn nu_v(&self, cell: usize, k: usize) -> Scalar {
+    pub fn nu_v(&self, cell: usize, k: usize) -> f64 {
         self.nu_v[k][cell]
     }
 
     /// 获取特定单元、层的扩散系数
-    pub fn kappa_v(&self, cell: usize, k: usize) -> Scalar {
+    pub fn kappa_v(&self, cell: usize, k: usize) -> f64 {
         self.kappa_v[k][cell]
     }
 

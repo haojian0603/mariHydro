@@ -11,7 +11,6 @@
 //! - 对数分布：底部加密（边界层解析）
 //! - 双曲正切：表层+底层加密
 
-use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
 /// σ层分布类型
@@ -24,14 +23,14 @@ pub enum SigmaDistribution {
     /// 对数分布（底部加密）
     Logarithmic {
         /// 加密因子（>1加密底部）
-        factor: Scalar,
+        factor: f64,
     },
     /// 双曲正切分布（表层+底层加密）
     DoubleTanh {
         /// 表层加密参数
-        surface_param: Scalar,
+        surface_param: f64,
         /// 底层加密参数
-        bottom_param: Scalar,
+        bottom_param: f64,
     },
 }
 
@@ -43,9 +42,9 @@ pub struct SigmaCoordinate {
     n_layers: usize,
     /// 层界面的 σ 值（长度 = n_layers + 1）
     /// sigma_w[0] = 0 (水面), sigma_w[n_layers] = -1 (底床)
-    sigma_w: Vec<Scalar>,
+    sigma_w: Vec<f64>,
     /// 层中心的 σ 值（长度 = n_layers）
-    sigma_c: Vec<Scalar>,
+    sigma_c: Vec<f64>,
     /// 分布类型
     distribution: SigmaDistribution,
 }
@@ -57,12 +56,12 @@ impl SigmaCoordinate {
     }
 
     /// 创建对数分布的 σ 层（底部加密）
-    pub fn logarithmic(n_layers: usize, factor: Scalar) -> Self {
+    pub fn logarithmic(n_layers: usize, factor: f64) -> Self {
         Self::new(n_layers, SigmaDistribution::Logarithmic { factor })
     }
 
     /// 创建双曲正切分布（表层+底层加密）
-    pub fn double_tanh(n_layers: usize, surface_param: Scalar, bottom_param: Scalar) -> Self {
+    pub fn double_tanh(n_layers: usize, surface_param: f64, bottom_param: f64) -> Self {
         Self::new(n_layers, SigmaDistribution::DoubleTanh { surface_param, bottom_param })
     }
 
@@ -77,14 +76,14 @@ impl SigmaCoordinate {
             SigmaDistribution::Uniform => {
                 // 均匀分布
                 for i in 0..=n_layers {
-                    sigma_w[i] = -(i as Scalar) / (n_layers as Scalar);
+                    sigma_w[i] = -(i as f64) / (n_layers as f64);
                 }
             }
             SigmaDistribution::Logarithmic { factor } => {
                 // 对数分布（底部加密）
                 let f = factor.max(1.0);
                 for i in 0..=n_layers {
-                    let xi = (i as Scalar) / (n_layers as Scalar);
+                    let xi = (i as f64) / (n_layers as f64);
                     // σ = -(e^(f*ξ) - 1) / (e^f - 1)
                     sigma_w[i] = -((f * xi).exp() - 1.0) / (f.exp() - 1.0);
                 }
@@ -94,7 +93,7 @@ impl SigmaCoordinate {
                 let ts = surface_param;
                 let tb = bottom_param;
                 for i in 0..=n_layers {
-                    let xi = (i as Scalar) / (n_layers as Scalar);
+                    let xi = (i as f64) / (n_layers as f64);
                     // 组合表层和底层加密
                     let s = ((xi - 1.0) * ts).tanh() / ts.tanh();
                     let b = (xi * tb).tanh() / tb.tanh();
@@ -124,37 +123,37 @@ impl SigmaCoordinate {
 
     /// 层界面的 σ 值
     #[inline]
-    pub fn sigma_at_interface(&self, k: usize) -> Scalar {
+    pub fn sigma_at_interface(&self, k: usize) -> f64 {
         self.sigma_w[k]
     }
 
     /// 层中心的 σ 值
     #[inline]
-    pub fn sigma_at_center(&self, k: usize) -> Scalar {
+    pub fn sigma_at_center(&self, k: usize) -> f64 {
         self.sigma_c[k]
     }
 
     /// 层厚度（无量纲）
     #[inline]
-    pub fn layer_thickness_sigma(&self, k: usize) -> Scalar {
+    pub fn layer_thickness_sigma(&self, k: usize) -> f64 {
         (self.sigma_w[k] - self.sigma_w[k + 1]).abs()
     }
 
     /// 层厚度（有量纲）
     #[inline]
-    pub fn layer_thickness(&self, k: usize, water_depth: Scalar) -> Scalar {
+    pub fn layer_thickness(&self, k: usize, water_depth: f64) -> f64 {
         self.layer_thickness_sigma(k) * water_depth
     }
 
     /// 从 σ 值计算实际深度
     #[inline]
-    pub fn depth_from_sigma(&self, sigma: Scalar, water_depth: Scalar, eta: Scalar) -> Scalar {
+    pub fn depth_from_sigma(&self, sigma: f64, water_depth: f64, eta: f64) -> f64 {
         eta + sigma * water_depth
     }
 
     /// 从实际深度计算 σ 值
     #[inline]
-    pub fn sigma_from_depth(&self, z: Scalar, water_depth: Scalar, eta: Scalar) -> Scalar {
+    pub fn sigma_from_depth(&self, z: f64, water_depth: f64, eta: f64) -> f64 {
         if water_depth < 1e-10 {
             return 0.0;
         }
@@ -162,12 +161,12 @@ impl SigmaCoordinate {
     }
 
     /// 层界面的 σ 值切片
-    pub fn sigma_interfaces(&self) -> &[Scalar] {
+    pub fn sigma_interfaces(&self) -> &[f64] {
         &self.sigma_w
     }
 
     /// 层中心的 σ 值切片
-    pub fn sigma_centers(&self) -> &[Scalar] {
+    pub fn sigma_centers(&self) -> &[f64] {
         &self.sigma_c
     }
 

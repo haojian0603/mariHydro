@@ -40,7 +40,7 @@
 
 pub mod events;
 pub mod job;
-pub mod job_v2;
+mod job_v2;
 pub mod manager;
 pub mod runner;
 pub mod scheduler;

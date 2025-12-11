@@ -86,6 +86,7 @@ pub mod boundary;
 pub mod diffusion;
 pub mod state;
 pub mod transport;
+pub mod settling;
 
 // 从 state 模块导出
 pub use state::{
@@ -97,6 +98,8 @@ pub use transport::{
     FaceFlowData, MultiTracerSolver, TracerAdvectionScheme, TracerDiffusionConfig,
     TracerFaceFlux, TracerTransportConfig, TracerTransportSolver,
 };
+
+pub use settling::{SettlingSolver, SettlingConfig, SettlingResult};
 
 // 从 boundary 模块导出
 pub use boundary::{

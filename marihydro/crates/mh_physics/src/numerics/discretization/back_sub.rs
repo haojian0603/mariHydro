@@ -25,7 +25,6 @@
 
 use crate::adapter::PhysicsMesh;
 use super::topology::CellFaceTopology;
-use mh_foundation::Scalar;
 
 /// 水深校正器
 ///
@@ -34,7 +33,7 @@ pub struct DepthCorrector {
     /// 单元数量
     n_cells: usize,
     /// 最小水深
-    h_min: Scalar,
+    h_min: f64,
     /// 是否保证非负
     ensure_positive: bool,
 }
@@ -50,7 +49,7 @@ impl DepthCorrector {
     }
 
     /// 设置最小水深
-    pub fn with_h_min(mut self, h_min: Scalar) -> Self {
+    pub fn with_h_min(mut self, h_min: f64) -> Self {
         self.h_min = h_min;
         self
     }
@@ -67,7 +66,7 @@ impl DepthCorrector {
     ///
     /// - `h`: 水深场（将被修改）
     /// - `eta_prime`: 水位校正量
-    pub fn correct(&self, h: &mut [Scalar], eta_prime: &[Scalar]) {
+    pub fn correct(&self, h: &mut [f64], eta_prime: &[f64]) {
         debug_assert_eq!(h.len(), self.n_cells);
         debug_assert_eq!(eta_prime.len(), self.n_cells);
 
@@ -80,7 +79,7 @@ impl DepthCorrector {
     }
 
     /// 校正水深并返回统计
-    pub fn correct_with_stats(&self, h: &mut [Scalar], eta_prime: &[Scalar]) -> CorrectionStats {
+    pub fn correct_with_stats(&self, h: &mut [f64], eta_prime: &[f64]) -> CorrectionStats {
         debug_assert_eq!(h.len(), self.n_cells);
         debug_assert_eq!(eta_prime.len(), self.n_cells);
 
@@ -99,7 +98,7 @@ impl DepthCorrector {
             }
         }
 
-        stats.mean_correction = stats.sum_correction / self.n_cells as Scalar;
+        stats.mean_correction = stats.sum_correction / self.n_cells as f64;
         stats
     }
 }
@@ -112,11 +111,11 @@ pub struct VelocityCorrector {
     /// 单元数量
     n_cells: usize,
     /// 梯度 x 分量
-    grad_x: Vec<Scalar>,
+    grad_x: Vec<f64>,
     /// 梯度 y 分量
-    grad_y: Vec<Scalar>,
+    grad_y: Vec<f64>,
     /// 最小水深
-    h_min: Scalar,
+    h_min: f64,
 }
 
 impl VelocityCorrector {
@@ -132,7 +131,7 @@ impl VelocityCorrector {
     }
 
     /// 设置最小水深
-    pub fn with_h_min(mut self, h_min: Scalar) -> Self {
+    pub fn with_h_min(mut self, h_min: f64) -> Self {
         self.h_min = h_min;
         self
     }
@@ -142,7 +141,7 @@ impl VelocityCorrector {
         &mut self,
         topo: &CellFaceTopology,
         mesh: &PhysicsMesh,
-        eta_prime: &[Scalar],
+        eta_prime: &[f64],
     ) {
         // 清零
         self.grad_x.fill(0.0);
@@ -203,14 +202,14 @@ impl VelocityCorrector {
     /// - `g`: 重力加速度
     pub fn correct(
         &mut self,
-        u: &mut [Scalar],
-        v: &mut [Scalar],
-        h: &[Scalar],
-        eta_prime: &[Scalar],
+        u: &mut [f64],
+        v: &mut [f64],
+        h: &[f64],
+        eta_prime: &[f64],
         topo: &CellFaceTopology,
         mesh: &PhysicsMesh,
-        dt: Scalar,
-        g: Scalar,
+        dt: f64,
+        g: f64,
     ) {
         // 计算 η' 的梯度
         self.compute_gradient(topo, mesh, eta_prime);
@@ -230,12 +229,12 @@ impl VelocityCorrector {
     }
 
     /// 获取梯度 x 分量
-    pub fn gradient_x(&self) -> &[Scalar] {
+    pub fn gradient_x(&self) -> &[f64] {
         &self.grad_x
     }
 
     /// 获取梯度 y 分量
-    pub fn gradient_y(&self) -> &[Scalar] {
+    pub fn gradient_y(&self) -> &[f64] {
         &self.grad_y
     }
 }
@@ -244,11 +243,11 @@ impl VelocityCorrector {
 #[derive(Debug, Clone, Default)]
 pub struct CorrectionStats {
     /// 最大校正量绝对值
-    pub max_correction: Scalar,
+    pub max_correction: f64,
     /// 平均校正量
-    pub mean_correction: Scalar,
+    pub mean_correction: f64,
     /// 校正量之和
-    pub sum_correction: Scalar,
+    pub sum_correction: f64,
     /// 被裁剪的单元数
     pub clipped_count: usize,
 }

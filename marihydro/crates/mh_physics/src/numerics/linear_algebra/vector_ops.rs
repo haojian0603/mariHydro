@@ -28,8 +28,6 @@
 //! axpy(2.0, &x, &mut y);  // y = [6, 9, 12]
 //! ```
 
-use mh_foundation::Scalar;
-
 /// 点积 x·y
 ///
 /// # 参数
@@ -41,7 +39,7 @@ use mh_foundation::Scalar;
 ///
 /// 点积结果
 #[inline]
-pub fn dot(x: &[Scalar], y: &[Scalar]) -> Scalar {
+pub fn dot(x: &[f64], y: &[f64]) -> f64 {
     debug_assert_eq!(x.len(), y.len());
     x.iter().zip(y.iter()).map(|(&xi, &yi)| xi * yi).sum()
 }
@@ -56,7 +54,7 @@ pub fn dot(x: &[Scalar], y: &[Scalar]) -> Scalar {
 ///
 /// 二范数
 #[inline]
-pub fn norm2(x: &[Scalar]) -> Scalar {
+pub fn norm2(x: &[f64]) -> f64 {
     dot(x, x).sqrt()
 }
 
@@ -70,8 +68,8 @@ pub fn norm2(x: &[Scalar]) -> Scalar {
 ///
 /// 无穷范数（最大绝对值）
 #[inline]
-pub fn norm_inf(x: &[Scalar]) -> Scalar {
-    x.iter().map(|&v| v.abs()).fold(0.0, Scalar::max)
+pub fn norm_inf(x: &[f64]) -> f64 {
+    x.iter().map(|&v| v.abs()).fold(0.0, f64::max)
 }
 
 /// AXPY: y = α*x + y
@@ -82,7 +80,7 @@ pub fn norm_inf(x: &[Scalar]) -> Scalar {
 /// - `x`: 向量 x
 /// - `y`: 向量 y（将被修改）
 #[inline]
-pub fn axpy(alpha: Scalar, x: &[Scalar], y: &mut [Scalar]) {
+pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     for (yi, &xi) in y.iter_mut().zip(x.iter()) {
         *yi += alpha * xi;
@@ -97,7 +95,7 @@ pub fn axpy(alpha: Scalar, x: &[Scalar], y: &mut [Scalar]) {
 /// - `alpha`: 标量 α
 /// - `y`: 向量 y（将被修改）
 #[inline]
-pub fn xpay(x: &[Scalar], alpha: Scalar, y: &mut [Scalar]) {
+pub fn xpay(x: &[f64], alpha: f64, y: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     for (yi, &xi) in y.iter_mut().zip(x.iter()) {
         *yi = xi + alpha * *yi;
@@ -111,7 +109,7 @@ pub fn xpay(x: &[Scalar], alpha: Scalar, y: &mut [Scalar]) {
 /// - `alpha`: 标量 α
 /// - `x`: 向量（将被修改）
 #[inline]
-pub fn scale(alpha: Scalar, x: &mut [Scalar]) {
+pub fn scale(alpha: f64, x: &mut [f64]) {
     for xi in x.iter_mut() {
         *xi *= alpha;
     }
@@ -124,7 +122,7 @@ pub fn scale(alpha: Scalar, x: &mut [Scalar]) {
 /// - `x`: 源向量
 /// - `y`: 目标向量（将被覆盖）
 #[inline]
-pub fn copy(x: &[Scalar], y: &mut [Scalar]) {
+pub fn copy(x: &[f64], y: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     y.copy_from_slice(x);
 }
@@ -136,7 +134,7 @@ pub fn copy(x: &[Scalar], y: &mut [Scalar]) {
 /// - `alpha`: 填充值
 /// - `x`: 向量（将被修改）
 #[inline]
-pub fn fill(alpha: Scalar, x: &mut [Scalar]) {
+pub fn fill(alpha: f64, x: &mut [f64]) {
     x.fill(alpha);
 }
 
@@ -150,7 +148,7 @@ pub fn fill(alpha: Scalar, x: &mut [Scalar]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn linear_combination(alpha: Scalar, x: &[Scalar], beta: Scalar, y: &[Scalar], z: &mut [Scalar]) {
+pub fn linear_combination(alpha: f64, x: &[f64], beta: f64, y: &[f64], z: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -166,7 +164,7 @@ pub fn linear_combination(alpha: Scalar, x: &[Scalar], beta: Scalar, y: &[Scalar
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn sub(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
+pub fn sub(x: &[f64], y: &[f64], z: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -182,7 +180,7 @@ pub fn sub(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn add(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
+pub fn add(x: &[f64], y: &[f64], z: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -198,7 +196,7 @@ pub fn add(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn hadamard(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
+pub fn hadamard(x: &[f64], y: &[f64], z: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -218,7 +216,7 @@ pub fn hadamard(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 ///
 /// y 中元素绝对值小于 f64::EPSILON 时，z 对应位置设为 0
 #[inline]
-pub fn hadamard_div(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
+pub fn hadamard_div(x: &[f64], y: &[f64], z: &mut [f64]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -237,7 +235,7 @@ pub fn hadamard_div(x: &[Scalar], y: &[Scalar], z: &mut [Scalar]) {
 ///
 /// 相对残差 ||r|| / ||b||，若 ||b|| <= f64::MIN_POSITIVE 则返回绝对残差 ||r||
 #[inline]
-pub fn relative_residual(residual: &[Scalar], b: &[Scalar]) -> Scalar {
+pub fn relative_residual(residual: &[f64], b: &[f64]) -> f64 {
     let norm_r = norm2(residual);
     let norm_b = norm2(b);
     if norm_b <= f64::MIN_POSITIVE {
@@ -251,7 +249,7 @@ pub fn relative_residual(residual: &[Scalar], b: &[Scalar]) -> Scalar {
 ///
 /// 与 axpy 相同，提供语义更清晰的别名
 #[inline]
-pub fn add_scaled(alpha: Scalar, x: &[Scalar], y: &mut [Scalar]) {
+pub fn add_scaled(alpha: f64, x: &[f64], y: &mut [f64]) {
     axpy(alpha, x, y);
 }
 

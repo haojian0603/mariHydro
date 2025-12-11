@@ -24,7 +24,6 @@
 
 use crate::adapter::PhysicsMesh;
 use glam::DVec2;
-use mh_foundation::Scalar;
 
 /// 邻居信息
 #[derive(Debug, Clone, Copy)]
@@ -36,11 +35,11 @@ pub struct NeighborInfo {
     /// 指向邻居的法向（归一化）
     pub normal: DVec2,
     /// 面长度 [m]
-    pub length: Scalar,
+    pub length: f64,
     /// 单元中心到面的距离 [m]
-    pub dist_to_face: Scalar,
+    pub dist_to_face: f64,
     /// 单元中心到邻居中心的距离 [m]（边界时为 2 * dist_to_face）
-    pub dist_to_neighbor: Scalar,
+    pub dist_to_neighbor: f64,
 }
 
 /// 面信息
@@ -55,13 +54,13 @@ pub struct FaceInfo {
     /// Owner -> Neighbor 方向的法向（归一化）
     pub normal: DVec2,
     /// 面长度 [m]
-    pub length: Scalar,
+    pub length: f64,
     /// Owner 中心到 Neighbor 中心的距离 [m]
-    pub dist_o2n: Scalar,
+    pub dist_o2n: f64,
     /// Owner 中心到面的距离 [m]
-    pub dist_o2f: Scalar,
+    pub dist_o2f: f64,
     /// Neighbor 中心到面的距离 [m]（边界时为 dist_o2f）
-    pub dist_n2f: Scalar,
+    pub dist_n2f: f64,
     /// 是否为边界面
     pub is_boundary: bool,
 }
