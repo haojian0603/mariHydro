@@ -13,6 +13,7 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
+use mh_foundation::Scalar;
 
 /// 侵蚀公式 trait
 pub trait ErosionFormula: Send + Sync {
@@ -26,7 +27,7 @@ pub trait ErosionFormula: Send + Sync {
     /// - `tau_cr`: 临界剪切应力 [Pa]
     /// - `props`: 泥沙属性
     /// - `physics`: 物理常数
-    fn erosion_rate(&self, tau_b: f64, tau_cr: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64;
+    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar;
     
     /// 计算沉降率 D [kg/m²/s]
     ///
@@ -35,7 +36,7 @@ pub trait ErosionFormula: Send + Sync {
     /// # 参数
     /// - `c_b`: 近底浓度 [kg/m³]
     /// - `ws`: 沉降速度 [m/s]
-    fn deposition_rate(&self, c_b: f64, ws: f64) -> f64 {
+    fn deposition_rate(&self, c_b: Scalar, ws: Scalar) -> Scalar {
         ws * c_b
     }
     
@@ -43,7 +44,7 @@ pub trait ErosionFormula: Send + Sync {
     ///
     /// E - D > 0: 侵蚀主导
     /// E - D < 0: 沉降主导
-    fn net_exchange(&self, tau_b: f64, c_b: f64, ws: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+    fn net_exchange(&self, tau_b: Scalar, c_b: Scalar, ws: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         let e = self.erosion_rate(tau_b, props.critical_shear_stress, props, physics);
         let d = self.deposition_rate(c_b, ws);
         e - d
@@ -59,7 +60,7 @@ pub trait ErosionFormula: Send + Sync {
 #[derive(Debug, Clone, Copy)]
 pub struct SmithMcLean {
     /// 再悬浮系数 γ₀（默认 0.0024）
-    pub gamma0: f64,
+    pub gamma0: Scalar,
 }
 
 impl Default for SmithMcLean {
@@ -75,7 +76,7 @@ impl SmithMcLean {
     }
     
     /// 设置再悬浮系数
-    pub fn with_gamma(mut self, gamma: f64) -> Self {
+    pub fn with_gamma(mut self, gamma: Scalar) -> Self {
         self.gamma0 = gamma;
         self
     }
@@ -86,7 +87,7 @@ impl ErosionFormula for SmithMcLean {
         "Smith-McLean"
     }
     
-    fn erosion_rate(&self, tau_b: f64, tau_cr: f64, props: &SedimentProperties, _physics: &PhysicalConstants) -> f64 {
+    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, _physics: &PhysicalConstants) -> Scalar {
         if tau_b <= tau_cr {
             return 0.0;
         }
@@ -115,7 +116,7 @@ impl ErosionFormula for SmithMcLean {
 #[derive(Debug, Clone, Copy)]
 pub struct GarciaParker {
     /// 公式系数 A（默认 1.3e-7）
-    pub coefficient_a: f64,
+    pub coefficient_a: Scalar,
 }
 
 impl Default for GarciaParker {
@@ -136,7 +137,7 @@ impl ErosionFormula for GarciaParker {
         "Garcia-Parker"
     }
     
-    fn erosion_rate(&self, tau_b: f64, tau_cr: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         if tau_b <= tau_cr {
             return 0.0;
         }
@@ -169,7 +170,7 @@ pub struct ResuspensionSource {
     /// 泥沙属性
     properties: SedimentProperties,
     /// 沉降速度 [m/s]
-    settling_velocity: f64,
+    settling_velocity: Scalar,
 }
 
 impl ResuspensionSource {
@@ -189,7 +190,7 @@ impl ResuspensionSource {
     }
     
     /// 设置沉降速度
-    pub fn with_settling_velocity(mut self, ws: f64) -> Self {
+    pub fn with_settling_velocity(mut self, ws: Scalar) -> Self {
         self.settling_velocity = ws;
         self
     }
@@ -197,7 +198,7 @@ impl ResuspensionSource {
     /// 计算单元的源项 [kg/m³/s]
     ///
     /// 正值表示增加（侵蚀），负值表示减少（沉降）
-    pub fn compute_source(&self, tau_b: f64, concentration: f64, water_depth: f64, physics: &PhysicalConstants) -> f64 {
+    pub fn compute_source(&self, tau_b: Scalar, concentration: Scalar, water_depth: Scalar, physics: &PhysicalConstants) -> Scalar {
         if water_depth < 1e-6 {
             return 0.0;
         }
@@ -216,7 +217,7 @@ impl ResuspensionSource {
     }
     
     /// 获取沉降速度
-    pub fn settling_velocity(&self) -> f64 {
+    pub fn settling_velocity(&self) -> Scalar {
         self.settling_velocity
     }
     

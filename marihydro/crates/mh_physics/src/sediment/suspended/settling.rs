@@ -15,6 +15,7 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
+use mh_foundation::Scalar;
 
 /// 沉降速度公式 trait
 pub trait SettlingFormula: Send + Sync {
@@ -29,10 +30,10 @@ pub trait SettlingFormula: Send + Sync {
     /// - `rho_w`: 水密度 [kg/m³]
     /// - `nu`: 运动粘度 [m²/s]
     /// - `g`: 重力加速度 [m/s²]
-    fn compute(&self, d: f64, rho_s: f64, rho_w: f64, nu: f64, g: f64) -> f64;
+    fn compute(&self, d: Scalar, rho_s: Scalar, rho_w: Scalar, nu: Scalar, g: Scalar) -> Scalar;
     
     /// 从泥沙属性和物理常数计算
-    fn compute_from_props(&self, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+    fn compute_from_props(&self, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         self.compute(
             props.d50,
             props.rho_s,
@@ -47,7 +48,7 @@ pub trait SettlingFormula: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SettlingVelocity {
     /// 预计算的沉降速度 [m/s]
-    pub ws: f64,
+    pub ws: Scalar,
     /// 使用的公式名称
     pub formula_used: &'static str,
 }
@@ -97,7 +98,7 @@ impl SettlingFormula for StokesSettling {
         "Stokes"
     }
     
-    fn compute(&self, d: f64, rho_s: f64, rho_w: f64, nu: f64, g: f64) -> f64 {
+    fn compute(&self, d: Scalar, rho_s: Scalar, rho_w: Scalar, nu: Scalar, g: Scalar) -> Scalar {
         let s = rho_s / rho_w;
         (s - 1.0) * g * d * d / (18.0 * nu)
     }
@@ -109,7 +110,7 @@ impl SettlingFormula for StokesSettling {
 #[derive(Debug, Clone, Copy)]
 pub struct DietrichSettling {
     /// 形状因子（球形=1.0，天然砂≈0.7）
-    pub shape_factor: f64,
+    pub shape_factor: Scalar,
 }
 
 impl Default for DietrichSettling {
@@ -123,7 +124,7 @@ impl SettlingFormula for DietrichSettling {
         "Dietrich"
     }
     
-    fn compute(&self, d: f64, rho_s: f64, rho_w: f64, nu: f64, g: f64) -> f64 {
+    fn compute(&self, d: Scalar, rho_s: Scalar, rho_w: Scalar, nu: Scalar, g: Scalar) -> Scalar {
         let s = rho_s / rho_w;
         
         // 无量纲粒径
@@ -154,7 +155,7 @@ impl SettlingFormula for VanRijnSettling {
         "Van Rijn"
     }
     
-    fn compute(&self, d: f64, rho_s: f64, rho_w: f64, nu: f64, g: f64) -> f64 {
+    fn compute(&self, d: Scalar, rho_s: Scalar, rho_w: Scalar, nu: Scalar, g: Scalar) -> Scalar {
         let s = rho_s / rho_w;
         let d_star = d * ((s - 1.0) * g / (nu * nu)).powf(1.0 / 3.0);
         

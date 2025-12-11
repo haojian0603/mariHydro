@@ -16,7 +16,7 @@ use crate::tracer::{TracerTransportConfig, TracerTransportSolver, TracerAdvectio
 use crate::types::PhysicalConstants;
 use super::resuspension::ResuspensionSource;
 use super::settling::SettlingVelocity;
-use mh_foundation::AlignedVec;
+use mh_foundation::{AlignedVec, Scalar};
 
 /// 悬移质输运求解器
 ///
@@ -29,9 +29,9 @@ pub struct SuspendedTransport {
     /// 沉降速度信息
     settling: SettlingVelocity,
     /// 浓度场 [kg/m³]
-    concentration: AlignedVec<f64>,
+    concentration: AlignedVec<Scalar>,
     /// 源项缓存 [kg/m³/s]
-    source_term: AlignedVec<f64>,
+    source_term: AlignedVec<Scalar>,
     /// 物理常数
     physics: PhysicalConstants,
 }
@@ -65,18 +65,18 @@ impl SuspendedTransport {
     }
     
     /// 设置初始浓度
-    pub fn set_concentration(&mut self, values: &[f64]) {
+    pub fn set_concentration(&mut self, values: &[Scalar]) {
         let n = self.concentration.len().min(values.len());
         self.concentration[..n].copy_from_slice(&values[..n]);
     }
     
     /// 获取浓度场
-    pub fn concentration(&self) -> &[f64] {
+    pub fn concentration(&self) -> &[Scalar] {
         &self.concentration
     }
     
     /// 获取沉降速度
-    pub fn settling_velocity(&self) -> f64 {
+    pub fn settling_velocity(&self) -> Scalar {
         self.settling.ws
     }
     
@@ -85,7 +85,7 @@ impl SuspendedTransport {
     /// # 参数
     /// - `tau_b`: 床面剪切应力场 [Pa]
     /// - `h`: 水深场 [m]
-    pub fn compute_source_terms(&mut self, tau_b: &[f64], h: &[f64]) {
+    pub fn compute_source_terms(&mut self, tau_b: &[Scalar], h: &[Scalar]) {
         for i in 0..self.source_term.len() {
             let tau = tau_b.get(i).copied().unwrap_or(0.0);
             let depth = h.get(i).copied().unwrap_or(0.0);
@@ -109,7 +109,7 @@ impl SuspendedTransport {
     ///
     /// # 注意
     /// 此方法只更新源项，实际的对流-扩散需要调用 tracer 求解器的 step 方法
-    pub fn step_source_only(&mut self, tau_b: &[f64], h: &[f64], dt: f64) {
+    pub fn step_source_only(&mut self, tau_b: &[Scalar], h: &[Scalar], dt: Scalar) {
         // 计算源项
         self.compute_source_terms(tau_b, h);
         
@@ -133,11 +133,11 @@ impl SuspendedTransport {
     /// - `dt`: 时间步长 [s]
     pub fn step(
         &mut self,
-        u: &[f64],
-        v: &[f64],
-        h: &[f64],
-        tau_b: &[f64],
-        dt: f64,
+        u: &[Scalar],
+        v: &[Scalar],
+        h: &[Scalar],
+        tau_b: &[Scalar],
+        dt: Scalar,
     ) {
         // 1. 计算床面源项（侵蚀-沉降）
         self.compute_source_terms(tau_b, h);
@@ -168,7 +168,7 @@ impl SuspendedTransport {
     }
     
     /// 获取源项（用于与 tracer 求解器耦合）
-    pub fn source_term(&self) -> &[f64] {
+    pub fn source_term(&self) -> &[Scalar] {
         &self.source_term
     }
     
@@ -182,7 +182,7 @@ impl SuspendedTransport {
     /// dz/dt = (D - E) / ((1 - p) × ρ_s)
     ///
     /// 其中 p 为孔隙率
-    pub fn bed_change_rate(&self, cell: usize, porosity: f64) -> f64 {
+    pub fn bed_change_rate(&self, cell: usize, porosity: Scalar) -> Scalar {
         let source = self.source_term.get(cell).copied().unwrap_or(0.0);
         let h = 1.0; // 假设单位水深，实际应传入
         

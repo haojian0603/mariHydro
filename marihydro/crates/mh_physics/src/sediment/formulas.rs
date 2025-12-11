@@ -29,6 +29,7 @@
 
 use super::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
+use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
 
 /// 输沙公式 trait
@@ -52,12 +53,12 @@ pub trait TransportFormula: Send + Sync {
     /// # 返回
     ///
     /// 无量纲输沙率 Φ
-    fn compute_phi(&self, theta: f64, theta_cr: f64, props: &SedimentProperties) -> f64;
+    fn compute_phi(&self, theta: Scalar, theta_cr: Scalar, props: &SedimentProperties) -> Scalar;
 
     /// 计算有量纲输沙率 [m²/s]
     ///
     /// 默认实现：q_b = Φ × √[(s-1)gd³]
-    fn compute_dimensional(&self, theta: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+    fn compute_dimensional(&self, theta: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         let phi = self.compute_phi(theta, props.critical_shields, props);
         if phi <= 0.0 {
             return 0.0;
@@ -71,7 +72,7 @@ pub trait TransportFormula: Send + Sync {
     }
 
     /// 从床面剪切应力计算输沙率
-    fn compute_from_shear_stress(&self, tau_b: f64, props: &SedimentProperties, physics: &PhysicalConstants) -> f64 {
+    fn compute_from_shear_stress(&self, tau_b: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
         let theta = props.shields_number(tau_b, physics);
         self.compute_dimensional(theta, props, physics)
     }
@@ -81,11 +82,11 @@ pub trait TransportFormula: Send + Sync {
     /// 输沙方向与剪切应力方向一致
     fn compute_transport_vector(
         &self,
-        tau_bx: f64,
-        tau_by: f64,
+        tau_bx: Scalar,
+        tau_by: Scalar,
         props: &SedimentProperties,
         physics: &PhysicalConstants,
-    ) -> (f64, f64) {
+    ) -> (Scalar, Scalar) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
         if tau_b < 1e-14 {
             return (0.0, 0.0);
@@ -116,9 +117,9 @@ pub trait TransportFormula: Send + Sync {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MeyerPeterMullerFormula {
     /// 公式系数 A（默认 8.0）
-    pub coefficient: f64,
+    pub coefficient: Scalar,
     /// 指数 n（默认 1.5）
-    pub exponent: f64,
+    pub exponent: Scalar,
 }
 
 impl Default for MeyerPeterMullerFormula {
@@ -137,13 +138,13 @@ impl MeyerPeterMullerFormula {
     }
 
     /// 设置系数
-    pub fn with_coefficient(mut self, c: f64) -> Self {
+    pub fn with_coefficient(mut self, c: Scalar) -> Self {
         self.coefficient = c;
         self
     }
 
     /// 设置指数
-    pub fn with_exponent(mut self, n: f64) -> Self {
+    pub fn with_exponent(mut self, n: Scalar) -> Self {
         self.exponent = n;
         self
     }
@@ -168,7 +169,7 @@ impl TransportFormula for MeyerPeterMullerFormula {
         "mpm"
     }
 
-    fn compute_phi(&self, theta: f64, theta_cr: f64, _props: &SedimentProperties) -> f64 {
+    fn compute_phi(&self, theta: Scalar, theta_cr: Scalar, _props: &SedimentProperties) -> Scalar {
         let excess = theta - theta_cr;
         if excess <= 0.0 {
             return 0.0;
@@ -191,7 +192,7 @@ impl TransportFormula for MeyerPeterMullerFormula {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct VanRijn1984Formula {
     /// 公式系数（默认 0.053）
-    pub coefficient: f64,
+    pub coefficient: Scalar,
 }
 
 impl Default for VanRijn1984Formula {
@@ -207,7 +208,7 @@ impl VanRijn1984Formula {
     }
 
     /// 设置系数
-    pub fn with_coefficient(mut self, c: f64) -> Self {
+    pub fn with_coefficient(mut self, c: Scalar) -> Self {
         self.coefficient = c;
         self
     }
@@ -222,7 +223,7 @@ impl TransportFormula for VanRijn1984Formula {
         "vanrijn"
     }
 
-    fn compute_phi(&self, theta: f64, theta_cr: f64, props: &SedimentProperties) -> f64 {
+    fn compute_phi(&self, theta: Scalar, theta_cr: Scalar, props: &SedimentProperties) -> Scalar {
         if theta <= theta_cr {
             return 0.0;
         }
@@ -283,10 +284,10 @@ impl EinsteinFormula {
     /// Chebyshev 多项式近似 Einstein 曲线
     ///
     /// 使用 8 阶 Chebyshev 多项式近似 Φ*(ψ) 关系
-    fn chebyshev_approximation(psi: f64) -> f64 {
+    fn chebyshev_approximation(psi: Scalar) -> Scalar {
         // Chebyshev 系数（预计算）
         // 在 ψ ∈ [0.5, 40] 区间拟合
-        const COEFFS: [f64; 8] = [
+        const COEFFS: [Scalar; 8] = [
             0.4893, -0.7812, 0.3421, -0.1234, 
             0.0423, -0.0134, 0.0038, -0.0009
         ];
@@ -309,7 +310,7 @@ impl EinsteinFormula {
     }
 
     /// 简化近似（原始实现）
-    fn simple_approximation(psi: f64) -> f64 {
+    fn simple_approximation(psi: Scalar) -> Scalar {
         if psi < 2.0 {
             40.0 * (-0.39 * psi).exp()
         } else {
@@ -327,7 +328,7 @@ impl TransportFormula for EinsteinFormula {
         "einstein"
     }
 
-    fn compute_phi(&self, theta: f64, _theta_cr: f64, _props: &SedimentProperties) -> f64 {
+    fn compute_phi(&self, theta: Scalar, _theta_cr: Scalar, _props: &SedimentProperties) -> Scalar {
         // 防止除零和溢出
         if theta < 1e-14 {
             return 0.0;
@@ -369,7 +370,7 @@ impl TransportFormula for EinsteinFormula {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct EngelundHansenFormula {
     /// 摩阻系数 f（默认 0.05）
-    pub friction_factor: f64,
+    pub friction_factor: Scalar,
 }
 
 impl Default for EngelundHansenFormula {
@@ -387,7 +388,7 @@ impl EngelundHansenFormula {
     }
 
     /// 设置摩阻系数
-    pub fn with_friction(mut self, f: f64) -> Self {
+    pub fn with_friction(mut self, f: Scalar) -> Self {
         self.friction_factor = f;
         self
     }
@@ -402,7 +403,7 @@ impl TransportFormula for EngelundHansenFormula {
         "engelund-hansen"
     }
 
-    fn compute_phi(&self, theta: f64, _theta_cr: f64, _props: &SedimentProperties) -> f64 {
+    fn compute_phi(&self, theta: Scalar, _theta_cr: Scalar, _props: &SedimentProperties) -> Scalar {
         if theta < 1e-14 {
             return 0.0;
         }

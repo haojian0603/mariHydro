@@ -20,7 +20,6 @@
 //! ```
 
 use crate::halfedge::HalfEdgeMesh;
-// f64 hardcoded for mesh geometry
 
 /// 矩形结构化网格生成器
 ///
