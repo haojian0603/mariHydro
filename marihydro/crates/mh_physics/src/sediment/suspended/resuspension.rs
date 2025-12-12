@@ -1,4 +1,5 @@
-// marihydro\crates\mh_physics\src\sediment\suspended\resuspension.rs
+// crates/mh_physics/src/sediment/suspended/resuspension.rs
+
 //! 再悬浮/侵蚀源项
 //!
 //! 实现床面与水体之间的泥沙交换：
@@ -13,12 +14,11 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-
-// 悬移质再悬浮计算使用 f64 精度
-type Scalar = f64;
+use mh_core::Scalar;
+use std::marker::PhantomData;
 
 /// 侵蚀公式 trait
-pub trait ErosionFormula: Send + Sync {
+pub trait ErosionFormula<S: Scalar>: Send + Sync {
     /// 公式名称
     fn name(&self) -> &'static str;
     
@@ -27,9 +27,9 @@ pub trait ErosionFormula: Send + Sync {
     /// # 参数
     /// - `tau_b`: 床面剪切应力 [Pa]
     /// - `tau_cr`: 临界剪切应力 [Pa]
-    /// - `props`: 泥沙属性
+    /// - `props`: 泥沙属性（配置参数，f64存储）
     /// - `physics`: 物理常数
-    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar;
+    fn erosion_rate(&self, tau_b: S, tau_cr: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S;
     
     /// 计算沉降率 D [kg/m²/s]
     ///
@@ -38,7 +38,7 @@ pub trait ErosionFormula: Send + Sync {
     /// # 参数
     /// - `c_b`: 近底浓度 [kg/m³]
     /// - `ws`: 沉降速度 [m/s]
-    fn deposition_rate(&self, c_b: Scalar, ws: Scalar) -> Scalar {
+    fn deposition_rate(&self, c_b: S, ws: S) -> S {
         ws * c_b
     }
     
@@ -46,12 +46,16 @@ pub trait ErosionFormula: Send + Sync {
     ///
     /// E - D > 0: 侵蚀主导
     /// E - D < 0: 沉降主导
-    fn net_exchange(&self, tau_b: Scalar, c_b: Scalar, ws: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
+    fn net_exchange(&self, tau_b: S, c_b: S, ws: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
         let e = self.erosion_rate(tau_b, props.critical_shear_stress, props, physics);
         let d = self.deposition_rate(c_b, ws);
         e - d
     }
 }
+
+// ============================================================
+// Smith & McLean (1977) 公式
+// ============================================================
 
 /// Smith & McLean (1977) 侵蚀公式
 ///
@@ -60,54 +64,58 @@ pub trait ErosionFormula: Send + Sync {
 ///
 /// 其中 T = (τ_b - τ_cr) / τ_cr
 #[derive(Debug, Clone, Copy)]
-pub struct SmithMcLean {
+pub struct SmithMcLean<S: Scalar> {
     /// 再悬浮系数 γ₀（默认 0.0024）
-    pub gamma0: Scalar,
+    pub gamma0: S,
 }
 
-impl Default for SmithMcLean {
+impl<S: Scalar> Default for SmithMcLean<S> {
     fn default() -> Self {
-        Self { gamma0: 0.0024 }
+        Self { gamma0: S::from_f64(0.0024) }
     }
 }
 
-impl SmithMcLean {
+impl<S: Scalar> SmithMcLean<S> {
     /// 创建新实例
     pub fn new() -> Self {
         Self::default()
     }
     
     /// 设置再悬浮系数
-    pub fn with_gamma(mut self, gamma: Scalar) -> Self {
+    pub fn with_gamma(mut self, gamma: S) -> Self {
         self.gamma0 = gamma;
         self
     }
 }
 
-impl ErosionFormula for SmithMcLean {
+impl<S: Scalar> ErosionFormula<S> for SmithMcLean<S> {
     fn name(&self) -> &'static str {
         "Smith-McLean"
     }
     
-    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, _physics: &PhysicalConstants) -> Scalar {
+    fn erosion_rate(&self, tau_b: S, tau_cr: S, props: &SedimentProperties, _physics: &PhysicalConstants) -> S {
         if tau_b <= tau_cr {
-            return 0.0;
+            return S::ZERO;
         }
         
         // 输沙强度参数
         let t_param = (tau_b - tau_cr) / tau_cr;
         
         // 近底参考浓度（体积分数）
-        let c_b_vol = self.gamma0 * t_param / (1.0 + self.gamma0 * t_param);
+        let c_b_vol = self.gamma0 * t_param / (S::ONE + self.gamma0 * t_param);
         
-        // 转换为质量浓度 [kg/m³]，假设沉降速度约为 ws
-        // E = c_b × ws × ρ_s
-        let rho_s = props.rho_s;
-        let ws = props.settling_velocity;
+        // 转换为质量浓度 [kg/m³]
+        // 注：props.rho_s为f64配置参数，运行时转换
+        let rho_s = S::from_f64(props.rho_s);
+        let ws = S::from_f64(props.settling_velocity);
         
         c_b_vol * rho_s * ws
     }
 }
+
+// ============================================================
+// Garcia & Parker (1991) 公式
+// ============================================================
 
 /// Garcia & Parker (1991) 侵蚀公式
 ///
@@ -116,83 +124,94 @@ impl ErosionFormula for SmithMcLean {
 ///
 /// 其中 Z = u* × Re_p^0.6 / ws
 #[derive(Debug, Clone, Copy)]
-pub struct GarciaParker {
+pub struct GarciaParker<S: Scalar> {
     /// 公式系数 A（默认 1.3e-7）
-    pub coefficient_a: Scalar,
+    pub coefficient_a: S,
 }
 
-impl Default for GarciaParker {
+impl<S: Scalar> Default for GarciaParker<S> {
     fn default() -> Self {
-        Self { coefficient_a: 1.3e-7 }
+        Self { coefficient_a: S::from_f64(1.3e-7) }
     }
 }
 
-impl GarciaParker {
+impl<S: Scalar> GarciaParker<S> {
     /// 创建新实例
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl ErosionFormula for GarciaParker {
+impl<S: Scalar> ErosionFormula<S> for GarciaParker<S> {
     fn name(&self) -> &'static str {
         "Garcia-Parker"
     }
     
-    fn erosion_rate(&self, tau_b: Scalar, tau_cr: Scalar, props: &SedimentProperties, physics: &PhysicalConstants) -> Scalar {
+    fn erosion_rate(&self, tau_b: S, tau_cr: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
         if tau_b <= tau_cr {
-            return 0.0;
+            return S::ZERO;
         }
         
         // 剪切速度
-        let u_star = (tau_b / physics.rho_water).sqrt();
+        let rho_water = S::from_f64(physics.rho_water);
+        let u_star = (tau_b / rho_water).sqrt();
         
         // 颗粒雷诺数
-        let re_p = props.d50 * u_star / physics.nu_water;
+        let d50 = S::from_f64(props.d50);
+        let nu_water = S::from_f64(physics.nu_water);
+        let re_p = d50 * u_star / nu_water;
         
-        // 沉降速度
-        let ws = props.settling_velocity.max(1e-10);
+        // 沉降速度（确保不为零）
+        let ws = S::from_f64(props.settling_velocity).max(S::from_f64(1e-10));
         
         // Z 参数
-        let z = u_star * re_p.powf(0.6) / ws;
+        let z = u_star * re_p.powf(S::from_f64(0.6)) / ws;
         
         // 近底浓度
         let z5 = z.powi(5);
-        let c_b = self.coefficient_a * z5 / (1.0 + self.coefficient_a / 0.3 * z5);
+        let c_b = self.coefficient_a * z5 / (S::ONE + self.coefficient_a / S::from_f64(0.3) * z5);
         
         // 侵蚀率
-        c_b * ws * props.rho_s
+        let rho_s = S::from_f64(props.rho_s);
+        c_b * ws * rho_s
     }
 }
 
-/// 悬移质源项（综合侵蚀和沉降）
-pub struct ResuspensionSource {
+// ============================================================
+// 悬移质源项（综合侵蚀和沉降）
+// ============================================================
+
+/// 悬移质源项（完全泛型化）
+pub struct ResuspensionSource<S: Scalar> {
     /// 侵蚀公式
-    formula: Box<dyn ErosionFormula>,
-    /// 泥沙属性
+    formula: Box<dyn ErosionFormula<S>>,
+    /// 泥沙属性（配置参数，f64存储）
     properties: SedimentProperties,
     /// 沉降速度 [m/s]
-    settling_velocity: Scalar,
+    settling_velocity: S,
+    /// 类型标记
+    _marker: PhantomData<S>,
 }
 
-impl ResuspensionSource {
+impl<S: Scalar> ResuspensionSource<S> {
     /// 创建新的源项计算器
     pub fn new(properties: SedimentProperties) -> Self {
         Self {
             formula: Box::new(SmithMcLean::default()),
             properties: properties.clone(),
-            settling_velocity: properties.settling_velocity,
+            settling_velocity: S::from_f64(properties.settling_velocity),
+            _marker: PhantomData,
         }
     }
     
     /// 设置侵蚀公式
-    pub fn with_formula<F: ErosionFormula + 'static>(mut self, formula: F) -> Self {
+    pub fn with_formula<F: ErosionFormula<S> + 'static>(mut self, formula: F) -> Self {
         self.formula = Box::new(formula);
         self
     }
     
     /// 设置沉降速度
-    pub fn with_settling_velocity(mut self, ws: Scalar) -> Self {
+    pub fn with_settling_velocity(mut self, ws: S) -> Self {
         self.settling_velocity = ws;
         self
     }
@@ -200,9 +219,15 @@ impl ResuspensionSource {
     /// 计算单元的源项 [kg/m³/s]
     ///
     /// 正值表示增加（侵蚀），负值表示减少（沉降）
-    pub fn compute_source(&self, tau_b: Scalar, concentration: Scalar, water_depth: Scalar, physics: &PhysicalConstants) -> Scalar {
-        if water_depth < 1e-6 {
-            return 0.0;
+    pub fn compute_source(
+        &self,
+        tau_b: S,
+        concentration: S,
+        water_depth: S,
+        physics: &PhysicalConstants,
+    ) -> S {
+        if water_depth < S::from_f64(1e-6) {
+            return S::ZERO;
         }
         
         // 床面交换 [kg/m²/s]
@@ -219,11 +244,11 @@ impl ResuspensionSource {
     }
     
     /// 获取沉降速度
-    pub fn settling_velocity(&self) -> Scalar {
+    pub fn settling_velocity(&self) -> S {
         self.settling_velocity
     }
     
-    /// 获取泥沙属性
+    /// 获取泥沙属性引用
     pub fn properties(&self) -> &SedimentProperties {
         &self.properties
     }
@@ -243,7 +268,7 @@ mod tests {
     
     #[test]
     fn test_smith_mclean_below_critical() {
-        let sm = SmithMcLean::default();
+        let sm: SmithMcLean<f64> = SmithMcLean::default();
         let props = make_props();
         let physics = make_physics();
         
@@ -254,7 +279,7 @@ mod tests {
     
     #[test]
     fn test_smith_mclean_above_critical() {
-        let sm = SmithMcLean::default();
+        let sm: SmithMcLean<f64> = SmithMcLean::default();
         let props = make_props();
         let physics = make_physics();
         
@@ -265,7 +290,7 @@ mod tests {
     
     #[test]
     fn test_deposition_rate() {
-        let sm = SmithMcLean::default();
+        let sm: SmithMcLean<f64> = SmithMcLean::default();
         
         let c_b = 1.0; // kg/m³
         let ws = 0.01; // m/s
@@ -279,7 +304,7 @@ mod tests {
         let props = make_props();
         let physics = make_physics();
         
-        let source = ResuspensionSource::new(props.clone());
+        let source: ResuspensionSource<f64> = ResuspensionSource::new(props.clone());
         
         // 无剪切力时应该是纯沉降（负值）
         let s = source.compute_source(0.0, 1.0, 1.0, &physics);
@@ -290,4 +315,32 @@ mod tests {
         // 取决于具体参数，但应该是有限值
         assert!(s.is_finite());
     }
+
+    #[test]
+    fn test_f32_precision() {
+        let props = make_props();
+        let physics = make_physics();
+        
+        let source_f32: ResuspensionSource<f32> = ResuspensionSource::new(props.clone());
+        let source_f64: ResuspensionSource<f64> = ResuspensionSource::new(props.clone());
+        
+        let tau_b = 2.0;
+        let conc = 0.5;
+        let depth = 1.0;
+        
+        let s_f32 = source_f32.compute_source(
+            f32::from_f64(tau_b),
+            f32::from_f64(conc),
+            f32::from_f64(depth),
+            &physics,
+        );
+        let s_f64 = source_f64.compute_source(tau_b, conc, depth, &physics);
+        
+        // f32和f64结果应接近
+        assert!((s_f32 as f64 - s_f64).abs() < 1e-3);
+    }
 }
+
+
+
+
