@@ -37,7 +37,6 @@
 //! matrix.mul_vec(&x, &mut y);
 //! ```
 
-use mh_foundation::Scalar;
 use std::collections::BTreeMap;
 
 /// CSR 矩阵的稀疏模式
@@ -125,7 +124,7 @@ pub struct CsrMatrix {
     /// 稀疏模式
     pattern: CsrPattern,
     /// 非零元值
-    values: Vec<Scalar>,
+    values: Vec<f64>,
 }
 
 impl CsrMatrix {
@@ -154,7 +153,7 @@ impl CsrMatrix {
         n_cols: usize,
         row_ptr: Vec<usize>,
         col_idx: Vec<usize>,
-        values: Vec<Scalar>,
+        values: Vec<f64>,
     ) -> Self {
         debug_assert_eq!(row_ptr.len(), n_rows + 1, "row_ptr 长度必须为 n_rows + 1");
         debug_assert_eq!(col_idx.len(), values.len(), "col_idx 和 values 长度必须相等");
@@ -181,7 +180,7 @@ impl CsrMatrix {
     }
 
     /// 创建对角矩阵
-    pub fn diagonal(diag: &[Scalar]) -> Self {
+    pub fn diagonal(diag: &[f64]) -> Self {
         let n = diag.len();
         let mut builder = CsrBuilder::new_square(n);
         for (i, &v) in diag.iter().enumerate() {
@@ -216,13 +215,13 @@ impl CsrMatrix {
 
     /// 获取值切片
     #[inline]
-    pub fn values(&self) -> &[Scalar] {
+    pub fn values(&self) -> &[f64] {
         &self.values
     }
 
     /// 获取可变值切片
     #[inline]
-    pub fn values_mut(&mut self) -> &mut [Scalar] {
+    pub fn values_mut(&mut self) -> &mut [f64] {
         &mut self.values
     }
 
@@ -239,7 +238,7 @@ impl CsrMatrix {
     }
 
     /// 获取 (row, col) 位置的值
-    pub fn get(&self, row: usize, col: usize) -> Scalar {
+    pub fn get(&self, row: usize, col: usize) -> f64 {
         match self.pattern.find_index(row, col) {
             Some(idx) => self.values[idx],
             None => 0.0,
@@ -247,7 +246,7 @@ impl CsrMatrix {
     }
 
     /// 设置 (row, col) 位置的值（必须已存在该位置）
-    pub fn set(&mut self, row: usize, col: usize, value: Scalar) -> bool {
+    pub fn set(&mut self, row: usize, col: usize, value: f64) -> bool {
         match self.pattern.find_index(row, col) {
             Some(idx) => {
                 self.values[idx] = value;
@@ -258,7 +257,7 @@ impl CsrMatrix {
     }
 
     /// 累加到 (row, col) 位置
-    pub fn add(&mut self, row: usize, col: usize, value: Scalar) -> bool {
+    pub fn add(&mut self, row: usize, col: usize, value: f64) -> bool {
         match self.pattern.find_index(row, col) {
             Some(idx) => {
                 self.values[idx] += value;
@@ -279,19 +278,19 @@ impl CsrMatrix {
     }
 
     /// 获取对角元素值
-    pub fn diagonal_value(&self, row: usize) -> Option<Scalar> {
+    pub fn diagonal_value(&self, row: usize) -> Option<f64> {
         self.pattern.find_index(row, row).map(|idx| self.values[idx])
     }
 
     /// 获取对角元素向量（提取对角线）
-    pub fn extract_diagonal(&self) -> Vec<Scalar> {
+    pub fn extract_diagonal(&self) -> Vec<f64> {
         (0..self.n_rows())
             .map(|i| self.diagonal_value(i).unwrap_or(0.0))
             .collect()
     }
 
     /// 矩阵-向量乘法 y = A*x
-    pub fn mul_vec(&self, x: &[Scalar], y: &mut [Scalar]) {
+    pub fn mul_vec(&self, x: &[f64], y: &mut [f64]) {
         assert_eq!(x.len(), self.n_cols());
         assert_eq!(y.len(), self.n_rows());
 
@@ -309,7 +308,7 @@ impl CsrMatrix {
     }
 
     /// 矩阵-向量乘法加法 y = y + alpha * A * x
-    pub fn mul_vec_add(&self, alpha: Scalar, x: &[Scalar], y: &mut [Scalar]) {
+    pub fn mul_vec_add(&self, alpha: f64, x: &[f64], y: &mut [f64]) {
         assert_eq!(x.len(), self.n_cols());
         assert_eq!(y.len(), self.n_rows());
 
@@ -332,22 +331,22 @@ impl CsrMatrix {
     }
 
     /// 缩放所有值
-    pub fn scale(&mut self, factor: Scalar) {
+    pub fn scale(&mut self, factor: f64) {
         for v in &mut self.values {
             *v *= factor;
         }
     }
 
     /// 获取 Frobenius 范数
-    pub fn frobenius_norm(&self) -> Scalar {
-        self.values.iter().map(|&v| v * v).sum::<Scalar>().sqrt()
+    pub fn frobenius_norm(&self) -> f64 {
+        self.values.iter().map(|&v| v * v).sum::<f64>().sqrt()
     }
 
     /// 高精度矩阵-向量乘法（Kahan 累加 + 4x 循环展开）
     ///
     /// 使用 Kahan 求和算法减少浮点累加误差，适用于需要高精度的场景。
     /// 4x 循环展开提高 CPU 流水线利用率。
-    pub fn mul_vec_kahan(&self, x: &[Scalar], y: &mut [Scalar]) {
+    pub fn mul_vec_kahan(&self, x: &[f64], y: &mut [f64]) {
         use mh_foundation::KahanSum;
 
         assert_eq!(x.len(), self.n_cols());
@@ -403,14 +402,14 @@ impl CsrMatrix {
 
     /// 使用缓存快速获取对角元素值
     #[inline]
-    pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<Scalar> {
+    pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<f64> {
         cache.get(row)?.map(|idx| self.values[idx])
     }
 
     /// 检查矩阵是否对称
     ///
     /// 验证所有非零元素 A[i,j] == A[j,i]。
-    pub fn is_symmetric(&self, tol: Scalar) -> bool {
+    pub fn is_symmetric(&self, tol: f64) -> bool {
         for i in 0..self.n_rows() {
             let start = self.pattern.row_ptr[i];
             let end = self.pattern.row_ptr[i + 1];
@@ -430,12 +429,12 @@ impl CsrMatrix {
     }
 
     /// 获取矩阵的无穷范数（行最大绝对值和）
-    pub fn infinity_norm(&self) -> Scalar {
-        let mut max_row_sum: Scalar = 0.0;
+    pub fn infinity_norm(&self) -> f64 {
+        let mut max_row_sum: f64 = 0.0;
         for row in 0..self.n_rows() {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
-            let row_sum: Scalar = self.values[start..end].iter().map(|v| v.abs()).sum();
+            let row_sum: f64 = self.values[start..end].iter().map(|v| v.abs()).sum();
             max_row_sum = max_row_sum.max(row_sum);
         }
         max_row_sum
@@ -445,7 +444,7 @@ impl CsrMatrix {
 /// 行视图
 pub struct RowView<'a> {
     col_idx: &'a [usize],
-    values: &'a [Scalar],
+    values: &'a [f64],
 }
 
 impl<'a> RowView<'a> {
@@ -455,7 +454,7 @@ impl<'a> RowView<'a> {
     }
 
     /// 获取值
-    pub fn values(&self) -> &'a [Scalar] {
+    pub fn values(&self) -> &'a [f64] {
         self.values
     }
 
@@ -465,7 +464,7 @@ impl<'a> RowView<'a> {
     }
 
     /// 迭代 (列索引, 值) 对
-    pub fn iter(&self) -> impl Iterator<Item = (usize, Scalar)> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = (usize, f64)> + 'a {
         self.col_idx.iter().copied().zip(self.values.iter().copied())
     }
 }
@@ -477,7 +476,7 @@ pub struct CsrBuilder {
     n_rows: usize,
     n_cols: usize,
     /// 每行的 (列索引, 值) 映射
-    rows: Vec<BTreeMap<usize, Scalar>>,
+    rows: Vec<BTreeMap<usize, f64>>,
 }
 
 impl CsrBuilder {
@@ -496,21 +495,21 @@ impl CsrBuilder {
     }
 
     /// 设置 (row, col) 的值
-    pub fn set(&mut self, row: usize, col: usize, value: Scalar) {
+    pub fn set(&mut self, row: usize, col: usize, value: f64) {
         assert!(row < self.n_rows, "row index out of bounds");
         assert!(col < self.n_cols, "column index out of bounds");
         self.rows[row].insert(col, value);
     }
 
     /// 累加到 (row, col)
-    pub fn add(&mut self, row: usize, col: usize, value: Scalar) {
+    pub fn add(&mut self, row: usize, col: usize, value: f64) {
         assert!(row < self.n_rows, "row index out of bounds");
         assert!(col < self.n_cols, "column index out of bounds");
         *self.rows[row].entry(col).or_insert(0.0) += value;
     }
 
     /// 获取 (row, col) 的值
-    pub fn get(&self, row: usize, col: usize) -> Scalar {
+    pub fn get(&self, row: usize, col: usize) -> f64 {
         self.rows[row].get(&col).copied().unwrap_or(0.0)
     }
 

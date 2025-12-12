@@ -3,12 +3,11 @@
 //! 物理计算核心类型定义
 //!
 //! 本模块提供物理求解器所需的类型定义，包括：
-//! - 类型安全索引 (CellIndex, FaceIndex, NodeIndex)
+//! - 类型安全索引 (从 mh_core 重新导出)
 //! - 安全包装类型 (SafeDepth, SafeVelocity)
 //! - 数值参数配置 (NumericalParams)
 //! - 物理常数 (PhysicalConstants)
 //!
-
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
@@ -16,205 +15,76 @@ use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
 // ============================================================
-// 类型安全索引
+// 类型安全索引 (从 mh_core 重新导出)
 // ============================================================
 
-/// 无效索引标记
-pub const INVALID_INDEX: usize = usize::MAX;
+// 重新导出 mh_core 中统一定义的索引类型
+pub use mh_core::{
+    CellIndex, FaceIndex, NodeIndex, BoundaryIndex,
+    INVALID_INDEX,
+};
 
-/// 单元索引 - 用于索引网格单元
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct CellIndex(pub usize);
+// ============================================================
+// 索引类型扩展 - 为物理引擎添加额外方法
+// ============================================================
 
-impl CellIndex {
-    /// 无效单元索引
-    pub const INVALID: Self = Self(INVALID_INDEX);
-
-    /// 创建新的单元索引
-    #[inline]
-    pub const fn new(idx: usize) -> Self {
-        Self(idx)
-    }
-
-    /// 判断索引是否有效
-    #[inline]
-    pub fn is_valid(self) -> bool {
-        self.0 != INVALID_INDEX
-    }
-
-    /// 获取内部 usize 值
-    #[inline]
-    pub fn get(self) -> usize {
-        self.0
-    }
-
-    /// 从 usize 创建
-    #[inline]
-    pub const fn from_usize(idx: usize) -> Self {
-        Self(idx)
-    }
-
+/// CellIndex 的物理引擎扩展 trait
+pub trait CellIndexExt {
     /// 转换为 u32 (用于新架构兼容)
+    fn as_u32(self) -> u32;
+    /// 从 u32 创建 (用于新架构兼容)
+    fn from_u32(idx: u32) -> Self;
+}
+
+impl CellIndexExt for CellIndex {
     #[inline]
-    pub fn as_u32(self) -> u32 {
+    fn as_u32(self) -> u32 {
         self.0 as u32
     }
 
-    /// 从 u32 创建 (用于新架构兼容)
     #[inline]
-    pub fn from_u32(idx: u32) -> Self {
-        Self(idx as usize)
+    fn from_u32(idx: u32) -> CellIndex {
+        CellIndex(idx as usize)
     }
 }
 
-impl fmt::Display for CellIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_valid() {
-            write!(f, "Cell({})", self.0)
-        } else {
-            write!(f, "Cell(INVALID)")
-        }
-    }
-}
-
-/// 面索引 - 用于索引网格面
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct FaceIndex(pub usize);
-
-impl FaceIndex {
-    /// 无效面索引
-    pub const INVALID: Self = Self(INVALID_INDEX);
-
-    /// 创建新的面索引
-    #[inline]
-    pub const fn new(idx: usize) -> Self {
-        Self(idx)
-    }
-
-    /// 判断索引是否有效
-    #[inline]
-    pub fn is_valid(self) -> bool {
-        self.0 != INVALID_INDEX
-    }
-
-    /// 获取内部 usize 值
-    #[inline]
-    pub fn get(self) -> usize {
-        self.0
-    }
-
-    /// 从 usize 创建
-    #[inline]
-    pub const fn from_usize(idx: usize) -> Self {
-        Self(idx)
-    }
-
+/// FaceIndex 的物理引擎扩展 trait
+pub trait FaceIndexExt {
     /// 转换为 u32 (用于新架构兼容)
+    fn as_u32(self) -> u32;
+    /// 从 u32 创建 (用于新架构兼容)
+    fn from_u32(idx: u32) -> Self;
+}
+
+impl FaceIndexExt for FaceIndex {
     #[inline]
-    pub fn as_u32(self) -> u32 {
+    fn as_u32(self) -> u32 {
         self.0 as u32
     }
 
-    /// 从 u32 创建 (用于新架构兼容)
     #[inline]
-    pub fn from_u32(idx: u32) -> Self {
-        Self(idx as usize)
+    fn from_u32(idx: u32) -> FaceIndex {
+        FaceIndex(idx as usize)
     }
 }
 
-impl fmt::Display for FaceIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_valid() {
-            write!(f, "Face({})", self.0)
-        } else {
-            write!(f, "Face(INVALID)")
-        }
-    }
-}
-
-/// 节点索引 - 用于索引网格节点
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct NodeIndex(pub usize);
-
-impl NodeIndex {
-    /// 无效节点索引
-    pub const INVALID: Self = Self(INVALID_INDEX);
-
-    /// 创建新的节点索引
-    #[inline]
-    pub const fn new(idx: usize) -> Self {
-        Self(idx)
-    }
-
-    /// 判断索引是否有效
-    #[inline]
-    pub fn is_valid(self) -> bool {
-        self.0 != INVALID_INDEX
-    }
-
-    /// 获取内部 usize 值
-    #[inline]
-    pub fn get(self) -> usize {
-        self.0
-    }
-
-    /// 从 usize 创建
-    #[inline]
-    pub const fn from_usize(idx: usize) -> Self {
-        Self(idx)
-    }
-
+/// NodeIndex 的物理引擎扩展 trait
+pub trait NodeIndexExt {
     /// 转换为 u32 (用于新架构兼容)
+    fn as_u32(self) -> u32;
+    /// 从 u32 创建 (用于新架构兼容)
+    fn from_u32(idx: u32) -> Self;
+}
+
+impl NodeIndexExt for NodeIndex {
     #[inline]
-    pub fn as_u32(self) -> u32 {
+    fn as_u32(self) -> u32 {
         self.0 as u32
     }
 
-    /// 从 u32 创建 (用于新架构兼容)
     #[inline]
-    pub fn from_u32(idx: u32) -> Self {
-        Self(idx as usize)
-    }
-}
-
-impl fmt::Display for NodeIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_valid() {
-            write!(f, "Node({})", self.0)
-        } else {
-            write!(f, "Node(INVALID)")
-        }
-    }
-}
-
-/// 边界索引 - 用于索引边界条件
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct BoundaryIndex(pub usize);
-
-impl BoundaryIndex {
-    /// 无效边界索引
-    pub const INVALID: Self = Self(INVALID_INDEX);
-
-    /// 创建新的边界索引
-    #[inline]
-    pub const fn new(idx: usize) -> Self {
-        Self(idx)
-    }
-
-    /// 判断索引是否有效
-    #[inline]
-    pub fn is_valid(self) -> bool {
-        self.0 != INVALID_INDEX
-    }
-
-    /// 获取内部 usize 值
-    #[inline]
-    pub fn get(self) -> usize {
-        self.0
+    fn from_u32(idx: u32) -> NodeIndex {
+        NodeIndex(idx as usize)
     }
 }
 

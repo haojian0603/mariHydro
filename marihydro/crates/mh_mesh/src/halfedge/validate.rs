@@ -54,7 +54,7 @@ impl ValidationReport {
     }
 }
 
-impl<V, E, F> HalfEdgeMesh<V, E, F> {
+impl<V, F> HalfEdgeMesh<V, F> {
     /// 验证网格拓扑完整性
     pub fn validate(&self) -> ValidationReport {
         let mut report = ValidationReport::default();

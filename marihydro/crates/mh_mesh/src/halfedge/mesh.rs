@@ -48,8 +48,8 @@ impl<V: Default> Vertex<V> {
 }
 
 /// 半边数据
-#[derive(Debug, Clone)]
-pub struct HalfEdge<E> {
+#[derive(Debug, Clone, Default)]
+pub struct HalfEdge {
     /// 起点顶点
     pub origin: VertexIndex,
     /// 对偶半边 (边界时为INVALID)
@@ -60,24 +60,9 @@ pub struct HalfEdge<E> {
     pub prev: HalfEdgeIndex,
     /// 所属面 (边界半边时为INVALID)
     pub face: FaceIndex,
-    /// 用户附加数据
-    pub data: E,
 }
 
-impl<E: Default> Default for HalfEdge<E> {
-    fn default() -> Self {
-        Self {
-            origin: VertexIndex::INVALID,
-            twin: HalfEdgeIndex::INVALID,
-            next: HalfEdgeIndex::INVALID,
-            prev: HalfEdgeIndex::INVALID,
-            face: FaceIndex::INVALID,
-            data: E::default(),
-        }
-    }
-}
-
-impl<E: Default> HalfEdge<E> {
+impl HalfEdge {
     /// 创建新半边
     pub fn new(origin: VertexIndex) -> Self {
         Self {
@@ -86,7 +71,6 @@ impl<E: Default> HalfEdge<E> {
             next: HalfEdgeIndex::INVALID,
             prev: HalfEdgeIndex::INVALID,
             face: FaceIndex::INVALID,
-            data: E::default(),
         }
     }
 }
@@ -120,14 +104,13 @@ impl<F: Default> Face<F> {
 /// # 类型参数
 ///
 /// - `V`: 顶点附加数据类型
-/// - `E`: 半边附加数据类型
 /// - `F`: 面附加数据类型
 #[derive(Debug)]
-pub struct HalfEdgeMesh<V = (), E = (), F = ()> {
+pub struct HalfEdgeMesh<V = (), F = ()> {
     /// 顶点存储
     vertices: Arena<Vertex<V>, VertexTag>,
     /// 半边存储
-    halfedges: Arena<HalfEdge<E>, HalfEdgeTag>,
+    halfedges: Arena<HalfEdge, HalfEdgeTag>,
     /// 面存储
     faces: Arena<Face<F>, FaceTag>,
     /// 脏顶点集合 (需要重新计算的顶点)
@@ -136,13 +119,13 @@ pub struct HalfEdgeMesh<V = (), E = (), F = ()> {
     dirty_faces: HashSet<FaceIndex>,
 }
 
-impl<V, E, F> Default for HalfEdgeMesh<V, E, F> {
+impl<V, F> Default for HalfEdgeMesh<V, F> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<V, E, F> HalfEdgeMesh<V, E, F> {
+impl<V, F> HalfEdgeMesh<V, F> {
     /// 创建空网格
     pub fn new() -> Self {
         Self {
@@ -254,24 +237,24 @@ impl<V, E, F> HalfEdgeMesh<V, E, F> {
     // =========================================================================
 
     /// 添加半边
-    pub fn add_halfedge(&mut self, halfedge: HalfEdge<E>) -> HalfEdgeIndex {
+    pub fn add_halfedge(&mut self, halfedge: HalfEdge) -> HalfEdgeIndex {
         self.halfedges.insert(halfedge)
     }
 
     /// 获取半边 (不可变)
     #[inline]
-    pub fn halfedge(&self, idx: HalfEdgeIndex) -> Option<&HalfEdge<E>> {
+    pub fn halfedge(&self, idx: HalfEdgeIndex) -> Option<&HalfEdge> {
         self.halfedges.get(idx)
     }
 
     /// 获取半边 (可变)
     #[inline]
-    pub fn halfedge_mut(&mut self, idx: HalfEdgeIndex) -> Option<&mut HalfEdge<E>> {
+    pub fn halfedge_mut(&mut self, idx: HalfEdgeIndex) -> Option<&mut HalfEdge> {
         self.halfedges.get_mut(idx)
     }
 
     /// 移除半边
-    pub fn remove_halfedge(&mut self, idx: HalfEdgeIndex) -> Option<HalfEdge<E>> {
+    pub fn remove_halfedge(&mut self, idx: HalfEdgeIndex) -> Option<HalfEdge> {
         self.halfedges.remove(idx)
     }
 
@@ -287,7 +270,7 @@ impl<V, E, F> HalfEdgeMesh<V, E, F> {
     }
 
     /// 遍历所有半边
-    pub fn halfedges(&self) -> impl Iterator<Item = (HalfEdgeIndex, &HalfEdge<E>)> + '_ {
+    pub fn halfedges(&self) -> impl Iterator<Item = (HalfEdgeIndex, &HalfEdge)> + '_ {
         self.halfedges.iter()
     }
 
@@ -486,7 +469,7 @@ impl<V, E, F> HalfEdgeMesh<V, E, F> {
 // 高级构建方法
 // ============================================================================
 
-impl<V: Default, E: Default, F: Default> HalfEdgeMesh<V, E, F> {
+impl<V: Default, F: Default> HalfEdgeMesh<V, F> {
     /// 从顶点列表创建简单顶点
     pub fn add_vertex_xyz(&mut self, x: f64, y: f64, z: f64) -> VertexIndex {
         self.add_vertex(Vertex::new(x, y, z))
@@ -621,7 +604,7 @@ mod tests {
 
     #[test]
     fn test_empty_mesh() {
-        let mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
         assert!(mesh.is_empty());
         assert_eq!(mesh.n_vertices(), 0);
         assert_eq!(mesh.n_halfedges(), 0);
@@ -630,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_add_vertices() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -648,7 +631,7 @@ mod tests {
 
     #[test]
     fn test_add_triangle() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -674,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_dirty_marks() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -699,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_remove_vertex() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);

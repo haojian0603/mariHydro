@@ -26,7 +26,7 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use mh_foundation::Scalar;
+use mh_core::Scalar;
 
 /// 预条件器 trait
 ///

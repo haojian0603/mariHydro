@@ -40,7 +40,7 @@ use super::traits::{TurbulenceClosure, VelocityGradient};
 use crate::adapter::PhysicsMesh;
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use mh_foundation::Scalar;
+use mh_core::Scalar;
 
 /// Smagorinsky 常数的默认值
 pub const DEFAULT_SMAGORINSKY_CONSTANT: Scalar = 0.15;

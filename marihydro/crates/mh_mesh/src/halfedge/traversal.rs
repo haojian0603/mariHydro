@@ -13,15 +13,15 @@ use mh_geo::{Point2D, Point3D};
 // ============================================================================
 
 /// 遍历面的所有顶点
-pub struct FaceVertexIter<'a, V, E, F> {
-    mesh: &'a HalfEdgeMesh<V, E, F>,
+pub struct FaceVertexIter<'a, V, F> {
+    mesh: &'a HalfEdgeMesh<V, F>,
     start: HalfEdgeIndex,
     current: HalfEdgeIndex,
     done: bool,
 }
 
-impl<'a, V, E, F> FaceVertexIter<'a, V, E, F> {
-    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, E, F>, face: FaceIndex) -> Self {
+impl<'a, V, F> FaceVertexIter<'a, V, F> {
+    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, F>, face: FaceIndex) -> Self {
         let start = mesh
             .face(face)
             .map(|f| f.halfedge)
@@ -36,7 +36,7 @@ impl<'a, V, E, F> FaceVertexIter<'a, V, E, F> {
     }
 }
 
-impl<'a, V, E, F> Iterator for FaceVertexIter<'a, V, E, F> {
+impl<'a, V, F> Iterator for FaceVertexIter<'a, V, F> {
     type Item = VertexIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -57,15 +57,15 @@ impl<'a, V, E, F> Iterator for FaceVertexIter<'a, V, E, F> {
 }
 
 /// 遍历面的所有半边
-pub struct FaceHalfEdgeIter<'a, V, E, F> {
-    mesh: &'a HalfEdgeMesh<V, E, F>,
+pub struct FaceHalfEdgeIter<'a, V, F> {
+    mesh: &'a HalfEdgeMesh<V, F>,
     start: HalfEdgeIndex,
     current: HalfEdgeIndex,
     done: bool,
 }
 
-impl<'a, V, E, F> FaceHalfEdgeIter<'a, V, E, F> {
-    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, E, F>, face: FaceIndex) -> Self {
+impl<'a, V, F> FaceHalfEdgeIter<'a, V, F> {
+    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, F>, face: FaceIndex) -> Self {
         let start = mesh
             .face(face)
             .map(|f| f.halfedge)
@@ -80,7 +80,7 @@ impl<'a, V, E, F> FaceHalfEdgeIter<'a, V, E, F> {
     }
 }
 
-impl<'a, V, E, F> Iterator for FaceHalfEdgeIter<'a, V, E, F> {
+impl<'a, V, F> Iterator for FaceHalfEdgeIter<'a, V, F> {
     type Item = HalfEdgeIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -105,15 +105,15 @@ impl<'a, V, E, F> Iterator for FaceHalfEdgeIter<'a, V, E, F> {
 // ============================================================================
 
 /// 遍历顶点周围的所有面
-pub struct VertexFaceIter<'a, V, E, F> {
-    mesh: &'a HalfEdgeMesh<V, E, F>,
+pub struct VertexFaceIter<'a, V, F> {
+    mesh: &'a HalfEdgeMesh<V, F>,
     start: HalfEdgeIndex,
     current: HalfEdgeIndex,
     done: bool,
 }
 
-impl<'a, V, E, F> VertexFaceIter<'a, V, E, F> {
-    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, E, F>, vertex: VertexIndex) -> Self {
+impl<'a, V, F> VertexFaceIter<'a, V, F> {
+    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, F>, vertex: VertexIndex) -> Self {
         let start = mesh
             .vertex(vertex)
             .map(|v| v.halfedge)
@@ -128,7 +128,7 @@ impl<'a, V, E, F> VertexFaceIter<'a, V, E, F> {
     }
 }
 
-impl<'a, V, E, F> Iterator for VertexFaceIter<'a, V, E, F> {
+impl<'a, V, F> Iterator for VertexFaceIter<'a, V, F> {
     type Item = FaceIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -157,15 +157,15 @@ impl<'a, V, E, F> Iterator for VertexFaceIter<'a, V, E, F> {
 }
 
 /// 遍历顶点周围的所有出发半边
-pub struct VertexOutgoingIter<'a, V, E, F> {
-    mesh: &'a HalfEdgeMesh<V, E, F>,
+pub struct VertexOutgoingIter<'a, V, F> {
+    mesh: &'a HalfEdgeMesh<V, F>,
     start: HalfEdgeIndex,
     current: HalfEdgeIndex,
     done: bool,
 }
 
-impl<'a, V, E, F> VertexOutgoingIter<'a, V, E, F> {
-    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, E, F>, vertex: VertexIndex) -> Self {
+impl<'a, V, F> VertexOutgoingIter<'a, V, F> {
+    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, F>, vertex: VertexIndex) -> Self {
         let start = mesh
             .vertex(vertex)
             .map(|v| v.halfedge)
@@ -180,7 +180,7 @@ impl<'a, V, E, F> VertexOutgoingIter<'a, V, E, F> {
     }
 }
 
-impl<'a, V, E, F> Iterator for VertexOutgoingIter<'a, V, E, F> {
+impl<'a, V, F> Iterator for VertexOutgoingIter<'a, V, F> {
     type Item = HalfEdgeIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -206,19 +206,19 @@ impl<'a, V, E, F> Iterator for VertexOutgoingIter<'a, V, E, F> {
 }
 
 /// 遍历顶点的所有邻居顶点
-pub struct VertexNeighborIter<'a, V, E, F> {
-    inner: VertexOutgoingIter<'a, V, E, F>,
+pub struct VertexNeighborIter<'a, V, F> {
+    inner: VertexOutgoingIter<'a, V, F>,
 }
 
-impl<'a, V, E, F> VertexNeighborIter<'a, V, E, F> {
-    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, E, F>, vertex: VertexIndex) -> Self {
+impl<'a, V, F> VertexNeighborIter<'a, V, F> {
+    pub(crate) fn new(mesh: &'a HalfEdgeMesh<V, F>, vertex: VertexIndex) -> Self {
         Self {
             inner: VertexOutgoingIter::new(mesh, vertex),
         }
     }
 }
 
-impl<'a, V, E, F> Iterator for VertexNeighborIter<'a, V, E, F> {
+impl<'a, V, F> Iterator for VertexNeighborIter<'a, V, F> {
     type Item = VertexIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -231,29 +231,29 @@ impl<'a, V, E, F> Iterator for VertexNeighborIter<'a, V, E, F> {
 // HalfEdgeMesh 遍历方法扩展
 // ============================================================================
 
-impl<V, E, F> HalfEdgeMesh<V, E, F> {
+impl<V, F> HalfEdgeMesh<V, F> {
     /// 遍历面的所有顶点
-    pub fn face_vertices(&self, face: FaceIndex) -> FaceVertexIter<'_, V, E, F> {
+    pub fn face_vertices(&self, face: FaceIndex) -> FaceVertexIter<'_, V, F> {
         FaceVertexIter::new(self, face)
     }
 
     /// 遍历面的所有半边
-    pub fn face_halfedges(&self, face: FaceIndex) -> FaceHalfEdgeIter<'_, V, E, F> {
+    pub fn face_halfedges(&self, face: FaceIndex) -> FaceHalfEdgeIter<'_, V, F> {
         FaceHalfEdgeIter::new(self, face)
     }
 
     /// 遍历顶点周围的所有面
-    pub fn vertex_faces(&self, vertex: VertexIndex) -> VertexFaceIter<'_, V, E, F> {
+    pub fn vertex_faces(&self, vertex: VertexIndex) -> VertexFaceIter<'_, V, F> {
         VertexFaceIter::new(self, vertex)
     }
 
     /// 遍历顶点的所有出发半边
-    pub fn vertex_outgoing(&self, vertex: VertexIndex) -> VertexOutgoingIter<'_, V, E, F> {
+    pub fn vertex_outgoing(&self, vertex: VertexIndex) -> VertexOutgoingIter<'_, V, F> {
         VertexOutgoingIter::new(self, vertex)
     }
 
     /// 遍历顶点的所有邻居顶点
-    pub fn vertex_neighbors(&self, vertex: VertexIndex) -> VertexNeighborIter<'_, V, E, F> {
+    pub fn vertex_neighbors(&self, vertex: VertexIndex) -> VertexNeighborIter<'_, V, F> {
         VertexNeighborIter::new(self, vertex)
     }
 

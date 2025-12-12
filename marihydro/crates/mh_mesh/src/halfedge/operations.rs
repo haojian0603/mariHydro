@@ -20,7 +20,7 @@ pub enum TopologyResult {
     BoundaryEdge,
 }
 
-impl<V: Default + Clone, E: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, E, F> {
+impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
     /// 分裂边
     ///
     /// 在边的中点插入一个新顶点，将边分成两段。

@@ -16,7 +16,8 @@ use crate::tracer::{TracerTransportConfig, TracerTransportSolver, TracerAdvectio
 use crate::types::PhysicalConstants;
 use super::resuspension::ResuspensionSource;
 use super::settling::SettlingVelocity;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_core::Scalar;
+use mh_foundation::AlignedVec;
 
 /// 悬移质输运求解器
 ///

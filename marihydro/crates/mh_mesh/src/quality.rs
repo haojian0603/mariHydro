@@ -10,7 +10,7 @@ use mh_foundation::index::FaceIndex;
 /// 计算三角形的长宽比
 /// 
 /// 理想的等边三角形返回 1.0，更细长的返回更大的值
-pub fn aspect_ratio<V, E, F>(mesh: &HalfEdgeMesh<V, E, F>, face: FaceIndex) -> Option<f64> {
+pub fn aspect_ratio<V, F>(mesh: &HalfEdgeMesh<V, F>, face: FaceIndex) -> Option<f64> {
     let positions = mesh.face_positions(face);
     if positions.len() != 3 {
         return None;
@@ -36,7 +36,7 @@ pub fn aspect_ratio<V, E, F>(mesh: &HalfEdgeMesh<V, E, F>, face: FaceIndex) -> O
 }
 
 /// 计算三角形的最小角 (度)
-pub fn min_angle<V, E, F>(mesh: &HalfEdgeMesh<V, E, F>, face: FaceIndex) -> Option<f64> {
+pub fn min_angle<V, F>(mesh: &HalfEdgeMesh<V, F>, face: FaceIndex) -> Option<f64> {
     let positions = mesh.face_positions(face);
     if positions.len() != 3 {
         return None;

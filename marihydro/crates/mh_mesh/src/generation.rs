@@ -92,7 +92,7 @@ impl RectMeshGenerator {
     }
 
     /// 构建网格
-    pub fn build(&self) -> HalfEdgeMesh<(), (), ()> {
+    pub fn build(&self) -> HalfEdgeMesh<(), ()> {
         let mut mesh = HalfEdgeMesh::new();
 
         let dx = self.dx();
@@ -142,11 +142,11 @@ impl RectMeshGenerator {
     /// # 参数
     ///
     /// - `depth_fn`: 返回给定 (x, y) 坐标处水深的函数
-    pub fn build_with_depth<F>(&self, depth_fn: F) -> (HalfEdgeMesh<(), (), f64>, Vec<f64>)
+    pub fn build_with_depth<D>(&self, depth_fn: D) -> (HalfEdgeMesh<(), f64>, Vec<f64>)
     where
-        F: Fn(f64, f64) -> f64,
+        D: Fn(f64, f64) -> f64,
     {
-        let mut mesh: HalfEdgeMesh<(), (), f64> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), f64> = HalfEdgeMesh::new();
 
         let dx = self.dx();
         let dy = self.dy();
@@ -280,7 +280,7 @@ impl CircularMeshGenerator {
     }
 
     /// 构建网格
-    pub fn build(&self) -> HalfEdgeMesh<(), (), ()> {
+    pub fn build(&self) -> HalfEdgeMesh<(), ()> {
         let mut mesh = HalfEdgeMesh::new();
 
         // 添加中心点

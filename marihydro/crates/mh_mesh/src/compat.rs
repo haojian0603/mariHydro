@@ -11,7 +11,7 @@ use mh_geo::{Point2D, Point3D};
 use std::collections::HashMap;
 
 /// 从 HalfEdgeMesh 转换为 FrozenMesh
-impl<V: Default, E: Default, F: Default> HalfEdgeMesh<V, E, F> {
+impl<V: Default, F: Default> HalfEdgeMesh<V, F> {
     /// 冻结网格
     ///
     /// 将半边网格转换为只读的 SoA 布局冻结网格。
@@ -327,7 +327,7 @@ impl FrozenMesh {
     /// 将冻结网格转换回可编辑的半边网格。
     pub fn to_halfedge<V: Default + Clone, E: Default + Clone, F: Default + Clone>(
         &self,
-    ) -> HalfEdgeMesh<V, E, F> {
+    ) -> HalfEdgeMesh<V, F> {
         let mut mesh = HalfEdgeMesh::with_capacity(self.n_nodes, self.n_faces * 3, self.n_cells);
 
         // 添加所有顶点

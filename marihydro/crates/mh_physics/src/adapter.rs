@@ -29,8 +29,11 @@ use glam::DVec2;
 use mh_mesh::FrozenMesh;
 use std::sync::Arc;
 
-/// 无效单元索引常量
-pub const INVALID_CELL: usize = usize::MAX;
+// 使用 types 模块中从 mh_core 导入的统一索引类型
+use crate::types::{CellIndex, FaceIndex, NodeIndex, INVALID_INDEX};
+
+/// 无效单元索引常量 (保留用于向后兼容)
+pub const INVALID_CELL: usize = INVALID_INDEX;
 
 /// 物理引擎网格适配器
 ///
@@ -370,70 +373,8 @@ impl PhysicsMesh {
     }
 }
 
-/// 单元索引类型（用于物理引擎内部）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CellIndex(pub usize);
-
-impl CellIndex {
-    /// 无效索引
-    pub const INVALID: Self = Self(INVALID_CELL);
-
-    /// 是否有效
-    #[inline]
-    pub fn is_valid(&self) -> bool {
-        self.0 != INVALID_CELL
-    }
-
-    /// 是否无效
-    #[inline]
-    pub fn is_invalid(&self) -> bool {
-        self.0 == INVALID_CELL
-    }
-}
-
-impl From<usize> for CellIndex {
-    fn from(idx: usize) -> Self {
-        Self(idx)
-    }
-}
-
-impl From<CellIndex> for usize {
-    fn from(idx: CellIndex) -> Self {
-        idx.0
-    }
-}
-
-/// 面索引类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FaceIndex(pub usize);
-
-impl From<usize> for FaceIndex {
-    fn from(idx: usize) -> Self {
-        Self(idx)
-    }
-}
-
-impl From<FaceIndex> for usize {
-    fn from(idx: FaceIndex) -> Self {
-        idx.0
-    }
-}
-
-/// 节点索引类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeIndex(pub usize);
-
-impl From<usize> for NodeIndex {
-    fn from(idx: usize) -> Self {
-        Self(idx)
-    }
-}
-
-impl From<NodeIndex> for usize {
-    fn from(idx: NodeIndex) -> Self {
-        idx.0
-    }
-}
+// 注：CellIndex, FaceIndex, NodeIndex 现在从 crate::types 导入
+// 该模块从 mh_core 重新导出这些类型，确保整个项目使用统一定义
 
 // ============================================================================
 // 测试
@@ -445,12 +386,12 @@ mod tests {
 
     #[test]
     fn test_cell_index() {
-        let idx = CellIndex(5);
+        let idx = CellIndex::new(5);
         assert!(idx.is_valid());
         assert_eq!(idx.0, 5);
 
         let invalid = CellIndex::INVALID;
-        assert!(invalid.is_invalid());
+        assert!(!invalid.is_valid());
     }
 
     #[test]

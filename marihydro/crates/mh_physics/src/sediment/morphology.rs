@@ -31,28 +31,29 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+// ?????? f64 ??
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
 /// 河床演变配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MorphologyConfig {
     /// 床面孔隙率（默认 0.4）
-    pub porosity: Scalar,
+    pub porosity: f64,
     /// 干单元水深阈值 [m]
-    pub h_dry: Scalar,
+    pub h_dry: f64,
     /// 是否启用崩塌处理
     pub avalanche_enabled: bool,
     /// 湿润时的安息角 [rad]
-    pub angle_repose_wet: Scalar,
+    pub angle_repose_wet: f64,
     /// 干燥时的安息角 [rad]
-    pub angle_repose_dry: Scalar,
+    pub angle_repose_dry: f64,
     /// 最大崩塌迭代次数
     pub max_avalanche_iter: usize,
     /// 崩塌松弛因子（0-1）
-    pub avalanche_relaxation: Scalar,
+    pub avalanche_relaxation: f64,
     /// 最大允许床面变化率 [m/s]
-    pub max_dz_rate: Scalar,
+    pub max_dz_rate: f64,
 }
 
 impl Default for MorphologyConfig {
@@ -104,13 +105,13 @@ impl MorphologyConfig {
 #[derive(Debug, Clone, Default)]
 pub struct MorphologyStats {
     /// 最大侵蚀深度 [m]
-    pub max_erosion: Scalar,
+    pub max_erosion: f64,
     /// 最大淤积深度 [m]
-    pub max_deposition: Scalar,
+    pub max_deposition: f64,
     /// 总侵蚀量 [m³]
-    pub total_erosion: Scalar,
+    pub total_erosion: f64,
     /// 总淤积量 [m³]
-    pub total_deposition: Scalar,
+    pub total_deposition: f64,
     /// 崩塌迭代次数
     pub avalanche_iterations: usize,
     /// 发生崩塌的面数
@@ -122,9 +123,9 @@ pub struct MorphodynamicsSolver {
     /// 配置
     config: MorphologyConfig,
     /// 河床变化率 dz/dt [m/s]
-    dz_dt: AlignedVec<Scalar>,
+    dz_dt: AlignedVec<f64>,
     /// 临时存储：通量散度
-    flux_divergence: AlignedVec<Scalar>,
+    flux_divergence: AlignedVec<f64>,
     /// 最新统计
     stats: MorphologyStats,
 }
@@ -175,7 +176,7 @@ impl MorphodynamicsSolver {
         mesh: &PhysicsMesh,
         qb_x: &[Scalar],
         qb_y: &[Scalar],
-        dt: Scalar,
+        dt: f64,
     ) {
         // 重置统计
         self.stats = MorphologyStats::default();
@@ -209,18 +210,18 @@ impl MorphodynamicsSolver {
         state: &mut ShallowWaterState,
         mesh: &PhysicsMesh,
         compute_transport: F,
-        dt: Scalar,
+        dt: f64,
         max_iter: usize,
-        tol: Scalar,
+        tol: f64,
     ) -> usize
     where
-        F: Fn(&ShallowWaterState) -> (Vec<Scalar>, Vec<Scalar>),
+        F: Fn(&ShallowWaterState) -> (Vec<f64>, Vec<f64>),
     {
         // 重置统计
         self.stats = MorphologyStats::default();
 
         // 保存初始河床
-        let z_old: Vec<Scalar> = state.z.to_vec();
+        let z_old: Vec<f64> = state.z.to_vec();
         let mut z_prev = z_old.clone();
         let mut iterations = 0;
 
@@ -286,7 +287,7 @@ impl MorphodynamicsSolver {
         state: &ShallowWaterState,
         qb_x: &[Scalar],
         qb_y: &[Scalar],
-    ) -> Vec<Scalar> {
+    ) -> Vec<f64> {
         let n = state.n_cells();
         let mut jacobian = vec![0.0; n];
         let _eps = 1e-6;
@@ -379,7 +380,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 强耦合更新河床和水深
-    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: Scalar) {
+    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: f64) {
         let max_dz = self.config.max_dz_rate * dt;
 
         for i in 0..state.n_cells() {
@@ -503,7 +504,7 @@ impl MorphodynamicsSolver {
         &mut self,
         state: &mut ShallowWaterState,
         mesh: &PhysicsMesh,
-        tol: Scalar,
+        tol: f64,
     ) {
         let mut total_faces = 0;
 

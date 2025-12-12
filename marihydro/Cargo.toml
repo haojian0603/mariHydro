@@ -3,6 +3,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/mh_core",
     "crates/mh_foundation",
     "crates/mh_geo",
     "crates/mh_mesh",

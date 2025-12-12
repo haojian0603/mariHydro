@@ -40,7 +40,6 @@
 
 pub mod events;
 pub mod job;
-mod job_v2;
 pub mod manager;
 pub mod runner;
 pub mod scheduler;
@@ -56,21 +55,3 @@ pub use scheduler::{
     HybridStrategy, PerformanceStats, SchedulerDiagnostics, SelectionStats,
 };
 pub use storage::{FileStorage, MemoryStorage, Storage, StorageError};
-
-// 类型状态 API（高级用法）
-pub mod typed {
-    //! 类型状态作业 API
-    //!
-    //! 提供编译时状态验证的作业类型。
-    //!
-    //! # 示例
-    //!
-    //! ```ignore
-    //! use mh_workflow::typed::{TypedJob, Pending, Running};
-    //!
-    //! let pending = TypedJob::new("job-1", "project-1");
-    //! let running = pending.start();  // Pending -> Running
-    //! let completed = running.complete("/path/to/result");
-    //! ```
-    pub use crate::job_v2::*;
-}

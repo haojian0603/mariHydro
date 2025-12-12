@@ -3,7 +3,8 @@
 //! 物理求解器模块
 //!
 //! 提供浅水方程数值求解功能，包括：
-//! - 核心抽象层 (core) - Backend, Buffer, f64 抽象
+//! - 核心抽象层 (core) - Backend, Buffer, Scalar 抽象
+//! - 构建器层 (builder) - 从无泛型配置到泛型引擎的桥梁
 //! - 网格适配层 (adapter)
 //! - 核心类型定义 (types)
 //! - 状态管理 (state)
@@ -13,14 +14,29 @@
 //! - 源项处理 (sources) - 摩擦、科氏力、湍流等
 //! - 垂向剖面 (vertical) - σ坐标、分层状态
 //!
+//! # 架构层级
+//!
+//! ```text
+//! Layer 5: Application (无泛型)
+//!     └─> SolverConfig, Precision
+//! Layer 4: Builder (枚举→泛型桥接)
+//!     └─> SolverBuilder -> Box<dyn DynSolver>
+//! Layer 3: Engine (全泛型)
+//!     └─> ShallowWaterSolver<B>
+//! ```
+//!
 //! # Trait 抽象
 //!
 //! - [`StateAccess`]: 状态只读访问接口
 //! - [`StateAccessMut`]: 状态可变访问接口
+//! - [`DynSolver`]: 运行时多态求解器接口
 //!
 
 // 核心抽象层
 pub mod core;
+
+// 构建器层（无泛型入口）
+pub mod builder;
 
 // 网格抽象层
 pub mod mesh;
