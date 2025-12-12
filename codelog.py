@@ -157,34 +157,58 @@ class CodeCollector:
             print(f"   - {ext}: {count}")
 
     def build_file_tree(self):
-        """构建文件树结构"""
-        if not self.collected_files:
-            return "未找到文件\n"
-
+        """构建文件树结构（即使文件夹内没有文件也记录文件夹名称，按遍历顺序）"""
         tree_lines = ["文件树：", "=" * 50, ""]
 
-        # 按相对路径组织
-        files_by_dir = {}
+        if not self.collected_files:
+            tree_lines.append(".")
+            tree_lines.extend(["", "=" * 50, ""])
+            return "\n".join(tree_lines)
+
+        # 按目录深度优先顺序构建树
+        current_dir = None
+        dir_stack = []
+        
         for file_path in self.collected_files:
             try:
                 rel_path = file_path.relative_to(self.root_path)
             except ValueError:
                 rel_path = Path(file_path.name)
 
-            dir_name = rel_path.parent
-            if dir_name not in files_by_dir:
-                files_by_dir[dir_name] = []
-            files_by_dir[dir_name].append(rel_path.name)
-
-        # 生成树形结构
-        for dir_path in sorted(files_by_dir.keys()):
-            if str(dir_path) == ".":
-                for filename in sorted(files_by_dir[dir_path]):
-                    tree_lines.append(f"├── {filename}")
-            else:
-                tree_lines.append(f"├── {dir_path}\\")
-                for filename in sorted(files_by_dir[dir_path]):
-                    tree_lines.append(f"│   ├── {filename}")
+            file_dir = rel_path.parent
+            
+            # 处理目录层级变化
+            if file_dir != current_dir:
+                # 找到共同祖先
+                common_prefix = Path(".")
+                for i, (a, b) in enumerate(zip(file_dir.parts, current_dir.parts if current_dir else ())):
+                    if a == b:
+                        common_prefix = common_prefix / a
+                    else:
+                        break
+                
+                # 计算需要回溯的层数
+                if current_dir:
+                    backtrack = len(current_dir.parts) - len(common_prefix.parts)
+                    dir_stack = dir_stack[:-backtrack] if backtrack < len(dir_stack) else []
+                else:
+                    dir_stack = []
+                
+                # 添加新的目录层级
+                new_parts = file_dir.parts[len(common_prefix.parts):]
+                for i, part in enumerate(new_parts):
+                    is_last = (i == len(new_parts) - 1) and (file_path == self.collected_files[-1] or file_path.relative_to(self.root_path).parent == Path(file_dir))
+                    indent = "│   " * len(dir_stack)
+                    tree_lines.append(f"{indent}├── {part}\\")
+                    dir_stack.append(part)
+                
+                current_dir = file_dir
+            
+            # 添加文件
+            indent = "│   " * len(dir_stack)
+            is_last_file = file_path == self.collected_files[-1] or (file_path.relative_to(self.root_path).parent != self.collected_files[self.collected_files.index(file_path) + 1].relative_to(self.root_path).parent)
+            file_prefix = "└── " if is_last_file else "├── "
+            tree_lines.append(f"{indent}{file_prefix}{rel_path.name}")
 
         tree_lines.extend(["", "=" * 50, ""])
         return "\n".join(tree_lines)
