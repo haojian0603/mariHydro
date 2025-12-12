@@ -1,4 +1,4 @@
-//! marihydro\crates\mh_physics\src\core\scalar.rs
+// marihydro\crates\mh_physics\src\core\scalar.rs
 //! 统一标量类型抽象 - 项目唯一权威定义 - 禁止更改此代码文件
 //!
 //! 本模块提供**编译期精度选择**的唯一接口，支持物理算法在 `f32` 和 `f64` 之间零成本切换。
@@ -24,16 +24,17 @@
 //!
 //! ```
 //! use mh_physics::core::Scalar;
+//! use mh_physics::types::PhysicalConstants;
 //! use num_traits::Float;
 //! 
 //! // 运行层：泛型算法
-//! fn compute_wave_speed<S: Scalar>(depth: S) -> S {
-//!     let g = S::from_f64(9.81);  // 配置层f64 → 运行层S
-//!     (g * depth).sqrt()          // sqrt() 来自 Float trait
+//! fn compute_wave_speed<S: Scalar>(depth: S, constants: &PhysicalConstants) -> S {
+//!     let g = S::from_f64(constants.g);  // 配置层f64 → 运行层S
+//!     (g * depth).sqrt()                 // sqrt() 来自 Float trait
 //! }
 //!
 //! // 配置层：硬编码f64
-//! const GRAVITY_F64: f64 = 9.81;  // 权威配置值
+//! let constants = PhysicalConstants::seawater(); // 权威配置值
 //! ```
 //!
 //! # GPU 内存操作

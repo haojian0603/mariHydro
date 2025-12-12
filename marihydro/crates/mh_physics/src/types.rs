@@ -913,13 +913,10 @@ impl NumericalParamsBuilder {
     }
 }
 
-// ============================================================
-// 物理常数
-// ============================================================
-
 /// 物理常数
 ///
 /// 包含地球物理、流体性质等自然界常数。
+/// 如果常量的值不随算法、场景、网格变化，仅取决于物理现实，则必须放入 PhysicalConstants
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicalConstants {
     /// 重力加速度 [m/s²]

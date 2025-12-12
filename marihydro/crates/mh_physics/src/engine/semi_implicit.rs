@@ -39,6 +39,7 @@ use crate::numerics::linear_algebra::{
 };
 use crate::schemes::riemann::{HllcSolver, RiemannSolver, SolverParams as RiemannParams};
 use crate::state::ShallowWaterState;
+use crate::types::PhysicalConstants;
 use glam::DVec2;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
@@ -46,8 +47,8 @@ use serde::{Deserialize, Serialize};
 /// 半隐式配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemiImplicitConfig {
-    /// 重力加速度 [m/s²]
-    pub gravity: f64,
+    /// 物理常数（包含重力等权威值）
+    pub constants: PhysicalConstants,
     /// 最小水深阈值 [m]
     pub h_min: f64,
     /// 干单元水深阈值 [m]
@@ -67,7 +68,7 @@ pub struct SemiImplicitConfig {
 impl Default for SemiImplicitConfig {
     fn default() -> Self {
         Self {
-            gravity: 9.81,
+            constants: PhysicalConstants::seawater(),
             h_min: 1e-6,
             h_dry: 1e-4,
             solver_rtol: 1e-8,
@@ -203,7 +204,7 @@ impl SemiImplicitStrategy {
 
         // 初始化 Riemann 求解器
         let riemann_params = RiemannParams {
-            gravity: config.gravity,
+            gravity: config.constants.g,
             h_dry: config.h_dry,
             h_min: config.h_min,
             flux_eps: 1e-14,
@@ -291,7 +292,7 @@ impl SemiImplicitStrategy {
             &self.topo,
             state,
             dt,
-            self.config.gravity,
+            self.config.constants.g,
         );
 
         // 5. 计算散度 RHS
@@ -337,7 +338,7 @@ impl SemiImplicitStrategy {
 
     /// 计算 CFL 数
     fn compute_cfl(&self, state: &ShallowWaterState, mesh: &PhysicsMesh, dt: f64) -> f64 {
-        let g = self.config.gravity;
+        let g = self.config.constants.g;
         let h_dry = self.config.h_dry;
 
         (0..state.n_cells())
@@ -474,7 +475,7 @@ impl SemiImplicitStrategy {
 
     /// 速度校正（Green-Gauss 梯度）
     fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) {
-        let g = self.config.gravity;
+        let g = self.config.constants.g;
         let theta = self.config.theta;
         let coeff = g * theta * dt;
         let h_dry = self.config.h_dry;
@@ -670,7 +671,7 @@ impl SemiImplicitStrategy {
 
         // 重新初始化 Riemann 求解器
         let riemann_params = RiemannParams {
-            gravity: self.config.gravity,
+            gravity: self.config.constants.g,
             h_dry: self.config.h_dry,
             h_min: self.config.h_min,
             flux_eps: 1e-14,
@@ -687,7 +688,7 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = SemiImplicitConfig::default();
-        assert!((config.gravity - 9.81).abs() < 1e-10);
+        assert!((config.constants.g - 9.81).abs() < 1e-10);
         assert!((config.theta - 0.5).abs() < 1e-10);
     }
 

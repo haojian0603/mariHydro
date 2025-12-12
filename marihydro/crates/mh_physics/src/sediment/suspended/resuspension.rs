@@ -13,7 +13,9 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_foundation::Scalar;
+
+// 悬移质再悬浮计算使用 f64 精度
+type Scalar = f64;
 
 /// 侵蚀公式 trait
 pub trait ErosionFormula: Send + Sync {

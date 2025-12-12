@@ -1,3 +1,4 @@
+//! marihydro\crates\mh_physics\src\numerics\limiter\venkatakrishnan.rs
 //! Venkatakrishnan 限制器
 //!
 //! 光滑的梯度限制器，避免 Barth-Jespersen 的梯度突变问题。

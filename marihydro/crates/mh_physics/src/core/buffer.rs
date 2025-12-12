@@ -1,3 +1,4 @@
+//! marihydro\crates\mh_physics\src\core\buffer.rs
 //! 设备缓冲区抽象
 //!
 //! 提供 CPU/GPU 统一的缓冲区接口。

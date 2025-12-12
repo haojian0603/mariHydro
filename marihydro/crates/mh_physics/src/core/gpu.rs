@@ -1,3 +1,4 @@
+// marihydro\crates\mh_physics\src\core\gpu.rs
 //! GPU 后端（骨架实现）
 //!
 //! 预留 CUDA 后端支持，当前仅提供接口定义。

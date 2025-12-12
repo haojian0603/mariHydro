@@ -11,6 +11,7 @@
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
+use crate::types::PhysicalConstants;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
@@ -21,8 +22,8 @@ pub struct BridgePierConfig {
     pub enabled: bool,
     /// 默认拖曳系数
     pub default_cd: f64,
-    /// 水密度 [kg/m³]
-    pub rho_water: f64,
+    /// 物理常量（唯一真理源）
+    pub constants: PhysicalConstants,
     /// 最小水深 [m]
     pub h_min: f64,
 }
@@ -32,7 +33,7 @@ impl Default for BridgePierConfig {
         Self {
             enabled: true,
             default_cd: 1.2, // 圆柱体典型值
-            rho_water: 1000.0,
+            constants: PhysicalConstants::seawater(),
             h_min: 0.01,
         }
     }
@@ -42,6 +43,8 @@ impl Default for BridgePierConfig {
 pub struct BridgePierDrag {
     /// 配置
     config: BridgePierConfig,
+    /// 物理常量缓存
+    constants: PhysicalConstants,
     /// 阻塞率场 (0~1)：桥墩占单元面积的比例
     pub blockage: AlignedVec<f64>,
     /// 拖曳系数场
@@ -53,6 +56,7 @@ impl BridgePierDrag {
     pub fn new(n_cells: usize, config: BridgePierConfig) -> Self {
         Self {
             config: config.clone(),
+            constants: config.constants,
             blockage: AlignedVec::zeros(n_cells),
             drag_coeff: AlignedVec::from_vec(vec![config.default_cd; n_cells]),
         }
@@ -113,7 +117,7 @@ impl BridgePierDrag {
 
         // F = 0.5 × ρ × Cd × A_block × |u| × u / h
         // 除以 h 是因为动量方程是单位体积的
-        let factor = 0.5 * self.config.rho_water * cd * ab * speed / h.max(0.01);
+        let factor = 0.5 * self.constants.rho_water * cd * ab * speed / h.max(0.01);
 
         (-factor * u, -factor * v)
     }

@@ -1,3 +1,4 @@
+//! crates/mh_physics/src/mesh/mod.rs
 //! 网格抽象层
 //!
 //! 提供结构化和非结构化网格的统一接口。

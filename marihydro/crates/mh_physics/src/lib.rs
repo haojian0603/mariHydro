@@ -43,8 +43,9 @@ pub mod sediment;
 pub mod sources;
 pub mod waves;
 
-// 新增模块：字段注册和算子抽象
+// 新增模块：字段注册、gpu和算子抽象
 pub mod fields;
+pub mod gpu;
 pub mod operators;
 
 // 重导出核心抽象

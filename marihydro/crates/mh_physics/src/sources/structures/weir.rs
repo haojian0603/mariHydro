@@ -20,11 +20,9 @@
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+use crate::types::PhysicalConstants;
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
-
-/// 重力加速度
-const G: Scalar = 9.81;
 
 /// 堰类型
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -38,13 +36,13 @@ pub enum WeirType {
     /// 实用堰（Cd ≈ 0.40-0.48）
     Practical,
     /// 自定义流量系数
-    Custom { cd: Scalar },
+    Custom { cd: f64 },
 }
 
 
 impl WeirType {
     /// 获取流量系数
-    pub fn discharge_coefficient(&self) -> Scalar {
+    pub fn discharge_coefficient(&self) -> f64 {
         match self {
             Self::BroadCrested => 0.35,
             Self::SharpCrested => 0.42,
@@ -61,10 +59,10 @@ pub struct WeirConfig {
     pub enabled: bool,
     /// 堰类型
     pub weir_type: WeirType,
-    /// 水密度 [kg/m³]
-    pub rho_water: Scalar,
+    /// 物理常量（唯一真理源）
+    pub constants: PhysicalConstants,
     /// 最小水头 [m]
-    pub h_min: Scalar,
+    pub h_min: f64,
 }
 
 impl Default for WeirConfig {
@@ -72,7 +70,7 @@ impl Default for WeirConfig {
         Self {
             enabled: true,
             weir_type: WeirType::BroadCrested,
-            rho_water: 1000.0,
+            constants: PhysicalConstants::seawater(),
             h_min: 0.001,
         }
     }
@@ -82,22 +80,24 @@ impl Default for WeirConfig {
 pub struct WeirFlow {
     /// 配置
     config: WeirConfig,
+    /// 物理常数缓存
+    constants: PhysicalConstants,
     /// 单元数
     n_cells: usize,
     /// 堰顶高程场 [m]
-    pub crest_elevation: AlignedVec<Scalar>,
+    pub crest_elevation: AlignedVec<f64>,
     /// 堰宽度场 [m]（通常等于单元宽度）
-    pub weir_width: AlignedVec<Scalar>,
+    pub weir_width: AlignedVec<f64>,
     /// 流量系数场（覆盖默认值）
-    pub cd_field: AlignedVec<Scalar>,
+    pub cd_field: AlignedVec<f64>,
     /// 堰法向（指向下游）x 分量
-    pub normal_x: AlignedVec<Scalar>,
+    pub normal_x: AlignedVec<f64>,
     /// 堰法向 y 分量
-    pub normal_y: AlignedVec<Scalar>,
+    pub normal_y: AlignedVec<f64>,
     /// 单元面积 [m²]
-    pub cell_area: AlignedVec<Scalar>,
+    pub cell_area: AlignedVec<f64>,
     /// 计算得到的过堰流量 [m³/s]
-    discharge: AlignedVec<Scalar>,
+    discharge: AlignedVec<f64>,
 }
 
 impl WeirFlow {
@@ -105,7 +105,8 @@ impl WeirFlow {
     pub fn new(n_cells: usize, config: WeirConfig) -> Self {
         let cd_default = config.weir_type.discharge_coefficient();
         Self {
-            config,
+            config: config.clone(),
+            constants: config.constants,
             n_cells,
             crest_elevation: AlignedVec::from_vec(vec![f64::INFINITY; n_cells]), // 默认无堰
             weir_width: AlignedVec::zeros(n_cells),
@@ -132,10 +133,10 @@ impl WeirFlow {
     pub fn set_weir(
         &mut self,
         cell: usize,
-        crest: Scalar,
-        width: Scalar,
-        cd: Option<Scalar>,
-        normal: (Scalar, Scalar),
+        crest: f64,
+        width: f64,
+        cd: Option<f64>,
+        normal: (f64, f64),
     ) {
         if cell < self.n_cells {
             self.crest_elevation[cell] = crest;
@@ -156,7 +157,7 @@ impl WeirFlow {
     ///
     /// # 返回
     /// 流量 [m³/s]，正值表示流向法向正方向
-    pub fn compute_discharge(&self, cell: usize, water_level: Scalar) -> Scalar {
+    pub fn compute_discharge(&self, cell: usize, water_level: f64) -> f64 {
         let crest = self.crest_elevation[cell];
         if crest.is_infinite() {
             return 0.0; // 无堰
@@ -173,7 +174,7 @@ impl WeirFlow {
         // 自由出流：Q = Cd × B × H^1.5 × √(2g)
         
 
-        cd * width * head.powf(1.5) * (2.0 * G).sqrt()
+        cd * width * head.powf(1.5) * (2.0 * self.constants.g).sqrt()
     }
 
     /// 计算淹没出流
@@ -184,9 +185,9 @@ impl WeirFlow {
     pub fn compute_discharge_submerged(
         &self,
         cell: usize,
-        h_upstream: Scalar,
-        h_downstream: Scalar,
-    ) -> Scalar {
+        h_upstream: f64,
+        h_downstream: f64,
+    ) -> f64 {
         if h_upstream < self.config.h_min {
             return 0.0;
         }
@@ -202,20 +203,20 @@ impl WeirFlow {
     }
 
     /// 从水头计算流量
-    fn compute_discharge_from_head(&self, cell: usize, head: Scalar) -> Scalar {
+    fn compute_discharge_from_head(&self, cell: usize, head: f64) -> f64 {
         let cd = self.cd_field[cell];
         let width = self.weir_width[cell];
 
-        cd * width * head.powf(1.5) * (2.0 * G).sqrt()
+        cd * width * head.powf(1.5) * (2.0 * self.constants.g).sqrt()
     }
 
     /// 获取计算的流量场
-    pub fn discharge(&self) -> &[Scalar] {
+    pub fn discharge(&self) -> &[f64] {
         &self.discharge
     }
 
     /// 设置单元面积
-    pub fn set_cell_areas(&mut self, areas: &[Scalar]) {
+    pub fn set_cell_areas(&mut self, areas: &[f64]) {
         let n = self.n_cells.min(areas.len());
         self.cell_area[..n].copy_from_slice(&areas[..n]);
     }
@@ -283,7 +284,7 @@ mod tests {
     use super::*;
 
     #[allow(dead_code)]
-    fn create_test_state(n_cells: usize, h: Scalar, z: Scalar) -> ShallowWaterState {
+    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterState {
         let mut state = ShallowWaterState::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;

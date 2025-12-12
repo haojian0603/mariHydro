@@ -29,8 +29,10 @@
 
 use super::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_foundation::Scalar;
 use serde::{Deserialize, Serialize};
+
+// 沉积学公式暂固定为 f64 精度
+type Scalar = f64;
 
 /// 输沙公式 trait
 ///

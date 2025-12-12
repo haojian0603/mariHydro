@@ -1,3 +1,4 @@
+//! marihydro\crates\mh_physics\src\operators.rs
 //! 算子抽象层
 //!
 //! 定义物理算子的通用接口，支持不同的通量格式和时间积分方法。
