@@ -14,7 +14,8 @@
 //! cargo test --release benchmark_ -- --ignored --nocapture
 //! ```
 
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
+use mh_core::Scalar;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, ConjugateGradient, IterativeSolver, JacobiPreconditioner,
     IdentityPreconditioner, Preconditioner, SolverConfig, SolverResult,
@@ -39,7 +40,7 @@ struct BenchmarkResult {
     /// 迭代次数
     iterations: usize,
     /// 残差
-    residual: Scalar,
+    residual: f64,
     /// 是否收敛
     converged: bool,
 }
@@ -103,7 +104,7 @@ fn generate_laplacian_5pt(n: usize) -> CsrMatrix {
 
 /// 生成带权重的测试矩阵（模拟非均匀网格）
 #[allow(dead_code)]
-fn generate_weighted_laplacian(n: usize, weights: &[Scalar]) -> CsrMatrix {
+fn generate_weighted_laplacian(n: usize, weights: &[f64]) -> CsrMatrix {
     let size = n * n;
     let mut builder = CsrBuilder::new(size, size);
 
@@ -140,14 +141,14 @@ fn generate_weighted_laplacian(n: usize, weights: &[Scalar]) -> CsrMatrix {
 }
 
 /// 生成对称正定随机右端向量
-fn generate_rhs(size: usize, seed: u64) -> AlignedVec<Scalar> {
+fn generate_rhs(size: usize, seed: u64) -> AlignedVec<f64> {
     // 简单 LCG 伪随机
     let mut state = seed;
     let mut rhs = AlignedVec::zeros(size);
     
     for i in 0..size {
         state = state.wrapping_mul(1103515245).wrapping_add(12345);
-        rhs[i] = ((state >> 16) as i32 % 1000) as Scalar / 1000.0;
+        rhs[i] = ((state >> 16) as i32 % 1000) as f64 / 1000.0;
     }
     
     rhs
@@ -160,10 +161,10 @@ fn generate_rhs(size: usize, seed: u64) -> AlignedVec<Scalar> {
 /// 运行单个基准测试
 fn run_benchmark<P: Preconditioner>(
     matrix: &CsrMatrix,
-    rhs: &[Scalar],
+    rhs: &[f64],
     preconditioner: &P,
     config: &SolverConfig,
-) -> (Duration, SolverResult, AlignedVec<Scalar>) {
+) -> (Duration, SolverResult, AlignedVec<f64>) {
     let n = matrix.n_rows();
     let mut x = AlignedVec::zeros(n);
     

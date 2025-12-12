@@ -220,14 +220,14 @@ mod tests {
 
     #[test]
     fn test_validate_empty_mesh() {
-        let mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
         let report = mesh.validate();
         assert!(report.is_valid());
     }
 
     #[test]
     fn test_validate_triangle() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_quick_validate() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);

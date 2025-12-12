@@ -6,7 +6,8 @@ pub mod explicit;
 pub mod semi_implicit;
 pub mod workspace;
 
-use crate::core::{Backend, Scalar};
+use crate::core::Backend;
+use mh_core::Scalar;
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
 
@@ -32,8 +33,8 @@ pub struct StepResult<S: Scalar> {
 impl<S: Scalar> Default for StepResult<S> {
     fn default() -> Self {
         Self {
-            dt_used: <S as Scalar>::from_f64(0.0),
-            max_wave_speed: <S as Scalar>::from_f64(0.0),
+            dt_used: <S as Scalar>::from_f64_lossless(0.0),
+            max_wave_speed: <S as Scalar>::from_f64_lossless(0.0),
             dry_cells: 0,
             limited_cells: 0,
             converged: true,
@@ -71,7 +72,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     
     /// 推荐的 CFL 数
     fn recommended_cfl(&self) -> B::Scalar {
-        <B::Scalar as Scalar>::from_f64(0.5)
+        <B::Scalar as Scalar>::from_f64_lossless(0.5)
     }
 }
 

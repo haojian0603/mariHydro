@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn test_aspect_ratio_equilateral() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         // 等边三角形
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);

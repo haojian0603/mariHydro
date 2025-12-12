@@ -325,7 +325,7 @@ impl FrozenMesh {
     /// 转换为半边网格
     ///
     /// 将冻结网格转换回可编辑的半边网格。
-    pub fn to_halfedge<V: Default + Clone, E: Default + Clone, F: Default + Clone>(
+    pub fn to_halfedge<V: Default + Clone, F: Default + Clone>(
         &self,
     ) -> HalfEdgeMesh<V, F> {
         let mut mesh = HalfEdgeMesh::with_capacity(self.n_nodes, self.n_faces * 3, self.n_cells);
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_freeze_empty_mesh() {
-        let mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
         let frozen = mesh.freeze();
 
         assert_eq!(frozen.n_cells(), 0);
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_freeze_triangle() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+        let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(1.0, 0.0, 0.0);
@@ -450,7 +450,7 @@ mod tests {
 
         // 冻结再转回
         let frozen = mesh.freeze();
-        let mesh2: HalfEdgeMesh<(), (), ()> = frozen.to_halfedge();
+        let mesh2: HalfEdgeMesh<(), ()> = frozen.to_halfedge();
 
         assert_eq!(mesh2.n_vertices(), 3);
         assert_eq!(mesh2.n_faces(), 1);

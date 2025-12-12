@@ -2,7 +2,8 @@
 //!
 //! 从2D深度平均状态恢复垂向速度剖面。
 
-use crate::core::{Backend, DeviceBuffer, CpuBackend, Scalar};
+use crate::core::{Backend, DeviceBuffer, CpuBackend};
+use mh_core::Scalar;
 use crate::state::ShallowWaterStateGeneric;
 use crate::vertical::sigma::SigmaCoordinate;
 
@@ -106,10 +107,10 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
             sigma: SigmaCoordinate::uniform(n_layers),
-            roughness: backend.alloc_init(n_cells, <B::Scalar as Scalar>::from_f64(0.01)), // 默认糙率
+            roughness: backend.alloc_init(n_cells, <B::Scalar as Scalar>::from_f64_lossless(0.01)), // 默认糙率
             n_layers,
             method,
-            von_karman: <B::Scalar as Scalar>::from_f64(VON_KARMAN),
+            von_karman: <B::Scalar as Scalar>::from_f64_lossless(VON_KARMAN),
             backend,
         }
     }

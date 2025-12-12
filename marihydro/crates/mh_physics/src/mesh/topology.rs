@@ -2,7 +2,8 @@
 //!
 //! 提供结构化和非结构化网格的统一接口。
 
-use crate::core::{Backend, Scalar};
+use crate::core::Backend;
+use mh_core::Scalar;
 
 /// 网格类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +129,7 @@ impl MeshGeometry {
         if length > S::min_positive_value() {
             [-dy / length, dx / length]
         } else {
-            [<S as Scalar>::from_f64(0.0), <S as Scalar>::from_f64(0.0)]
+            [<S as Scalar>::from_f64_lossless(0.0), <S as Scalar>::from_f64_lossless(0.0)]
         }
     }
 }

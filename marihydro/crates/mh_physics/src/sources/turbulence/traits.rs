@@ -4,7 +4,9 @@
 //!
 //! 定义湍流模型的公共接口，为不同湍流闭合提供统一抽象。
 
-/// 速度梯度张量
+use mh_core::Scalar;
+
+/// 速度梯度张量（完全泛型化）
 ///
 /// 用于计算应变率、涡度等湍流相关量。
 ///
@@ -20,22 +22,33 @@
 /// ```text
 /// |S| = √(2S_ij·S_ij) = √(2(∂u/∂x)² + 2(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct VelocityGradient {
+#[derive(Debug, Clone, Copy)]
+pub struct VelocityGradient<S: Scalar> {
     /// ∂u/∂x
-    pub du_dx: f64,
+    pub du_dx: S,
     /// ∂u/∂y
-    pub du_dy: f64,
+    pub du_dy: S,
     /// ∂v/∂x
-    pub dv_dx: f64,
+    pub dv_dx: S,
     /// ∂v/∂y
-    pub dv_dy: f64,
+    pub dv_dy: S,
 }
 
-impl VelocityGradient {
+impl<S: Scalar> Default for VelocityGradient<S> {
+    fn default() -> Self {
+        Self {
+            du_dx: S::ZERO,
+            du_dy: S::ZERO,
+            dv_dx: S::ZERO,
+            dv_dy: S::ZERO,
+        }
+    }
+}
+
+impl<S: Scalar> VelocityGradient<S> {
     /// 创建新的速度梯度
     #[inline]
-    pub fn new(du_dx: f64, du_dy: f64, dv_dx: f64, dv_dy: f64) -> Self {
+    pub fn new(du_dx: S, du_dy: S, dv_dx: S, dv_dy: S) -> Self {
         Self { du_dx, du_dy, dv_dx, dv_dy }
     }
 
@@ -43,19 +56,21 @@ impl VelocityGradient {
     ///
     /// |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
     #[inline]
-    pub fn strain_rate_magnitude(&self) -> f64 {
+    pub fn strain_rate_magnitude(&self) -> S {
         let s11 = self.du_dx;
         let s22 = self.dv_dy;
-        let s12 = 0.5 * (self.du_dy + self.dv_dx);
+        let s12 = S::HALF * (self.du_dy + self.dv_dx);
 
-        (2.0 * s11 * s11 + 2.0 * s22 * s22 + 4.0 * s12 * s12).sqrt()
+        let two = S::TWO;
+        let four = two + two;
+        (two * s11 * s11 + two * s22 * s22 + four * s12 * s12).sqrt()
     }
 
     /// 计算涡度（z 分量）
     ///
     /// ω_z = ∂v/∂x - ∂u/∂y
     #[inline]
-    pub fn vorticity(&self) -> f64 {
+    pub fn vorticity(&self) -> S {
         self.dv_dx - self.du_dy
     }
 
@@ -63,7 +78,7 @@ impl VelocityGradient {
     ///
     /// div(u) = ∂u/∂x + ∂v/∂y
     #[inline]
-    pub fn divergence(&self) -> f64 {
+    pub fn divergence(&self) -> S {
         self.du_dx + self.dv_dy
     }
     
@@ -75,7 +90,7 @@ impl VelocityGradient {
     }
 }
 
-/// 湍流闭合模型 trait
+/// 湍流闭合模型 trait（完全泛型化）
 ///
 /// 所有湍流模型（Smagorinsky, k-ε 等）的公共接口。
 /// 
@@ -83,7 +98,7 @@ impl VelocityGradient {
 /// 
 /// - [`SmagorinskySolver`](super::SmagorinskySolver): 2D Smagorinsky 模型
 /// - [`KEpsilonModel`](super::KEpsilonModel): 3D k-ε 模型
-pub trait TurbulenceClosure: Send + Sync {
+pub trait TurbulenceClosure<S: Scalar>: Send + Sync {
     /// 模型名称
     fn name(&self) -> &'static str;
     
@@ -93,11 +108,11 @@ pub trait TurbulenceClosure: Send + Sync {
     fn is_3d(&self) -> bool;
     
     /// 获取涡粘性场
-    fn eddy_viscosity(&self) -> &[f64];
+    fn eddy_viscosity(&self) -> &[S];
     
     /// 获取单个单元的涡粘性
-    fn get_eddy_viscosity(&self, cell: usize) -> f64 {
-        self.eddy_viscosity().get(cell).copied().unwrap_or(0.0)
+    fn get_eddy_viscosity(&self, cell: usize) -> S {
+        self.eddy_viscosity().get(cell).copied().unwrap_or(S::ZERO)
     }
     
     /// 更新涡粘性（基于当前速度场）
@@ -105,7 +120,7 @@ pub trait TurbulenceClosure: Send + Sync {
     /// # 参数
     /// - `velocity_gradients`: 速度梯度场
     /// - `cell_sizes`: 网格尺度（用于 Smagorinsky 等模型）
-    fn update(&mut self, velocity_gradients: &[VelocityGradient], cell_sizes: &[f64]);
+    fn update(&mut self, velocity_gradients: &[VelocityGradient<S>], cell_sizes: &[S]);
     
     /// 是否启用
     fn is_enabled(&self) -> bool {
@@ -121,7 +136,7 @@ mod tests {
     fn test_velocity_gradient_strain_rate() {
         // 纯剪切流: u = y, v = 0
         // ∂u/∂y = 1, 其他为 0
-        let grad = VelocityGradient::new(0.0, 1.0, 0.0, 0.0);
+        let grad: VelocityGradient<f64> = VelocityGradient::new(0.0, 1.0, 0.0, 0.0);
 
         // |S| = √(4 * s12²) = √(4 * 0.25) = 1.0
         let strain = grad.strain_rate_magnitude();
@@ -130,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_velocity_gradient_vorticity() {
-        let grad = VelocityGradient::new(0.0, 1.0, -1.0, 0.0);
+        let grad: VelocityGradient<f64> = VelocityGradient::new(0.0, 1.0, -1.0, 0.0);
         let vorticity = grad.vorticity();
         // ω = -1 - 1 = -2
         assert!((vorticity - (-2.0)).abs() < 1e-10);
@@ -138,17 +153,27 @@ mod tests {
 
     #[test]
     fn test_velocity_gradient_divergence() {
-        let grad = VelocityGradient::new(2.0, 0.0, 0.0, 3.0);
+        let grad: VelocityGradient<f64> = VelocityGradient::new(2.0, 0.0, 0.0, 3.0);
         let div = grad.divergence();
         assert!((div - 5.0).abs() < 1e-10);
     }
     
     #[test]
     fn test_velocity_gradient_validity() {
-        let valid = VelocityGradient::new(1.0, 2.0, 3.0, 4.0);
+        let valid: VelocityGradient<f64> = VelocityGradient::new(1.0, 2.0, 3.0, 4.0);
         assert!(valid.is_valid());
         
-        let invalid = VelocityGradient::new(f64::NAN, 0.0, 0.0, 0.0);
+        let invalid: VelocityGradient<f64> = VelocityGradient::new(f64::NAN, 0.0, 0.0, 0.0);
         assert!(!invalid.is_valid());
+    }
+    
+    #[test]
+    fn test_velocity_gradient_f32() {
+        // 测试 f32 版本
+        let grad: VelocityGradient<f32> = VelocityGradient::new(1.0f32, 2.0f32, 3.0f32, 4.0f32);
+        assert!(grad.is_valid());
+        
+        let strain = grad.strain_rate_magnitude();
+        assert!(strain > 0.0f32);
     }
 }

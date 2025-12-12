@@ -28,7 +28,7 @@
 //! use mh_mesh::halfedge::HalfEdgeMesh;
 //!
 //! // 创建半边网格
-//! let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+//! let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
 //!
 //! // 添加顶点
 //! let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);

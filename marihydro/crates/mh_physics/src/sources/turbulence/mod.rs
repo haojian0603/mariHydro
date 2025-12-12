@@ -43,7 +43,6 @@ pub mod traits;
 // ==================== Smagorinsky (2D) ====================
 pub use smagorinsky::{
     TurbulenceModel, TurbulenceConfig, SmagorinskySolver,
-    DEFAULT_SMAGORINSKY_CONSTANT, MIN_EDDY_VISCOSITY, MAX_EDDY_VISCOSITY,
 };
 
 // ==================== 通用 trait ====================

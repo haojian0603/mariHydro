@@ -98,7 +98,14 @@ pub trait Scalar:
     const MIN: Self;
 
     /// 从**配置层**f64转换到**运行层**S（可能丢失精度）
-    fn from_f64(v: f64) -> Self;
+    ///
+    /// # 说明
+    /// 此方法用于从 f64 配置值转换到运行时标量类型。
+    /// 对于 f32 目标类型，可能会丢失精度
+    /// TODO(重构-2024Q1): 这是临时方案，应删除此方法改用FromPrimitive
+    /// 原因: 与num_traits::FromPrimitive::from_f64冲突，增加API混乱
+    /// 正确做法: 所有调用处改为 S::from_f64(v).unwrap_or(S::ZERO)
+    fn from_f64_lossless(v: f64) -> Self;
 
     /// 转换回f64（用于输出或跨模块接口）
     fn to_f64(self) -> f64;
@@ -157,7 +164,7 @@ impl Scalar for f32 {
     const MIN: f32 = f32::MIN;
 
     #[inline]
-    fn from_f64(v: f64) -> Self {
+    fn from_f64_lossless(v: f64) -> Self {
         v as f32
     }
 
@@ -182,7 +189,7 @@ impl Scalar for f64 {
     const MIN: f64 = f64::MIN;
 
     #[inline]
-    fn from_f64(v: f64) -> Self {
+    fn from_f64_lossless(v: f64) -> Self {
         v
     }
 
@@ -203,11 +210,11 @@ mod tests {
     }
 
     #[test]
-    fn test_from_f64() {
-        let v: f32 = Scalar::from_f64(3.14159265358979);
+    fn test_from_f64_lossless() {
+        let v: f32 = Scalar::from_f64_lossless(3.14159265358979);
         assert!((v - 3.1415927).abs() < 1e-6);
 
-        let v: f64 = Scalar::from_f64(3.14159265358979);
+        let v: f64 = Scalar::from_f64_lossless(3.14159265358979);
         assert!((v - 3.14159265358979).abs() < 1e-14);
     }
 

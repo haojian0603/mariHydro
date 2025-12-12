@@ -28,7 +28,8 @@ use super::traits::{
     SourceTerm,
     SourceTermGeneric,
 };
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, CpuBackend};
+use mh_core::Scalar;
 use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 
 /// Manning 摩擦配置
@@ -379,20 +380,20 @@ impl<S: Scalar> ManningFrictionConfigGeneric<S> {
     /// 创建均匀 Manning 系数配置
     pub fn uniform(n_cells: usize, manning_n: S) -> Self {
         Self {
-            gravity: <S as Scalar>::from_f64(9.81),
+            gravity: <S as Scalar>::from_f64_lossless(9.81),
             manning_n: vec![manning_n; n_cells],
-            min_depth: <S as Scalar>::from_f64(1e-6),
-            max_cf: <S as Scalar>::from_f64(100.0),
+            min_depth: <S as Scalar>::from_f64_lossless(1e-6),
+            max_cf: <S as Scalar>::from_f64_lossless(100.0),
         }
     }
 
     /// 从 Manning 系数数组创建
     pub fn from_array(manning_n: Vec<S>) -> Self {
         Self {
-            gravity: <S as Scalar>::from_f64(9.81),
+            gravity: <S as Scalar>::from_f64_lossless(9.81),
             manning_n,
-            min_depth: <S as Scalar>::from_f64(1e-6),
-            max_cf: <S as Scalar>::from_f64(100.0),
+            min_depth: <S as Scalar>::from_f64_lossless(1e-6),
+            max_cf: <S as Scalar>::from_f64_lossless(100.0),
         }
     }
 }
@@ -510,7 +511,7 @@ pub struct ChezyFrictionConfigGeneric<S: Scalar> {
 impl<S: Scalar> ChezyFrictionConfigGeneric<S> {
     /// 创建均匀 Chezy 系数配置
     pub fn uniform(n_cells: usize, chezy_c: S) -> Self {
-        Self { gravity: <S as Scalar>::from_f64(9.81), chezy_c: vec![chezy_c; n_cells], min_depth: <S as Scalar>::from_f64(1e-6) }
+        Self { gravity: <S as Scalar>::from_f64_lossless(9.81), chezy_c: vec![chezy_c; n_cells], min_depth: <S as Scalar>::from_f64_lossless(1e-6) }
     }
 }
 

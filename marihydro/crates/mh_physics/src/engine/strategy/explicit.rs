@@ -8,7 +8,8 @@
 
 use super::{ExplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, CpuBackend};
+use mh_core::Scalar;
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
 
@@ -56,8 +57,8 @@ impl<B: Backend> ExplicitStrategy<B> {
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
             backend,
-            gravity: <B::Scalar as Scalar>::from_f64(config.gravity),
-            h_dry: <B::Scalar as Scalar>::from_f64(config.h_dry),
+            gravity: <B::Scalar as Scalar>::from_f64_lossless(config.gravity),
+            h_dry: <B::Scalar as Scalar>::from_f64_lossless(config.h_dry),
             config,
         }
     }

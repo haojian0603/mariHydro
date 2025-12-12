@@ -173,10 +173,10 @@ fn test_robin_boundary_jacobian_consistency() {
     let start = Instant::now();
 
     // Robin 边界参数: αc + β∂c/∂n = γ
-    let alpha = 1.5;
-    let beta = 0.3;
-    let gamma = 5.0;
-    let dx = 0.1;
+    let alpha = 1.5_f64;
+    let beta = 0.3_f64;
+    let gamma = 5.0_f64;
+    let dx = 0.1_f64;
 
     let bc = ResolvedBoundaryValue::robin(alpha, beta, gamma);
 

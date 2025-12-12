@@ -30,7 +30,7 @@ use mh_mesh::FrozenMesh;
 use std::sync::Arc;
 
 // 使用 types 模块中从 mh_core 导入的统一索引类型
-use crate::types::{CellIndex, FaceIndex, NodeIndex, INVALID_INDEX};
+use crate::types::{INVALID_INDEX};
 
 /// 无效单元索引常量 (保留用于向后兼容)
 pub const INVALID_CELL: usize = INVALID_INDEX;
@@ -383,6 +383,7 @@ impl PhysicsMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_core::{CellIndex, FaceIndex, NodeIndex};
 
     #[test]
     fn test_cell_index() {

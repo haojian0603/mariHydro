@@ -134,7 +134,6 @@ pub use turbulence::{
     // Smagorinsky (2D)
     TurbulenceModel, TurbulenceConfig, SmagorinskySolver,
     VelocityGradient,
-    DEFAULT_SMAGORINSKY_CONSTANT, MIN_EDDY_VISCOSITY, MAX_EDDY_VISCOSITY,
     // 通用 trait
     TurbulenceClosure,
 };

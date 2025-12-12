@@ -23,7 +23,7 @@
 //! ```
 
 use super::buffer::DeviceBuffer;
-use super::scalar::Scalar;
+use mh_core::Scalar;
 use bytemuck::Pod;
 use std::fmt::Debug;
 use std::marker::PhantomData;

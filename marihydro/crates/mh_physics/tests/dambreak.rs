@@ -18,7 +18,7 @@ fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
     let gmsh_data = GmshLoader::load(path).map_err(|e| format!("加载网格失败: {}", e))?;
     
     // 创建 HalfEdgeMesh
-    let mut mesh: HalfEdgeMesh<(), (), ()> = HalfEdgeMesh::new();
+    let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
     
     // 添加所有顶点
     let mut vertex_map = Vec::with_capacity(gmsh_data.nodes.len());

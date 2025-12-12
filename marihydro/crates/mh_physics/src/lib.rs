@@ -65,7 +65,9 @@ pub mod gpu;
 pub mod operators;
 
 // 重导出核心抽象
-pub use core::{Backend, CpuBackend, DefaultBackend, Scalar, DeviceBuffer, D2, D3};
+// 注意：Scalar trait 应从 mh_core 导入
+pub use core::{Backend, CpuBackend, DefaultBackend, DeviceBuffer, D2, D3};
+pub use mh_core::Scalar;
 
 // 重导出网格抽象
 pub use mesh::{MeshTopology, MeshKind, UnstructuredMeshAdapter};

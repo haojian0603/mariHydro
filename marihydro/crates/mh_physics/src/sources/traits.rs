@@ -4,7 +4,8 @@
 //!
 //! 定义源项的核心接口和数据结构。
 
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, CpuBackend};
+use mh_core::Scalar;
 use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 use crate::types::NumericalParams;
 use std::marker::PhantomData;
@@ -407,9 +408,9 @@ impl<S: Scalar> SourceContextGeneric<S> {
         Self {
             time,
             dt,
-            gravity: <S as Scalar>::from_f64(9.81),
-            h_dry: <S as Scalar>::from_f64(1e-6),
-            h_wet: <S as Scalar>::from_f64(1e-4),
+            gravity: <S as Scalar>::from_f64_lossless(9.81),
+            h_dry: <S as Scalar>::from_f64_lossless(1e-6),
+            h_wet: <S as Scalar>::from_f64_lossless(1e-4),
         }
     }
     

@@ -174,8 +174,8 @@ impl MorphodynamicsSolver {
         &mut self,
         state: &mut ShallowWaterState,
         mesh: &PhysicsMesh,
-        qb_x: &[Scalar],
-        qb_y: &[Scalar],
+        qb_x: &[f64],
+        qb_y: &[f64],
         dt: f64,
     ) {
         // 重置统计
@@ -285,8 +285,8 @@ impl MorphodynamicsSolver {
         &self,
         mesh: &PhysicsMesh,
         state: &ShallowWaterState,
-        qb_x: &[Scalar],
-        qb_y: &[Scalar],
+        qb_x: &[f64],
+        qb_y: &[f64],
     ) -> Vec<f64> {
         let n = state.n_cells();
         let mut jacobian = vec![0.0; n];
@@ -316,9 +316,9 @@ impl MorphodynamicsSolver {
         &mut self,
         mesh: &PhysicsMesh,
         state: &ShallowWaterState,
-        qb_x: &[Scalar],
-        qb_y: &[Scalar],
-    ) -> &[Scalar] {
+        qb_x: &[f64],
+        qb_y: &[f64],
+    ) -> &[f64] {
         self.compute_divergence_upwind(mesh, state, qb_x, qb_y);
         self.dz_dt.as_slice()
     }
@@ -328,8 +328,8 @@ impl MorphodynamicsSolver {
         &mut self,
         mesh: &PhysicsMesh,
         state: &ShallowWaterState,
-        qb_x: &[Scalar],
-        qb_y: &[Scalar],
+        qb_x: &[f64],
+        qb_y: &[f64],
     ) {
         let factor = 1.0 / (1.0 - self.config.porosity);
 
@@ -566,7 +566,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 获取河床变化率场引用
-    pub fn dz_dt(&self) -> &[Scalar] {
+    pub fn dz_dt(&self) -> &[f64] {
         self.dz_dt.as_slice()
     }
 }

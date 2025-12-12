@@ -27,7 +27,8 @@
 //! - 雅可比（对角）预处理：M = diag(A)
 //! - 无预处理（单位矩阵）
 
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, CpuBackend};
+use mh_core::Scalar;
 use std::marker::PhantomData;
 
 /// PCG 求解器配置

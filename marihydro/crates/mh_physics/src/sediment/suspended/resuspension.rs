@@ -47,7 +47,8 @@ pub trait ErosionFormula<S: Scalar>: Send + Sync {
     /// E - D > 0: 侵蚀主导
     /// E - D < 0: 沉降主导
     fn net_exchange(&self, tau_b: S, c_b: S, ws: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let e = self.erosion_rate(tau_b, props.critical_shear_stress, props, physics);
+        let tau_cr = S::from_f64_lossless(props.critical_shear_stress);
+        let e = self.erosion_rate(tau_b, tau_cr, props, physics);
         let d = self.deposition_rate(c_b, ws);
         e - d
     }
@@ -71,7 +72,7 @@ pub struct SmithMcLean<S: Scalar> {
 
 impl<S: Scalar> Default for SmithMcLean<S> {
     fn default() -> Self {
-        Self { gamma0: S::from_f64(0.0024) }
+        Self { gamma0: S::from_f64_lossless(0.0024) }
     }
 }
 
@@ -106,8 +107,8 @@ impl<S: Scalar> ErosionFormula<S> for SmithMcLean<S> {
         
         // 转换为质量浓度 [kg/m³]
         // 注：props.rho_s为f64配置参数，运行时转换
-        let rho_s = S::from_f64(props.rho_s);
-        let ws = S::from_f64(props.settling_velocity);
+        let rho_s = S::from_f64_lossless(props.rho_s);
+        let ws = S::from_f64_lossless(props.settling_velocity);
         
         c_b_vol * rho_s * ws
     }
@@ -131,7 +132,7 @@ pub struct GarciaParker<S: Scalar> {
 
 impl<S: Scalar> Default for GarciaParker<S> {
     fn default() -> Self {
-        Self { coefficient_a: S::from_f64(1.3e-7) }
+        Self { coefficient_a: S::from_f64_lossless(1.3e-7) }
     }
 }
 
@@ -153,26 +154,26 @@ impl<S: Scalar> ErosionFormula<S> for GarciaParker<S> {
         }
         
         // 剪切速度
-        let rho_water = S::from_f64(physics.rho_water);
+        let rho_water = S::from_f64_lossless(physics.rho_water);
         let u_star = (tau_b / rho_water).sqrt();
         
         // 颗粒雷诺数
-        let d50 = S::from_f64(props.d50);
-        let nu_water = S::from_f64(physics.nu_water);
+        let d50 = S::from_f64_lossless(props.d50);
+        let nu_water = S::from_f64_lossless(physics.nu_water);
         let re_p = d50 * u_star / nu_water;
         
         // 沉降速度（确保不为零）
-        let ws = S::from_f64(props.settling_velocity).max(S::from_f64(1e-10));
+        let ws = S::from_f64_lossless(props.settling_velocity).max(S::from_f64_lossless(1e-10));
         
         // Z 参数
-        let z = u_star * re_p.powf(S::from_f64(0.6)) / ws;
+        let z = u_star * re_p.powf(S::from_f64_lossless(0.6)) / ws;
         
         // 近底浓度
         let z5 = z.powi(5);
-        let c_b = self.coefficient_a * z5 / (S::ONE + self.coefficient_a / S::from_f64(0.3) * z5);
+        let c_b = self.coefficient_a * z5 / (S::ONE + self.coefficient_a / S::from_f64_lossless(0.3) * z5);
         
         // 侵蚀率
-        let rho_s = S::from_f64(props.rho_s);
+        let rho_s = S::from_f64_lossless(props.rho_s);
         c_b * ws * rho_s
     }
 }
@@ -199,7 +200,7 @@ impl<S: Scalar> ResuspensionSource<S> {
         Self {
             formula: Box::new(SmithMcLean::default()),
             properties: properties.clone(),
-            settling_velocity: S::from_f64(properties.settling_velocity),
+            settling_velocity: S::from_f64_lossless(properties.settling_velocity),
             _marker: PhantomData,
         }
     }
@@ -226,7 +227,7 @@ impl<S: Scalar> ResuspensionSource<S> {
         water_depth: S,
         physics: &PhysicalConstants,
     ) -> S {
-        if water_depth < S::from_f64(1e-6) {
+        if water_depth < S::from_f64_lossless(1e-6) {
             return S::ZERO;
         }
         
@@ -329,9 +330,9 @@ mod tests {
         let depth = 1.0;
         
         let s_f32 = source_f32.compute_source(
-            f32::from_f64(tau_b),
-            f32::from_f64(conc),
-            f32::from_f64(depth),
+            f32::from_f64_lossless(tau_b),
+            f32::from_f64_lossless(conc),
+            f32::from_f64_lossless(depth),
             &physics,
         );
         let s_f64 = source_f64.compute_source(tau_b, conc, depth, &physics);

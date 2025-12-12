@@ -5,7 +5,7 @@
 //! 验证核心组件可以正确初始化和基本运行。
 //! 这些测试应该快速完成（<1秒），用于 CI 快速反馈。
 
-use mh_foundation::Scalar;
+use mh_core::Scalar;
 
 // ============================================================
 // Plan 1: 边界数据驱动测试
@@ -76,11 +76,11 @@ fn test_transport_formula_mpm() {
     let physics = PhysicalConstants::seawater();
 
     // 无剪切应力时输沙率为零
-    let qb = formula.compute_from_shear_stress(0.0, &sediment, &physics);
+    let qb: f64 = formula.compute_from_shear_stress(0.0, &sediment, &physics);
     assert!(qb.abs() < 1e-20);
 
     // 有剪切应力时输沙率为正
-    let qb = formula.compute_from_shear_stress(10.0, &sediment, &physics);
+    let qb: f64 = formula.compute_from_shear_stress(10.0, &sediment, &physics);
     assert!(qb >= 0.0);
 }
 
@@ -112,7 +112,7 @@ fn test_tracer_boundary_manager() {
 
     let bc0 = manager.get(0, 0.0);
     assert_eq!(bc0.bc_type, TracerBoundaryType::Dirichlet);
-    assert!((bc0.value - 35.0).abs() < 1e-10);
+    assert!((bc0.value - 35.0_f64).abs() < 1e-10);
 
     let bc5 = manager.get(5, 0.0);
     assert_eq!(bc5.bc_type, TracerBoundaryType::ZeroGradient);
@@ -122,10 +122,10 @@ fn test_tracer_boundary_manager() {
 fn test_diffusion_coefficient() {
     use mh_physics::tracer::diffusion::DiffusionCoefficient;
 
-    let const_coef = DiffusionCoefficient::constant(10.0);
+    let const_coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Constant(10.0);
     assert!((const_coef.effective_at(0, None) - 10.0).abs() < 1e-10);
 
-    let turb_coef = DiffusionCoefficient::turbulent(1.0, 0.7);
+    let turb_coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Turbulent { molecular: 1.0, schmidt_number: 0.7 };
     let eff = turb_coef.effective_at(0, Some(7.0));
     assert!((eff - 11.0).abs() < 1e-10);
 }
@@ -246,7 +246,7 @@ fn test_semi_implicit_config() {
     use mh_physics::engine::SemiImplicitConfig;
 
     let config = SemiImplicitConfig::default();
-    assert!((config.gravity - 9.81).abs() < 1e-10);
+    assert!((config.constants.g - 9.81).abs() < 1e-10);
     assert!((config.theta - 0.5).abs() < 1e-10);
 
     let conservative = SemiImplicitConfig::conservative();
@@ -267,6 +267,6 @@ fn test_types_compile() {
     assert!(params.h_min > 0.0);
 
     let provider = ConstantBoundaryProvider::new(1.5);
-    let v: Scalar = *provider.value();
+    let v: f64 = *provider.value();
     assert!((v - 1.5).abs() < 1e-10);
 }

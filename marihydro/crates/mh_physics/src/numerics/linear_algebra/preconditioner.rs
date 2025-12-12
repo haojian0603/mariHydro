@@ -26,7 +26,7 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use mh_core::Scalar;
+
 
 /// 预条件器 trait
 ///
@@ -38,7 +38,7 @@ pub trait Preconditioner: Send + Sync {
     ///
     /// - `r`: 输入向量（通常是残差）
     /// - `z`: 输出向量（预条件后的方向）
-    fn apply(&self, r: &[Scalar], z: &mut [Scalar]);
+    fn apply(&self, r: &[f64], z: &mut [f64]);
 
     /// 获取预条件器名称
     fn name(&self) -> &'static str;
@@ -65,7 +65,7 @@ impl IdentityPreconditioner {
 }
 
 impl Preconditioner for IdentityPreconditioner {
-    fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
+    fn apply(&self, r: &[f64], z: &mut [f64]) {
         z.copy_from_slice(r);
     }
 
@@ -87,7 +87,7 @@ impl Preconditioner for IdentityPreconditioner {
 #[derive(Debug, Clone)]
 pub struct JacobiPreconditioner {
     /// 对角元素的倒数
-    inv_diag: Vec<Scalar>,
+    inv_diag: Vec<f64>,
 }
 
 impl JacobiPreconditioner {
@@ -111,7 +111,7 @@ impl JacobiPreconditioner {
     ///
     /// 对于对角元素小于 `h_dry * 1e-6` 的行，使用单位预条件。
     /// 这避免了干单元导致的数值不稳定。
-    pub fn from_matrix_with_dry_detection(matrix: &CsrMatrix, h_dry: Scalar) -> Self {
+    pub fn from_matrix_with_dry_detection(matrix: &CsrMatrix, h_dry: f64) -> Self {
         let n = matrix.n_rows();
         let mut inv_diag = vec![1.0; n];
         let threshold = h_dry * 1e-6;
@@ -131,7 +131,7 @@ impl JacobiPreconditioner {
     }
 
     /// 从对角向量创建 Jacobi 预条件器
-    pub fn from_diagonal(diag: &[Scalar]) -> Self {
+    pub fn from_diagonal(diag: &[f64]) -> Self {
         let inv_diag: Vec<_> = diag
             .iter()
             .map(|&d| if d.abs() > 1e-14 { 1.0 / d } else { 1.0 })
@@ -151,7 +151,7 @@ impl JacobiPreconditioner {
     }
 
     /// 更新预条件器（带干单元检测）
-    pub fn update_with_dry_detection(&mut self, matrix: &CsrMatrix, h_dry: Scalar) {
+    pub fn update_with_dry_detection(&mut self, matrix: &CsrMatrix, h_dry: f64) {
         let threshold = h_dry * 1e-6;
         for i in 0..self.inv_diag.len().min(matrix.n_rows()) {
             if let Some(diag) = matrix.diagonal_value(i) {
@@ -165,13 +165,13 @@ impl JacobiPreconditioner {
     }
 
     /// 获取对角元素倒数引用
-    pub fn inv_diagonal(&self) -> &[Scalar] {
+    pub fn inv_diagonal(&self) -> &[f64] {
         &self.inv_diag
     }
 }
 
 impl Preconditioner for JacobiPreconditioner {
-    fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
+    fn apply(&self, r: &[f64], z: &mut [f64]) {
         debug_assert_eq!(r.len(), z.len());
         debug_assert_eq!(r.len(), self.inv_diag.len());
 
@@ -206,14 +206,14 @@ pub struct SsorPreconditioner {
     /// 矩阵引用（用于前向和后向扫描）
     row_ptr: Vec<usize>,
     col_idx: Vec<usize>,
-    values: Vec<Scalar>,
+    values: Vec<f64>,
     /// 对角元素
-    diag: Vec<Scalar>,
+    diag: Vec<f64>,
     /// 松弛因子
-    omega: Scalar,
+    omega: f64,
     /// 临时工作向量
     #[allow(dead_code)]
-    work: Vec<Scalar>,
+    work: Vec<f64>,
 }
 
 impl SsorPreconditioner {
@@ -223,7 +223,7 @@ impl SsorPreconditioner {
     ///
     /// - `matrix`: CSR 矩阵
     /// - `omega`: 松弛因子（通常取 1.0-1.8）
-    pub fn from_matrix(matrix: &CsrMatrix, omega: Scalar) -> Self {
+    pub fn from_matrix(matrix: &CsrMatrix, omega: f64) -> Self {
         let n = matrix.n_rows();
         let diag: Vec<_> = (0..n)
             .map(|i| matrix.diagonal_value(i).unwrap_or(1.0))
@@ -249,7 +249,7 @@ impl SsorPreconditioner {
 
     /// 前向扫描 (D + ωL) y = r
     #[allow(dead_code)]
-    fn forward_sweep(&self, r: &[Scalar], y: &mut [Scalar]) {
+    fn forward_sweep(&self, r: &[f64], y: &mut [f64]) {
         let n = self.diag.len();
         for i in 0..n {
             let start = self.row_ptr[i];
@@ -269,7 +269,7 @@ impl SsorPreconditioner {
 
     /// 后向扫描 (D + ωU) z = D y
     #[allow(dead_code)]
-    fn backward_sweep(&self, y: &[Scalar], z: &mut [Scalar]) {
+    fn backward_sweep(&self, y: &[f64], z: &mut [f64]) {
         let n = self.diag.len();
         for i in (0..n).rev() {
             let start = self.row_ptr[i];
@@ -289,7 +289,7 @@ impl SsorPreconditioner {
 }
 
 impl Preconditioner for SsorPreconditioner {
-    fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
+    fn apply(&self, r: &[f64], z: &mut [f64]) {
         let n = self.diag.len();
 
         // 前向扫描: (D + ωL) y = r
@@ -354,7 +354,7 @@ pub struct Ilu0Preconditioner {
     /// 列索引
     col_idx: Vec<usize>,
     /// LU 分解后的值（L 和 U 共用存储）
-    lu_values: Vec<Scalar>,
+    lu_values: Vec<f64>,
     /// 对角元位置索引
     diag_ptr: Vec<usize>,
 }
@@ -403,13 +403,13 @@ impl Ilu0Preconditioner {
     fn factorize(
         row_ptr: &[usize],
         col_idx: &[usize],
-        lu: &mut [Scalar],
+        lu: &mut [f64],
         diag_ptr: &[usize],
         n: usize,
     ) {
         // 数值稳定性参数
-        const PIVOT_TOL: Scalar = 1e-10;
-        const GROWTH_LIMIT: Scalar = 1e3;
+        const PIVOT_TOL: f64 = 1e-10;
+        const GROWTH_LIMIT: f64 = 1e3;
 
         for i in 1..n {
             // 遍历第 i 行的下三角部分 (j < i)
@@ -453,7 +453,7 @@ impl Ilu0Preconditioner {
     }
 
     /// 前向替换: L * y = r
-    fn forward_solve(&self, r: &[Scalar], y: &mut [Scalar]) {
+    fn forward_solve(&self, r: &[f64], y: &mut [f64]) {
         y.copy_from_slice(r);
 
         for i in 0..self.n {
@@ -465,7 +465,7 @@ impl Ilu0Preconditioner {
     }
 
     /// 后向替换: U * z = y
-    fn backward_solve(&self, y: &[Scalar], z: &mut [Scalar]) {
+    fn backward_solve(&self, y: &[f64], z: &mut [f64]) {
         z.copy_from_slice(y);
 
         for i in (0..self.n).rev() {
@@ -483,7 +483,7 @@ impl Ilu0Preconditioner {
 }
 
 impl Preconditioner for Ilu0Preconditioner {
-    fn apply(&self, r: &[Scalar], z: &mut [Scalar]) {
+    fn apply(&self, r: &[f64], z: &mut [f64]) {
         // 解 L * U * z = r
         // 分两步: L * y = r, 然后 U * z = y
         let mut y = vec![0.0; self.n];

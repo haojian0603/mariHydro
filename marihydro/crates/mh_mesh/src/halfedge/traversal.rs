@@ -399,7 +399,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
 mod tests {
     use super::*;
 
-    fn create_triangle_mesh() -> HalfEdgeMesh<(), (), ()> {
+    fn create_triangle_mesh() -> HalfEdgeMesh<(), ()> {
         let mut mesh = HalfEdgeMesh::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);

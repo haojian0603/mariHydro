@@ -30,7 +30,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use crate::core::scalar::Scalar;
+use mh_core::Scalar;
 use bytemuck::Pod;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
@@ -97,20 +97,20 @@ impl DiffusionCoefficientConfig {
     /// 转换为运行时精度（供算子使用）
     pub fn to_precision<S: Scalar>(&self) -> DiffusionCoefficient<S> {
         match *self {
-            Self::Constant(d) => DiffusionCoefficient::Constant(<S as Scalar>::from_f64(d)),
+            Self::Constant(d) => DiffusionCoefficient::Constant(<S as Scalar>::from_f64_lossless(d)),
             Self::Variable(ref values) => DiffusionCoefficient::Variable(
-                values.iter().map(|&v| <S as Scalar>::from_f64(v)).collect()
+                values.iter().map(|&v| <S as Scalar>::from_f64_lossless(v)).collect()
             ),
             Self::Anisotropic { longitudinal, transverse } => {
                 DiffusionCoefficient::Anisotropic {
-                    longitudinal: <S as Scalar>::from_f64(longitudinal),
-                    transverse: <S as Scalar>::from_f64(transverse),
+                    longitudinal: <S as Scalar>::from_f64_lossless(longitudinal),
+                    transverse: <S as Scalar>::from_f64_lossless(transverse),
                 }
             }
             Self::Turbulent { molecular, schmidt_number } => {
                 DiffusionCoefficient::Turbulent {
-                    molecular: <S as Scalar>::from_f64(molecular),
-                    schmidt_number: <S as Scalar>::from_f64(schmidt_number),
+                    molecular: <S as Scalar>::from_f64_lossless(molecular),
+                    schmidt_number: <S as Scalar>::from_f64_lossless(schmidt_number),
                 }
             }
         }
@@ -248,8 +248,8 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
     pub fn new(n_cells: usize, n_faces: usize, config: DiffusionConfig) -> Self {
         // 转换配置到运行时精度
         let coefficient = config.coefficient.to_precision();
-        let min_diffusivity = <S as Scalar>::from_f64(config.min_diffusivity);
-        let max_diffusivity = <S as Scalar>::from_f64(config.max_diffusivity);
+        let min_diffusivity = <S as Scalar>::from_f64_lossless(config.min_diffusivity);
+        let max_diffusivity = <S as Scalar>::from_f64_lossless(config.max_diffusivity);
         
         Self {
             config,
@@ -337,12 +337,12 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
             let neighbor = mesh.face_neighbor(face_idx);
 
             let d = self.face_diffusivity[face_idx];
-            let length = <S as Scalar>::from_f64(mesh.face_length(face_idx) as f64);
+            let length = <S as Scalar>::from_f64_lossless(mesh.face_length(face_idx) as f64);
 
             let flux = if let Some(neigh) = neighbor {
                 // 内部面：中心差分
-                let dist = <S as Scalar>::from_f64(mesh.face_dist_o2n(face_idx) as f64);
-                if dist > <S as Scalar>::from_f64(1e-14) {
+                let dist = <S as Scalar>::from_f64_lossless(mesh.face_dist_o2n(face_idx) as f64);
+                if dist > <S as Scalar>::from_f64_lossless(1e-14) {
                     let grad_n = (concentration[neigh] - concentration[owner]) / dist;
                     -d * grad_n * length
                 } else {
@@ -386,11 +386,11 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
             let neighbor = mesh.face_neighbor(face_idx);
             let flux = self.face_flux[face_idx];
 
-            let area_o = <S as Scalar>::from_f64(mesh.cell_area_unchecked(owner) as f64);
+            let area_o = <S as Scalar>::from_f64_lossless(mesh.cell_area_unchecked(owner) as f64);
             self.cell_diffusion[owner] -= flux / area_o;
 
             if let Some(neigh) = neighbor {
-                let area_n = <S as Scalar>::from_f64(mesh.cell_area_unchecked(neigh) as f64);
+                let area_n = <S as Scalar>::from_f64_lossless(mesh.cell_area_unchecked(neigh) as f64);
                 self.cell_diffusion[neigh] += flux / area_n;
             }
         }
@@ -457,12 +457,12 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
 
             let flux = if let Some(neigh) = neighbor {
                 let normal = mesh.face_normal(face_idx);
-                let normal_x = <S as Scalar>::from_f64(normal.x as f64);
-                let normal_y = <S as Scalar>::from_f64(normal.y as f64);
-                let length = <S as Scalar>::from_f64(mesh.face_length(face_idx) as f64);
-                let dist = <S as Scalar>::from_f64(mesh.face_dist_o2n(face_idx) as f64);
+                let normal_x = <S as Scalar>::from_f64_lossless(normal.x as f64);
+                let normal_y = <S as Scalar>::from_f64_lossless(normal.y as f64);
+                let length = <S as Scalar>::from_f64_lossless(mesh.face_length(face_idx) as f64);
+                let dist = <S as Scalar>::from_f64_lossless(mesh.face_dist_o2n(face_idx) as f64);
 
-                if dist < <S as Scalar>::from_f64(1e-14) {
+                if dist < <S as Scalar>::from_f64_lossless(1e-14) {
                     S::ZERO
                 } else {
                     // 计算流向单位向量
@@ -471,13 +471,13 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
                     let u_n = velocity_x[neigh];
                     let v_n = velocity_y[neigh];
 
-                    let half = <S as Scalar>::from_f64(0.5);
+                    let half = <S as Scalar>::from_f64_lossless(0.5);
                     let u_avg = half * (u_o + u_n);
                     let v_avg = half * (v_o + v_n);
                     let speed = (u_avg * u_avg + v_avg * v_avg).sqrt();
 
                     // 有效扩散系数（投影到面法向）
-                    let d_eff = if speed > <S as Scalar>::from_f64(1e-8) {
+                    let d_eff = if speed > <S as Scalar>::from_f64_lossless(1e-8) {
                         let e_x = u_avg / speed;
                         let e_y = v_avg / speed;
 
@@ -513,10 +513,10 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
 /// 计算调和平均
 #[inline]
 fn harmonic_mean<S: Scalar>(a: S, b: S) -> S {
-    if a.abs() < <S as Scalar>::from_f64(1e-14) || b.abs() < <S as Scalar>::from_f64(1e-14) {
+    if a.abs() < <S as Scalar>::from_f64_lossless(1e-14) || b.abs() < <S as Scalar>::from_f64_lossless(1e-14) {
         S::ZERO
     } else {
-        <S as Scalar>::from_f64(2.0) * a * b / (a + b)
+        <S as Scalar>::from_f64_lossless(2.0) * a * b / (a + b)
     }
 }
 
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_constant_coefficient() {
-        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::constant(10.0);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Constant(10.0);
         assert!((coef.effective_at(0, None) - 10.0).abs() < 1e-10);
     }
 
@@ -541,7 +541,10 @@ mod tests {
 
     #[test]
     fn test_anisotropic_coefficient() {
-        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::anisotropic(100.0, 10.0);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Anisotropic {
+            longitudinal: 100.0,
+            transverse: 10.0,
+        };
         let effective = coef.effective_at(0, None);
         // 几何平均 = sqrt(100 * 10) ≈ 31.62
         assert!((effective - 31.622776601683793).abs() < 1e-10);
@@ -549,7 +552,10 @@ mod tests {
 
     #[test]
     fn test_turbulent_coefficient() {
-        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::turbulent(1.0, 0.7);
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Turbulent {
+            molecular: 1.0,
+            schmidt_number: 0.7,
+        };
 
         // 无涡粘度时只有分子扩散
         assert!((coef.effective_at(0, None) - 1.0).abs() < 1e-10);
@@ -562,9 +568,9 @@ mod tests {
 
     #[test]
     fn test_harmonic_mean() {
-        assert!((harmonic_mean(2.0, 2.0) - 2.0).abs() < 1e-10);
-        assert!((harmonic_mean(1.0, 3.0) - 1.5).abs() < 1e-10);
-        assert!(harmonic_mean(0.0, 1.0).abs() < 1e-10);
+        assert!((harmonic_mean(2.0_f64, 2.0_f64) - 2.0_f64).abs() < 1e-10);
+        assert!((harmonic_mean(1.0_f64, 3.0_f64) - 1.5_f64).abs() < 1e-10);
+        assert!(harmonic_mean(0.0_f64, 1.0_f64).abs() < 1e-10);
     }
 
     #[test]
@@ -583,7 +589,7 @@ mod tests {
     #[test]
     fn test_config_f64_to_f32_conversion() {
         let config = DiffusionConfig {
-            coefficient: DiffusionCoefficient::turbulent(1.5, 0.8),
+            coefficient: DiffusionCoefficientConfig::turbulent(1.5, 0.8),
             enabled: true,
             min_diffusivity: 0.1,
             max_diffusivity: 100.0,

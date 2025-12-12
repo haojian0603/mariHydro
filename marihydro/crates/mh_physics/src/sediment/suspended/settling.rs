@@ -114,11 +114,11 @@ impl<S: Scalar> SettlingFormula<S> for StokesSettling<S> {
     }
     
     fn compute(&self, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let s = S::from_f64(props.relative_density);
-        let d = S::from_f64(props.d50);
-        let nu = S::from_f64(physics.nu_water);
-        let g = S::from_f64(physics.g);
-        let eighteen = S::from_f64(18.0);
+        let s = S::from_f64_lossless(props.relative_density);
+        let d = S::from_f64_lossless(props.d50);
+        let nu = S::from_f64_lossless(physics.nu_water);
+        let g = S::from_f64_lossless(physics.g);
+        let eighteen = S::from_f64_lossless(18.0);
         let one = S::ONE;
         
         (s - one) * g * d * d / (eighteen * nu)
@@ -151,28 +151,28 @@ impl<S: Scalar> SettlingFormula<S> for VanRijnSettling<S> {
     }
     
     fn compute(&self, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let s = S::from_f64(props.relative_density);
-        let d = S::from_f64(props.d50);
+        let s = S::from_f64_lossless(props.relative_density);
+        let d = S::from_f64_lossless(props.d50);
         let d_star = props.dimensionless_diameter;
-        let nu = S::from_f64(physics.nu_water);
-        let g = S::from_f64(physics.g);
+        let nu = S::from_f64_lossless(physics.nu_water);
+        let g = S::from_f64_lossless(physics.g);
         let one = S::ONE;
         
         if d_star < 1.0 {
             // Stokes 区
-            let eighteen = S::from_f64(18.0);
+            let eighteen = S::from_f64_lossless(18.0);
             (s - one) * g * d * d / (eighteen * nu)
         } else if d_star <= 100.0 {
             // 过渡区
-            let eighteen = S::from_f64(18.0);
+            let eighteen = S::from_f64_lossless(18.0);
             let ws_stokes = (s - one) * g * d * d / (eighteen * nu);
-            let ws_newton = S::from_f64(1.1) * ((s - one) * g * d).sqrt();
+            let ws_newton = S::from_f64_lossless(1.1) * ((s - one) * g * d).sqrt();
             // 线性插值
-            let f = S::from_f64((d_star - 1.0) / 99.0);
+            let f = S::from_f64_lossless((d_star - 1.0) / 99.0);
             ws_stokes * (one - f) + ws_newton * f
         } else {
             // Newton 区
-            S::from_f64(1.1) * ((s - one) * g * d).sqrt()
+            S::from_f64_lossless(1.1) * ((s - one) * g * d).sqrt()
         }
     }
 }
@@ -203,14 +203,14 @@ impl<S: Scalar> SettlingFormula<S> for DietrichSettling<S> {
     }
     
     fn compute(&self, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let s = S::from_f64(props.relative_density);
-        let d = S::from_f64(props.d50);
-        let nu = S::from_f64(physics.nu_water);
-        let g = S::from_f64(physics.g);
+        let s = S::from_f64_lossless(props.relative_density);
+        let d = S::from_f64_lossless(props.d50);
+        let nu = S::from_f64_lossless(physics.nu_water);
+        let g = S::from_f64_lossless(physics.g);
         let one = S::ONE;
         
         // 无量纲粒径
-        let d_star = d * ((s - one) * g / (nu * nu)).powf(one / S::from_f64(3.0));
+        let d_star = d * ((s - one) * g / (nu * nu)).powf(one / S::from_f64_lossless(3.0));
         
         // Dietrich 公式
         let ln_d_star = d_star.ln();
@@ -218,23 +218,23 @@ impl<S: Scalar> SettlingFormula<S> for DietrichSettling<S> {
         let ln_d_star_cubed = ln_d_star_sq * ln_d_star;
         let ln_d_star_fourth = ln_d_star_cubed * ln_d_star;
         
-        let r1 = S::from_f64(-3.76715) 
-            + S::from_f64(1.92944) * ln_d_star 
-            - S::from_f64(0.09815) * ln_d_star_sq
-            - S::from_f64(0.00575) * ln_d_star_cubed 
-            + S::from_f64(0.00056) * ln_d_star_fourth;
+        let r1 = S::from_f64_lossless(-3.76715) 
+            + S::from_f64_lossless(1.92944) * ln_d_star 
+            - S::from_f64_lossless(0.09815) * ln_d_star_sq
+            - S::from_f64_lossless(0.00575) * ln_d_star_cubed 
+            + S::from_f64_lossless(0.00056) * ln_d_star_fourth;
         let r2 = (ln_d_star - r1).exp();
         
         // 形状因子修正（球形）
-        let csf = S::from_f64(1.0); // 球形 Corey 形状因子
-        let tanh_arg = (one - (S::from_f64(-0.2) * d_star).exp());
-        let r3 = S::from_f64(0.65) - csf / S::from_f64(2.83) * tanh_arg.tanh();
+        let csf = S::from_f64_lossless(1.0); // 球形 Corey 形状因子
+        let tanh_arg = one - (S::from_f64_lossless(-0.2) * d_star).exp();
+        let r3 = S::from_f64_lossless(0.65) - csf / S::from_f64_lossless(2.83) * tanh_arg.tanh();
         
         // 修正的 W*
-        let w_star = r2 * S::from_f64(10.0).powf(-r3);
+        let w_star = r2 * S::from_f64_lossless(10.0).powf(-r3);
         
         // 转换为有量纲速度
-        let ws = w_star * ((s - one) * g * nu).powf(one / S::from_f64(3.0));
+        let ws = w_star * ((s - one) * g * nu).powf(one / S::from_f64_lossless(3.0));
         
         ws
     }

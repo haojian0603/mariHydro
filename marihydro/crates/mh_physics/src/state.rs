@@ -1291,7 +1291,8 @@ mod tests {
 // 泛型浅水状态 (Backend 抽象)
 // ============================================================
 
-use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
+use crate::core::{Backend, CpuBackend, DeviceBuffer};
+use mh_core::Scalar;
 
 /// 泛型浅水状态
 ///
@@ -1345,9 +1346,9 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     
     /// 重置为零
     pub fn reset(&mut self) {
-        self.h.fill(<B::Scalar as Scalar>::from_f64(0.0));
-        self.hu.fill(<B::Scalar as Scalar>::from_f64(0.0));
-        self.hv.fill(<B::Scalar as Scalar>::from_f64(0.0));
+        self.h.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
+        self.hu.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
+        self.hv.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
     }
     
     /// 验证状态有效性
@@ -1434,11 +1435,11 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         let hv_slice = self.hv.as_slice()?;
         
         let mut stats = StateStatisticsData {
-            h_max: <B::Scalar as Scalar>::from_f64(0.0),
-            h_min: <B::Scalar as Scalar>::from_f64(f64::MAX),
-            h_mean: <B::Scalar as Scalar>::from_f64(0.0),
-            velocity_max: <B::Scalar as Scalar>::from_f64(0.0),
-            total_volume: <B::Scalar as Scalar>::from_f64(0.0),
+            h_max: <B::Scalar as Scalar>::from_f64_lossless(0.0),
+            h_min: <B::Scalar as Scalar>::from_f64_lossless(f64::MAX),
+            h_mean: <B::Scalar as Scalar>::from_f64_lossless(0.0),
+            velocity_max: <B::Scalar as Scalar>::from_f64_lossless(0.0),
+            total_volume: <B::Scalar as Scalar>::from_f64_lossless(0.0),
             wet_cells: 0,
         };
         
@@ -1464,7 +1465,7 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         }
         
         if stats.wet_cells > 0 {
-            stats.h_mean = stats.total_volume / <B::Scalar as Scalar>::from_f64(stats.wet_cells as f64);
+            stats.h_mean = stats.total_volume / <B::Scalar as Scalar>::from_f64_lossless(stats.wet_cells as f64);
         }
         
         Some(stats)

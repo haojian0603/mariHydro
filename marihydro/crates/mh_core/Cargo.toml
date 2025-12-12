@@ -12,6 +12,9 @@ num-traits = "0.2"
 bytemuck = { version = "1.14", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 
+[dev-dependencies]
+serde_json = "1.0"
+
 [features]
 default = ["precision-f64"]
 precision-f32 = []

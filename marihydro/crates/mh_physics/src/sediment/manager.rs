@@ -13,7 +13,8 @@
 //! 2. **质量守恒**: 严格保证泥沙质量守恒
 //! 3. **可扩展**: 支持多种泥沙粒径和分层
 
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, CpuBackend};
+use mh_core::Scalar;
 use crate::state::ShallowWaterStateGeneric;
 use std::marker::PhantomData;
 
@@ -78,14 +79,14 @@ pub struct SedimentConfigGeneric<S: Scalar> {
 impl<S: Scalar> Default for SedimentConfigGeneric<S> {
     fn default() -> Self {
         Self {
-            tau_critical: <S as Scalar>::from_f64(0.1),
-            erosion_rate: <S as Scalar>::from_f64(1e-4),
-            settling_velocity: <S as Scalar>::from_f64(0.001),
-            sediment_density: <S as Scalar>::from_f64(2650.0),
-            water_density: <S as Scalar>::from_f64(998.2),
-            porosity: <S as Scalar>::from_f64(0.4),
-            conservation_tolerance: <S as Scalar>::from_f64(1e-10),
-            min_depth: <S as Scalar>::from_f64(1e-4),
+            tau_critical: <S as Scalar>::from_f64_lossless(0.1),
+            erosion_rate: <S as Scalar>::from_f64_lossless(1e-4),
+            settling_velocity: <S as Scalar>::from_f64_lossless(0.001),
+            sediment_density: <S as Scalar>::from_f64_lossless(2650.0),
+            water_density: <S as Scalar>::from_f64_lossless(998.2),
+            porosity: <S as Scalar>::from_f64_lossless(0.4),
+            conservation_tolerance: <S as Scalar>::from_f64_lossless(1e-10),
+            min_depth: <S as Scalar>::from_f64_lossless(1e-4),
         }
     }
 }

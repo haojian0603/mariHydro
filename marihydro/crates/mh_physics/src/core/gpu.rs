@@ -5,7 +5,7 @@
 //! 实际 GPU 实现将在未来阶段完成。
 
 use super::buffer::DeviceBuffer;
-use super::scalar::Scalar;
+use mh_core::Scalar;
 use bytemuck::Pod;
 use std::marker::PhantomData;
 

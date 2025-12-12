@@ -112,8 +112,8 @@ impl<S: Scalar> Tolerance<S> {
     {
         let mut tol = Self::default();
         // 放宽容差
-        tol.convergence = tol.convergence * Scalar::from_f64(10.0);
-        tol.h_dry = tol.h_dry * Scalar::from_f64(10.0);
+        tol.convergence = tol.convergence * Scalar::from_f64_lossless(10.0);
+        tol.h_dry = tol.h_dry * Scalar::from_f64_lossless(10.0);
         tol
     }
 
@@ -124,8 +124,8 @@ impl<S: Scalar> Tolerance<S> {
     {
         let mut tol = Self::default();
         // 收紧容差
-        tol.convergence = tol.convergence * Scalar::from_f64(0.1);
-        tol.h_dry = tol.h_dry * Scalar::from_f64(0.1);
+        tol.convergence = tol.convergence * Scalar::from_f64_lossless(0.1);
+        tol.h_dry = tol.h_dry * Scalar::from_f64_lossless(0.1);
         tol
     }
 
@@ -236,10 +236,10 @@ impl ToleranceConfig {
         Tolerance<S>: Default,
     {
         let mut tol = Tolerance::<S>::default();
-        tol.h_min = Scalar::from_f64(self.h_min);
-        tol.h_dry = Scalar::from_f64(self.h_dry);
-        tol.velocity_cap = Scalar::from_f64(self.velocity_cap);
-        tol.convergence = Scalar::from_f64(self.convergence);
+        tol.h_min = Scalar::from_f64_lossless(self.h_min);
+        tol.h_dry = Scalar::from_f64_lossless(self.h_dry);
+        tol.velocity_cap = Scalar::from_f64_lossless(self.velocity_cap);
+        tol.convergence = Scalar::from_f64_lossless(self.convergence);
         tol
     }
 }

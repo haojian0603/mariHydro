@@ -1,6 +1,7 @@
 // crates/mh_physics/src/tracer/settling.rs
 
-use crate::core::{Backend, DeviceBuffer, Scalar};
+use crate::core::{Backend, DeviceBuffer};
+use mh_core::Scalar;
 use num_traits::Float;
 
 /// 沉降求解器配置
@@ -21,11 +22,11 @@ pub struct SettlingConfig<S: Scalar> {
 impl<S: Scalar> Default for SettlingConfig<S> {
     fn default() -> Self {
         Self {
-            settling_velocity: <S as Scalar>::from_f64(0.001),
+            settling_velocity: <S as Scalar>::from_f64_lossless(0.001),
             implicit: true,
-            tolerance: <S as Scalar>::from_f64(1e-6),
+            tolerance: <S as Scalar>::from_f64_lossless(1e-6),
             max_iterations: 10,
-            min_depth: <S as Scalar>::from_f64(0.01),
+            min_depth: <S as Scalar>::from_f64_lossless(0.01),
         }
     }
 }
@@ -126,7 +127,7 @@ impl<B: Backend> SettlingSolver<B> {
                 for i in 0..n {
                     let h = Float::max(h_slice[i], self.config.min_depth);
                     let updated = Float::max(c_old[i] * coeff[i], B::Scalar::ZERO);
-                    let denom = Float::max(Float::abs(c_new[i]), <B::Scalar as Scalar>::from_f64(1e-12));
+                    let denom = Float::max(Float::abs(c_new[i]), <B::Scalar as Scalar>::from_f64_lossless(1e-12));
                     let rel = Float::abs(updated - c_new[i]) / denom;
                     max_rel = Float::max(max_rel, rel);
                     settled = settled + Float::max(c_old[i] - updated, B::Scalar::ZERO) * h;
@@ -140,7 +141,7 @@ impl<B: Backend> SettlingSolver<B> {
                 for i in 0..n {
                     let h = Float::max(depth_host[i], self.config.min_depth);
                     let updated = Float::max(c_old_host[i] * coeff_host[i], B::Scalar::ZERO);
-                    let denom = Float::max(Float::abs(c_new_host[i]), <B::Scalar as Scalar>::from_f64(1e-12));
+                    let denom = Float::max(Float::abs(c_new_host[i]), <B::Scalar as Scalar>::from_f64_lossless(1e-12));
                     let rel = Float::abs(updated - c_new_host[i]) / denom;
                     max_rel = Float::max(max_rel, rel);
                     settled = settled + Float::max(c_old_host[i] - updated, B::Scalar::ZERO) * h;

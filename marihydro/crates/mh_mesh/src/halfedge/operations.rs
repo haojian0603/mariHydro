@@ -514,7 +514,7 @@ mod tests {
     use super::super::mesh::Face;
 
     /// 创建两个共享边的三角形
-    fn create_two_triangles() -> (HalfEdgeMesh<(), (), ()>, HalfEdgeIndex) {
+    fn create_two_triangles() -> (HalfEdgeMesh<(), ()>, HalfEdgeIndex) {
         let mut mesh = HalfEdgeMesh::new();
 
         //     v2
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_split_edge() {
-        let mut mesh = HalfEdgeMesh::<(), (), ()>::new();
+        let mut mesh = HalfEdgeMesh::<(), ()>::new();
 
         let v0 = mesh.add_vertex_xyz(0.0, 0.0, 0.0);
         let v1 = mesh.add_vertex_xyz(2.0, 0.0, 0.0);

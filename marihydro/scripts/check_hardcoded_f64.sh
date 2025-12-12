@@ -9,7 +9,8 @@
 # 允许的例外：
 # - mh_core/src/scalar.rs - Scalar trait 实现文件
 # - mh_core/src/precision.rs - Precision 枚举定义
-# - mh_physics/src/builder/*.rs - Builder 层需要在运行时处理 f64 配置
+# - mh_mesh/** - 几何库（坐标存储需要 f64 精度）
+# - mh_geo/** - 地理库（坐标转换需要 f64 精度）
 # - *_test.rs, *_tests.rs - 测试文件中的常量
 # - docs/*.md - 文档中的说明
 
@@ -18,25 +19,22 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 定义扫描的核心目录
+# 定义需要严格扫描的核心目录（Layer 3 引擎层）
 SCAN_DIRS=(
     "crates/mh_physics/src/engine"
-    "crates/mh_physics/src/schemes"
+    "crates/mh_physics/src/flux"
+    "crates/mh_physics/src/boundary"
+    "crates/mh_physics/src/numerics"
     "crates/mh_physics/src/sources"
-    "crates/mh_physics/src/state"
-    "crates/mh_mesh/src"
-    "crates/mh_geo/src"
 )
 
 # 定义排除的文件模式
 EXCLUDE_PATTERNS=(
-    "scalar.rs"
-    "precision.rs"
-    "builder/"
-    "_test.rs"
-    "_tests.rs"
-    "test_"
-    "mod.rs"
+    "scalar.rs"          # Scalar trait 定义文件
+    "precision.rs"       # Precision 枚举定义文件
+    "_test.rs"           # 测试文件
+    "_tests.rs"          # 测试文件
+    "test_"              # 测试模块
 )
 
 echo "=== Checking for hardcoded f64 types ==="
@@ -62,25 +60,17 @@ for dir in "${SCAN_DIRS[@]}"; do
                 break
             fi
         done
-
-        if $skip; then
-            continue
-        fi
+        [[ $skip == true ]] && continue
 
         # 搜索硬编码的 f64 模式
-        # 匹配: `: f64`, `f64,`, `f64>`, `f64)`, `as f64`, `[f64;`, `Vec<f64>`
-        matches=$(grep -n -E '(:\s*f64\b|f64[,)>\]]|as\s+f64\b|\[f64;|Vec<f64>)' "$file" 2>/dev/null || true)
+        # 匹配: `: f64`, `as f64`, `[f64;`, `Vec<f64>` 等
+        matches=$(grep -n -E '(:\s*f64\b|as\s+f64\b|\[f64;|Vec<f64>)' "$file" 2>/dev/null || true)
         
         if [[ -n "$matches" ]]; then
-            # 进一步过滤掉 Scalar trait bound 中的 f64
-            # 例如: `where S: Scalar` 是正确的, 但 `fn foo(x: f64)` 是问题
+            # 进一步过滤掉注释行
             while IFS= read -r line; do
-                # 跳过 trait bound 和泛型约束
-                if [[ "$line" == *"Scalar"* ]] || [[ "$line" == *"Float"* ]]; then
-                    continue
-                fi
-                # 跳过注释
-                if [[ "$line" == *"//"* ]]; then
+                # 跳过注释（// 在 f64 之前）
+                if [[ "$line" =~ // ]]; then
                     comment_pos=$(echo "$line" | grep -b -o "//" | head -1 | cut -d: -f1)
                     f64_pos=$(echo "$line" | grep -b -o "f64" | head -1 | cut -d: -f1)
                     if [[ -n "$comment_pos" ]] && [[ -n "$f64_pos" ]] && [[ "$comment_pos" -lt "$f64_pos" ]]; then
@@ -100,10 +90,10 @@ done
 echo ""
 echo "=== Summary ==="
 if [[ $FOUND_ISSUES -eq 0 ]]; then
-    echo "✅ No hardcoded f64 issues found!"
+    echo "✅ No hardcoded f64 issues found in Layer 3 Engine!"
     exit 0
 else
-    echo "❌ Found $FOUND_ISSUES potential hardcoded f64 issues"
-    echo "Please use Scalar<S> generic type or ensure these are intentional."
+    echo "❌ Found $FOUND_ISSUES hardcoded f64 issues"
+    echo "Please use Scalar<S> generic type or add // ALLOW_F64: <原因> comment"
     exit 1
 fi

@@ -428,6 +428,7 @@ dependencies = [
  "bytemuck",
  "num-traits",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

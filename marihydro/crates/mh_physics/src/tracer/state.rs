@@ -721,7 +721,8 @@ mod tests {
 // 泛型示踪剂场（Backend 抽象）
 // ============================================================
 
-use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
+use crate::core::{Backend, CpuBackend, DeviceBuffer};
+use mh_core::Scalar;
 
 /// 泛型示踪剂场
 ///
@@ -749,7 +750,7 @@ pub struct TracerFieldGeneric<B: Backend> {
 impl<B: Backend> TracerFieldGeneric<B> {
     /// 使用后端实例创建新的示踪剂场
     pub fn new_with_backend(backend: B, properties: TracerProperties, n_cells: usize) -> Self {
-        let background = <B::Scalar as Scalar>::from_f64(properties.background_value);
+        let background = <B::Scalar as Scalar>::from_f64_lossless(properties.background_value);
         let mut concentration = backend.alloc(n_cells);
         concentration.fill(background);
         
@@ -825,7 +826,7 @@ impl<B: Backend> TracerFieldGeneric<B> {
     
     /// 重置为背景值
     pub fn reset(&mut self) {
-        let background = <B::Scalar as Scalar>::from_f64(self.properties.background_value);
+        let background = <B::Scalar as Scalar>::from_f64_lossless(self.properties.background_value);
         self.concentration.fill(background);
         self.conserved.fill(B::Scalar::ZERO);
         self.rhs.fill(B::Scalar::ZERO);

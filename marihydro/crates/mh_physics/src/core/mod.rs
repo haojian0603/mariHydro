@@ -4,7 +4,6 @@
 //!
 //! # 模块结构
 //!
-//! - [`scalar`]: 标量类型抽象 (f32/f64)
 //! - [`buffer`]: 设备缓冲区抽象
 //! - [`backend`]: 计算后端抽象 (CPU/GPU)
 //! - [`dimension`]: 维度标记 (2D/3D)
@@ -14,7 +13,8 @@
 //! # 使用示例
 //!
 //! ```ignore
-//! use mh_physics::core::{Backend, CpuBackend, Scalar};
+//! use mh_physics::core::{Backend, CpuBackend};
+//! use mh_core::Scalar;
 //!
 //! // 创建 f64 精度的 CPU 后端实例
 //! let backend = CpuBackend::<f64>::new();
@@ -26,7 +26,6 @@
 //! assert!((y[0] - 2.5).abs() < 1e-10);
 //! ```
 
-pub mod scalar;
 pub mod buffer;
 pub mod backend;
 pub mod dimension;
@@ -34,7 +33,7 @@ pub mod kernel;
 pub mod gpu;
 
 // 重导出常用类型
-pub use scalar::Scalar;
+// 注意：Scalar trait 应从 mh_core 导入
 pub use buffer::DeviceBuffer;
 pub use backend::{Backend, CpuBackend, DefaultBackend, MemoryLocation};
 pub use dimension::{Dimension, D2, D3};

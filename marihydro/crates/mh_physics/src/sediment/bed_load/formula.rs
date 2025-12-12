@@ -5,7 +5,7 @@
 
 // 重导出公式 trait 和实现
 pub use super::super::formulas::{
-    available_formulas, get_formula, EinsteinFormula, EngelundHansenFormula,
+    available_formulas, get_formula_f64, get_formula_f32, EinsteinFormula, EngelundHansenFormula,
     MeyerPeterMullerFormula, TransportFormula, VanRijn1984Formula,
 };
 
@@ -15,6 +15,6 @@ pub use super::super::bed_load_legacy::{
 };
 
 /// 推移质公式类型别名（向后兼容）
-pub type MeyerPeterMullerAlias = MeyerPeterMullerFormula;
-pub type VanRijnAlias = VanRijn1984Formula;
-pub type EngelundHansen = EngelundHansenFormula;
+pub type MeyerPeterMullerAlias = MeyerPeterMullerFormula<f64>;
+pub type VanRijnAlias = VanRijn1984Formula<f64>;
+pub type EngelundHansen = EngelundHansenFormula<f64>;
