@@ -5,7 +5,7 @@
 //! 提供CPU/GPU统一的计算接口。
 
 use crate::buffer::DeviceBuffer;
-use crate::scalar::Scalar;
+use crate::scalar::RuntimeScalar;
 use bytemuck::Pod;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -36,7 +36,7 @@ pub enum MemoryLocation {
 /// ```
 pub trait Backend: Clone + Send + Sync + Debug + 'static {
     /// 标量类型 (f32 或 f64)
-    type Scalar: Scalar + Pod + Default;
+    type Scalar: RuntimeScalar + Pod + Default;
 
     /// 设备缓冲区类型
     type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T>;
@@ -104,11 +104,11 @@ pub trait Backend: Clone + Send + Sync + Debug + 'static {
 ///
 /// CpuBackend是无状态的零大小类型，实例化零开销。
 #[derive(Debug, Clone, Default)]
-pub struct CpuBackend<S: Scalar> {
+pub struct CpuBackend<S: RuntimeScalar> {
     _marker: PhantomData<S>,
 }
 
-impl<S: Scalar> CpuBackend<S> {
+impl<S: RuntimeScalar> CpuBackend<S> {
     /// 创建CPU后端实例
     pub fn new() -> Self {
         Self { _marker: PhantomData }

@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sediment/manager.rs
+﻿// crates/mh_physics/src/sediment/manager.rs
 //! 泥沙系统统一管理器
 //!
 //! 该模块实现了泥沙输运的统一管理，包括：
@@ -79,14 +79,14 @@ pub struct SedimentConfigGeneric<S: Scalar> {
 impl<S: Scalar> Default for SedimentConfigGeneric<S> {
     fn default() -> Self {
         Self {
-            tau_critical: <S as Scalar>::from_f64_lossless(0.1),
-            erosion_rate: <S as Scalar>::from_f64_lossless(1e-4),
-            settling_velocity: <S as Scalar>::from_f64_lossless(0.001),
-            sediment_density: <S as Scalar>::from_f64_lossless(2650.0),
-            water_density: <S as Scalar>::from_f64_lossless(998.2),
-            porosity: <S as Scalar>::from_f64_lossless(0.4),
-            conservation_tolerance: <S as Scalar>::from_f64_lossless(1e-10),
-            min_depth: <S as Scalar>::from_f64_lossless(1e-4),
+            tau_critical: S::from_config(0.1).unwrap_or(S::ZERO),
+            erosion_rate: S::from_config(1e-4).unwrap_or(S::ZERO),
+            settling_velocity: S::from_config(0.001).unwrap_or(S::ZERO),
+            sediment_density: S::from_config(2650.0).unwrap_or(S::ZERO),
+            water_density: S::from_config(998.2).unwrap_or(S::ZERO),
+            porosity: S::from_config(0.4).unwrap_or(S::ZERO),
+            conservation_tolerance: S::from_config(1e-10).unwrap_or(S::ZERO),
+            min_depth: S::from_config(1e-4).unwrap_or(S::ZERO),
         }
     }
 }

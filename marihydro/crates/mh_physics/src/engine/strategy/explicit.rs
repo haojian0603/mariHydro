@@ -1,4 +1,4 @@
-// marihydro\crates\mh_physics\src\engine\strategy\explicit.rs
+﻿// marihydro\crates\mh_physics\src\engine\strategy\explicit.rs
 //! 显式时间积分策略
 //!
 //! 基于 Godunov 格式的显式有限体积法。
@@ -57,8 +57,8 @@ impl<B: Backend> ExplicitStrategy<B> {
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
             backend,
-            gravity: <B::Scalar as Scalar>::from_f64_lossless(config.gravity),
-            h_dry: <B::Scalar as Scalar>::from_f64_lossless(config.h_dry),
+            gravity: <B::Scalar as Scalar>::from_config(config.gravity).unwrap_or(B::Scalar::ZERO),
+            h_dry: <B::Scalar as Scalar>::from_config(config.h_dry).unwrap_or(B::Scalar::ZERO),
             config,
         }
     }

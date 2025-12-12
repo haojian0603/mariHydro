@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sources/traits.rs
+﻿// crates/mh_physics/src/sources/traits.rs
 
 //! 源项 Trait 定义
 //!
@@ -408,9 +408,9 @@ impl<S: Scalar> SourceContextGeneric<S> {
         Self {
             time,
             dt,
-            gravity: <S as Scalar>::from_f64_lossless(9.81),
-            h_dry: <S as Scalar>::from_f64_lossless(1e-6),
-            h_wet: <S as Scalar>::from_f64_lossless(1e-4),
+            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
+            h_dry: S::from_config(1e-6).unwrap_or(S::ZERO),
+            h_wet: S::from_config(1e-4).unwrap_or(S::ZERO),
         }
     }
     

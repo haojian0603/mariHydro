@@ -1,4 +1,4 @@
-//! 网格拓扑抽象
+﻿//! 网格拓扑抽象
 //!
 //! 提供结构化和非结构化网格的统一接口。
 
@@ -129,7 +129,7 @@ impl MeshGeometry {
         if length > S::min_positive_value() {
             [-dy / length, dx / length]
         } else {
-            [<S as Scalar>::from_f64_lossless(0.0), <S as Scalar>::from_f64_lossless(0.0)]
+            [S::from_config(0.0).unwrap_or(S::ZERO), S::from_config(0.0).unwrap_or(S::ZERO)]
         }
     }
 }

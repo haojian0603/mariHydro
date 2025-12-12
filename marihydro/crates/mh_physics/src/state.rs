@@ -1,4 +1,4 @@
-// crates/mh_physics/src/state.rs
+﻿// crates/mh_physics/src/state.rs
 
 //! 浅水方程状态管理
 //!
@@ -1346,9 +1346,9 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     
     /// 重置为零
     pub fn reset(&mut self) {
-        self.h.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
-        self.hu.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
-        self.hv.fill(<B::Scalar as Scalar>::from_f64_lossless(0.0));
+        self.h.fill(<B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO));
+        self.hu.fill(<B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO));
+        self.hv.fill(<B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO));
     }
     
     /// 验证状态有效性
@@ -1435,11 +1435,11 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         let hv_slice = self.hv.as_slice()?;
         
         let mut stats = StateStatisticsData {
-            h_max: <B::Scalar as Scalar>::from_f64_lossless(0.0),
-            h_min: <B::Scalar as Scalar>::from_f64_lossless(f64::MAX),
-            h_mean: <B::Scalar as Scalar>::from_f64_lossless(0.0),
-            velocity_max: <B::Scalar as Scalar>::from_f64_lossless(0.0),
-            total_volume: <B::Scalar as Scalar>::from_f64_lossless(0.0),
+            h_max: <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO),
+            h_min: <B::Scalar as Scalar>::from_config(f64::MAX).unwrap_or(B::Scalar::ZERO),
+            h_mean: <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO),
+            velocity_max: <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO),
+            total_volume: <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO),
             wet_cells: 0,
         };
         
@@ -1465,7 +1465,7 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         }
         
         if stats.wet_cells > 0 {
-            stats.h_mean = stats.total_volume / <B::Scalar as Scalar>::from_f64_lossless(stats.wet_cells as f64);
+            stats.h_mean = stats.total_volume / <B::Scalar as Scalar>::from_config(stats.wet_cells as f64).unwrap_or(B::Scalar::ZERO);
         }
         
         Some(stats)

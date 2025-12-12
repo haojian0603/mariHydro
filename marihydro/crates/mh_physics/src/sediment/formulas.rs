@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sediment/formulas.rs
+﻿// crates/mh_physics/src/sediment/formulas.rs
 
 //! 输沙公式库
 //!
@@ -60,14 +60,14 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
     ///
     /// 默认实现：q_b = Φ × √[(s-1)gd³]
     fn compute_dimensional(&self, theta: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let phi = self.compute_phi(theta, S::from_f64_lossless(props.critical_shields), props);
+        let phi = self.compute_phi(theta, S::from_config(props.critical_shields).unwrap_or(S::ZERO), props);
         if phi <= S::ZERO {
             return S::ZERO;
         }
 
-        let d = S::from_f64_lossless(props.d50);
-        let s = S::from_f64_lossless(props.relative_density);
-        let g = S::from_f64_lossless(physics.g);
+        let d = S::from_config(props.d50).unwrap_or(S::ZERO);
+        let s = S::from_config(props.relative_density).unwrap_or(S::ZERO);
+        let g = S::from_config(physics.g).unwrap_or(S::ZERO);
         let scale = ((s - S::ONE) * g * d * d * d).sqrt();
 
         phi * scale
@@ -75,7 +75,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
 
     /// 从床面剪切应力计算输沙率
     fn compute_from_shear_stress(&self, tau_b: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let theta = S::from_f64_lossless(props.shields_number(tau_b.to_f64(), physics));
+        let theta = S::from_config(props.shields_number(tau_b.to_f64(), physics)).unwrap_or(S::ZERO);
         self.compute_dimensional(theta, props, physics)
     }
 
@@ -90,7 +90,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         physics: &PhysicalConstants,
     ) -> (S, S) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
-        if tau_b < S::from_f64_lossless(1e-14) {
+        if tau_b < S::from_config(1e-14).unwrap_or(S::ZERO) {
             return (S::ZERO, S::ZERO);
         }
 
@@ -127,8 +127,8 @@ pub struct MeyerPeterMullerFormula<S: Scalar> {
 impl<S: Scalar> Default for MeyerPeterMullerFormula<S> {
     fn default() -> Self {
         Self {
-            coefficient: S::from_f64_lossless(8.0),
-            exponent: S::from_f64_lossless(1.5),
+            coefficient: S::from_config(8.0).unwrap_or(S::ZERO),
+            exponent: S::from_config(1.5).unwrap_or(S::ZERO),
         }
     }
 }
@@ -156,8 +156,8 @@ impl<S: Scalar> MeyerPeterMullerFormula<S> {
     /// A = 4.93, n = 1.6，适用于均匀沙
     pub fn wong_parker() -> Self {
         Self {
-            coefficient: S::from_f64_lossless(4.93),
-            exponent: S::from_f64_lossless(1.6),
+            coefficient: S::from_config(4.93).unwrap_or(S::ZERO),
+            exponent: S::from_config(1.6).unwrap_or(S::ZERO),
         }
     }
 }
@@ -199,7 +199,7 @@ pub struct VanRijn1984Formula<S: Scalar> {
 
 impl<S: Scalar> Default for VanRijn1984Formula<S> {
     fn default() -> Self {
-        Self { coefficient: S::from_f64_lossless(0.053) }
+        Self { coefficient: S::from_config(0.053).unwrap_or(S::ZERO) }
     }
 }
 
@@ -234,9 +234,9 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         let t_param = (theta - theta_cr) / theta_cr;
 
         // 无量纲粒径 D*
-        let d_star = S::from_f64_lossless(props.dimensionless_diameter);
+        let d_star = S::from_config(props.dimensionless_diameter).unwrap_or(S::ZERO);
 
-        self.coefficient * t_param.powf(S::from_f64_lossless(2.1)) * d_star.powf(S::from_f64_lossless(-0.3))
+        self.coefficient * t_param.powf(S::from_config(2.1).unwrap_or(S::ZERO)) * d_star.powf(S::from_config(-0.3).unwrap_or(S::ZERO))
     }
 }
 
@@ -294,21 +294,21 @@ impl<S: Scalar> EinsteinFormula<S> {
         // Chebyshev 系数（预计算）
         // 在 ψ ∈ [0.5, 40] 区间拟合
         let coeffs = [
-            S::from_f64_lossless(0.4893), S::from_f64_lossless(-0.7812), S::from_f64_lossless(0.3421), S::from_f64_lossless(-0.1234),
-            S::from_f64_lossless(0.0423), S::from_f64_lossless(-0.0134), S::from_f64_lossless(0.0038), S::from_f64_lossless(-0.0009)
+            S::from_config(0.4893).unwrap_or(S::ZERO), S::from_config(-0.7812).unwrap_or(S::ZERO), S::from_config(0.3421).unwrap_or(S::ZERO), S::from_config(-0.1234).unwrap_or(S::ZERO),
+            S::from_config(0.0423).unwrap_or(S::ZERO), S::from_config(-0.0134).unwrap_or(S::ZERO), S::from_config(0.0038).unwrap_or(S::ZERO), S::from_config(-0.0009).unwrap_or(S::ZERO)
         ];
 
         // 归一化到 [-1, 1]
-        let psi_min = S::from_f64_lossless(0.5);
-        let psi_max = S::from_f64_lossless(40.0);
+        let psi_min = S::from_config(0.5).unwrap_or(S::ZERO);
+        let psi_max = S::from_config(40.0).unwrap_or(S::ZERO);
         let psi_clamped = psi.min(psi_max).max(psi_min);
-        let x = S::from_f64_lossless(2.0) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
+        let x = S::from_config(2.0).unwrap_or(S::ZERO) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
 
         // Clenshaw 递归计算
         let mut b1 = S::ZERO;
         let mut b2 = S::ZERO;
         for &c in coeffs.iter().rev() {
-            let b0 = c + S::from_f64_lossless(2.0) * x * b1 - b2;
+            let b0 = c + S::from_config(2.0).unwrap_or(S::ZERO) * x * b1 - b2;
             b2 = b1;
             b1 = b0;
         }
@@ -319,10 +319,10 @@ impl<S: Scalar> EinsteinFormula<S> {
 
     /// 简化近似（原始实现）
     fn simple_approximation(psi: S) -> S {
-        if psi < S::from_f64_lossless(2.0) {
-            S::from_f64_lossless(40.0) * (S::from_f64_lossless(-0.39) * psi).exp()
+        if psi < S::from_config(2.0).unwrap_or(S::ZERO) {
+            S::from_config(40.0).unwrap_or(S::ZERO) * (S::from_config(-0.39).unwrap_or(S::ZERO) * psi).exp()
         } else {
-            S::from_f64_lossless(0.465) * psi.powf(S::from_f64_lossless(-2.5))
+            S::from_config(0.465).unwrap_or(S::ZERO) * psi.powf(S::from_config(-2.5).unwrap_or(S::ZERO))
         }
     }
 }
@@ -338,14 +338,14 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
 
     fn compute_phi(&self, theta: S, _theta_cr: S, _props: &SedimentProperties) -> S {
         // 防止除零和溢出
-        if theta < S::from_f64_lossless(1e-14) {
+        if theta < S::from_config(1e-14).unwrap_or(S::ZERO) {
             return S::ZERO;
         }
 
         // Einstein 参数 ψ = 1/θ，带溢出保护
-        let psi = (S::ONE / theta).min(S::from_f64_lossless(1e6));
+        let psi = (S::ONE / theta).min(S::from_config(1e6).unwrap_or(S::ZERO));
 
-        if psi > S::from_f64_lossless(40.0) {
+        if psi > S::from_config(40.0).unwrap_or(S::ZERO) {
             return S::ZERO; // 无输沙
         }
 
@@ -356,7 +356,7 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
         };
 
         // 结果限制
-        phi.min(S::from_f64_lossless(1e3)).max(S::ZERO)
+        phi.min(S::from_config(1e3).unwrap_or(S::ZERO)).max(S::ZERO)
     }
 
     fn uses_slope_effect(&self) -> bool {
@@ -384,7 +384,7 @@ pub struct EngelundHansenFormula<S: Scalar> {
 impl<S: Scalar> Default for EngelundHansenFormula<S> {
     fn default() -> Self {
         Self {
-            friction_factor: S::from_f64_lossless(0.05),
+            friction_factor: S::from_config(0.05).unwrap_or(S::ZERO),
         }
     }
 }
@@ -412,10 +412,10 @@ impl<S: Scalar> TransportFormula<S> for EngelundHansenFormula<S> {
     }
 
     fn compute_phi(&self, theta: S, _theta_cr: S, _props: &SedimentProperties) -> S {
-        if theta < S::from_f64_lossless(1e-14) {
+        if theta < S::from_config(1e-14).unwrap_or(S::ZERO) {
             return S::ZERO;
         }
-        S::from_f64_lossless(0.05) * theta.powf(S::from_f64_lossless(2.5)) / self.friction_factor
+        S::from_config(0.05).unwrap_or(S::ZERO) * theta.powf(S::from_config(2.5).unwrap_or(S::ZERO)) / self.friction_factor
     }
 }
 

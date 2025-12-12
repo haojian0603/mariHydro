@@ -1,4 +1,4 @@
-// crates/mh_core/src/tolerance.rs
+﻿// crates/mh_core/src/tolerance.rs
 
 //! 泛型化容差配置
 //!
@@ -10,7 +10,7 @@
 //! 2. **泛型化**: 容差值与计算精度匹配
 //! 3. **精度适配**: f32和f64有不同的默认值
 
-use crate::scalar::Scalar;
+use crate::scalar::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -19,19 +19,19 @@ use std::fmt;
 /// # 示例
 ///
 /// ```
-/// use mh_core::{Tolerance, Scalar};
+/// use mh_core::{Tolerance, RuntimeScalar};
 ///
 /// // 使用默认容差
 /// let tol_f32 = Tolerance::<f32>::default();
 /// let tol_f64 = Tolerance::<f64>::default();
 ///
 /// // 检查水深是否为干
-/// fn is_dry<S: Scalar>(h: S, tol: &Tolerance<S>) -> bool {
+/// fn is_dry<S: RuntimeScalar>(h: S, tol: &Tolerance<S>) -> bool {
 ///     h < tol.h_dry
 /// }
 /// ```
 #[derive(Clone)]
-pub struct Tolerance<S: Scalar> {
+pub struct Tolerance<S: RuntimeScalar> {
     /// 机器epsilon的倍数
     pub epsilon: S,
     /// 最小水深 [m]
@@ -56,7 +56,7 @@ pub struct Tolerance<S: Scalar> {
     pub min_area: S,
 }
 
-impl<S: Scalar> fmt::Debug for Tolerance<S> {
+impl<S: RuntimeScalar> fmt::Debug for Tolerance<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tolerance")
             .field("h_min", &self.h_min.to_f64())
@@ -104,7 +104,7 @@ impl Default for Tolerance<f64> {
     }
 }
 
-impl<S: Scalar> Tolerance<S> {
+impl<S: RuntimeScalar> Tolerance<S> {
     /// 创建宽松容差（用于f32或快速计算）
     pub fn relaxed() -> Self
     where
@@ -112,8 +112,8 @@ impl<S: Scalar> Tolerance<S> {
     {
         let mut tol = Self::default();
         // 放宽容差
-        tol.convergence = tol.convergence * Scalar::from_f64_lossless(10.0);
-        tol.h_dry = tol.h_dry * Scalar::from_f64_lossless(10.0);
+        tol.convergence = tol.convergence * S::from_config(10.0).unwrap_or(S::ZERO);
+        tol.h_dry = tol.h_dry * S::from_config(10.0).unwrap_or(S::ZERO);
         tol
     }
 
@@ -124,8 +124,8 @@ impl<S: Scalar> Tolerance<S> {
     {
         let mut tol = Self::default();
         // 收紧容差
-        tol.convergence = tol.convergence * Scalar::from_f64_lossless(0.1);
-        tol.h_dry = tol.h_dry * Scalar::from_f64_lossless(0.1);
+        tol.convergence = tol.convergence * S::from_config(0.1).unwrap_or(S::ZERO);
+        tol.h_dry = tol.h_dry * S::from_config(0.1).unwrap_or(S::ZERO);
         tol
     }
 
@@ -231,15 +231,15 @@ impl Default for ToleranceConfig {
 
 impl ToleranceConfig {
     /// 转换为泛型Tolerance
-    pub fn to_tolerance<S: Scalar>(&self) -> Tolerance<S>
+    pub fn to_tolerance<S: RuntimeScalar>(&self) -> Tolerance<S>
     where
         Tolerance<S>: Default,
     {
         let mut tol = Tolerance::<S>::default();
-        tol.h_min = Scalar::from_f64_lossless(self.h_min);
-        tol.h_dry = Scalar::from_f64_lossless(self.h_dry);
-        tol.velocity_cap = Scalar::from_f64_lossless(self.velocity_cap);
-        tol.convergence = Scalar::from_f64_lossless(self.convergence);
+        tol.h_min = S::from_config(self.h_min).unwrap_or(S::ZERO);
+        tol.h_dry = S::from_config(self.h_dry).unwrap_or(S::ZERO);
+        tol.velocity_cap = S::from_config(self.velocity_cap).unwrap_or(S::ZERO);
+        tol.convergence = S::from_config(self.convergence).unwrap_or(S::ZERO);
         tol
     }
 }

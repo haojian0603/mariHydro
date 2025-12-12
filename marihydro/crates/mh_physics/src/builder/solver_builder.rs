@@ -1,4 +1,4 @@
-// crates/mh_physics/src/builder/solver_builder.rs
+﻿// crates/mh_physics/src/builder/solver_builder.rs
 
 //! 求解器构建器
 //!
@@ -223,10 +223,10 @@ where
         Self {
             config,
             n_cells,
-            h: h.into_iter().map(|x| S::from_f64_lossless(x)).collect(),
-            u: u.into_iter().map(|x| S::from_f64_lossless(x)).collect(),
-            v: v.into_iter().map(|x| S::from_f64_lossless(x)).collect(),
-            z: z.into_iter().map(|x| S::from_f64_lossless(x)).collect(),
+            h: h.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
+            u: u.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
+            v: v.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
+            z: z.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
             time: S::ZERO,
             step_count: 0,
             tolerance: Tolerance::<S>::default(),
@@ -237,7 +237,7 @@ where
 
     /// 执行一个时间步（简化版本）
     fn step_internal(&mut self, dt: S) -> (S, S, S) {
-        let g = S::from_f64_lossless(self.config.gravity);
+        let g = S::from_config(self.config.gravity).unwrap_or(S::ZERO);
         let dt_actual = dt;
 
         // 简化的更新逻辑（实际求解器会使用完整的有限体积法）
@@ -249,7 +249,7 @@ where
                 // 计算波速
                 let c = (g * h).sqrt();
                 let vel = (self.u[i] * self.u[i] + self.v[i] * self.v[i]).sqrt();
-                let cfl = (vel + c) * dt / S::from_f64_lossless(1.0); // 假设 dx = 1
+                let cfl = (vel + c) * dt / S::from_config(1.0).unwrap_or(S::ZERO); // 假设 dx = 1
                 if cfl > max_cfl {
                     max_cfl = cfl;
                 }
@@ -268,7 +268,7 @@ where
     Tolerance<S>: Default,
 {
     fn step(&mut self, dt: f64) -> DynStepResult {
-        let dt_s = Scalar::from_f64_lossless(dt);
+        let dt_s = S::from_config(dt).unwrap_or(S::ZERO);
         let (dt_actual, max_cfl, mass_error) = self.step_internal(dt_s);
         
         // 更新统计

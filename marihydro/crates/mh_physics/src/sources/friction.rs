@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sources/friction.rs
+﻿// crates/mh_physics/src/sources/friction.rs
 
 //! 摩擦源项
 //!
@@ -380,20 +380,20 @@ impl<S: Scalar> ManningFrictionConfigGeneric<S> {
     /// 创建均匀 Manning 系数配置
     pub fn uniform(n_cells: usize, manning_n: S) -> Self {
         Self {
-            gravity: <S as Scalar>::from_f64_lossless(9.81),
+            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
             manning_n: vec![manning_n; n_cells],
-            min_depth: <S as Scalar>::from_f64_lossless(1e-6),
-            max_cf: <S as Scalar>::from_f64_lossless(100.0),
+            min_depth: S::from_config(1e-6).unwrap_or(S::ZERO),
+            max_cf: S::from_config(100.0).unwrap_or(S::ZERO),
         }
     }
 
     /// 从 Manning 系数数组创建
     pub fn from_array(manning_n: Vec<S>) -> Self {
         Self {
-            gravity: <S as Scalar>::from_f64_lossless(9.81),
+            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
             manning_n,
-            min_depth: <S as Scalar>::from_f64_lossless(1e-6),
-            max_cf: <S as Scalar>::from_f64_lossless(100.0),
+            min_depth: S::from_config(1e-6).unwrap_or(S::ZERO),
+            max_cf: S::from_config(100.0).unwrap_or(S::ZERO),
         }
     }
 }
@@ -511,7 +511,7 @@ pub struct ChezyFrictionConfigGeneric<S: Scalar> {
 impl<S: Scalar> ChezyFrictionConfigGeneric<S> {
     /// 创建均匀 Chezy 系数配置
     pub fn uniform(n_cells: usize, chezy_c: S) -> Self {
-        Self { gravity: <S as Scalar>::from_f64_lossless(9.81), chezy_c: vec![chezy_c; n_cells], min_depth: <S as Scalar>::from_f64_lossless(1e-6) }
+        Self { gravity: S::from_config(9.81).unwrap_or(S::ZERO), chezy_c: vec![chezy_c; n_cells], min_depth: S::from_config(1e-6).unwrap_or(S::ZERO) }
     }
 }
 

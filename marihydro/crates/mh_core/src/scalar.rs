@@ -1,4 +1,4 @@
-// crates/mh_core/src/scalar.rs
+﻿// crates/mh_core/src/scalar.rs
 
 //! 统一标量类型抽象（RuntimeScalar）
 //!
@@ -20,9 +20,11 @@
 //! # 使用规范
 //!
 //! ```rust
+//! use mh_core::RuntimeScalar;
+//!
 //! // ✅ 正确：Layer 3引擎层使用泛型
 //! fn compute_flux<S: RuntimeScalar>(h: &[S]) -> S {
-//!     let g = S::from_f64(9.81).unwrap_or(S::ZERO);
+//!     let g = S::from_config(9.81).unwrap_or(S::ZERO);
 //!     h[0] * g
 //! }
 //!
@@ -118,10 +120,9 @@ pub trait RuntimeScalar:
     /// - f32实现: `v as f32`（可能丢失精度，但配置层已验证范围）
     /// - f64实现: `v`（无损失）
     ///
-    /// # 与FromPrimitive的关系
+    /// # 使用方式
     ///
-    /// 此方法是对`FromPrimitive::from_f64`的封装，明确其用途为配置转换。
-    /// 返回值是`Option<Self>`，调用处必须使用`.unwrap_or(S::ZERO)`处理失败情况。
+    /// 推荐调用模式：`S::from_config(v).unwrap_or(S::ZERO)`    /// 返回值是`Option<Self>`，调用处必须使用`.unwrap_or(S::ZERO)`处理失败情况。
     fn from_config(v: f64) -> Option<Self>;
 
     /// 转换回f64（用于输出或跨模块接口）

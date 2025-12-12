@@ -1,4 +1,4 @@
-//! 求解器工作区
+﻿//! 求解器工作区
 //!
 //! 提供通量、残差、临时变量的统一管理。
 
@@ -81,7 +81,7 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     
     /// 重置通量
     pub fn reset_fluxes(&mut self) {
-        let zero = <B::Scalar as Scalar>::from_f64_lossless(0.0);
+        let zero = <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO);
         self.flux_h.fill(zero);
         self.flux_hu.fill(zero);
         self.flux_hv.fill(zero);
@@ -89,7 +89,7 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     
     /// 重置源项
     pub fn reset_sources(&mut self) {
-        let zero = <B::Scalar as Scalar>::from_f64_lossless(0.0);
+        let zero = <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO);
         self.source_hu.fill(zero);
         self.source_hv.fill(zero);
     }

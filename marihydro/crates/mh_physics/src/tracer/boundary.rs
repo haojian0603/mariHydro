@@ -1,4 +1,4 @@
-//! marihydro\crates\mh_physics\src\tracer\boundary.rs
+﻿//! marihydro\crates\mh_physics\src\tracer\boundary.rs
 //! 示踪剂边界条件模块
 //!
 //! 提供示踪剂输运的边界条件管理，支持：
@@ -154,18 +154,18 @@ impl TracerBoundaryConditionConfig {
     /// 转换为运行时精度
     pub fn to_precision<S: Scalar>(&self) -> TracerBoundaryCondition<S> {
         match *self {
-            Self::Dirichlet(v) => TracerBoundaryCondition::Dirichlet(<S as Scalar>::from_f64_lossless(v)),
+            Self::Dirichlet(v) => TracerBoundaryCondition::Dirichlet(S::from_config(v).unwrap_or(S::ZERO)),
             Self::DirichletTimeSeries(ref ts) => {
                 TracerBoundaryCondition::DirichletTimeSeries(ts.clone())
             }
-            Self::Neumann(flux) => TracerBoundaryCondition::Neumann(<S as Scalar>::from_f64_lossless(flux)),
+            Self::Neumann(flux) => TracerBoundaryCondition::Neumann(S::from_config(flux).unwrap_or(S::ZERO)),
             Self::NeumannTimeSeries(ref ts) => {
                 TracerBoundaryCondition::NeumannTimeSeries(ts.clone())
             }
             Self::Robin { alpha, beta, gamma } => TracerBoundaryCondition::Robin {
-                alpha: <S as Scalar>::from_f64_lossless(alpha),
-                beta: <S as Scalar>::from_f64_lossless(beta),
-                gamma: <S as Scalar>::from_f64_lossless(gamma),
+                alpha: S::from_config(alpha).unwrap_or(S::ZERO),
+                beta: S::from_config(beta).unwrap_or(S::ZERO),
+                gamma: S::from_config(gamma).unwrap_or(S::ZERO),
             },
             Self::ZeroGradient => TracerBoundaryCondition::ZeroGradient,
         }
@@ -248,9 +248,9 @@ impl<S: Scalar> TracerBoundaryCondition<S> {
     pub fn evaluate(&self, time: f64) -> S {
         match self {
             Self::Dirichlet(v) => *v,
-            Self::DirichletTimeSeries(ts) => <S as Scalar>::from_f64_lossless(ts.get_value(time)),
+            Self::DirichletTimeSeries(ts) => S::from_config(ts.get_value(time)).unwrap_or(S::ZERO),
             Self::Neumann(flux) => *flux,
-            Self::NeumannTimeSeries(ts) => <S as Scalar>::from_f64_lossless(ts.get_value(time)),
+            Self::NeumannTimeSeries(ts) => S::from_config(ts.get_value(time)).unwrap_or(S::ZERO),
             Self::Robin { gamma, .. } => *gamma,
             Self::ZeroGradient => S::ZERO,
         }
@@ -333,17 +333,17 @@ impl<S: Scalar> ResolvedBoundaryValue<S> {
     pub fn implicit_diagonal_contribution(&self, _dt: S, dx: S) -> S {
         match self.bc_type {
             TracerBoundaryType::Robin => {
-                if self.beta.abs() > <S as Scalar>::from_f64_lossless(1e-14) {
+                if self.beta.abs() > S::from_config(1e-14).unwrap_or(S::ZERO) {
                     // Robin: α/β * dx 贡献到对角
                     self.alpha / self.beta * dx
                 } else {
                     // 退化为 Dirichlet
-                    <S as Scalar>::from_f64_lossless(1e14) // 强制约束
+                    S::from_config(1e14).unwrap_or(S::ZERO) // 强制约束
                 }
             }
             TracerBoundaryType::Dirichlet => {
                 // Dirichlet 施加于对角
-                <S as Scalar>::from_f64_lossless(1e14)
+                S::from_config(1e14).unwrap_or(S::ZERO)
             }
             _ => S::ZERO,
         }
@@ -353,15 +353,15 @@ impl<S: Scalar> ResolvedBoundaryValue<S> {
     pub fn implicit_rhs_contribution(&self, dx: S, _c_interior: S) -> S {
         match self.bc_type {
             TracerBoundaryType::Robin => {
-                if self.beta.abs() > <S as Scalar>::from_f64_lossless(1e-14) {
+                if self.beta.abs() > S::from_config(1e-14).unwrap_or(S::ZERO) {
                     // γ/β * dx
                     self.value / self.beta * dx
                 } else {
-                    self.value * <S as Scalar>::from_f64_lossless(1e14)
+                    self.value * S::from_config(1e14).unwrap_or(S::ZERO)
                 }
             }
             TracerBoundaryType::Dirichlet => {
-                self.value * <S as Scalar>::from_f64_lossless(1e14)
+                self.value * S::from_config(1e14).unwrap_or(S::ZERO)
             }
             TracerBoundaryType::Neumann => {
                 // 通量直接加入 RHS
@@ -388,7 +388,7 @@ impl<S: Scalar> ResolvedBoundaryValue<S> {
             }
             TracerBoundaryType::Robin => {
                 // αc + β·grad_n = γ => c = (γ - β·grad_n) / α
-                if self.alpha.abs() > <S as Scalar>::from_f64_lossless(1e-14) {
+                if self.alpha.abs() > S::from_config(1e-14).unwrap_or(S::ZERO) {
                     (self.value - self.beta * grad_n) / self.alpha
                 } else {
                     // 退化为 Neumann
@@ -513,11 +513,11 @@ impl<S: Scalar> TracerBoundaryManager<S> {
         match cond {
             TracerBoundaryCondition::Dirichlet(v) => ResolvedBoundaryValue::dirichlet(*v),
             TracerBoundaryCondition::DirichletTimeSeries(ts) => {
-                ResolvedBoundaryValue::dirichlet(<S as Scalar>::from_f64_lossless(ts.get_value(time)))
+                ResolvedBoundaryValue::dirichlet(S::from_config(ts.get_value(time)).unwrap_or(S::ZERO))
             }
             TracerBoundaryCondition::Neumann(flux) => ResolvedBoundaryValue::neumann(*flux),
             TracerBoundaryCondition::NeumannTimeSeries(ts) => {
-                ResolvedBoundaryValue::neumann(<S as Scalar>::from_f64_lossless(ts.get_value(time)))
+                ResolvedBoundaryValue::neumann(S::from_config(ts.get_value(time)).unwrap_or(S::ZERO))
             }
             TracerBoundaryCondition::Robin { alpha, beta, gamma } => {
                 ResolvedBoundaryValue::robin(*alpha, *beta, *gamma)

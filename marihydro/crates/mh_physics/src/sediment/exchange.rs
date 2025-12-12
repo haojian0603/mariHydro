@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sediment/exchange.rs
+﻿// crates/mh_physics/src/sediment/exchange.rs
 
 use crate::core::{Backend, DeviceBuffer};
 use mh_core::Scalar;
@@ -126,7 +126,7 @@ impl<B: Backend> SedimentExchange<B> {
                 .iter()
                 .take(n)
                 .fold(0.0, |acc, &v| acc + v.to_f64());
-            self.cumulative_exchange += <B::Scalar as Scalar>::from_f64_lossless(added);
+            self.cumulative_exchange += <B::Scalar as Scalar>::from_config(added).unwrap_or(B::Scalar::ZERO);
         }
     }
     

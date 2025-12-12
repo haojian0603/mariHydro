@@ -1,4 +1,4 @@
-//! 垂向剖面恢复器
+﻿//! 垂向剖面恢复器
 //!
 //! 从2D深度平均状态恢复垂向速度剖面。
 
@@ -107,10 +107,10 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
             sigma: SigmaCoordinate::uniform(n_layers),
-            roughness: backend.alloc_init(n_cells, <B::Scalar as Scalar>::from_f64_lossless(0.01)), // 默认糙率
+            roughness: backend.alloc_init(n_cells, <B::Scalar as Scalar>::from_config(0.01).unwrap_or(B::Scalar::ZERO)), // 默认糙率
             n_layers,
             method,
-            von_karman: <B::Scalar as Scalar>::from_f64_lossless(VON_KARMAN),
+            von_karman: <B::Scalar as Scalar>::from_config(VON_KARMAN).unwrap_or(B::Scalar::ZERO),
             backend,
         }
     }

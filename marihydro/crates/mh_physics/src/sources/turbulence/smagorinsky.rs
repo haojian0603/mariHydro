@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sources/turbulence/smagorinsky.rs
+﻿// crates/mh_physics/src/sources/turbulence/smagorinsky.rs
 
 //! Smagorinsky 亚格子尺度湍流模型
 //!
@@ -66,19 +66,19 @@ impl<S: Scalar> TurbulenceModel<S> {
     /// Smagorinsky 常数的默认值
     #[inline]
     pub fn default_smagorinsky_constant() -> S {
-        S::from_f64_lossless(0.15)
+        S::from_config(0.15).unwrap_or(S::ZERO)
     }
 
     /// 最小涡粘性系数 [m²/s]
     #[inline]
     pub fn min_eddy_viscosity() -> S {
-        S::from_f64_lossless(1e-6)
+        S::from_config(1e-6).unwrap_or(S::ZERO)
     }
 
     /// 最大涡粘性系数 [m²/s]
     #[inline]
     pub fn max_eddy_viscosity() -> S {
-        S::from_f64_lossless(1e3)
+        S::from_config(1e3).unwrap_or(S::ZERO)
     }
 
     /// 创建禁用模式（推荐）
@@ -125,10 +125,10 @@ impl<S: Scalar> SmagorinskySolver<S> {
     pub fn new(n_cells: usize, model: TurbulenceModel<S>) -> Self {
         Self {
             model,
-            grid_scale: vec![S::from_f64_lossless(10.0); n_cells], // 默认网格尺度
+            grid_scale: vec![S::from_config(10.0).unwrap_or(S::ZERO); n_cells], // 默认网格尺度
             eddy_viscosity: vec![S::ZERO; n_cells],
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: S::from_f64_lossless(1e-4),
+            h_min: S::from_config(1e-4).unwrap_or(S::ZERO),
             _marker: PhantomData,
         }
     }
@@ -141,7 +141,7 @@ impl<S: Scalar> SmagorinskySolver<S> {
         // 计算网格尺度（使用单元面积的平方根）
         for i in 0..n_cells {
             if let Some(area) = mesh.cell_area(i) {
-                solver.grid_scale[i] = S::from_f64_lossless(area.sqrt());
+                solver.grid_scale[i] = S::from_config(area.sqrt()).unwrap_or(S::ZERO);
             }
         }
 
@@ -151,8 +151,8 @@ impl<S: Scalar> SmagorinskySolver<S> {
     /// 设置网格尺度
     pub fn set_grid_scale(&mut self, i: usize, scale: S) {
         if i < self.grid_scale.len() {
-            self.grid_scale[i] = if scale < S::from_f64_lossless(1e-3) {
-                S::from_f64_lossless(1e-3)
+            self.grid_scale[i] = if scale < S::from_config(1e-3).unwrap_or(S::ZERO) {
+                S::from_config(1e-3).unwrap_or(S::ZERO)
             } else {
                 scale
             };
@@ -226,18 +226,18 @@ impl<S: Scalar> SmagorinskySolver<S> {
                     let normal = mesh.face_normal(face_id);
                     let dist = self.grid_scale[i];
 
-                    if dist > S::from_f64_lossless(1e-10) {
+                    if dist > S::from_config(1e-10).unwrap_or(S::ZERO) {
                         let weight = S::ONE / dist;
-                        du_dx = du_dx + (u_n - u) * S::from_f64_lossless(normal.x) * weight;
-                        du_dy = du_dy + (u_n - u) * S::from_f64_lossless(normal.y) * weight;
-                        dv_dx = dv_dx + (v_n - v) * S::from_f64_lossless(normal.x) * weight;
-                        dv_dy = dv_dy + (v_n - v) * S::from_f64_lossless(normal.y) * weight;
+                        du_dx = du_dx + (u_n - u) * S::from_config(normal.x).unwrap_or(S::ZERO) * weight;
+                        du_dy = du_dy + (u_n - u) * S::from_config(normal.y).unwrap_or(S::ZERO) * weight;
+                        dv_dx = dv_dx + (v_n - v) * S::from_config(normal.x).unwrap_or(S::ZERO) * weight;
+                        dv_dy = dv_dy + (v_n - v) * S::from_config(normal.y).unwrap_or(S::ZERO) * weight;
                         weight_sum = weight_sum + weight;
                     }
                 }
             }
 
-            if weight_sum > S::from_f64_lossless(1e-10) {
+            if weight_sum > S::from_config(1e-10).unwrap_or(S::ZERO) {
                 self.velocity_gradient[i] = VelocityGradient::new(
                     du_dx / weight_sum,
                     du_dy / weight_sum,
@@ -344,7 +344,7 @@ impl<B: Backend> TurbulenceConfig<B> {
             model,
             eddy_viscosity: vec![B::Scalar::ZERO; n_cells],
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: B::Scalar::from_f64_lossless(1e-4),
+            h_min: <B::Scalar as Scalar>::from_config(1e-4).unwrap_or(B::Scalar::ZERO),
             _marker: PhantomData,
         }
     }

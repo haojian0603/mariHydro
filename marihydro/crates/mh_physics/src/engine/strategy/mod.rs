@@ -1,4 +1,4 @@
-//! 时间积分策略
+﻿//! 时间积分策略
 //!
 //! 提供显式和半隐式时间积分的统一接口。
 
@@ -33,8 +33,8 @@ pub struct StepResult<S: Scalar> {
 impl<S: Scalar> Default for StepResult<S> {
     fn default() -> Self {
         Self {
-            dt_used: <S as Scalar>::from_f64_lossless(0.0),
-            max_wave_speed: <S as Scalar>::from_f64_lossless(0.0),
+            dt_used: S::from_config(0.0).unwrap_or(S::ZERO),
+            max_wave_speed: S::from_config(0.0).unwrap_or(S::ZERO),
             dry_cells: 0,
             limited_cells: 0,
             converged: true,
@@ -72,7 +72,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     
     /// 推荐的 CFL 数
     fn recommended_cfl(&self) -> B::Scalar {
-        <B::Scalar as Scalar>::from_f64_lossless(0.5)
+        <B::Scalar as Scalar>::from_config(0.5).unwrap_or(B::Scalar::ZERO)
     }
 }
 

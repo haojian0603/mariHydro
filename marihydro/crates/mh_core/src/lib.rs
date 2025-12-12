@@ -44,7 +44,10 @@ pub mod buffer;
 
 // 统一导出
 pub use precision::Precision;
-pub use scalar::Scalar;
+pub use scalar::RuntimeScalar;
+// TODO(重构-Phase5): 删除Scalar别名，统一使用RuntimeScalar
+// 临时向后兼容，确保迁移期间代码可编译
+pub use scalar::RuntimeScalar as Scalar;
 pub use indices::{CellIndex, FaceIndex, NodeIndex, BoundaryIndex, VertexIndex, HalfEdgeIndex, INVALID_INDEX};
 pub use tolerance::Tolerance;
 pub use backend::{Backend, CpuBackend};
@@ -76,7 +79,9 @@ macro_rules! assert_backend {
 pub mod prelude {
     //! 常用类型预导入
     pub use crate::precision::Precision;
-    pub use crate::scalar::Scalar;
+    pub use crate::scalar::RuntimeScalar;
+    // TODO(重构-Phase5): 删除Scalar别名
+    pub use crate::scalar::RuntimeScalar as Scalar;
     pub use crate::indices::{CellIndex, FaceIndex, NodeIndex, BoundaryIndex};
     pub use crate::tolerance::Tolerance;
     pub use crate::backend::{Backend, CpuBackend};

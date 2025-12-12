@@ -1,4 +1,4 @@
-// crates/mh_physics/src/tracer/state.rs
+﻿// crates/mh_physics/src/tracer/state.rs
 
 //! 示踪剂状态模块
 //!
@@ -750,7 +750,7 @@ pub struct TracerFieldGeneric<B: Backend> {
 impl<B: Backend> TracerFieldGeneric<B> {
     /// 使用后端实例创建新的示踪剂场
     pub fn new_with_backend(backend: B, properties: TracerProperties, n_cells: usize) -> Self {
-        let background = <B::Scalar as Scalar>::from_f64_lossless(properties.background_value);
+        let background = <B::Scalar as Scalar>::from_config(properties.background_value).unwrap_or(B::Scalar::ZERO);
         let mut concentration = backend.alloc(n_cells);
         concentration.fill(background);
         
@@ -826,7 +826,7 @@ impl<B: Backend> TracerFieldGeneric<B> {
     
     /// 重置为背景值
     pub fn reset(&mut self) {
-        let background = <B::Scalar as Scalar>::from_f64_lossless(self.properties.background_value);
+        let background = <B::Scalar as Scalar>::from_config(self.properties.background_value).unwrap_or(B::Scalar::ZERO);
         self.concentration.fill(background);
         self.conserved.fill(B::Scalar::ZERO);
         self.rhs.fill(B::Scalar::ZERO);
