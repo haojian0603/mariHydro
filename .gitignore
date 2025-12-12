@@ -6,6 +6,8 @@ target/
 优化代码补丁/
 杂项/
 *.py
+docs/
+marihydro/docs/
 
 ## AI修改文档
 marihydro/.ai
