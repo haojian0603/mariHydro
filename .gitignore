@@ -7,7 +7,13 @@ target/
 杂项/
 *.py
 docs/
-marihydro/docs/
+*.md
+*.zip
+*.tar.gz
+
+
+marihydro/docs
+
 
 ## AI修改文档
 marihydro/.ai
