@@ -311,6 +311,25 @@ impl PhysicsMesh {
         face >= self.inner.n_interior_faces
     }
 
+    /// 获取面的边界 ID
+    ///
+    /// 返回面对应的边界索引（用于查找边界条件）。
+    /// 对于内部面返回 `None`，对于边界面返回边界索引。
+    ///
+    /// # 参数
+    /// - `face`: 面索引
+    ///
+    /// # 返回
+    /// - `Some(boundary_id)`: 边界面对应的边界 ID
+    /// - `None`: 内部面或无效索引
+    #[inline]
+    pub fn face_boundary_id(&self, face: usize) -> Option<usize> {
+        self.inner
+            .face_boundary_id
+            .get(face)
+            .and_then(|opt| opt.map(|id| id as usize))
+    }
+
     // =========================================================================
     // 节点访问
     // =========================================================================

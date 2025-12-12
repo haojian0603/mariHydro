@@ -250,14 +250,29 @@ impl<'a> DiffusionSolver<'a> {
     }
 
     /// 获取边界条件
-    fn get_boundary_condition(&self, _face: usize) -> DiffusionBC {
-        // TODO: 实现边界索引映射
-        // 目前使用默认零通量
-        self.config
-            .boundary_conditions
-            .first()
-            .copied()
-            .unwrap_or_default()
+    ///
+    /// 根据面索引查找对应的边界条件。使用网格的边界 ID 映射
+    /// 到配置中的边界条件向量。
+    ///
+    /// # 参数
+    /// - `face`: 边界面索引
+    ///
+    /// # 返回
+    /// 该面对应的扩散边界条件。如果未找到映射或配置中
+    /// 没有对应条件，则返回默认的零通量边界条件。
+    fn get_boundary_condition(&self, face: usize) -> DiffusionBC {
+        // 获取面的边界 ID（边界条件索引）
+        if let Some(boundary_id) = self.mesh.face_boundary_id(face) {
+            // 根据边界 ID 查找对应的边界条件
+            self.config
+                .boundary_conditions
+                .get(boundary_id)
+                .copied()
+                .unwrap_or_default()
+        } else {
+            // 无边界 ID（内部面或未配置），使用默认零通量
+            DiffusionBC::default()
+        }
     }
 
     /// 显式扩散求解

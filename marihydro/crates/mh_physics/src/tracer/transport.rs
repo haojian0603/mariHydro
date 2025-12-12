@@ -150,6 +150,40 @@ impl TracerDiffusionConfig {
             ..Default::default()
         }
     }
+
+    /// 计算 Smagorinsky 扩散系数
+    ///
+    /// 使用 Smagorinsky 公式: K = (C_s * Δ)² * |S|
+    ///
+    /// # 参数
+    /// - `grid_scale`: 网格尺度 Δ [m]（通常为单元面积的平方根）
+    /// - `strain_rate_magnitude`: 应变率张量模 |S| [1/s]
+    ///
+    /// # 返回
+    /// 湍流扩散系数 [m²/s]
+    ///
+    /// # 公式
+    /// ```text
+    /// |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
+    /// K = (C_s * Δ)² * |S|
+    /// ```
+    #[inline]
+    pub fn compute_smagorinsky_diffusivity(
+        &self,
+        grid_scale: f64,
+        strain_rate_magnitude: f64,
+    ) -> f64 {
+        let cs = self.smagorinsky_coefficient;
+        let cs_delta = cs * grid_scale;
+        let k = cs_delta * cs_delta * strain_rate_magnitude;
+
+        // 限制扩散系数在合理范围内
+        // 最小值：防止数值不稳定
+        // 最大值：防止过度扩散
+        const K_MIN: f64 = 1e-6;
+        const K_MAX: f64 = 1e4;
+        k.clamp(K_MIN, K_MAX)
+    }
 }
 
 // ============================================================
@@ -231,6 +265,113 @@ impl TracerFaceFlux {
     /// 总通量
     pub fn total(&self) -> f64 {
         self.advective + self.diffusive
+    }
+}
+
+/// Smagorinsky 模型数据
+///
+/// 用于计算 Smagorinsky 亚格子扩散系数。
+/// 当启用 `use_smagorinsky` 时，需要提供此数据。
+///
+/// # Smagorinsky 公式
+///
+/// ```text
+/// K = (C_s * Δ)² * |S|
+/// ```
+///
+/// 其中：
+/// - `C_s`: Smagorinsky 系数（配置中已有）
+/// - `Δ`: 网格尺度 [m]（通常为 √(单元面积)）
+/// - `|S|`: 应变率张量模 [1/s]
+#[derive(Debug, Clone)]
+pub struct SmagorinskyData {
+    /// 每个单元的网格尺度 [m]
+    ///
+    /// 通常使用 `√(cell_area)` 计算
+    pub grid_scales: Vec<f64>,
+
+    /// 每个单元的应变率张量模 [1/s]
+    ///
+    /// 计算方式：
+    /// ```text
+    /// |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
+    /// ```
+    pub strain_rate_magnitudes: Vec<f64>,
+}
+
+impl SmagorinskyData {
+    /// 创建新的 Smagorinsky 数据
+    pub fn new(n_cells: usize) -> Self {
+        Self {
+            grid_scales: vec![10.0; n_cells],       // 默认网格尺度 10m
+            strain_rate_magnitudes: vec![0.0; n_cells], // 默认无应变
+        }
+    }
+
+    /// 从网格和速度场初始化
+    ///
+    /// # 参数
+    /// - `cell_areas`: 单元面积数组
+    /// - `du_dx`: ∂u/∂x 分量
+    /// - `du_dy`: ∂u/∂y 分量
+    /// - `dv_dx`: ∂v/∂x 分量
+    /// - `dv_dy`: ∂v/∂y 分量
+    pub fn from_velocity_gradients(
+        cell_areas: &[f64],
+        du_dx: &[f64],
+        du_dy: &[f64],
+        dv_dx: &[f64],
+        dv_dy: &[f64],
+    ) -> Self {
+        let n_cells = cell_areas.len();
+        let mut data = Self::new(n_cells);
+
+        for i in 0..n_cells {
+            // 网格尺度 = √(面积)
+            data.grid_scales[i] = cell_areas[i].sqrt().max(1e-6);
+
+            // 应变率张量模
+            // |S| = √(2*(∂u/∂x)² + 2*(∂v/∂y)² + (∂u/∂y + ∂v/∂x)²)
+            let s11 = du_dx[i];
+            let s22 = dv_dy[i];
+            let s12 = 0.5 * (du_dy[i] + dv_dx[i]);
+
+            data.strain_rate_magnitudes[i] =
+                (2.0 * s11 * s11 + 2.0 * s22 * s22 + 4.0 * s12 * s12).sqrt();
+        }
+
+        data
+    }
+
+    /// 获取单元的平均扩散系数
+    ///
+    /// 对于面上的扩散，需要使用左右单元的平均值
+    #[inline]
+    pub fn face_diffusivity(
+        &self,
+        config: &TracerDiffusionConfig,
+        left_cell: usize,
+        right_cell: Option<usize>,
+    ) -> f64 {
+        let k_left = config.compute_smagorinsky_diffusivity(
+            self.grid_scales.get(left_cell).copied().unwrap_or(10.0),
+            self.strain_rate_magnitudes.get(left_cell).copied().unwrap_or(0.0),
+        );
+
+        if let Some(right) = right_cell {
+            let k_right = config.compute_smagorinsky_diffusivity(
+                self.grid_scales.get(right).copied().unwrap_or(10.0),
+                self.strain_rate_magnitudes.get(right).copied().unwrap_or(0.0),
+            );
+            // 使用调和平均值（更适合扩散系数）
+            if k_left + k_right > 1e-10 {
+                2.0 * k_left * k_right / (k_left + k_right)
+            } else {
+                0.0
+            }
+        } else {
+            k_left
+        }
     }
 }
 
@@ -351,14 +492,40 @@ impl TracerTransportSolver {
         cell_volumes: &[f64],
         face_distances: &[f64],
     ) {
-        field.clear_rhs();
+        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, None);
+    }
 
-        let diffusivity = if self.config.diffusion.use_smagorinsky {
-            // TODO: 计算 Smagorinsky 扩散系数
-            self.config.diffusion.horizontal_diffusivity
-        } else {
-            self.config.diffusion.horizontal_diffusivity
-        };
+    /// 计算所有面的通量并累加到 RHS（带 Smagorinsky 模型支持）
+    ///
+    /// 当启用 Smagorinsky 模型时，使用提供的数据计算空间变化的扩散系数。
+    ///
+    /// # 参数
+    /// - `field`: 示踪剂场
+    /// - `flow_data`: 面流动数据
+    /// - `cell_volumes`: 单元体积
+    /// - `face_distances`: 面对应的单元中心间距
+    /// - `smagorinsky_data`: Smagorinsky 模型数据（网格尺度和应变率）
+    pub fn compute_rhs_with_smagorinsky(
+        &mut self,
+        field: &mut TracerField,
+        flow_data: &[FaceFlowData],
+        cell_volumes: &[f64],
+        face_distances: &[f64],
+        smagorinsky_data: &SmagorinskyData,
+    ) {
+        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, Some(smagorinsky_data));
+    }
+
+    /// 内部实现：计算 RHS
+    fn compute_rhs_internal(
+        &mut self,
+        field: &mut TracerField,
+        flow_data: &[FaceFlowData],
+        cell_volumes: &[f64],
+        face_distances: &[f64],
+        smagorinsky_data: Option<&SmagorinskyData>,
+    ) {
+        field.clear_rhs();
 
         // 确保工作数组大小足够
         if self.face_fluxes.len() < flow_data.len() {
@@ -380,6 +547,20 @@ impl TracerTransportSolver {
                 face.un,
                 face.length,
             );
+
+            // 计算扩散系数（根据配置选择常数或 Smagorinsky）
+            let diffusivity = if self.config.diffusion.use_smagorinsky {
+                // 使用 Smagorinsky 模型计算空间变化的扩散系数
+                if let Some(smag) = smagorinsky_data {
+                    smag.face_diffusivity(&self.config.diffusion, face.left_cell, face.right_cell)
+                } else {
+                    // 如果启用了 Smagorinsky 但没有提供数据，回退到常数扩散
+                    // 并添加背景扩散作为最小值
+                    self.config.diffusion.horizontal_diffusivity.max(1e-3)
+                }
+            } else {
+                self.config.diffusion.horizontal_diffusivity
+            };
 
             // 扩散通量
             let diffusive = if face.right_cell.is_some() {

@@ -9,48 +9,55 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 
-# === 排除规则（添加在这里）===
-# 排除的目录（底层库，坐标和几何需要f64精度）
+
+# === 排除规则（基于架构五层设计原则） ===
+# 排除的目录（Layer 1: 基础几何库，坐标存储天然需要f64精度）
 $ExcludeDirs = @(
-    "crates\mh_mesh",              # 几何库（坐标存储）- Layer 1允许f64
-    "crates\mh_geo"                # 地理库（坐标转换）- Layer 1允许f64
+    "crates\mh_mesh",              # 几何网格库 - 坐标几何计算允许f64
+    "crates\mh_geo"                # 地理坐标库 - 大地坐标转换需要f64
 )
 
-# 排除的文件模式（物理常数、材料属性、配置参数）
-# 注意：PowerShell -like 使用通配符，* 匹配任意字符，? 匹配单个字符
+# 排除的文件模式（Layer 4/5: 配置参数、物理常数、材料属性）
+# 支持 // ALLOW_F64: <原因> 注释的排除机制
 $ExcludeFilePatterns = @(
-    "scalar.rs",                   # Scalar trait定义 - 基础类型定义
-    "precision.rs",                # Precision枚举 - 配置层
-    "constants.rs",                # 物理常数 - 明确允许
-    "physical_constants.rs",       # 物理常数 - 明确允许
-    "numerical_params.rs",         # 数值参数配置 - Layer 4配置层
-    "properties.rs",               # 沉积物材料属性 - Layer 4配置层
-    "morphology.rs",               # 地形几何数据 - Layer 1几何层
-    "atmosphere.rs",               # 大气物理常数 - Layer 1
-    "field.rs",                    # 地基参数 - Layer 4配置层
+    "scalar.rs",                   # RuntimeScalar trait定义 - 基础抽象层
+    "precision.rs",                # Precision枚举 - 运行时精度选择
+    "constants.rs",                # 物理常数文件 - 全局常数明确允许f64
+    "physical_constants.rs",       # 物理常数文件 - 全局常数明确允许f64
+    "numerical_params.rs",         # 数值参数配置 - Layer 4配置层允许f64
+    "properties.rs",               # 材料属性配置 - Layer 4配置层允许f64
+    "morphology.rs",               # 地形几何数据 - Layer 1几何层允许f64
+    "atmosphere.rs",               # 大气物理常数 - Layer 1物理常数层
+    "field.rs",                    # 地基参数配置 - Layer 4配置层
     "reconstruction\config.rs",    # 重构配置 - Layer 4配置层
     "limiter\config.rs",           # 限制器配置 - Layer 4配置层
     "diffusion.rs",                # 扩散算子配置 - Layer 4配置层
-    "*_test.rs",                   # 测试文件
-    "test_*.rs",                   # 测试文件
-    "_test.rs",                    # 测试文件
-    "_tests.rs",                   # 测试文件
-    "tests\"                       # 测试模块
+    "*_test.rs",                   # 单元测试文件 - 测试逻辑不受限
+    "test_*.rs",                   # 集成测试文件 - 测试逻辑不受限
+    "_test.rs",                    # 测试模块文件 - 测试逻辑不受限
+    "_tests.rs",                   # 测试模块文件 - 测试逻辑不受限
+    "tests\"                       # 测试目录 - 测试逻辑不受限
 )
 
-# 需要严格扫描的核心目录（Layer 3 引擎层）
+# 需要严格扫描的核心目录（Layer 3: 引擎计算核心层，禁止硬编码f64）
+# 包括：求解器、通量计算、边界处理、数值算子、时间积分等
 $ScanDirs = @(
-    "crates\mh_physics\src\engine"
-    "crates\mh_physics\src\flux"
-    "crates\mh_physics\src\boundary"
-    "crates\mh_physics\src\numerics\linear_algebra"
-    "crates\mh_physics\src\numerics\gradient"
-    "crates\mh_physics\src\numerics\reconstruction"
-    "crates\mh_physics\src\numerics\limiter"
-    "crates\mh_physics\src\sources"
+    "crates\mh_physics\src\engine",           # 求解器核心 - 必须泛型化
+    "crates\mh_physics\src\flux",             # 通量计算 - 必须泛型化
+    "crates\mh_physics\src\boundary",         # 边界处理 - 必须泛型化
+    "crates\mh_physics\src\numerics\linear_algebra", # 线性代数 - 必须泛型化
+    "crates\mh_physics\src\numerics\gradient",       # 梯度计算 - 必须泛型化
+    "crates\mh_physics\src\numerics\reconstruction", # 重构 - 必须泛型化
+    "crates\mh_physics\src\numerics\limiter",        # 限制器 - 必须泛型化
+    "crates\mh_physics\src\numerics\operators",      # 算子 - 必须泛型化
+    "crates\mh_physics\src\sources",      # 源项 - 必须泛型化
+    "crates\mh_physics\src\time_integrator", # 时间积分 - 必须泛型化
+    "crates\mh_physics\src\timestep",       # 时间步控制 - 必须泛型化
+    "crates\mh_physics\src\riemann",        # 黎曼求解器 - 必须泛型化
+    "crates\mh_physics\src\wetting_drying"  # 干湿处理 - 必须泛型化
 )
 
-Write-Host "=== Checking for hardcoded f64 types ===" -ForegroundColor Cyan
+Write-Host "=== Checking for hardcoded f64 types in Layer 3 Engine ===" -ForegroundColor Cyan
 Write-Host "Project root: $ProjectRoot"
 Write-Host ""
 
