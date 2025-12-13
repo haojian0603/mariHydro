@@ -3,6 +3,7 @@
 //! 迭代线性求解器
 //!
 //! 提供用于求解稀疏线性系统 Ax = b 的迭代方法：
+//! 支持泛型标量类型 `S: RuntimeScalar`（f32 或 f64）。
 //!
 //! # 求解器类型
 //!
@@ -17,13 +18,13 @@
 //!     CsrMatrix, PcgSolver, JacobiPreconditioner, SolverConfig,
 //! };
 //!
-//! let matrix: CsrMatrix = /* ... */;
+//! let matrix: CsrMatrix<f64> = /* ... */;
 //! let b = vec![1.0, 2.0, 3.0];
 //! let mut x = vec![0.0; 3];
 //!
 //! let precond = JacobiPreconditioner::from_matrix(&matrix);
 //! let config = SolverConfig::new(1e-8, 100);
-//! let mut solver = PcgSolver::new(config);
+//! let mut solver = PcgSolver::<f64>::new(config);
 //!
 //! let result = solver.solve(&matrix, &b, &mut x, &precond);
 //! println!("Converged in {} iterations", result.iterations);
@@ -32,15 +33,20 @@
 use super::csr::CsrMatrix;
 use super::preconditioner::Preconditioner;
 use super::vector_ops::{axpy, copy, dot, norm2};
+use mh_core::RuntimeScalar;
 use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// 配置层 (Layer 4) - 允许使用 f64
+// ============================================================================
 
 /// 求解器配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {
     /// 相对收敛容差
-    pub rtol: f64,
+    pub rtol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 绝对收敛容差
-    pub atol: f64,
+    pub atol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大迭代次数
     pub max_iter: usize,
     /// 是否打印迭代信息
@@ -60,6 +66,7 @@ impl Default for SolverConfig {
 
 impl SolverConfig {
     /// 创建求解器配置
+    // ALLOW_F64: Layer 4 配置参数构造方法
     pub fn new(rtol: f64, max_iter: usize) -> Self {
         Self {
             rtol,
@@ -69,6 +76,7 @@ impl SolverConfig {
     }
 
     /// 设置绝对容差
+    // ALLOW_F64: Layer 4 配置参数设置方法
     pub fn with_atol(mut self, atol: f64) -> Self {
         self.atol = atol;
         self
@@ -96,20 +104,23 @@ pub enum SolverStatus {
 
 /// 求解器结果
 #[derive(Debug, Clone)]
-pub struct SolverResult {
+pub struct SolverResult<S: RuntimeScalar> {
     /// 求解状态
     pub status: SolverStatus,
     /// 迭代次数
     pub iterations: usize,
     /// 最终残差范数
-    pub residual_norm: f64,
+    pub residual_norm: S,
     /// 初始残差范数
-    pub initial_residual_norm: f64,
+    pub initial_residual_norm: S,
     /// 相对残差
-    pub relative_residual: f64,
+    pub relative_residual: S,
 }
 
-impl SolverResult {
+/// Legacy 类型别名，保持向后兼容
+pub type SolverResultF64 = SolverResult<f64>;
+
+impl<S: RuntimeScalar> SolverResult<S> {
     /// 是否成功收敛
     pub fn is_converged(&self) -> bool {
         self.status == SolverStatus::Converged
@@ -125,25 +136,28 @@ impl SolverResult {
 ///
 /// 预分配的工作向量，避免 solve 内部频繁分配
 #[derive(Debug, Clone, Default)]
-pub struct CgWorkspace {
+pub struct CgWorkspace<S: RuntimeScalar> {
     /// 残差向量
-    pub r: Vec<f64>,
+    pub r: Vec<S>,
     /// 搜索方向
-    pub p: Vec<f64>,
+    pub p: Vec<S>,
     /// A*p
-    pub ap: Vec<f64>,
+    pub ap: Vec<S>,
     /// 预条件后的残差
-    pub z: Vec<f64>,
+    pub z: Vec<S>,
 }
 
-impl CgWorkspace {
+/// Legacy 类型别名，保持向后兼容
+pub type CgWorkspaceF64 = CgWorkspace<f64>;
+
+impl<S: RuntimeScalar> CgWorkspace<S> {
     /// 创建新的工作区
     pub fn new(n: usize) -> Self {
         Self {
-            r: vec![0.0; n],
-            p: vec![0.0; n],
-            ap: vec![0.0; n],
-            z: vec![0.0; n],
+            r: vec![S::ZERO; n],
+            p: vec![S::ZERO; n],
+            ap: vec![S::ZERO; n],
+            z: vec![S::ZERO; n],
         }
     }
 
@@ -152,61 +166,64 @@ impl CgWorkspace {
     /// 无论大小是否变化，均清零防止历史数据污染。
     pub fn resize(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![0.0; n];
-            self.p = vec![0.0; n];
-            self.ap = vec![0.0; n];
-            self.z = vec![0.0; n];
+            self.r = vec![S::ZERO; n];
+            self.p = vec![S::ZERO; n];
+            self.ap = vec![S::ZERO; n];
+            self.z = vec![S::ZERO; n];
         } else {
             // 即使大小不变也要清零
-            self.r.fill(0.0);
-            self.p.fill(0.0);
-            self.ap.fill(0.0);
-            self.z.fill(0.0);
+            self.r.fill(S::ZERO);
+            self.p.fill(S::ZERO);
+            self.ap.fill(S::ZERO);
+            self.z.fill(S::ZERO);
         }
     }
 
     /// 清零工作区
     pub fn clear(&mut self) {
-        self.r.fill(0.0);
-        self.p.fill(0.0);
-        self.ap.fill(0.0);
-        self.z.fill(0.0);
+        self.r.fill(S::ZERO);
+        self.p.fill(S::ZERO);
+        self.ap.fill(S::ZERO);
+        self.z.fill(S::ZERO);
     }
 }
 
 /// BiCGStab 求解器工作区
 #[derive(Debug, Clone, Default)]
-pub struct BiCgStabWorkspace {
+pub struct BiCgStabWorkspace<S: RuntimeScalar> {
     /// 残差向量
-    pub r: Vec<f64>,
+    pub r: Vec<S>,
     /// 影子残差，必须保持不变
-    pub r0: Vec<f64>,
+    pub r0: Vec<S>,
     /// 搜索方向
-    pub p: Vec<f64>,
+    pub p: Vec<S>,
     /// A*p_hat
-    pub v: Vec<f64>,
+    pub v: Vec<S>,
     /// 中间残差
-    pub s: Vec<f64>,
+    pub s: Vec<S>,
     /// A*s_hat
-    pub t: Vec<f64>,
+    pub t: Vec<S>,
     /// 预条件后的向量
-    pub p_hat: Vec<f64>,
+    pub p_hat: Vec<S>,
     /// 预条件后的向量
-    pub s_hat: Vec<f64>,
+    pub s_hat: Vec<S>,
 }
 
-impl BiCgStabWorkspace {
+/// Legacy 类型别名，保持向后兼容
+pub type BiCgStabWorkspaceF64 = BiCgStabWorkspace<f64>;
+
+impl<S: RuntimeScalar> BiCgStabWorkspace<S> {
     /// 创建新的工作区
     pub fn new(n: usize) -> Self {
         Self {
-            r: vec![0.0; n],
-            r0: vec![0.0; n],
-            p: vec![0.0; n],
-            v: vec![0.0; n],
-            s: vec![0.0; n],
-            t: vec![0.0; n],
-            p_hat: vec![0.0; n],
-            s_hat: vec![0.0; n],
+            r: vec![S::ZERO; n],
+            r0: vec![S::ZERO; n],
+            p: vec![S::ZERO; n],
+            v: vec![S::ZERO; n],
+            s: vec![S::ZERO; n],
+            t: vec![S::ZERO; n],
+            p_hat: vec![S::ZERO; n],
+            s_hat: vec![S::ZERO; n],
         }
     }
 
@@ -215,14 +232,14 @@ impl BiCgStabWorkspace {
     /// 无论大小是否变化，均清零防止历史数据污染。
     pub fn resize(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![0.0; n];
-            self.r0 = vec![0.0; n];
-            self.p = vec![0.0; n];
-            self.v = vec![0.0; n];
-            self.s = vec![0.0; n];
-            self.t = vec![0.0; n];
-            self.p_hat = vec![0.0; n];
-            self.s_hat = vec![0.0; n];
+            self.r = vec![S::ZERO; n];
+            self.r0 = vec![S::ZERO; n];
+            self.p = vec![S::ZERO; n];
+            self.v = vec![S::ZERO; n];
+            self.s = vec![S::ZERO; n];
+            self.t = vec![S::ZERO; n];
+            self.p_hat = vec![S::ZERO; n];
+            self.s_hat = vec![S::ZERO; n];
         } else {
             self.clear();
         }
@@ -230,19 +247,19 @@ impl BiCgStabWorkspace {
 
     /// 清零工作区
     pub fn clear(&mut self) {
-        self.r.fill(0.0);
-        self.r0.fill(0.0);
-        self.p.fill(0.0);
-        self.v.fill(0.0);
-        self.s.fill(0.0);
-        self.t.fill(0.0);
-        self.p_hat.fill(0.0);
-        self.s_hat.fill(0.0);
+        self.r.fill(S::ZERO);
+        self.r0.fill(S::ZERO);
+        self.p.fill(S::ZERO);
+        self.v.fill(S::ZERO);
+        self.s.fill(S::ZERO);
+        self.t.fill(S::ZERO);
+        self.p_hat.fill(S::ZERO);
+        self.s_hat.fill(S::ZERO);
     }
 }
 
 /// 迭代求解器 trait
-pub trait IterativeSolver {
+pub trait IterativeSolver<S: RuntimeScalar> {
     /// 求解线性系统 Ax = b
     ///
     /// # 参数
@@ -255,13 +272,13 @@ pub trait IterativeSolver {
     /// # 返回
     ///
     /// 求解结果
-    fn solve<P: Preconditioner>(
+    fn solve<P: Preconditioner<S>>(
         &mut self,
-        matrix: &CsrMatrix,
-        b: &[f64],
-        x: &mut [f64],
+        matrix: &CsrMatrix<S>,
+        b: &[S],
+        x: &mut [S],
         precond: &P,
-    ) -> SolverResult;
+    ) -> SolverResult<S>;
 
     /// 获取求解器名称
     fn name(&self) -> &'static str;
@@ -270,15 +287,18 @@ pub trait IterativeSolver {
 /// 共轭梯度法求解器
 ///
 /// 适用于对称正定矩阵
-pub struct ConjugateGradient {
+pub struct ConjugateGradient<S: RuntimeScalar> {
     config: SolverConfig,
     // 工作向量
-    r: Vec<f64>,
-    p: Vec<f64>,
-    ap: Vec<f64>,
+    r: Vec<S>,
+    p: Vec<S>,
+    ap: Vec<S>,
 }
 
-impl ConjugateGradient {
+/// Legacy 类型别名，保持向后兼容
+pub type ConjugateGradientF64 = ConjugateGradient<f64>;
+
+impl<S: RuntimeScalar> ConjugateGradient<S> {
     /// 创建共轭梯度求解器
     pub fn new(config: SolverConfig) -> Self {
         Self {
@@ -292,23 +312,26 @@ impl ConjugateGradient {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![0.0; n];
-            self.p = vec![0.0; n];
-            self.ap = vec![0.0; n];
+            self.r = vec![S::ZERO; n];
+            self.p = vec![S::ZERO; n];
+            self.ap = vec![S::ZERO; n];
         }
     }
 }
 
-impl IterativeSolver for ConjugateGradient {
-    fn solve<P: Preconditioner>(
+impl<S: RuntimeScalar> IterativeSolver<S> for ConjugateGradient<S> {
+    fn solve<P: Preconditioner<S>>(
         &mut self,
-        matrix: &CsrMatrix,
-        b: &[f64],
-        x: &mut [f64],
+        matrix: &CsrMatrix<S>,
+        b: &[S],
+        x: &mut [S],
         _precond: &P,
-    ) -> SolverResult {
+    ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
+        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -317,13 +340,13 @@ impl IterativeSolver for ConjugateGradient {
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < self.config.atol {
+        if initial_norm < atol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: 0.0,
+                relative_residual: S::ZERO,
             };
         }
 
@@ -338,7 +361,7 @@ impl IterativeSolver for ConjugateGradient {
 
             // alpha = r'r / p'Ap
             let pap = dot(&self.p, &self.ap);
-            if pap.abs() < 1e-30 {
+            if pap.abs() < stag_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
@@ -360,11 +383,11 @@ impl IterativeSolver for ConjugateGradient {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("CG iter {}: residual = {:.6e}", iter + 1, res_norm);
+                log::trace!("CG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
             }
 
             // 检查收敛
-            if res_norm < self.config.atol || rel_res < self.config.rtol {
+            if res_norm < atol || rel_res < rtol {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -402,16 +425,19 @@ impl IterativeSolver for ConjugateGradient {
 /// 预条件共轭梯度法求解器
 ///
 /// 适用于对称正定矩阵，使用预条件器加速收敛
-pub struct PcgSolver {
+pub struct PcgSolver<S: RuntimeScalar> {
     config: SolverConfig,
     // 工作向量
-    r: Vec<f64>,
-    z: Vec<f64>,
-    p: Vec<f64>,
-    ap: Vec<f64>,
+    r: Vec<S>,
+    z: Vec<S>,
+    p: Vec<S>,
+    ap: Vec<S>,
 }
 
-impl PcgSolver {
+/// Legacy 类型别名，保持向后兼容
+pub type PcgSolverF64 = PcgSolver<f64>;
+
+impl<S: RuntimeScalar> PcgSolver<S> {
     /// 创建 PCG 求解器
     pub fn new(config: SolverConfig) -> Self {
         Self {
@@ -426,10 +452,10 @@ impl PcgSolver {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![0.0; n];
-            self.z = vec![0.0; n];
-            self.p = vec![0.0; n];
-            self.ap = vec![0.0; n];
+            self.r = vec![S::ZERO; n];
+            self.z = vec![S::ZERO; n];
+            self.p = vec![S::ZERO; n];
+            self.ap = vec![S::ZERO; n];
         }
     }
 
@@ -442,16 +468,19 @@ impl PcgSolver {
     /// - `x`: 解向量
     /// - `precond`: 预条件器
     /// - `ws`: 外部工作区
-    pub fn solve_with_workspace<P: Preconditioner>(
+    pub fn solve_with_workspace<P: Preconditioner<S>>(
         &self,
-        matrix: &CsrMatrix,
-        b: &[f64],
-        x: &mut [f64],
+        matrix: &CsrMatrix<S>,
+        b: &[S],
+        x: &mut [S],
         precond: &P,
-        ws: &mut CgWorkspace,
-    ) -> SolverResult {
+        ws: &mut CgWorkspace<S>,
+    ) -> SolverResult<S> {
         let n = b.len();
         ws.resize(n);
+        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut ws.r);
@@ -463,10 +492,10 @@ impl PcgSolver {
         let b_norm = norm2(b);
 
         // 鲁棒的收敛判据：处理 b_norm ≈ 0 的情况
-        let effective_tol = if b_norm < f64::MIN_POSITIVE {
-            self.config.atol
+        let effective_tol = if b_norm < S::MIN_POSITIVE {
+            atol
         } else {
-            self.config.atol.max(self.config.rtol * b_norm)
+            atol.max(rtol * b_norm)
         };
 
         if initial_norm < effective_tol {
@@ -475,7 +504,7 @@ impl PcgSolver {
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: 0.0,
+                relative_residual: S::ZERO,
             };
         }
 
@@ -493,16 +522,16 @@ impl PcgSolver {
 
             // alpha = r'z / p'Ap
             let pap = dot(&ws.p, &ws.ap);
-            if pap.abs() < 1e-30 {
+            if pap.abs() < stag_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
                     residual_norm: norm2(&ws.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: if initial_norm > 0.0 {
+                    relative_residual: if initial_norm > S::ZERO {
                         norm2(&ws.r) / initial_norm
                     } else {
-                        0.0
+                        S::ZERO
                     },
                 };
             }
@@ -518,7 +547,7 @@ impl PcgSolver {
             let res_norm = norm2(&ws.r);
 
             if self.config.verbose {
-                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm);
+                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
             }
 
             // 检查收敛
@@ -528,10 +557,10 @@ impl PcgSolver {
                     iterations: iter + 1,
                     residual_norm: res_norm,
                     initial_residual_norm: initial_norm,
-                    relative_residual: if initial_norm > 0.0 {
+                    relative_residual: if initial_norm > S::ZERO {
                         res_norm / initial_norm
                     } else {
-                        0.0
+                        S::ZERO
                     },
                 };
             }
@@ -555,25 +584,28 @@ impl PcgSolver {
             iterations: self.config.max_iter,
             residual_norm: norm2(&ws.r),
             initial_residual_norm: initial_norm,
-            relative_residual: if initial_norm > 0.0 {
+            relative_residual: if initial_norm > S::ZERO {
                 norm2(&ws.r) / initial_norm
             } else {
-                0.0
+                S::ZERO
             },
         }
     }
 }
 
-impl IterativeSolver for PcgSolver {
-    fn solve<P: Preconditioner>(
+impl<S: RuntimeScalar> IterativeSolver<S> for PcgSolver<S> {
+    fn solve<P: Preconditioner<S>>(
         &mut self,
-        matrix: &CsrMatrix,
-        b: &[f64],
-        x: &mut [f64],
+        matrix: &CsrMatrix<S>,
+        b: &[S],
+        x: &mut [S],
         precond: &P,
-    ) -> SolverResult {
+    ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
+        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -582,13 +614,13 @@ impl IterativeSolver for PcgSolver {
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < self.config.atol {
+        if initial_norm < atol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: 0.0,
+                relative_residual: S::ZERO,
             };
         }
 
@@ -606,7 +638,7 @@ impl IterativeSolver for PcgSolver {
 
             // alpha = r'z / p'Ap
             let pap = dot(&self.p, &self.ap);
-            if pap.abs() < 1e-30 {
+            if pap.abs() < stag_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
@@ -628,11 +660,11 @@ impl IterativeSolver for PcgSolver {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm);
+                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
             }
 
             // 检查收敛
-            if res_norm < self.config.atol || rel_res < self.config.rtol {
+            if res_norm < atol || rel_res < rtol {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -673,19 +705,22 @@ impl IterativeSolver for PcgSolver {
 /// 双共轭梯度稳定法求解器
 ///
 /// 适用于非对称矩阵
-pub struct BiCgStabSolver {
+pub struct BiCgStabSolver<S: RuntimeScalar> {
     config: SolverConfig,
     // 工作向量
-    r: Vec<f64>,
-    r0: Vec<f64>,
-    p: Vec<f64>,
-    v: Vec<f64>,
-    s: Vec<f64>,
-    t: Vec<f64>,
-    z: Vec<f64>,
+    r: Vec<S>,
+    r0: Vec<S>,
+    p: Vec<S>,
+    v: Vec<S>,
+    s: Vec<S>,
+    t: Vec<S>,
+    z: Vec<S>,
 }
 
-impl BiCgStabSolver {
+/// Legacy 类型别名，保持向后兼容
+pub type BiCgStabSolverF64 = BiCgStabSolver<f64>;
+
+impl<S: RuntimeScalar> BiCgStabSolver<S> {
     /// 创建 BiCGStab 求解器
     pub fn new(config: SolverConfig) -> Self {
         Self {
@@ -703,27 +738,31 @@ impl BiCgStabSolver {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![0.0; n];
-            self.r0 = vec![0.0; n];
-            self.p = vec![0.0; n];
-            self.v = vec![0.0; n];
-            self.s = vec![0.0; n];
-            self.t = vec![0.0; n];
-            self.z = vec![0.0; n];
+            self.r = vec![S::ZERO; n];
+            self.r0 = vec![S::ZERO; n];
+            self.p = vec![S::ZERO; n];
+            self.v = vec![S::ZERO; n];
+            self.s = vec![S::ZERO; n];
+            self.t = vec![S::ZERO; n];
+            self.z = vec![S::ZERO; n];
         }
     }
 }
 
-impl IterativeSolver for BiCgStabSolver {
-    fn solve<P: Preconditioner>(
+impl<S: RuntimeScalar> IterativeSolver<S> for BiCgStabSolver<S> {
+    fn solve<P: Preconditioner<S>>(
         &mut self,
-        matrix: &CsrMatrix,
-        b: &[f64],
-        x: &mut [f64],
+        matrix: &CsrMatrix<S>,
+        b: &[S],
+        x: &mut [S],
         precond: &P,
-    ) -> SolverResult {
+    ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
+        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let div_factor = S::from_config(1e6).unwrap_or(S::MAX);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -732,13 +771,13 @@ impl IterativeSolver for BiCgStabSolver {
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < self.config.atol {
+        if initial_norm < atol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: 0.0,
+                relative_residual: S::ZERO,
             };
         }
 
@@ -746,19 +785,19 @@ impl IterativeSolver for BiCgStabSolver {
         copy(&self.r, &mut self.r0);
 
         // 标准 BiCGStab: rho_old 用于计算 beta
-        let mut rho_old = 1.0;
-        let mut alpha = 1.0;
-        let mut omega = 1.0;
+        let mut rho_old = S::ONE;
+        let mut alpha = S::ONE;
+        let mut omega = S::ONE;
 
-        self.v.fill(0.0);
-        self.p.fill(0.0);
+        self.v.fill(S::ZERO);
+        self.p.fill(S::ZERO);
 
         for iter in 0..self.config.max_iter {
             // 计算 rho = (r0, r)
             let rho = dot(&self.r0, &self.r);
             
             // 检查 rho breakdown
-            if rho.abs() < 1e-30 {
+            if rho.abs() < stag_tol {
                 if iter == 0 {
                     // 初始残差与影子残差正交，已经收敛
                     return SolverResult {
@@ -766,7 +805,7 @@ impl IterativeSolver for BiCgStabSolver {
                         iterations: 0,
                         residual_norm: initial_norm,
                         initial_residual_norm: initial_norm,
-                        relative_residual: 0.0,
+                        relative_residual: S::ZERO,
                     };
                 }
                 return SolverResult {
@@ -781,7 +820,7 @@ impl IterativeSolver for BiCgStabSolver {
             // 计算 beta（第一次迭代时 beta = 0，因为 rho_old = 1, omega = 1）
             let beta = if iter == 0 {
                 // 首次迭代: p = r
-                0.0
+                S::ZERO
             } else {
                 // 标准公式: beta = (rho / rho_old) * (alpha / omega)
                 (rho / rho_old) * (alpha / omega)
@@ -803,7 +842,7 @@ impl IterativeSolver for BiCgStabSolver {
 
             // alpha = rho / (r0, v)
             let r0v = dot(&self.r0, &self.v);
-            if r0v.abs() < 1e-30 {
+            if r0v.abs() < stag_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
@@ -821,7 +860,7 @@ impl IterativeSolver for BiCgStabSolver {
 
             // 检查 s 的范数
             let s_norm = norm2(&self.s);
-            if s_norm < self.config.atol {
+            if s_norm < atol {
                 // x = x + alpha * z
                 axpy(alpha, &self.z, x);
                 return SolverResult {
@@ -841,14 +880,14 @@ impl IterativeSolver for BiCgStabSolver {
 
             // omega = (t, s) / (t, t)
             let tt = dot(&self.t, &self.t);
-            if tt.abs() < 1e-30 {
-                omega = 1.0;
+            if tt.abs() < stag_tol {
+                omega = S::ONE;
             } else {
                 omega = dot(&self.t, &self.s) / tt;
             }
             
             // 检查 omega breakdown（omega 过小会导致算法不稳定）
-            if omega.abs() < 1e-30 {
+            if omega.abs() < stag_tol {
                 // 只更新 x 的 alpha 部分后返回
                 precond.apply(&self.p, &mut self.z);
                 axpy(alpha, &self.z, x);
@@ -876,11 +915,11 @@ impl IterativeSolver for BiCgStabSolver {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("BiCGStab iter {}: residual = {:.6e}", iter + 1, res_norm);
+                log::trace!("BiCGStab iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
             }
 
             // 检查收敛
-            if res_norm < self.config.atol || rel_res < self.config.rtol {
+            if res_norm < atol || rel_res < rtol {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -891,7 +930,7 @@ impl IterativeSolver for BiCgStabSolver {
             }
 
             // 检查发散
-            if res_norm > initial_norm * 1e6 {
+            if res_norm > initial_norm * div_factor {
                 return SolverResult {
                     status: SolverStatus::Diverged,
                     iterations: iter + 1,
@@ -924,9 +963,9 @@ mod tests {
         IdentityPreconditioner, JacobiPreconditioner,
     };
 
-    fn create_spd_matrix(n: usize) -> CsrMatrix {
+    fn create_spd_matrix(n: usize) -> CsrMatrix<f64> {
         // 创建三对角对称正定矩阵
-        let mut builder = CsrBuilder::new_square(n);
+        let mut builder = CsrBuilder::<f64>::new_square(n);
         for i in 0..n {
             builder.set(i, i, 4.0);
             if i > 0 {
@@ -946,7 +985,7 @@ mod tests {
         let mut x = vec![0.0; 10];
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = ConjugateGradient::new(config);
+        let mut solver = ConjugateGradient::<f64>::new(config);
         let precond = IdentityPreconditioner::new();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
@@ -962,7 +1001,7 @@ mod tests {
         let mut x = vec![0.0; 10];
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = PcgSolver::new(config);
+        let mut solver = PcgSolver::<f64>::new(config);
         let precond = JacobiPreconditioner::from_matrix(&matrix);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
@@ -979,13 +1018,13 @@ mod tests {
         // CG
         let mut x_cg = vec![0.0; 50];
         let config = SolverConfig::new(1e-10, 200);
-        let mut cg_solver = ConjugateGradient::new(config.clone());
+        let mut cg_solver = ConjugateGradient::<f64>::new(config.clone());
         let ident = IdentityPreconditioner::new();
         let cg_result = cg_solver.solve(&matrix, &b, &mut x_cg, &ident);
 
         // PCG
         let mut x_pcg = vec![0.0; 50];
-        let mut pcg_solver = PcgSolver::new(config);
+        let mut pcg_solver = PcgSolver::<f64>::new(config);
         let precond = JacobiPreconditioner::from_matrix(&matrix);
         let pcg_result = pcg_solver.solve(&matrix, &b, &mut x_pcg, &precond);
 
@@ -1002,7 +1041,7 @@ mod tests {
         let mut x = vec![0.0; 10];
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = BiCgStabSolver::new(config);
+        let mut solver = BiCgStabSolver::<f64>::new(config);
         let precond = JacobiPreconditioner::from_matrix(&matrix);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
@@ -1022,7 +1061,7 @@ mod tests {
         let mut x = x_exact.clone();
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = PcgSolver::new(config);
+        let mut solver = PcgSolver::<f64>::new(config);
         let precond = IdentityPreconditioner::new();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
@@ -1033,7 +1072,7 @@ mod tests {
 
     #[test]
     fn test_solver_result() {
-        let result = SolverResult {
+        let result = SolverResult::<f64> {
             status: SolverStatus::Converged,
             iterations: 10,
             residual_norm: 1e-12,

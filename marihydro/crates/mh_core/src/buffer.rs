@@ -21,11 +21,21 @@ pub trait DeviceBuffer<T: Pod + Send + Sync>:
         self.len() == 0
     }
 
-    /// 获取切片引用
+    /// 获取切片引用（CPU直接返回）
     fn as_slice(&self) -> &[T];
 
-    /// 获取可变切片引用
+    /// 获取可变切片引用（CPU直接返回）
     fn as_slice_mut(&mut self) -> &mut [T];
+
+    /// 尝试获取切片引用（GPU安全方法，GPU返回None）
+    fn try_as_slice(&self) -> Option<&[T]> {
+        Some(self.as_slice())
+    }
+
+    /// 尝试获取可变切片引用（GPU安全方法，GPU返回None）
+    fn try_as_slice_mut(&mut self) -> Option<&mut [T]> {
+        Some(self.as_slice_mut())
+    }
 
     /// 填充值
     fn fill(&mut self, value: T);
@@ -35,6 +45,9 @@ pub trait DeviceBuffer<T: Pod + Send + Sync>:
 
     /// 复制到切片
     fn copy_to_slice(&self, dst: &mut [T]);
+
+    /// 复制到新Vec（GPU兼容）
+    fn copy_to_vec(&self) -> Vec<T>;
 
     /// 调整大小
     fn resize(&mut self, new_len: usize, value: T);
@@ -70,12 +83,18 @@ impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for Vec<T> {
 
     #[inline]
     fn copy_from_slice(&mut self, src: &[T]) {
-        self.as_mut_slice().copy_from_slice(src);
+        self.clear();
+        self.extend_from_slice(src);
     }
 
     #[inline]
     fn copy_to_slice(&self, dst: &mut [T]) {
-        dst.copy_from_slice(self.as_slice());
+        dst.copy_from_slice(self.as_ref());
+    }
+
+    #[inline]
+    fn copy_to_vec(&self) -> Vec<T> {
+        self.clone()
     }
 
     #[inline]
@@ -160,11 +179,16 @@ impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for CpuBuffer<T> {
     }
 
     fn copy_from_slice(&mut self, src: &[T]) {
-        self.data.copy_from_slice(src);
+        self.data.clear();
+        self.data.extend_from_slice(src);
     }
 
     fn copy_to_slice(&self, dst: &mut [T]) {
         dst.copy_from_slice(&self.data);
+    }
+
+    fn copy_to_vec(&self) -> Vec<T> {
+        self.data.clone()
     }
 
     fn resize(&mut self, new_len: usize, value: T) {

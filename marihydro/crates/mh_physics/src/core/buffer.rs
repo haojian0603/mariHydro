@@ -1,90 +1,121 @@
 //! marihydro\crates\mh_physics\src\core\buffer.rs
-//! 设备缓冲区抽象
+//! AlignedVec 包装器与 DeviceBuffer 实现
 //!
-//! 提供 CPU/GPU 统一的缓冲区接口。
+//! 本模块提供 `AlignedBuffer<T>` 作为 `mh_foundation::AlignedVec<T>` 的 newtype 包装，
+//! 从而满足孤儿规则，可以为本地类型实现外部 trait。
+//!
+//! # 设计说明
+//!
+//! 由于 `DeviceBuffer` trait 定义在 `mh_core`，`AlignedVec` 定义在 `mh_foundation`，
+//! 两者都是"外部"类型，无法直接实现。通过 newtype 包装绕过限制。
 
 use bytemuck::Pod;
+use mh_core::buffer::DeviceBuffer;
 use mh_foundation::memory::AlignedVec;
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 
-/// 设备缓冲区接口
-pub trait DeviceBuffer<T: Pod>: Clone + Send + Sync + Sized {
-    /// 缓冲区长度
-    fn len(&self) -> usize;
-    
-    /// 是否为空
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    
-    /// 从 Host 切片复制数据
-    fn copy_from_slice(&mut self, src: &[T]);
-    
-    /// 复制到 Host Vec
-    fn copy_to_vec(&self) -> Vec<T>;
-    
-    /// 获取只读切片（仅 CPU 有效，GPU 返回 None）
-    fn as_slice(&self) -> Option<&[T]>;
-    
-    /// 获取可变切片（仅 CPU 有效，GPU 返回 None）
-    fn as_slice_mut(&mut self) -> Option<&mut [T]>;
-    
-    /// 填充值
-    fn fill(&mut self, value: T);
+/// 对齐缓冲区 - AlignedVec 的 newtype 包装
+/// 
+/// 实现 `DeviceBuffer` trait，使其可以在泛型计算中使用。
+#[derive(Debug, Clone)]
+pub struct AlignedBuffer<T: Pod + Default> {
+    inner: AlignedVec<T>,
 }
 
-/// Vec<T> 作为 CPU 缓冲区
-impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for Vec<T> {
-    fn len(&self) -> usize {
-        Vec::len(self)
+impl<T: Pod + Default> AlignedBuffer<T> {
+    /// 创建指定长度的零初始化缓冲区
+    pub fn zeros(len: usize) -> Self {
+        Self {
+            inner: AlignedVec::zeros(len),
+        }
     }
     
-    fn copy_from_slice(&mut self, src: &[T]) {
-        self.clear();
-        self.extend_from_slice(src);
+    /// 从 AlignedVec 创建
+    pub fn from_aligned_vec(inner: AlignedVec<T>) -> Self {
+        Self { inner }
     }
     
-    fn copy_to_vec(&self) -> Vec<T> {
-        self.clone()
+    /// 转换为 AlignedVec
+    pub fn into_inner(self) -> AlignedVec<T> {
+        self.inner
     }
     
-    fn as_slice(&self) -> Option<&[T]> {
-        Some(self.as_ref())
+    /// 获取内部 AlignedVec 引用
+    pub fn inner(&self) -> &AlignedVec<T> {
+        &self.inner
     }
     
-    fn as_slice_mut(&mut self) -> Option<&mut [T]> {
-        Some(self.as_mut())
-    }
-    
-    fn fill(&mut self, value: T) {
-        self.iter_mut().for_each(|x| *x = value);
+    /// 获取内部 AlignedVec 可变引用
+    pub fn inner_mut(&mut self) -> &mut AlignedVec<T> {
+        &mut self.inner
     }
 }
 
-/// AlignedVec 适配器（复用现有类型）
-impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for AlignedVec<T> {
+impl<T: Pod + Default> Deref for AlignedBuffer<T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_slice()
+    }
+}
+
+impl<T: Pod + Default> DerefMut for AlignedBuffer<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut_slice()
+    }
+}
+
+impl<T: Pod + Default> Index<usize> for AlignedBuffer<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.inner.as_slice()[index]
+    }
+}
+
+impl<T: Pod + Default> IndexMut<usize> for AlignedBuffer<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.inner.as_mut_slice()[index]
+    }
+}
+
+impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for AlignedBuffer<T> {
     fn len(&self) -> usize {
-        AlignedVec::len(self)
+        self.inner.len()
     }
     
-    fn copy_from_slice(&mut self, src: &[T]) {
-        self.as_mut_slice().copy_from_slice(src);
+    fn as_slice(&self) -> &[T] {
+        self.inner.as_slice()
     }
     
-    fn copy_to_vec(&self) -> Vec<T> {
-        self.as_slice().to_vec()
-    }
-    
-    fn as_slice(&self) -> Option<&[T]> {
-        Some(AlignedVec::as_slice(self))
-    }
-    
-    fn as_slice_mut(&mut self) -> Option<&mut [T]> {
-        Some(AlignedVec::as_mut_slice(self))
+    fn as_slice_mut(&mut self) -> &mut [T] {
+        self.inner.as_mut_slice()
     }
     
     fn fill(&mut self, value: T) {
-        // 使用切片的 fill 方法
-        self.as_mut_slice().fill(value);
+        self.inner.as_mut_slice().fill(value);
+    }
+    
+    fn copy_from_slice(&mut self, src: &[T]) {
+        // 如果长度不匹配，先调整大小
+        if self.inner.len() != src.len() {
+            self.inner.resize(src.len());
+        }
+        self.inner.as_mut_slice().copy_from_slice(src);
+    }
+    
+    fn copy_to_slice(&self, dst: &mut [T]) {
+        dst.copy_from_slice(self.inner.as_slice());
+    }
+    
+    fn copy_to_vec(&self) -> Vec<T> {
+        self.inner.as_slice().to_vec()
+    }
+    
+    fn resize(&mut self, new_len: usize, _value: T) {
+        self.inner.resize(new_len);
+    }
+    
+    fn clear(&mut self) {
+        self.inner.resize(0);
     }
 }
 
@@ -93,8 +124,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vec_buffer() {
-        let mut buf: Vec<f64> = vec![0.0; 10];
+    fn test_aligned_buffer() {
+        let mut buf: AlignedBuffer<f64> = AlignedBuffer::zeros(10);
         buf.fill(1.0);
         assert_eq!(buf[0], 1.0);
         assert_eq!(DeviceBuffer::len(&buf), 10);

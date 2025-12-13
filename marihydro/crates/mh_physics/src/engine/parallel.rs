@@ -67,7 +67,7 @@ pub struct ParallelFluxConfig {
     /// 数值参数
     pub params: NumericalParams,
     /// 重力加速度
-    pub g: f64,
+    pub g: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小并行面数（低于此值使用串行）
     pub min_parallel_size: usize,
     /// 并行策略
@@ -107,7 +107,7 @@ impl ParallelFluxConfigBuilder {
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self {
+    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
         self.config.g = g;
         self
     }
@@ -663,7 +663,7 @@ impl ParallelFluxCalculatorBuilder {
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self {
+    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
         self.config.g = g;
         self
     }

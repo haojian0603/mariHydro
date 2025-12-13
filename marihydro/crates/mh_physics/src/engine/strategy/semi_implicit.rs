@@ -159,7 +159,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         state: &mut ShallowWaterStateGeneric<CpuBackend<f64>>,
         mesh: &dyn MeshTopology<CpuBackend<f64>>,
         _workspace: &mut SolverWorkspaceGeneric<CpuBackend<f64>>,
-        dt: f64,
+        dt: f64, // ALLOW_F64: 时间步长
     ) -> StepResult<f64> {
         let n_cells = mesh.n_cells();
         self.ensure_capacity(n_cells);
@@ -374,7 +374,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         &self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
         mesh: &dyn MeshTopology<CpuBackend<f64>>,
-        cfl: f64,
+        cfl: f64, // ALLOW_F64: 物理参数
     ) -> f64 {
         let h: &[f64] = &state.h;
         let hu: &[f64] = &state.hu;

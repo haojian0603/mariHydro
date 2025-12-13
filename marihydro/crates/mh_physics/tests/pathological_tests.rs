@@ -50,7 +50,7 @@ const VEL_MAX: f64 = 1e3;
 ///
 /// # Panics
 /// 当`n == 0`或`diag <= off_diag_sum`时panic
-fn build_dominant_matrix(n: usize, diag: f64, off_diag: f64) -> CsrMatrix {
+fn build_dominant_matrix(n: usize, diag: f64, off_diag: f64) -> CsrMatrix<f64> {
     assert!(n > 0, "矩阵维度必须为正");
     assert!(diag > 2.0 * off_diag.abs(), "必须严格对角占优");
 
@@ -83,7 +83,7 @@ fn build_dominant_matrix(n: usize, diag: f64, off_diag: f64) -> CsrMatrix {
 }
 
 /// 构建奇异性测试矩阵（条件数>1e12）
-fn build_near_singular_matrix(n: usize) -> CsrMatrix {
+fn build_near_singular_matrix(n: usize) -> CsrMatrix<f64> {
     let epsilon = 1e-12;
     let mut row_ptr = vec![0usize; n + 1];
     let mut col_idx = Vec::new();
@@ -113,7 +113,7 @@ fn build_near_singular_matrix(n: usize) -> CsrMatrix {
 }
 
 /// 构建对称正定矩阵（用于收敛性验证）
-fn build_spd_matrix(n: usize) -> CsrMatrix {
+fn build_spd_matrix(n: usize) -> CsrMatrix<f64> {
     let mut rng = thread_rng();
 
     let mut row_ptr = vec![0usize; n + 1];
@@ -193,9 +193,9 @@ fn test_zero_rhs_instant_convergence() {
     );
     // 解应该接近零
     assert!(
-        x_nonzero.iter().all(|v| v.abs() < 1e-8),
+        x_nonzero.iter().all(|v: &f64| v.abs() < 1e-8),
         "解应接近零，实际最大值: {}",
-        x_nonzero.iter().map(|v| v.abs()).fold(0.0_f64, |a, b| a.max(b))
+        x_nonzero.iter().map(|v: &f64| v.abs()).fold(0.0_f64, |a, b| a.max(b))
     );
 }
 
@@ -228,7 +228,7 @@ fn test_ill_conditioned_matrix_stability() {
                 "收敛残差未达标: {}",
                 result.residual_norm
             );
-            assert!(x.iter().all(|v| v.is_finite()), "解包含非有限值");
+            assert!(x.iter().all(|v: &f64| v.is_finite()), "解包含非有限值");
         }
         SolverStatus::MaxIterationsReached => {
             // 病态矩阵可能不收敛，但不应panic
@@ -494,7 +494,7 @@ fn test_solver_on_singular_matrix() {
 
     // 解必须有限
     assert!(
-        x.iter().all(|v| v.is_finite()),
+        x.iter().all(|v: &f64| v.is_finite()),
         "奇异矩阵求解产生非有限值"
     );
 }
@@ -653,8 +653,8 @@ fn test_convergence_criteria_edge_cases() {
     let b_tiny = vec![1e-16; 10];
     let b_zero = vec![0.0; 10];
 
-    let rel_res_tiny = relative_residual(&r, &b_tiny);
-    let rel_res_zero = relative_residual(&r, &b_zero);
+    let rel_res_tiny: f64 = relative_residual(&r, &b_tiny);
+    let rel_res_zero: f64 = relative_residual(&r, &b_zero);
 
     // 当|b|≈0时，应使用绝对值
     assert!(rel_res_tiny.is_finite(), "极小b_norm应产生有限相对残差");

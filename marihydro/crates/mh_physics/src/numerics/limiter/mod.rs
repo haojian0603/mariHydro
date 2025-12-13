@@ -2,7 +2,8 @@
 //!
 //! 提供梯度限制器用于控制二阶精度重构的振荡:
 //!
-//! - `SlopeLimiter` - 限制器 trait 定义
+//! - `SlopeLimiterGeneric<S>` - 泛型限制器 trait (Layer 3 使用)
+//! - `SlopeLimiter` - f64 版本别名
 //! - `NoLimiter` - 无限制（一阶精度）
 //! - `BarthJespersen` - Barth-Jespersen 限制器（严格 TVD）
 //! - `Venkatakrishnan` - Venkatakrishnan 限制器（光滑，保单调）
@@ -11,7 +12,7 @@
 //! ## 使用方式
 //!
 //! ```ignore
-//! use mh_physics::numerics::limiter::{SlopeLimiter, Venkatakrishnan};
+//! use mh_physics::numerics::limiter::{SlopeLimiterGeneric, Venkatakrishnan};
 //!
 //! let limiter = Venkatakrishnan::new(5.0, mesh_scale);
 //! let alpha = limiter.compute_limiter(
@@ -33,7 +34,12 @@ mod barth_jespersen;
 mod venkatakrishnan;
 mod minmod;
 
+// Generic API (Layer 3) - Primary
+pub use traits::{SlopeLimiterGeneric, LimiterContextGeneric, NoLimiterGeneric};
+
+// f64 type aliases for convenience
 pub use traits::{SlopeLimiter, LimiterContext, NoLimiter};
+
 pub use barth_jespersen::BarthJespersen;
 pub use venkatakrishnan::Venkatakrishnan;
 pub use minmod::Minmod;
@@ -48,11 +54,11 @@ use crate::types::LimiterType;
 /// * `mesh_scale` - 网格特征尺度 (对 Venkatakrishnan 使用)
 pub fn create_limiter(
     limiter_type: LimiterType, 
-    k: f64, 
-    mesh_scale: f64,
-) -> Box<dyn SlopeLimiter + Send + Sync> {
+    k: f64, // ALLOW_F64: 配置参数，配合 PhysicsMesh (DVec2) 使用
+    mesh_scale: f64, // ALLOW_F64: 网格尺度，来自 PhysicsMesh
+) -> Box<dyn SlopeLimiterGeneric<f64> + Send + Sync> { // ALLOW_F64: 返回 f64 版本限制器
     match limiter_type {
-        LimiterType::None => Box::new(NoLimiter),
+        LimiterType::None => Box::new(NoLimiter::new()),
         LimiterType::BarthJespersen => Box::new(BarthJespersen::new()),
         LimiterType::Venkatakrishnan => Box::new(Venkatakrishnan::new(k, mesh_scale)),
         LimiterType::Minmod => Box::new(Minmod::new()),

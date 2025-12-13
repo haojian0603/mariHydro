@@ -36,12 +36,14 @@ pub enum WeirType {
     /// 实用堰（Cd ≈ 0.40-0.48）
     Practical,
     /// 自定义流量系数
+    // ALLOW_F64: Layer 4 配置参数
     Custom { cd: f64 },
 }
 
 
 impl WeirType {
     /// 获取流量系数
+    // ALLOW_F64: 源项计算
     pub fn discharge_coefficient(&self) -> f64 {
         match self {
             Self::BroadCrested => 0.35,
@@ -62,7 +64,7 @@ pub struct WeirConfig {
     /// 物理常量（唯一真理源）
     pub constants: PhysicalConstants,
     /// 最小水头 [m]
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for WeirConfig {
@@ -85,19 +87,19 @@ pub struct WeirFlow {
     /// 单元数
     n_cells: usize,
     /// 堰顶高程场 [m]
-    pub crest_elevation: AlignedVec<f64>,
+    pub crest_elevation: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 堰宽度场 [m]（通常等于单元宽度）
-    pub weir_width: AlignedVec<f64>,
+    pub weir_width: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 流量系数场（覆盖默认值）
-    pub cd_field: AlignedVec<f64>,
+    pub cd_field: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 堰法向（指向下游）x 分量
-    pub normal_x: AlignedVec<f64>,
+    pub normal_x: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 堰法向 y 分量
-    pub normal_y: AlignedVec<f64>,
+    pub normal_y: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 单元面积 [m²]
-    pub cell_area: AlignedVec<f64>,
+    pub cell_area: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 计算得到的过堰流量 [m³/s]
-    discharge: AlignedVec<f64>,
+    discharge: AlignedVec<f64>, // ALLOW_F64: 源项计算
 }
 
 impl WeirFlow {
@@ -133,10 +135,10 @@ impl WeirFlow {
     pub fn set_weir(
         &mut self,
         cell: usize,
-        crest: f64,
-        width: f64,
-        cd: Option<f64>,
-        normal: (f64, f64),
+        crest: f64, // ALLOW_F64: 物理参数
+        width: f64, // ALLOW_F64: 物理参数
+        cd: Option<f64>, // ALLOW_F64: 物理参数
+        normal: (f64, f64), // ALLOW_F64: 几何参数
     ) {
         if cell < self.n_cells {
             self.crest_elevation[cell] = crest;
@@ -157,6 +159,7 @@ impl WeirFlow {
     ///
     /// # 返回
     /// 流量 [m³/s]，正值表示流向法向正方向
+    // ALLOW_F64: 源项计算
     pub fn compute_discharge(&self, cell: usize, water_level: f64) -> f64 {
         let crest = self.crest_elevation[cell];
         if crest.is_infinite() {
@@ -185,9 +188,9 @@ impl WeirFlow {
     pub fn compute_discharge_submerged(
         &self,
         cell: usize,
-        h_upstream: f64,
-        h_downstream: f64,
-    ) -> f64 {
+        h_upstream: f64, // ALLOW_F64: 源项计算
+        h_downstream: f64, // ALLOW_F64: 源项计算
+    ) -> f64 { // ALLOW_F64: 源项计算
         if h_upstream < self.config.h_min {
             return 0.0;
         }
@@ -203,6 +206,7 @@ impl WeirFlow {
     }
 
     /// 从水头计算流量
+    // ALLOW_F64: 源项计算
     fn compute_discharge_from_head(&self, cell: usize, head: f64) -> f64 {
         let cd = self.cd_field[cell];
         let width = self.weir_width[cell];

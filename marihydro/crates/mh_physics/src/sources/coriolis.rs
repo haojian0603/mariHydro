@@ -22,9 +22,11 @@
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
+// ALLOW_F64: 数学常数
 use std::f64::consts::PI;
 
 /// 地球角速度 [rad/s]
+// ALLOW_F64: 物理常数
 pub const EARTH_ANGULAR_VELOCITY: f64 = 7.2921e-5;
 
 /// 科氏力源项配置
@@ -33,7 +35,7 @@ pub struct CoriolisConfig {
     /// 是否启用
     pub enabled: bool,
     /// 科氏参数 f = 2ω sin(lat) [rad/s]
-    pub f: f64,
+    pub f: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否使用精确旋转（否则使用线性近似）
     pub use_exact_rotation: bool,
 }
@@ -43,6 +45,7 @@ impl CoriolisConfig {
     ///
     /// # Arguments
     /// * `f` - 科氏参数 [rad/s]
+    // ALLOW_F64: 物理参数
     pub fn new(f: f64) -> Self {
         Self {
             enabled: true,
@@ -55,6 +58,7 @@ impl CoriolisConfig {
     ///
     /// # Arguments
     /// * `lat_deg` - 纬度 [度]
+    // ALLOW_F64: 物理参数
     pub fn from_latitude(lat_deg: f64) -> Self {
         let f = 2.0 * EARTH_ANGULAR_VELOCITY * (lat_deg * PI / 180.0).sin();
         Self::new(f)
@@ -140,11 +144,13 @@ pub struct CoriolisSource;
 
 impl CoriolisSource {
     /// 创建新的科氏力配置
+    // ALLOW_F64: 物理参数
     pub fn new(f: f64) -> CoriolisConfig {
         CoriolisConfig::new(f)
     }
 
     /// 从纬度创建配置
+    // ALLOW_F64: 物理参数
     pub fn from_latitude(lat_deg: f64) -> CoriolisConfig {
         CoriolisConfig::from_latitude(lat_deg)
     }

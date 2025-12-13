@@ -93,13 +93,13 @@ impl<B: Backend + Clone> ExplicitStrategy<B> {
 /// HLL 通量计算结果
 struct HllFlux {
     /// 质量通量
-    f_h: f64,
+    f_h: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// x 方向动量通量
-    f_hu: f64,
+    f_hu: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// y 方向动量通量
-    f_hv: f64,
+    f_hv: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 最大波速
-    max_speed: f64,
+    max_speed: f64, // ALLOW_F64: 与 PhysicsMesh 配合
 }
 
 /// 计算 HLL 数值通量
@@ -120,11 +120,11 @@ struct HllFlux {
 /// 返回 HLL 通量结构，包含质量和动量通量以及最大波速
 #[inline]
 fn compute_hll_flux(
-    h_l: f64, u_l: f64, v_l: f64,
-    h_r: f64, u_r: f64, v_r: f64,
-    normal: [f64; 2],
-    gravity: f64,
-    h_dry: f64,
+    h_l: f64, u_l: f64, v_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+    h_r: f64, u_r: f64, v_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+    normal: [f64; 2], // ALLOW_F64: 与 PhysicsMesh 配合
+    gravity: f64, // ALLOW_F64: 物理参数
+    h_dry: f64, // ALLOW_F64: 物理参数
 ) -> HllFlux {
     // 投影到法向的速度分量
     let un_l = u_l * normal[0] + v_l * normal[1];
@@ -186,7 +186,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         state: &mut ShallowWaterStateGeneric<CpuBackend<f64>>,
         mesh: &dyn MeshTopology<CpuBackend<f64>>,
         workspace: &mut SolverWorkspaceGeneric<CpuBackend<f64>>,
-        dt: f64,
+        dt: f64, // ALLOW_F64: 时间步长
     ) -> StepResult<f64> {
         // ========== 第1步：重置工作区 ==========
         workspace.reset();
@@ -349,7 +349,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         &self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
         mesh: &dyn MeshTopology<CpuBackend<f64>>,
-        cfl: f64,
+        cfl: f64, // ALLOW_F64: 物理参数
     ) -> f64 {
         let h: &[f64] = &state.h;
         let hu: &[f64] = &state.hu;

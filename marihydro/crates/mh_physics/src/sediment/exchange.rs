@@ -65,69 +65,39 @@ impl<B: Backend> SedimentExchange<B> {
         let erosion_rate = self.params.erosion_rate;
         let settling_velocity = self.params.settling_velocity;
         
-        if let (
-            Some(tau_slice),
-            Some(conc_slice),
-            Some(depth_slice),
-            Some(flux_slice),
-            Some(ero_slice),
-            Some(dep_slice),
-        ) = (
-            tau_bed.as_slice(),
-            concentration.as_slice(),
-            depth.as_slice(),
-            self.flux.as_slice_mut(),
-            self.erosion.as_slice_mut(),
-            self.deposition.as_slice_mut(),
-        ) {
-            for i in 0..n {
-                if depth_slice[i] <= zero {
-                    flux_slice[i] = zero;
-                    ero_slice[i] = zero;
-                    dep_slice[i] = zero;
-                    continue;
-                }
-                // 内联计算侵蚀率（Partheniades公式）
-                let e_rate = if tau_slice[i] > tau_critical {
-                    erosion_rate * (tau_slice[i] - tau_critical)
-                } else {
-                    zero
-                };
-                // 内联计算沉降率
-                let d_rate = settling_velocity * conc_slice[i];
-                ero_slice[i] = e_rate;
-                dep_slice[i] = d_rate;
-                flux_slice[i] = e_rate - d_rate;
+        let tau_slice = tau_bed.as_slice();
+        let conc_slice = concentration.as_slice();
+        let depth_slice = depth.as_slice();
+        let flux_slice = self.flux.as_slice_mut();
+        let ero_slice = self.erosion.as_slice_mut();
+        let dep_slice = self.deposition.as_slice_mut();
+        
+        for i in 0..n {
+            if depth_slice[i] <= zero {
+                flux_slice[i] = zero;
+                ero_slice[i] = zero;
+                dep_slice[i] = zero;
+                continue;
             }
-        } else {
-            let tau_host = tau_bed.copy_to_vec();
-            let conc_host = concentration.copy_to_vec();
-            let depth_host = depth.copy_to_vec();
-            let mut flux_host = vec![zero; n];
-            let mut ero_host = vec![zero; n];
-            let mut dep_host = vec![zero; n];
-            for i in 0..n {
-                if depth_host[i] <= zero {
-                    continue;
-                }
-                let e_rate = self.compute_erosion_rate(tau_host[i]);
-                let d_rate = self.compute_deposition_rate(conc_host[i]);
-                ero_host[i] = e_rate;
-                dep_host[i] = d_rate;
-                flux_host[i] = e_rate - d_rate;
-            }
-            self.flux.copy_from_slice(&flux_host);
-            self.erosion.copy_from_slice(&ero_host);
-            self.deposition.copy_from_slice(&dep_host);
+            // 内联计算侵蚀率（Partheniades公式）
+            let e_rate = if tau_slice[i] > tau_critical {
+                erosion_rate * (tau_slice[i] - tau_critical)
+            } else {
+                zero
+            };
+            // 内联计算沉降率
+            let d_rate = settling_velocity * conc_slice[i];
+            ero_slice[i] = e_rate;
+            dep_slice[i] = d_rate;
+            flux_slice[i] = e_rate - d_rate;
         }
 
-        if let Some(slice) = self.flux.as_slice() {
-            let added = slice
-                .iter()
-                .take(n)
-                .fold(0.0, |acc, &v| acc + v.to_f64());
-            self.cumulative_exchange += <B::Scalar as Scalar>::from_config(added).unwrap_or(B::Scalar::ZERO);
-        }
+        let slice = self.flux.as_slice();
+        let added = slice
+            .iter()
+            .take(n)
+            .fold(0.0, |acc, &v| acc + v.to_f64());
+        self.cumulative_exchange += <B::Scalar as Scalar>::from_config(added).unwrap_or(B::Scalar::ZERO);
     }
     
     /// 获取净交换通量
@@ -155,22 +125,12 @@ impl<B: Backend> SedimentExchange<B> {
         cell_areas: &B::Buffer<B::Scalar>,
     ) {
         let n = bed_mass.len().min(self.flux.len()).min(cell_areas.len());
-        if let (Some(bed_slice), Some(flux_slice), Some(area_slice)) = (
-            bed_mass.as_slice_mut(),
-            self.flux.as_slice(),
-            cell_areas.as_slice(),
-        ) {
-            for i in 0..n {
-                bed_slice[i] += flux_slice[i] * dt * area_slice[i];
-            }
-        } else {
-            let mut bed_host = bed_mass.copy_to_vec();
-            let flux_host = self.flux.copy_to_vec();
-            let area_host = cell_areas.copy_to_vec();
-            for i in 0..n {
-                bed_host[i] += flux_host[i] * dt * area_host[i];
-            }
-            bed_mass.copy_from_slice(&bed_host[..n]);
+        let bed_slice = bed_mass.as_slice_mut();
+        let flux_slice = self.flux.as_slice();
+        let area_slice = cell_areas.as_slice();
+        
+        for i in 0..n {
+            bed_slice[i] += flux_slice[i] * dt * area_slice[i];
         }
     }
     
@@ -185,36 +145,19 @@ impl<B: Backend> SedimentExchange<B> {
     ) {
         let n = concentration.len().min(depth.len()).min(self.flux.len());
         let zero = B::Scalar::ZERO;
-        if let (Some(conc_slice), Some(depth_slice), Some(flux_slice)) = (
-            concentration.as_slice_mut(),
-            depth.as_slice(),
-            self.flux.as_slice(),
-        ) {
-            for i in 0..n {
-                let h = depth_slice[i];
-                if h <= zero {
-                    continue;
-                }
-                conc_slice[i] -= flux_slice[i] * dt / h;
-                if conc_slice[i] < zero {
-                    conc_slice[i] = zero;
-                }
+        let conc_slice = concentration.as_slice_mut();
+        let depth_slice = depth.as_slice();
+        let flux_slice = self.flux.as_slice();
+        
+        for i in 0..n {
+            let h = depth_slice[i];
+            if h <= zero {
+                continue;
             }
-        } else {
-            let mut conc_host = concentration.copy_to_vec();
-            let depth_host = depth.copy_to_vec();
-            let flux_host = self.flux.copy_to_vec();
-            for i in 0..n {
-                let h = depth_host[i];
-                if h <= zero {
-                    continue;
-                }
-                conc_host[i] -= flux_host[i] * dt / h;
-                if conc_host[i] < zero {
-                    conc_host[i] = zero;
-                }
+            conc_slice[i] -= flux_slice[i] * dt / h;
+            if conc_slice[i] < zero {
+                conc_slice[i] = zero;
             }
-            concentration.copy_from_slice(&conc_host[..n]);
         }
     }
     

@@ -48,7 +48,7 @@ pub struct BoundaryFaceInfo {
     pub normal: DVec2,
 
     /// 面长度 [m]
-    pub length: f64,
+    pub length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
 
     /// 所属边界条件的索引
     pub boundary_idx: usize,
@@ -60,7 +60,7 @@ impl BoundaryFaceInfo {
         face_id: usize,
         cell_id: usize,
         normal: DVec2,
-        length: f64,
+        length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
         boundary_idx: usize,
     ) -> Self {
         Self {
@@ -89,6 +89,7 @@ pub trait BoundaryDataProvider: Send + Sync {
     ///
     /// # 返回
     /// 强迫数据，若无数据返回 None
+    // ALLOW_F64: 时间参数与模拟进度配合
     fn get_forcing(&self, face_id: usize, time: f64) -> Option<ExternalForcing>;
 
     /// 批量获取强迫数据
@@ -97,7 +98,7 @@ pub trait BoundaryDataProvider: Send + Sync {
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
-        time: f64,
+        time: f64, // ALLOW_F64: 时间参数与模拟进度配合
         output: &mut [ExternalForcing],
     ) {
         debug_assert_eq!(face_ids.len(), output.len());
@@ -121,20 +122,21 @@ impl ConstantForcingProvider {
     }
 
     /// 创建仅水位的恒定提供者
+    // ALLOW_F64: Layer 4 配置 API
     pub fn with_eta(eta: f64) -> Self {
         Self::new(ExternalForcing::with_eta(eta))
     }
 }
 
 impl BoundaryDataProvider for ConstantForcingProvider {
-    fn get_forcing(&self, _face_id: usize, _time: f64) -> Option<ExternalForcing> {
+    fn get_forcing(&self, _face_id: usize, _time: f64) -> Option<ExternalForcing> { // ALLOW_F64: 时间参数
         Some(self.forcing)
     }
 
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
-        _time: f64,
+        _time: f64, // ALLOW_F64: 时间参数与模拟进度配合
         output: &mut [ExternalForcing],
     ) {
         output[..face_ids.len()].fill(self.forcing);
@@ -267,7 +269,7 @@ impl BoundaryManager {
         face_id: usize,
         cell_id: usize,
         normal: DVec2,
-        length: f64,
+        length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
         boundary_name: &str,
     ) -> Result<(), BoundaryError> {
         let boundary_idx = *self
@@ -301,6 +303,7 @@ impl BoundaryManager {
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
+    // ALLOW_F64: 与 BoundaryParams 和 DVec2 配合使用
     pub fn compute_wall_flux(&self, h_interior: f64, normal: DVec2) -> (f64, DVec2) {
         // 质量通量为零（无穿透）
         let mass_flux = 0.0;
@@ -328,10 +331,10 @@ impl BoundaryManager {
     pub fn compute_flather_flux(
         &self,
         interior: ConservedState,
-        z_interior: f64,
+        z_interior: f64, // ALLOW_F64: 与 BoundaryParams、ConservedState 和 DVec2 配合使用
         external: &ExternalForcing,
         normal: DVec2,
-    ) -> (f64, DVec2) {
+    ) -> (f64, DVec2) { // ALLOW_F64: 与 DVec2 配合
         let h = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h);
 
@@ -396,11 +399,11 @@ impl BoundaryManager {
     /// (质量通量, 动量通量向量)
     pub fn compute_inflow_flux(
         &self,
-        h_interior: f64,
-        discharge: f64,
-        face_length: f64,
+        h_interior: f64, // ALLOW_F64: 与 BoundaryParams 和 DVec2 配合使用
+        discharge: f64, // ALLOW_F64: 入流流量参数
+        face_length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
         normal: DVec2,
-    ) -> (f64, DVec2) {
+    ) -> (f64, DVec2) { // ALLOW_F64: 与 DVec2 配合
         // 入流流量（负号因为入流方向与法向相反）
         let qn = -discharge / face_length.max(1e-10);
 
@@ -524,7 +527,10 @@ pub enum BoundaryError {
 
     /// 边界面法向量未单位化
     #[error("边界面 {face_id} 法向量未单位化，模长为 {magnitude}")]
-    InvalidNormal { face_id: usize, magnitude: f64 },
+    InvalidNormal {
+        face_id: usize,
+        magnitude: f64, // ALLOW_F64: 错误信息中的幅度值
+    },
 
     /// 重复的边界面
     #[error("重复的边界面: {0}")]

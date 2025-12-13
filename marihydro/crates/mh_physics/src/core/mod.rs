@@ -4,11 +4,15 @@
 //!
 //! # 模块结构
 //!
-//! - [`buffer`]: 设备缓冲区抽象
-//! - [`backend`]: 计算后端抽象 (CPU/GPU)
+//! - [`buffer`]: AlignedVec 的 DeviceBuffer 实现（扩展 mh_core）
 //! - [`dimension`]: 维度标记 (2D/3D)
 //! - [`kernel`]: GPU Kernel 接口规范
 //! - [`gpu`]: GPU 后端占位符
+//!
+//! # 设计原则
+//!
+//! 所有核心抽象（Backend, DeviceBuffer, RuntimeScalar）统一定义在 mh_core，
+//! 本模块仅提供维度标记、GPU扩展、AlignedVec支持等 physics 层专用类型。
 //!
 //! # 使用示例
 //!
@@ -26,16 +30,20 @@
 //! assert!((y[0] - 2.5).abs() < 1e-10);
 //! ```
 
+// AlignedVec 的 DeviceBuffer 实现
 pub mod buffer;
-pub mod backend;
 pub mod dimension;
 pub mod kernel;
 pub mod gpu;
 
-// 重导出常用类型
-// 注意：Scalar trait 应从 mh_core 导入
-pub use buffer::DeviceBuffer;
-pub use backend::{Backend, CpuBackend, DefaultBackend, MemoryLocation};
+// 从 mh_core 重导出核心抽象（Single Source of Truth）
+pub use mh_core::buffer::DeviceBuffer;
+pub use mh_core::backend::{Backend, CpuBackend, MemoryLocation, DefaultBackend};
+
+// AlignedBuffer - AlignedVec 的 DeviceBuffer 适配器
+pub use buffer::AlignedBuffer;
+
+// 本模块专有类型
 pub use dimension::{Dimension, D2, D3};
 pub use kernel::{KernelSpec, KernelPriority, TransferPolicy, CORE_KERNELS};
 pub use gpu::{CudaError, GpuDeviceInfo, available_gpus, has_cuda};

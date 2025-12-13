@@ -211,6 +211,7 @@ impl BoundaryCondition {
     /// let bc = BoundaryCondition::river_inflow("yangtze", 30000.0);
     /// assert_eq!(bc.fixed_discharge, Some(30000.0));
     /// ```
+    // ALLOW_F64: Layer 4 配置 API
     pub fn river_inflow(name: impl Into<String>, discharge: f64) -> Self {
         Self {
             name: name.into(),
@@ -253,18 +254,21 @@ impl BoundaryCondition {
     }
 
     /// 设置固定水位
+    // ALLOW_F64: Layer 4 配置 API
     pub fn with_fixed_eta(mut self, eta: f64) -> Self {
         self.fixed_eta = Some(eta);
         self
     }
 
     /// 设置固定流量
+    // ALLOW_F64: Layer 4 配置 API
     pub fn with_fixed_discharge(mut self, discharge: f64) -> Self {
         self.fixed_discharge = Some(discharge);
         self
     }
 
     /// 设置曼宁粗糙度
+    // ALLOW_F64: Layer 4 配置 API
     pub fn with_manning_n(mut self, n: f64) -> Self {
         self.manning_n = Some(n);
         self
@@ -284,10 +288,11 @@ impl Default for BoundaryCondition {
 /// 外部强迫数据
 ///
 /// 边界处的水位和速度数据，用于 OpenSea、RiverInflow 等边界条件。
+// ALLOW_F64: 边界强迫数据与 DVec2 配合使用
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ExternalForcing {
     /// 水位 [m]
-    pub eta: f64,
+    pub eta: f64, // ALLOW_F64: 边界数据结构
 
     /// 速度向量 [m/s]
     pub velocity: DVec2,
@@ -307,7 +312,7 @@ impl ExternalForcing {
     /// - `u`: x 方向速度 [m/s]
     /// - `v`: y 方向速度 [m/s]
     #[inline]
-    pub fn new(eta: f64, u: f64, v: f64) -> Self {
+    pub fn new(eta: f64, u: f64, v: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
         Self {
             eta,
             velocity: DVec2::new(u, v),
@@ -316,7 +321,7 @@ impl ExternalForcing {
 
     /// 创建仅水位的强迫数据
     #[inline]
-    pub fn with_eta(eta: f64) -> Self {
+    pub fn with_eta(eta: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
         Self {
             eta,
             velocity: DVec2::ZERO,
@@ -325,7 +330,7 @@ impl ExternalForcing {
 
     /// 创建仅速度的强迫数据
     #[inline]
-    pub fn with_velocity(u: f64, v: f64) -> Self {
+    pub fn with_velocity(u: f64, v: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
         Self {
             eta: 0.0,
             velocity: DVec2::new(u, v),
@@ -358,16 +363,15 @@ impl ExternalForcing {
 /// 边界计算参数
 ///
 /// 边界通量计算所需的物理参数和预计算常量。
+// ALLOW_F64: Layer 4 边界计算参数配置
 #[derive(Debug, Clone, Copy)]
 pub struct BoundaryParams {
     /// 重力加速度 [m/s²]
-    pub gravity: f64,
-
+    pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深阈值 [m]
-    pub h_min: f64,
-
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// sqrt(g) - 预计算以提高性能
-    pub sqrt_g: f64,
+    pub sqrt_g: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl BoundaryParams {
@@ -376,7 +380,7 @@ impl BoundaryParams {
     /// # 参数
     /// - `gravity`: 重力加速度 [m/s²]
     /// - `h_min`: 最小水深阈值 [m]
-    pub fn new(gravity: f64, h_min: f64) -> Self {
+    pub fn new(gravity: f64, h_min: f64) -> Self { // ALLOW_F64: Layer 4 配置 API
         Self {
             gravity,
             h_min,
@@ -401,7 +405,7 @@ impl BoundaryParams {
     ///
     /// c = sqrt(g * h)
     #[inline]
-    pub fn wave_speed(&self, h: f64) -> f64 {
+    pub fn wave_speed(&self, h: f64) -> f64 { // ALLOW_F64: 与 BoundaryParams 配合使用
         self.sqrt_g * h.max(self.h_min).sqrt()
     }
 
@@ -409,7 +413,7 @@ impl BoundaryParams {
     ///
     /// p = 0.5 * g * h²
     #[inline]
-    pub fn hydrostatic_pressure(&self, h: f64) -> f64 {
+    pub fn hydrostatic_pressure(&self, h: f64) -> f64 { // ALLOW_F64: 与 BoundaryParams 配合使用
         0.5 * self.gravity * h * h
     }
 }

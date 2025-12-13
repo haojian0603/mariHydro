@@ -49,10 +49,10 @@ foreach ($idxType in $IndexTypes) {
             $RelPath = $file.FullName.Replace($ProjectRoot + "\", "")
             
             if ($RelPath -eq $AllowedFile) {
-                Write-Host "  ✓ Canonical definition in $RelPath" -ForegroundColor Green
+                Write-Host "  [OK] Canonical definition in $RelPath" -ForegroundColor Green
             }
             else {
-                Write-Host "  ✗ Duplicate definition in $RelPath" -ForegroundColor Red
+                Write-Host "  [FAIL] Duplicate definition in $RelPath" -ForegroundColor Red
                 $FoundIssues++
             }
         }
@@ -87,11 +87,11 @@ foreach ($idxType in $IndexTypes) {
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Cyan
 if ($FoundIssues -eq 0) {
-    Write-Host "✅ No duplicate index type definitions found!" -ForegroundColor Green
+    Write-Host "[OK] No duplicate index type definitions found!" -ForegroundColor Green
     exit 0
 }
 else {
-    Write-Host "❌ Found $FoundIssues duplicate index type definitions" -ForegroundColor Red
-    Write-Host "Please remove duplicates and use mh_core::{CellIndex, FaceIndex, ...}"
+    Write-Host "[FAIL] Found $FoundIssues duplicate index type definitions" -ForegroundColor Red
+    Write-Host "Please remove duplicates and import from mh_core"
     exit 1
 }

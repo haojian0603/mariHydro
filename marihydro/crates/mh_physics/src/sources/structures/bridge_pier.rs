@@ -21,11 +21,11 @@ pub struct BridgePierConfig {
     /// 是否启用
     pub enabled: bool,
     /// 默认拖曳系数
-    pub default_cd: f64,
+    pub default_cd: f64, // ALLOW_F64: Layer 4 配置参数
     /// 物理常量（唯一真理源）
     pub constants: PhysicalConstants,
     /// 最小水深 [m]
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for BridgePierConfig {
@@ -46,9 +46,9 @@ pub struct BridgePierDrag {
     /// 物理常量缓存
     constants: PhysicalConstants,
     /// 阻塞率场 (0~1)：桥墩占单元面积的比例
-    pub blockage: AlignedVec<f64>,
+    pub blockage: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 拖曳系数场
-    pub drag_coeff: AlignedVec<f64>,
+    pub drag_coeff: AlignedVec<f64>, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl BridgePierDrag {
@@ -73,6 +73,7 @@ impl BridgePierDrag {
     /// - `cell`: 单元索引
     /// - `blockage`: 阻塞率 (0~1)
     /// - `cd`: 拖曳系数（None 使用默认值）
+    // ALLOW_F64: 物理参数
     pub fn set_pier(&mut self, cell: usize, blockage: f64, cd: Option<f64>) {
         if cell < self.blockage.len() {
             self.blockage[cell] = blockage.clamp(0.0, 1.0);
@@ -88,6 +89,7 @@ impl BridgePierDrag {
     /// - `cell`: 单元索引
     /// - `pier_diameter`: 桥墩直径 [m]
     /// - `cell_width`: 单元宽度 [m]
+    // ALLOW_F64: 物理参数
     pub fn set_from_geometry(&mut self, cell: usize, pier_diameter: f64, cell_width: f64) {
         if cell < self.blockage.len() {
             let blockage = (pier_diameter / cell_width).clamp(0.0, 0.9);
@@ -102,6 +104,7 @@ impl BridgePierDrag {
     }
 
     /// 计算单元的拖曳力 [N/m²]
+    // ALLOW_F64: 源项计算
     fn compute_drag_force(&self, cell: usize, h: f64, u: f64, v: f64) -> (f64, f64) {
         let ab = self.blockage[cell];
         if ab < 1e-10 {

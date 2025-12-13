@@ -34,15 +34,17 @@ pub enum InflowType {
     #[default]
     None,
     /// 恒定流量 [m³/s]
+    // ALLOW_F64: Layer 4 配置参数
     ConstantDischarge(f64),
     /// 恒定流速入流 [m/s, 方向]
     ConstantVelocity {
         /// 入流流速 [m/s]
-        velocity: f64,
+        velocity: f64, // ALLOW_F64: Layer 4 配置参数
         /// 入流方向 [弧度]
-        direction: f64,
+        direction: f64, // ALLOW_F64: Layer 4 配置参数
     },
     /// 均匀面源（如降雨）[m/s]
+    // ALLOW_F64: Layer 4 配置参数
     UniformFlux(f64),
     /// 时变流量（需要外部更新）
     TimeVarying,
@@ -51,11 +53,13 @@ pub enum InflowType {
 
 impl InflowType {
     /// 创建恒定流量入流
+    // ALLOW_F64: 物理参数
     pub fn constant_discharge(q: f64) -> Self {
         Self::ConstantDischarge(q)
     }
 
     /// 创建恒定流速入流
+    // ALLOW_F64: 物理参数
     pub fn constant_velocity(velocity: f64, direction_deg: f64) -> Self {
         Self::ConstantVelocity {
             velocity: velocity.abs(),
@@ -64,6 +68,7 @@ impl InflowType {
     }
 
     /// 创建降雨入流
+    // ALLOW_F64: 物理参数
     pub fn rainfall(intensity_mm_hr: f64) -> Self {
         // 转换 mm/hr 到 m/s
         let flux = intensity_mm_hr / (1000.0 * 3600.0);
@@ -71,6 +76,7 @@ impl InflowType {
     }
 
     /// 创建蒸发出流
+    // ALLOW_F64: 物理参数
     pub fn evaporation(rate_mm_hr: f64) -> Self {
         // 负值表示出流
         let flux = -rate_mm_hr / (1000.0 * 3600.0);
@@ -86,13 +92,13 @@ pub struct InflowConfig {
     /// 入流类型（每个单元）
     pub inflow_type: Vec<InflowType>,
     /// 当前流量值 [m³/s]（用于时变入流）
-    pub current_discharge: Vec<f64>,
+    pub current_discharge: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 入流方向 [弧度]
-    pub inflow_direction: Vec<f64>,
+    pub inflow_direction: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 单元面积 [m²]
-    pub cell_area: Vec<f64>,
+    pub cell_area: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl InflowConfig {
@@ -116,6 +122,7 @@ impl InflowConfig {
     }
 
     /// 设置单元面积
+    // ALLOW_F64: 物理参数
     pub fn set_cell_area(&mut self, cell: usize, area: f64) {
         if cell < self.cell_area.len() {
             self.cell_area[cell] = area.max(1e-6);
@@ -131,6 +138,7 @@ impl InflowConfig {
     }
 
     /// 更新时变流量
+    // ALLOW_F64: 物理参数
     pub fn update_discharge(&mut self, cell: usize, discharge: f64) {
         if cell < self.current_discharge.len() {
             self.current_discharge[cell] = discharge;
@@ -144,6 +152,7 @@ impl InflowConfig {
     }
 
     /// 设置均匀降雨
+    // ALLOW_F64: 物理参数
     pub fn with_uniform_rainfall(mut self, intensity_mm_hr: f64) -> Self {
         let inflow = InflowType::rainfall(intensity_mm_hr);
         self.inflow_type.fill(inflow);
@@ -151,6 +160,7 @@ impl InflowConfig {
     }
 
     /// 设置点源入流
+    // ALLOW_F64: 物理参数
     pub fn add_point_source(&mut self, cell: usize, discharge: f64, direction_deg: f64) {
         if cell < self.inflow_type.len() {
             self.inflow_type[cell] = InflowType::constant_discharge(discharge);
@@ -159,12 +169,14 @@ impl InflowConfig {
     }
 
     /// 设置河流入流边界
+    // ALLOW_F64: 物理参数
     pub fn add_river_inflow(&mut self, cells: &[usize], total_discharge: f64, direction_deg: f64) {
         if cells.is_empty() {
             return;
         }
 
         // 均分流量到各单元
+        // ALLOW_F64: 源项计算
         let q_per_cell = total_discharge / cells.len() as f64;
         let dir_rad = direction_deg.to_radians();
 
@@ -262,11 +274,11 @@ pub struct RainfallConfig {
     /// 是否启用
     pub enabled: bool,
     /// 降雨强度 [m/s]（每个单元）
-    pub intensity: Vec<f64>,
+    pub intensity: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 是否考虑渗透
     pub with_infiltration: bool,
     /// 渗透率 [m/s]（每个单元）
-    pub infiltration_rate: Vec<f64>,
+    pub infiltration_rate: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl RainfallConfig {
@@ -281,6 +293,7 @@ impl RainfallConfig {
     }
 
     /// 设置均匀降雨强度 [mm/hr]
+    // ALLOW_F64: 物理参数
     pub fn with_uniform_intensity(mut self, intensity_mm_hr: f64) -> Self {
         let intensity_ms = intensity_mm_hr / (1000.0 * 3600.0);
         self.intensity.fill(intensity_ms);
@@ -288,6 +301,7 @@ impl RainfallConfig {
     }
 
     /// 设置单元降雨强度 [mm/hr]
+    // ALLOW_F64: 物理参数
     pub fn set_intensity(&mut self, cell: usize, intensity_mm_hr: f64) {
         if cell < self.intensity.len() {
             self.intensity[cell] = intensity_mm_hr / (1000.0 * 3600.0);
@@ -295,6 +309,7 @@ impl RainfallConfig {
     }
 
     /// 启用渗透
+    // ALLOW_F64: 物理参数
     pub fn with_infiltration(mut self, rate_mm_hr: f64) -> Self {
         self.with_infiltration = true;
         let rate_ms = rate_mm_hr / (1000.0 * 3600.0);
@@ -303,6 +318,7 @@ impl RainfallConfig {
     }
 
     /// 计算净降雨强度 [m/s]
+    // ALLOW_F64: 源项计算
     pub fn net_intensity(&self, cell: usize) -> f64 {
         let rain = self.intensity.get(cell).copied().unwrap_or(0.0);
         if self.with_infiltration {
@@ -344,9 +360,9 @@ pub struct EvaporationConfig {
     /// 是否启用
     pub enabled: bool,
     /// 蒸发率 [m/s]（每个单元）
-    pub rate: Vec<f64>,
+    pub rate: Vec<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深（低于此不蒸发）
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl EvaporationConfig {
@@ -360,6 +376,7 @@ impl EvaporationConfig {
     }
 
     /// 设置均匀蒸发率 [mm/hr]
+    // ALLOW_F64: 物理参数
     pub fn with_uniform_rate(mut self, rate_mm_hr: f64) -> Self {
         let rate_ms = rate_mm_hr / (1000.0 * 3600.0);
         self.rate.fill(rate_ms);
@@ -367,6 +384,7 @@ impl EvaporationConfig {
     }
 
     /// 设置单元蒸发率 [mm/hr]
+    // ALLOW_F64: 物理参数
     pub fn set_rate(&mut self, cell: usize, rate_mm_hr: f64) {
         if cell < self.rate.len() {
             self.rate[cell] = rate_mm_hr / (1000.0 * 3600.0);
@@ -424,6 +442,7 @@ impl RainfallSource {
     }
 
     /// 创建均匀降雨配置
+    // ALLOW_F64: 物理参数
     pub fn uniform(n_cells: usize, intensity_mm_hr: f64) -> RainfallConfig {
         RainfallConfig::new(n_cells).with_uniform_intensity(intensity_mm_hr)
     }
@@ -439,6 +458,7 @@ impl EvaporationSource {
     }
 
     /// 创建均匀蒸发配置
+    // ALLOW_F64: 物理参数
     pub fn uniform(n_cells: usize, rate_mm_hr: f64) -> EvaporationConfig {
         EvaporationConfig::new(n_cells).with_uniform_rate(rate_mm_hr)
     }

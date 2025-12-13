@@ -66,9 +66,9 @@ impl BenchmarkResult {
 // ============================================================
 
 /// 生成 Laplacian 测试矩阵（五点差分格式）
-fn generate_laplacian_5pt(n: usize) -> CsrMatrix {
+fn generate_laplacian_5pt(n: usize) -> CsrMatrix<f64> {
     let size = n * n;
-    let mut builder = CsrBuilder::new(size, size);
+    let mut builder = CsrBuilder::<f64>::new(size, size);
 
     for i in 0..n {
         for j in 0..n {
@@ -104,9 +104,9 @@ fn generate_laplacian_5pt(n: usize) -> CsrMatrix {
 
 /// 生成带权重的测试矩阵（模拟非均匀网格）
 #[allow(dead_code)]
-fn generate_weighted_laplacian(n: usize, weights: &[f64]) -> CsrMatrix {
+fn generate_weighted_laplacian(n: usize, weights: &[f64]) -> CsrMatrix<f64> {
     let size = n * n;
-    let mut builder = CsrBuilder::new(size, size);
+    let mut builder = CsrBuilder::<f64>::new(size, size);
 
     for i in 0..n {
         for j in 0..n {
@@ -159,12 +159,12 @@ fn generate_rhs(size: usize, seed: u64) -> AlignedVec<f64> {
 // ============================================================
 
 /// 运行单个基准测试
-fn run_benchmark<P: Preconditioner>(
-    matrix: &CsrMatrix,
+fn run_benchmark<P: Preconditioner<f64>>(
+    matrix: &CsrMatrix<f64>,
     rhs: &[f64],
     preconditioner: &P,
     config: &SolverConfig,
-) -> (Duration, SolverResult, AlignedVec<f64>) {
+) -> (Duration, SolverResult<f64>, AlignedVec<f64>) {
     let n = matrix.n_rows();
     let mut x = AlignedVec::zeros(n);
     

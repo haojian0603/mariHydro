@@ -11,7 +11,7 @@
 //!
 //! 当法方程奇异时，回退到 Green-Gauss 方法。
 
-use super::traits::{GradientMethod, ScalarGradientStorage, VectorGradientStorage};
+use super::traits::{GradientMethodGeneric, ScalarGradientStorage, VectorGradientStorage};
 use super::green_gauss::GreenGaussGradient;
 use crate::adapter::PhysicsMesh;
 use crate::types::NumericalParams;
@@ -19,14 +19,14 @@ use crate::types::NumericalParams;
 use glam::DVec2;
 
 // ============================================================
-// 配置
+// 配置 (Layer 4 - 配置参数允许 f64)
 // ============================================================
 
 /// 最小二乘梯度配置
 #[derive(Debug, Clone)]
 pub struct LeastSquaresConfig {
     /// 行列式最小值（判断奇异性）
-    pub det_min: f64,
+    pub det_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否启用边界贡献（虚拟点策略）
     pub use_boundary_contributions: bool,
     /// 是否启用并行
@@ -85,6 +85,7 @@ impl LeastSquaresGradient {
     }
 
     /// 设置行列式最小值
+    // ALLOW_F64: Layer 4 配置参数设置方法
     pub fn with_det_min(mut self, det_min: f64) -> Self {
         self.config.det_min = det_min;
         self
@@ -106,15 +107,16 @@ impl LeastSquaresGradient {
     ///
     /// [a11 a12] [x1]   [b1]
     /// [a12 a22] [x2] = [b2]
+    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此辅助方法配合 DVec2 使用
     #[inline]
     fn solve_2x2(
-        a11: f64,
-        a12: f64,
-        a22: f64,
-        b1: f64,
-        b2: f64,
-        det_min: f64,
-    ) -> Option<(f64, f64)> {
+        a11: f64, // ALLOW_F64: DVec2 坐标计算
+        a12: f64, // ALLOW_F64: DVec2 坐标计算
+        a22: f64, // ALLOW_F64: DVec2 坐标计算
+        b1: f64, // ALLOW_F64: DVec2 坐标计算
+        b2: f64, // ALLOW_F64: DVec2 坐标计算
+        det_min: f64, // ALLOW_F64: DVec2 坐标计算
+    ) -> Option<(f64, f64)> { // ALLOW_F64: DVec2 坐标计算
         let det = a11 * a22 - a12 * a12;
         if det.abs() < det_min {
             return None;
@@ -223,7 +225,7 @@ impl LeastSquaresGradient {
     }
 }
 
-impl GradientMethod for LeastSquaresGradient {
+impl GradientMethodGeneric<f64> for LeastSquaresGradient {
     fn compute_scalar_gradient(
         &self,
         field: &[f64],

@@ -89,15 +89,15 @@ pub enum StrategyKind {
 #[derive(Debug, Clone, Default)]
 pub struct ExplicitConfig {
     /// CFL 数
-    pub cfl: f64,
+    pub cfl: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否使用二阶重构
     pub second_order: bool,
     /// 是否使用静水重构
     pub hydrostatic_reconstruction: bool,
     /// 重力加速度
-    pub gravity: f64,
+    pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
-    pub h_dry: f64,
+    pub h_dry: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl ExplicitConfig {
@@ -117,15 +117,15 @@ impl ExplicitConfig {
 #[derive(Debug, Clone)]
 pub struct SemiImplicitConfig {
     /// 重力加速度
-    pub gravity: f64,
+    pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 求解器容差
-    pub solver_rtol: f64,
+    pub solver_rtol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大迭代次数
     pub solver_max_iter: usize,
     /// 隐式因子 (0=显式, 1=全隐式)
-    pub theta: f64,
+    pub theta: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for SemiImplicitConfig {

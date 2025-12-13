@@ -25,9 +25,9 @@ pub struct WaveForcingConfig {
     /// 是否启用
     pub enabled: bool,
     /// 水密度 [kg/m³]
-    pub rho_water: f64,
+    pub rho_water: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深 [m]
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for WaveForcingConfig {
@@ -49,13 +49,13 @@ pub struct WaveForcing {
     /// 单元数
     n_cells: usize,
     /// x 方向辐射应力梯度 ∂S_xx/∂x + ∂S_xy/∂y [N/m²]
-    grad_sxx_sxy: AlignedVec<f64>,
+    grad_sxx_sxy: AlignedVec<f64>, // ALLOW_F64: 源项计算
     /// y 方向辐射应力梯度 ∂S_xy/∂x + ∂S_yy/∂y [N/m²]
-    grad_sxy_syy: AlignedVec<f64>,
+    grad_sxy_syy: AlignedVec<f64>, // ALLOW_F64: 源项计算
     /// 波浪轨道速度 [m/s]
-    orbital_velocity: AlignedVec<f64>,
+    orbital_velocity: AlignedVec<f64>, // ALLOW_F64: 源项计算
     /// 有效（波流联合）剪切应力 [Pa]
-    effective_shear: AlignedVec<f64>,
+    effective_shear: AlignedVec<f64>, // ALLOW_F64: 源项计算
 }
 
 impl WaveForcing {

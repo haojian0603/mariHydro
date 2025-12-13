@@ -1353,7 +1353,7 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
     
     /// 验证状态有效性
     pub fn is_valid(&self) -> bool {
-        if let Some(h) = self.h.as_slice() {
+        if let Some(h) = self.h.try_as_slice() {
             h.iter().all(|&x| x.to_f64().is_finite() && x.to_f64() >= 0.0)
         } else {
             // GPU 缓冲区需要同步检查
@@ -1430,9 +1430,9 @@ pub struct StateStatisticsData<S> {
 impl<B: Backend> ShallowWaterStateGeneric<B> {
     /// 计算状态统计信息（仅 CPU 后端有效）
     pub fn compute_statistics(&self, cell_areas: &[B::Scalar], h_dry: B::Scalar) -> Option<StateStatisticsData<B::Scalar>> {
-        let h_slice = self.h.as_slice()?;
-        let hu_slice = self.hu.as_slice()?;
-        let hv_slice = self.hv.as_slice()?;
+        let h_slice = self.h.try_as_slice()?;
+        let hu_slice = self.hu.try_as_slice()?;
+        let hv_slice = self.hv.try_as_slice()?;
         
         let mut stats = StateStatisticsData {
             h_max: <B::Scalar as Scalar>::from_config(0.0).unwrap_or(B::Scalar::ZERO),
@@ -1476,16 +1476,16 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         debug_assert_eq!(self.n_cells, other.n_cells, "状态复制: 单元数量不匹配");
         
         // CPU 后端直接复制
-        if let (Some(src_h), Some(dst_h)) = (self.h.as_slice(), other.h.as_slice_mut()) {
+        if let (Some(src_h), Some(dst_h)) = (self.h.try_as_slice(), other.h.try_as_slice_mut()) {
             dst_h.copy_from_slice(src_h);
         }
-        if let (Some(src_hu), Some(dst_hu)) = (self.hu.as_slice(), other.hu.as_slice_mut()) {
+        if let (Some(src_hu), Some(dst_hu)) = (self.hu.try_as_slice(), other.hu.try_as_slice_mut()) {
             dst_hu.copy_from_slice(src_hu);
         }
-        if let (Some(src_hv), Some(dst_hv)) = (self.hv.as_slice(), other.hv.as_slice_mut()) {
+        if let (Some(src_hv), Some(dst_hv)) = (self.hv.try_as_slice(), other.hv.try_as_slice_mut()) {
             dst_hv.copy_from_slice(src_hv);
         }
-        if let (Some(src_z), Some(dst_z)) = (self.z.as_slice(), other.z.as_slice_mut()) {
+        if let (Some(src_z), Some(dst_z)) = (self.z.try_as_slice(), other.z.try_as_slice_mut()) {
             dst_z.copy_from_slice(src_z);
         }
     }

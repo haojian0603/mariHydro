@@ -67,7 +67,7 @@ pub struct PressureMatrixAssembler {
     /// 矩阵稀疏模式
     pattern: CsrPattern,
     /// 系数矩阵
-    matrix: CsrMatrix,
+    matrix: CsrMatrix<f64>,
     /// 右端项
     rhs: Vec<f64>,
     /// 对角元素索引缓存
@@ -91,7 +91,7 @@ impl PressureMatrixAssembler {
         }
 
         let pattern = builder.build_pattern();
-        let matrix: CsrMatrix = pattern.clone().into();
+        let matrix: CsrMatrix<f64> = pattern.clone().into();
 
         // 缓存对角元素索引
         let diag_indices: Vec<_> = (0..n)
@@ -286,12 +286,12 @@ impl PressureMatrixAssembler {
     }
 
     /// 获取矩阵引用
-    pub fn matrix(&self) -> &CsrMatrix {
+    pub fn matrix(&self) -> &CsrMatrix<f64> {
         &self.matrix
     }
 
     /// 获取可变矩阵引用
-    pub fn matrix_mut(&mut self) -> &mut CsrMatrix {
+    pub fn matrix_mut(&mut self) -> &mut CsrMatrix<f64> {
         &mut self.matrix
     }
 
@@ -321,9 +321,9 @@ pub struct ImplicitMomentumAssembler {
     /// 配置
     config: AssemblerConfig,
     /// x 方向矩阵
-    matrix_u: CsrMatrix,
+    matrix_u: CsrMatrix<f64>,
     /// y 方向矩阵
-    matrix_v: CsrMatrix,
+    matrix_v: CsrMatrix<f64>,
     /// x 方向右端项
     rhs_u: Vec<f64>,
     /// y 方向右端项
@@ -345,8 +345,8 @@ impl ImplicitMomentumAssembler {
         }
 
         let pattern = builder.build_pattern();
-        let matrix_u: CsrMatrix = pattern.clone().into();
-        let matrix_v: CsrMatrix = pattern.into();
+        let matrix_u: CsrMatrix<f64> = pattern.clone().into();
+        let matrix_v: CsrMatrix<f64> = pattern.into();
 
         Self {
             config: AssemblerConfig::default(),
@@ -413,12 +413,12 @@ impl ImplicitMomentumAssembler {
     }
 
     /// 获取 u 方向矩阵
-    pub fn matrix_u(&self) -> &CsrMatrix {
+    pub fn matrix_u(&self) -> &CsrMatrix<f64> {
         &self.matrix_u
     }
 
     /// 获取 v 方向矩阵
-    pub fn matrix_v(&self) -> &CsrMatrix {
+    pub fn matrix_v(&self) -> &CsrMatrix<f64> {
         &self.matrix_v
     }
 

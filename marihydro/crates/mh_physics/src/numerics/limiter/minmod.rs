@@ -31,25 +31,36 @@
 //! - 干湿交界处
 //! - 需要无条件稳定的情况
 
-use super::traits::{LimiterContext, SlopeLimiter};
+use mh_core::RuntimeScalar;
+use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
-/// Minmod 限制器
+// Re-export for tests
+#[cfg(test)]
+use super::traits::LimiterContext;
+
+/// 泛型 Minmod 限制器
 ///
 /// 最耗散的限制器，提供最大稳定性。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Minmod {
+#[derive(Debug, Clone, Copy)]
+pub struct MinmodGeneric<S: RuntimeScalar> {
     /// 判断值为零的容差
-    eps: f64,
+    eps: S,
 }
 
-impl Minmod {
+impl<S: RuntimeScalar> Default for MinmodGeneric<S> {
+    fn default() -> Self {
+        Self { eps: S::from_config(1e-12).unwrap_or(S::MIN_POSITIVE) }
+    }
+}
+
+impl<S: RuntimeScalar> MinmodGeneric<S> {
     /// 创建新的 Minmod 限制器
     pub fn new() -> Self {
-        Self { eps: 1e-12 }
+        Self::default()
     }
     
     /// 创建具有自定义容差的限制器
-    pub fn with_tolerance(eps: f64) -> Self {
+    pub fn with_tolerance(eps: S) -> Self {
         Self { eps }
     }
     
@@ -57,55 +68,62 @@ impl Minmod {
     ///
     /// 返回绝对值最小的值，如果符号不同则返回 0
     #[inline]
-    fn minmod(&self, a: f64, b: f64) -> f64 {
-        if a * b <= 0.0 {
+    fn minmod(&self, a: S, b: S) -> S {
+        if a * b <= S::ZERO {
             // 符号不同（或其中一个为零）
-            0.0
-        } else if a > 0.0 {
+            S::ZERO
+        } else if a > S::ZERO {
             // 都是正数，取较小者
-            a.min(b)
+            if a < b { a } else { b }
         } else {
             // 都是负数，取绝对值较小者（即较大的负数）
-            a.max(b)
+            if a > b { a } else { b }
         }
     }
-    
 }
 
-impl SlopeLimiter for Minmod {
-    fn compute_limiter(&self, ctx: &LimiterContext) -> f64 {
+impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for MinmodGeneric<S> {
+    fn compute_limiter(&self, ctx: &LimiterContextGeneric<S>) -> S {
         // 如果梯度为零，不需要限制
         if ctx.is_gradient_zero(self.eps) {
-            return 1.0;
+            return S::ONE;
         }
         
         let delta = ctx.gradient;
         
         // 计算允许的比值
-        let ratio = if delta > 0.0 {
+        let ratio = if delta > S::ZERO {
             let delta_max = ctx.delta_max();
             if delta_max < self.eps {
-                0.0
+                S::ZERO
             } else {
                 delta_max / delta
             }
         } else {
             let delta_min = ctx.delta_min();
             if delta_min > -self.eps {
-                0.0
+                S::ZERO
             } else {
                 delta_min / delta
             }
         };
         
         // Minmod: 取 1 和 ratio 中的较小者，但必须非负
-        self.minmod(1.0, ratio).max(0.0)
+        let minmod_val = self.minmod(S::ONE, ratio);
+        if minmod_val < S::ZERO { S::ZERO } else { minmod_val }
     }
     
     fn name(&self) -> &'static str {
         "Minmod"
     }
 }
+
+// =============================================================================
+// Type alias for f64 version
+// =============================================================================
+
+/// f64 特化版本 (默认)
+pub type Minmod = MinmodGeneric<f64>;
 
 /// 扩展的 Minmod 限制器 (Superbee 变体的基础)
 ///

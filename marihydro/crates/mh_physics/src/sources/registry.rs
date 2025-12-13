@@ -196,29 +196,14 @@ impl<B: Backend> SourceRegistry<B> {
             source.compute_batch(state, &mut scratch[..n], ctx);
 
             // 直接累加到 workspace 的缓冲区
-            if let (Some(h_dst), Some(hu_dst), Some(hv_dst)) = (
-                workspace.flux_h.as_slice_mut(),
-                workspace.source_hu.as_slice_mut(),
-                workspace.source_hv.as_slice_mut(),
-            ) {
-                for i in 0..n {
-                    h_dst[i] += scratch[i].s_h;
-                    hu_dst[i] += scratch[i].s_hu;
-                    hv_dst[i] += scratch[i].s_hv;
-                }
-            } else {
-                // 回退路径：使用 copy_to_vec/copy_from_slice
-                let mut h_host = workspace.flux_h.copy_to_vec();
-                let mut hu_host = workspace.source_hu.copy_to_vec();
-                let mut hv_host = workspace.source_hv.copy_to_vec();
-                for i in 0..n {
-                    h_host[i] += scratch[i].s_h;
-                    hu_host[i] += scratch[i].s_hu;
-                    hv_host[i] += scratch[i].s_hv;
-                }
-                workspace.flux_h.copy_from_slice(&h_host);
-                workspace.source_hu.copy_from_slice(&hu_host);
-                workspace.source_hv.copy_from_slice(&hv_host);
+            let h_dst = workspace.flux_h.as_slice_mut();
+            let hu_dst = workspace.source_hu.as_slice_mut();
+            let hv_dst = workspace.source_hv.as_slice_mut();
+            
+            for i in 0..n {
+                h_dst[i] += scratch[i].s_h;
+                hu_dst[i] += scratch[i].s_hu;
+                hv_dst[i] += scratch[i].s_hv;
             }
         }
     }

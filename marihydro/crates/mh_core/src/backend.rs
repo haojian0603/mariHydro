@@ -98,6 +98,33 @@ pub trait Backend: Clone + Send + Sync + Debug + 'static {
 
     /// 确保正性：x[i] = max(x[i], min_val)
     fn enforce_positivity(&self, x: &mut Self::Buffer<Self::Scalar>, min_val: Self::Scalar);
+
+    /// 分配未初始化缓冲区（性能优化，谨慎使用）
+    /// 
+    /// # Safety
+    /// 调用者必须在使用前初始化所有元素。对于 Pod 类型，
+    /// 此实现通常会分配容量然后设置长度。
+    fn alloc_uninit<T: Pod + Send + Sync>(&self, len: usize) -> Self::Buffer<T>;
+
+    /// L2 范数：sqrt(sum(x^2))
+    fn norm2(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
+
+    /// 逐元素乘法：z[i] = x[i] * y[i]
+    fn elementwise_mul(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    );
+
+    /// 逐元素安全除法：z[i] = x[i] / max(y[i], eps)
+    fn elementwise_div_safe(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+        eps: Self::Scalar,
+    );
 }
 
 /// CPU后端（泛型精度，无状态）
@@ -183,6 +210,45 @@ impl Backend for CpuBackend<f32> {
             }
         }
     }
+
+    fn alloc_uninit<T: Pod + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
+        let mut v = Vec::with_capacity(len);
+        // 安全：Pod 类型允许任意位模式
+        #[allow(clippy::uninit_vec)]
+        unsafe { v.set_len(len); }
+        v
+    }
+
+    fn norm2(&self, x: &Self::Buffer<f32>) -> f32 {
+        x.iter().map(|xi| xi * xi).sum::<f32>().sqrt()
+    }
+
+    fn elementwise_mul(
+        &self,
+        x: &Self::Buffer<f32>,
+        y: &Self::Buffer<f32>,
+        z: &mut Self::Buffer<f32>,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "逐元素乘法: 向量长度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "逐元素乘法: 输出向量长度不匹配");
+        for ((xi, yi), zi) in x.iter().zip(y.iter()).zip(z.iter_mut()) {
+            *zi = xi * yi;
+        }
+    }
+
+    fn elementwise_div_safe(
+        &self,
+        x: &Self::Buffer<f32>,
+        y: &Self::Buffer<f32>,
+        z: &mut Self::Buffer<f32>,
+        eps: f32,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "逐元素除法: 向量长度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "逐元素除法: 输出向量长度不匹配");
+        for ((xi, yi), zi) in x.iter().zip(y.iter()).zip(z.iter_mut()) {
+            *zi = xi / yi.max(eps);
+        }
+    }
 }
 
 // ============================================================================
@@ -253,6 +319,45 @@ impl Backend for CpuBackend<f64> {
             }
         }
     }
+
+    fn alloc_uninit<T: Pod + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
+        let mut v = Vec::with_capacity(len);
+        // 安全：Pod 类型允许任意位模式
+        #[allow(clippy::uninit_vec)]
+        unsafe { v.set_len(len); }
+        v
+    }
+
+    fn norm2(&self, x: &Self::Buffer<f64>) -> f64 {
+        x.iter().map(|xi| xi * xi).sum::<f64>().sqrt()
+    }
+
+    fn elementwise_mul(
+        &self,
+        x: &Self::Buffer<f64>,
+        y: &Self::Buffer<f64>,
+        z: &mut Self::Buffer<f64>,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "逐元素乘法: 向量长度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "逐元素乘法: 输出向量长度不匹配");
+        for ((xi, yi), zi) in x.iter().zip(y.iter()).zip(z.iter_mut()) {
+            *zi = xi * yi;
+        }
+    }
+
+    fn elementwise_div_safe(
+        &self,
+        x: &Self::Buffer<f64>,
+        y: &Self::Buffer<f64>,
+        z: &mut Self::Buffer<f64>,
+        eps: f64,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "逐元素除法: 向量长度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "逐元素除法: 输出向量长度不匹配");
+        for ((xi, yi), zi) in x.iter().zip(y.iter()).zip(z.iter_mut()) {
+            *zi = xi / yi.max(eps);
+        }
+    }
 }
 
 /// 默认后端类型别名
@@ -261,6 +366,10 @@ pub type DefaultBackend = CpuBackend<f64>;
 
 #[cfg(all(feature = "precision-f32", not(feature = "precision-f64")))]
 pub type DefaultBackend = CpuBackend<f32>;
+
+// 当没有启用任何精度feature时，默认使用f64
+#[cfg(not(any(feature = "precision-f32", feature = "precision-f64")))]
+pub type DefaultBackend = CpuBackend<f64>;
 
 #[cfg(test)]
 mod tests {

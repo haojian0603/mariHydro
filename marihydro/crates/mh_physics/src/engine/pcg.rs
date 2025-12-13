@@ -35,9 +35,9 @@ use std::marker::PhantomData;
 #[derive(Debug, Clone)]
 pub struct PcgConfig {
     /// 相对容差
-    pub rtol: f64,
+    pub rtol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 绝对容差
-    pub atol: f64,
+    pub atol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大迭代次数
     pub max_iter: usize,
     /// 预处理器类型
@@ -260,8 +260,8 @@ impl PcgSolver<CpuBackend<f64>> {
     pub fn solve<M: SparseMvp<CpuBackend<f64>>>(
         &mut self,
         matrix: &M,
-        x: &mut Vec<f64>,
-        b: &Vec<f64>,
+        x: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        b: &Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         precond: Option<&DiagonalMatrix<CpuBackend<f64>>>,
     ) -> PcgResult<f64> {
         let n = matrix.dimension();
@@ -427,7 +427,7 @@ fn dot_product(x: &[f64], y: &[f64], n: usize) -> f64 {
 /// 
 /// 当系统矩阵近似为对角矩阵时使用。
 impl SparseMvp<CpuBackend<f64>> for DiagonalMatrix<CpuBackend<f64>> {
-    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) {
+    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) { // ALLOW_F64: 与 CpuBackend<f64> 配合
         for i in 0..self.n {
             y[i] = self.diag[i] * x[i];
         }
@@ -502,7 +502,7 @@ impl<B: Backend> CsrMatrix<B> {
 
 impl SparseMvp<CpuBackend<f64>> for CsrMatrix<CpuBackend<f64>> {
     /// 计算 CSR 矩阵-向量乘积: y = A * x
-    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) {
+    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) { // ALLOW_F64: 与 CpuBackend<f64> 配合
         // 清零输出向量
         for i in 0..self.n_rows {
             y[i] = 0.0;
@@ -564,10 +564,10 @@ impl PoissonMatrixBuilder {
         &self,
         backend: &CpuBackend<f64>,
         cell_areas: &[f64],
-        dt: f64,
-        gravity: f64,
+        dt: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        gravity: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
         h: &[f64],
-        h_min: f64,
+        h_min: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
     ) -> DiagonalMatrix<CpuBackend<f64>> {
         let mut diag = backend.alloc(self.n_cells);
         

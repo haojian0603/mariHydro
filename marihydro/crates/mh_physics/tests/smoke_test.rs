@@ -138,7 +138,7 @@ fn test_diffusion_coefficient() {
 fn test_csr_matrix_identity() {
     use mh_physics::numerics::CsrMatrix;
 
-    let mat = CsrMatrix::identity(5);
+    let mat = CsrMatrix::<f64>::identity(5);
     assert_eq!(mat.n_rows(), 5);
     assert_eq!(mat.n_cols(), 5);
     assert_eq!(mat.nnz(), 5);
@@ -152,7 +152,7 @@ fn test_csr_matrix_identity() {
 fn test_csr_mul_vec() {
     use mh_physics::numerics::CsrBuilder;
 
-    let mut builder = CsrBuilder::new_square(3);
+    let mut builder = CsrBuilder::<f64>::new_square(3);
     builder.set(0, 0, 2.0);
     builder.set(0, 1, -1.0);
     builder.set(1, 0, -1.0);
@@ -167,17 +167,17 @@ fn test_csr_mul_vec() {
 
     mat.mul_vec(&x, &mut y);
 
-    assert!((y[0] - 0.0).abs() < 1e-14);
-    assert!((y[1] - 0.0).abs() < 1e-14);
-    assert!((y[2] - 4.0).abs() < 1e-14);
+    assert!((y[0] - 0.0_f64).abs() < 1e-14);
+    assert!((y[1] - 0.0_f64).abs() < 1e-14);
+    assert!((y[2] - 4.0_f64).abs() < 1e-14);
 }
 
 #[test]
 fn test_vector_ops() {
     use mh_physics::numerics::{axpy, dot, norm2};
 
-    let x = vec![3.0, 4.0];
-    let mut y = vec![1.0, 2.0];
+    let x: Vec<f64> = vec![3.0, 4.0];
+    let mut y: Vec<f64> = vec![1.0, 2.0];
 
     assert!((norm2(&x) - 5.0).abs() < 1e-14);
 
@@ -194,7 +194,7 @@ fn test_pcg_solver_simple() {
     use mh_physics::numerics::{CsrBuilder, IterativeSolver, JacobiPreconditioner, PcgSolver, SolverConfig};
 
     // 简单对称正定矩阵
-    let mut builder = CsrBuilder::new_square(3);
+    let mut builder = CsrBuilder::<f64>::new_square(3);
     builder.set(0, 0, 4.0);
     builder.set(0, 1, -1.0);
     builder.set(1, 0, -1.0);

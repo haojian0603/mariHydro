@@ -36,37 +36,38 @@ pub enum VegetationType {
     /// 刚性植被（如树干、芦苇杆）
     Rigid {
         /// 阻力系数
-        cd: f64,
+        cd: f64, // ALLOW_F64: Layer 4 配置参数
         /// 茎直径 [m]
-        diameter: f64,
+        diameter: f64, // ALLOW_F64: Layer 4 配置参数
         /// 茎密度 [1/m²]
-        density: f64,
+        density: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
-        height: f64,
+        height: f64, // ALLOW_F64: Layer 4 配置参数
     },
     /// 柔性植被（如水草）
     Flexible {
         /// 基础阻力系数
-        cd_base: f64,
+        cd_base: f64, // ALLOW_F64: Layer 4 配置参数
         /// 弯曲模量
-        flex_modulus: f64,
+        flex_modulus: f64, // ALLOW_F64: Layer 4 配置参数
         /// 叶面积指数 [m²/m²]
-        lai: f64,
+        lai: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
-        height: f64,
+        height: f64, // ALLOW_F64: Layer 4 配置参数
     },
     /// 通用植被（使用体积阻力系数）
     Generic {
         /// 体积阻力系数 [1/m]
-        av_cd: f64,
+        av_cd: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
-        height: f64,
+        height: f64, // ALLOW_F64: Layer 4 配置参数
     },
 }
 
 
 impl VegetationType {
     /// 创建刚性植被
+    // ALLOW_F64: 物理参数
     pub fn rigid(cd: f64, diameter: f64, density: f64, height: f64) -> Self {
         Self::Rigid {
             cd: cd.max(0.1).min(3.0),
@@ -87,6 +88,7 @@ impl VegetationType {
     }
 
     /// 创建柔性水草
+    // ALLOW_F64: 物理参数
     pub fn flexible(cd_base: f64, lai: f64, height: f64) -> Self {
         Self::Flexible {
             cd_base: cd_base.max(0.1),
@@ -97,6 +99,7 @@ impl VegetationType {
     }
 
     /// 创建通用植被
+    // ALLOW_F64: 物理参数
     pub fn generic(av_cd: f64, height: f64) -> Self {
         Self::Generic {
             av_cd: av_cd.max(0.0),
@@ -107,6 +110,7 @@ impl VegetationType {
     /// 计算有效阻力系数 × 投影面积密度
     ///
     /// 返回 C_d * A_v [1/m]
+    // ALLOW_F64: 源项计算
     pub fn effective_drag(&self, water_depth: f64, velocity: f64) -> f64 {
         match *self {
             Self::None => 0.0,
@@ -141,6 +145,7 @@ impl VegetationType {
     }
 
     /// 获取植被高度
+    // ALLOW_F64: 源项计算
     pub fn height(&self) -> f64 {
         match *self {
             Self::None => 0.0,
@@ -151,6 +156,7 @@ impl VegetationType {
     }
 
     /// 是否为淹没植被
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn is_submerged(&self, water_depth: f64) -> bool {
         water_depth >= self.height()
     }
@@ -164,15 +170,16 @@ pub struct VegetationConfig {
     /// 每个单元的植被类型
     pub vegetation: Vec<VegetationType>,
     /// 水密度 [kg/m³]
-    pub rho_water: f64,
+    pub rho_water: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小流速（避免除零）
-    pub vel_min: f64,
+    pub vel_min: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl VegetationConfig {
     /// 创建新配置
+    // ALLOW_F64: 物理参数
     pub fn new(n_cells: usize, rho_water: f64) -> Self {
         Self {
             enabled: true,
@@ -284,6 +291,7 @@ pub struct VegetationSource;
 
 impl VegetationSource {
     /// 创建新配置
+    // ALLOW_F64: 物理参数
     pub fn new(n_cells: usize, rho_water: f64) -> VegetationConfig {
         VegetationConfig::new(n_cells, rho_water)
     }
@@ -302,7 +310,7 @@ pub struct VegetationImplicit {
     /// 配置
     pub config: VegetationConfig,
     /// 阻力衰减因子（预计算）
-    decay_factors: Vec<f64>,
+    decay_factors: Vec<f64>, // ALLOW_F64: 源项计算
 }
 
 impl VegetationImplicit {
@@ -318,6 +326,7 @@ impl VegetationImplicit {
     /// 计算衰减因子
     ///
     /// 返回 exp(-Δt * 0.5 * C_d * A_v * |u|)
+    // ALLOW_F64: 时间参数与模拟进度配合
     pub fn compute_decay_factors(&mut self, state: &ShallowWaterState, dt: f64) {
         let n = self.decay_factors.len().min(state.h.len());
 
@@ -357,6 +366,7 @@ impl VegetationImplicit {
     }
 
     /// 获取衰减因子
+    // ALLOW_F64: 源项计算
     pub fn get_decay_factor(&self, cell: usize) -> f64 {
         self.decay_factors.get(cell).copied().unwrap_or(1.0)
     }

@@ -13,8 +13,8 @@ use mh_physics::numerics::linear_algebra::{
 use std::time::Instant;
 
 /// 生成随机对称正定矩阵
-fn generate_spd_matrix(n: usize, seed: u64) -> CsrMatrix {
-    let mut builder = CsrBuilder::new_square(n);
+fn generate_spd_matrix(n: usize, seed: u64) -> CsrMatrix<f64> {
+    let mut builder = CsrBuilder::<f64>::new_square(n);
     let mut rng_state = seed;
 
     // 简单的伪随机数生成
@@ -44,8 +44,8 @@ fn generate_spd_matrix(n: usize, seed: u64) -> CsrMatrix {
 }
 
 /// 生成随机非对称矩阵
-fn generate_nonsymmetric_matrix(n: usize, seed: u64) -> CsrMatrix {
-    let mut builder = CsrBuilder::new_square(n);
+fn generate_nonsymmetric_matrix(n: usize, seed: u64) -> CsrMatrix<f64> {
+    let mut builder = CsrBuilder::<f64>::new_square(n);
     let mut rng_state = seed;
 
     let mut next_rand = || -> f64 {
@@ -73,8 +73,8 @@ fn generate_nonsymmetric_matrix(n: usize, seed: u64) -> CsrMatrix {
 }
 
 /// 生成接近奇异的病态矩阵
-fn generate_ill_conditioned_matrix(n: usize, condition_target: f64) -> CsrMatrix {
-    let mut builder = CsrBuilder::new_square(n);
+fn generate_ill_conditioned_matrix(n: usize, condition_target: f64) -> CsrMatrix<f64> {
+    let mut builder = CsrBuilder::<f64>::new_square(n);
 
     // 构建条件数约为 condition_target 的矩阵
     let scale_factor = condition_target.powf(1.0 / (n as f64 - 1.0));

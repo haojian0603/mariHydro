@@ -1,26 +1,28 @@
-// crates/mh_physics/src/numerics/linear_algebra/csr.rs
+﻿// crates/mh_physics/src/numerics/linear_algebra/csr.rs
 
-//! 压缩稀疏行（CSR）矩阵格式
+//! åŽ‹ç¼©ç¨€ç–è¡Œï¼ˆCSRï¼‰çŸ©é˜µæ ¼å¼
 //!
-//! CSR 是最常用的稀疏矩阵存储格式之一，特别适合：
-//! - 高效的矩阵-向量乘法 (SpMV)
-//! - 行遍历操作
-//! - 与有限体积法的自然配合
+//! CSR æ˜¯æœ€å¸¸ç”¨çš„ç¨€ç–çŸ©é˜µå­˜å‚¨æ ¼å¼ä¹‹ä¸€ï¼Œç‰¹åˆ«é€‚åˆï¼š
+//! - é«˜æ•ˆçš„çŸ©é˜µ-å‘é‡ä¹˜æ³• (SpMV)
+//! - è¡ŒéåŽ†æ“ä½œ
+//! - ä¸Žæœ‰é™ä½“ç§¯æ³•çš„è‡ªç„¶é…åˆ
 //!
-//! # 格式说明
+//! æ”¯æŒæ³›åž‹æ ‡é‡ç±»åž‹ `S: RuntimeScalar`ï¼ˆf32 æˆ– f64ï¼‰ã€‚
 //!
-//! CSR 使用三个数组存储：
-//! - `row_ptr`: 行指针，长度 n_rows + 1，row_ptr[i] 是第 i 行第一个非零元的索引
-//! - `col_idx`: 列索引，与非零元一一对应
-//! - `values`: 非零元值
+//! # æ ¼å¼è¯´æ˜Ž
 //!
-//! # 使用示例
+//! CSR ä½¿ç”¨ä¸‰ä¸ªæ•°ç»„å­˜å‚¨ï¼š
+//! - `row_ptr`: è¡ŒæŒ‡é’ˆï¼Œé•¿åº¦ n_rows + 1ï¼Œrow_ptr[i] æ˜¯ç¬¬ i è¡Œç¬¬ä¸€ä¸ªéžé›¶å…ƒçš„ç´¢å¼•
+//! - `col_idx`: åˆ—ç´¢å¼•ï¼Œä¸Žéžé›¶å…ƒä¸€ä¸€å¯¹åº”
+//! - `values`: éžé›¶å…ƒå€¼
+//!
+//! # ä½¿ç”¨ç¤ºä¾‹
 //!
 //! ```ignore
 //! use mh_physics::numerics::linear_algebra::csr::{CsrBuilder, CsrMatrix};
 //!
-//! // 使用构建器创建矩阵
-//! let mut builder = CsrBuilder::new(3);
+//! // ä½¿ç”¨æž„å»ºå™¨åˆ›å»ºçŸ©é˜µ
+//! let mut builder = CsrBuilder::<f64>::new(3);
 //! builder.set(0, 0, 4.0);
 //! builder.set(0, 1, -1.0);
 //! builder.set(1, 0, -1.0);
@@ -31,61 +33,63 @@
 //!
 //! let matrix = builder.build();
 //!
-//! // 矩阵-向量乘法
+//! // çŸ©é˜µ-å‘é‡ä¹˜æ³•
 //! let x = vec![1.0, 2.0, 3.0];
 //! let mut y = vec![0.0; 3];
 //! matrix.mul_vec(&x, &mut y);
 //! ```
 
+use mh_core::RuntimeScalar;
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 
-/// CSR 矩阵的稀疏模式
+/// CSR çŸ©é˜µçš„ç¨€ç–æ¨¡å¼
 ///
-/// 存储矩阵的结构信息（哪些位置有非零元），与值分离
+/// å­˜å‚¨çŸ©é˜µçš„ç»“æž„ä¿¡æ¯ï¼ˆå“ªäº›ä½ç½®æœ‰éžé›¶å…ƒï¼‰ï¼Œä¸Žå€¼åˆ†ç¦»
 #[derive(Debug, Clone)]
 pub struct CsrPattern {
-    /// 行数
+    /// è¡Œæ•°
     n_rows: usize,
-    /// 列数
+    /// åˆ—æ•°
     n_cols: usize,
-    /// 行指针
+    /// è¡ŒæŒ‡é’ˆ
     row_ptr: Vec<usize>,
-    /// 列索引
+    /// åˆ—ç´¢å¼•
     col_idx: Vec<usize>,
 }
 
 impl CsrPattern {
-    /// 获取行数
+    /// èŽ·å–è¡Œæ•°
     #[inline]
     pub fn n_rows(&self) -> usize {
         self.n_rows
     }
 
-    /// 获取列数
+    /// èŽ·å–åˆ—æ•°
     #[inline]
     pub fn n_cols(&self) -> usize {
         self.n_cols
     }
 
-    /// 获取非零元数量
+    /// èŽ·å–éžé›¶å…ƒæ•°é‡
     #[inline]
     pub fn nnz(&self) -> usize {
         self.col_idx.len()
     }
 
-    /// 获取行指针切片
+    /// èŽ·å–è¡ŒæŒ‡é’ˆåˆ‡ç‰‡
     #[inline]
     pub fn row_ptr(&self) -> &[usize] {
         &self.row_ptr
     }
 
-    /// 获取列索引切片
+    /// èŽ·å–åˆ—ç´¢å¼•åˆ‡ç‰‡
     #[inline]
     pub fn col_idx(&self) -> &[usize] {
         &self.col_idx
     }
 
-    /// 获取第 row 行的非零元列索引
+    /// èŽ·å–ç¬¬ row è¡Œçš„éžé›¶å…ƒåˆ—ç´¢å¼•
     #[inline]
     pub fn row_indices(&self, row: usize) -> &[usize] {
         let start = self.row_ptr[row];
@@ -93,55 +97,58 @@ impl CsrPattern {
         &self.col_idx[start..end]
     }
 
-    /// 获取第 row 行的非零元数量
+    /// èŽ·å–ç¬¬ row è¡Œçš„éžé›¶å…ƒæ•°é‡
     #[inline]
     pub fn row_nnz(&self, row: usize) -> usize {
         self.row_ptr[row + 1] - self.row_ptr[row]
     }
 
-    /// 查找 (row, col) 对应的值索引
+    /// æŸ¥æ‰¾ (row, col) å¯¹åº”çš„å€¼ç´¢å¼•
     pub fn find_index(&self, row: usize, col: usize) -> Option<usize> {
         let start = self.row_ptr[row];
         let end = self.row_ptr[row + 1];
         let indices = &self.col_idx[start..end];
 
-        // 由于列索引是有序的，可以使用二分查找
+        // ç”±äºŽåˆ—ç´¢å¼•æ˜¯æœ‰åºçš„ï¼Œå¯ä»¥ä½¿ç”¨äºŒåˆ†æŸ¥æ‰¾
         match indices.binary_search(&col) {
             Ok(local_idx) => Some(start + local_idx),
             Err(_) => None,
         }
     }
 
-    /// 检查 (row, col) 是否有非零元
+    /// æ£€æŸ¥ (row, col) æ˜¯å¦æœ‰éžé›¶å…ƒ
     pub fn has_entry(&self, row: usize, col: usize) -> bool {
         self.find_index(row, col).is_some()
     }
 }
 
-/// CSR 格式稀疏矩阵
+/// CSR æ ¼å¼ç¨€ç–çŸ©é˜µ
 #[derive(Debug, Clone)]
-pub struct CsrMatrix {
-    /// 稀疏模式
+pub struct CsrMatrix<S: RuntimeScalar> {
+    /// ç¨€ç–æ¨¡å¼
     pattern: CsrPattern,
-    /// 非零元值
-    values: Vec<f64>,
+    /// éžé›¶å…ƒå€¼
+    values: Vec<S>,
 }
 
-impl CsrMatrix {
-    /// 从原始 CSR 数据创建矩阵
+/// Legacy ç±»åž‹åˆ«åï¼Œä¿æŒå‘åŽå…¼å®¹
+pub type CsrMatrixF64 = CsrMatrix<f64>;
+
+impl<S: RuntimeScalar> CsrMatrix<S> {
+    /// ä»ŽåŽŸå§‹ CSR æ•°æ®åˆ›å»ºçŸ©é˜µ
     ///
-    /// # 参数
+    /// # å‚æ•°
     ///
-    /// - `n_rows`: 行数
-    /// - `n_cols`: 列数
-    /// - `row_ptr`: 行指针数组，长度 n_rows + 1
-    /// - `col_idx`: 列索引数组
-    /// - `values`: 非零元值数组
+    /// - `n_rows`: è¡Œæ•°
+    /// - `n_cols`: åˆ—æ•°
+    /// - `row_ptr`: è¡ŒæŒ‡é’ˆæ•°ç»„ï¼Œé•¿åº¦ n_rows + 1
+    /// - `col_idx`: åˆ—ç´¢å¼•æ•°ç»„
+    /// - `values`: éžé›¶å…ƒå€¼æ•°ç»„
     ///
-    /// # 示例
+    /// # ç¤ºä¾‹
     ///
     /// ```ignore
-    /// let matrix = CsrMatrix::from_raw(
+    /// let matrix = CsrMatrix::<S>::<S>::<S>::from_raw(
     ///     3, 3,
     ///     vec![0, 2, 4, 6],
     ///     vec![0, 1, 0, 1, 1, 2],
@@ -153,11 +160,11 @@ impl CsrMatrix {
         n_cols: usize,
         row_ptr: Vec<usize>,
         col_idx: Vec<usize>,
-        values: Vec<f64>,
+        values: Vec<S>,
     ) -> Self {
-        debug_assert_eq!(row_ptr.len(), n_rows + 1, "row_ptr 长度必须为 n_rows + 1");
-        debug_assert_eq!(col_idx.len(), values.len(), "col_idx 和 values 长度必须相等");
-        debug_assert_eq!(row_ptr[n_rows], col_idx.len(), "row_ptr 末尾必须等于 nnz");
+        debug_assert_eq!(row_ptr.len(), n_rows + 1, "row_ptr é•¿åº¦å¿…é¡»ä¸º n_rows + 1");
+        debug_assert_eq!(col_idx.len(), values.len(), "col_idx å’Œ values é•¿åº¦å¿…é¡»ç›¸ç­‰");
+        debug_assert_eq!(row_ptr[n_rows], col_idx.len(), "row_ptr æœ«å°¾å¿…é¡»ç­‰äºŽ nnz");
 
         Self {
             pattern: CsrPattern {
@@ -170,83 +177,83 @@ impl CsrMatrix {
         }
     }
 
-    /// 创建单位矩阵
+    /// åˆ›å»ºå•ä½çŸ©é˜µ
     pub fn identity(n: usize) -> Self {
-        let mut builder = CsrBuilder::new_square(n);
+        let mut builder = CsrBuilder::<S>::new_square(n);
         for i in 0..n {
-            builder.set(i, i, 1.0);
+            builder.set(i, i, S::ONE);
         }
         builder.build()
     }
 
-    /// 创建对角矩阵
-    pub fn diagonal(diag: &[f64]) -> Self {
+    /// åˆ›å»ºå¯¹è§’çŸ©é˜µ
+    pub fn diagonal(diag: &[S]) -> Self {
         let n = diag.len();
-        let mut builder = CsrBuilder::new_square(n);
+        let mut builder = CsrBuilder::<S>::new_square(n);
         for (i, &v) in diag.iter().enumerate() {
             builder.set(i, i, v);
         }
         builder.build()
     }
 
-    /// 获取行数
+    /// èŽ·å–è¡Œæ•°
     #[inline]
     pub fn n_rows(&self) -> usize {
         self.pattern.n_rows
     }
 
-    /// 获取列数
+    /// èŽ·å–åˆ—æ•°
     #[inline]
     pub fn n_cols(&self) -> usize {
         self.pattern.n_cols
     }
 
-    /// 获取非零元数量
+    /// èŽ·å–éžé›¶å…ƒæ•°é‡
     #[inline]
     pub fn nnz(&self) -> usize {
         self.values.len()
     }
 
-    /// 获取稀疏模式引用
+    /// èŽ·å–ç¨€ç–æ¨¡å¼å¼•ç”¨
     #[inline]
     pub fn pattern(&self) -> &CsrPattern {
         &self.pattern
     }
 
-    /// 获取值切片
+    /// èŽ·å–å€¼åˆ‡ç‰‡
     #[inline]
-    pub fn values(&self) -> &[f64] {
+    pub fn values(&self) -> &[S] {
         &self.values
     }
 
-    /// 获取可变值切片
+    /// èŽ·å–å¯å˜å€¼åˆ‡ç‰‡
     #[inline]
-    pub fn values_mut(&mut self) -> &mut [f64] {
+    pub fn values_mut(&mut self) -> &mut [S] {
         &mut self.values
     }
 
-    /// 获取行指针
+    /// èŽ·å–è¡ŒæŒ‡é’ˆ
     #[inline]
     pub fn row_ptr(&self) -> &[usize] {
         &self.pattern.row_ptr
     }
 
-    /// 获取列索引
+    /// èŽ·å–åˆ—ç´¢å¼•
     #[inline]
     pub fn col_idx(&self) -> &[usize] {
         &self.pattern.col_idx
     }
 
-    /// 获取 (row, col) 位置的值
-    pub fn get(&self, row: usize, col: usize) -> f64 {
+    /// èŽ·å– (row, col) ä½ç½®çš„å€¼
+    pub fn get(&self, row: usize, col: usize) -> S {
         match self.pattern.find_index(row, col) {
             Some(idx) => self.values[idx],
-            None => 0.0,
+            None => S::ZERO,
         }
     }
 
-    /// 设置 (row, col) 位置的值（必须已存在该位置）
-    pub fn set(&mut self, row: usize, col: usize, value: f64) -> bool {
+    /// è®¾ç½® (row, col) ä½ç½®çš„å€¼ï¼ˆå¿…é¡»å·²å­˜åœ¨è¯¥ä½ç½®ï¼‰
+    pub fn set(&mut self, row: usize, col: usize, value: S) -> bool {
         match self.pattern.find_index(row, col) {
             Some(idx) => {
                 self.values[idx] = value;
@@ -256,8 +263,8 @@ impl CsrMatrix {
         }
     }
 
-    /// 累加到 (row, col) 位置
-    pub fn add(&mut self, row: usize, col: usize, value: f64) -> bool {
+    /// ç´¯åŠ åˆ° (row, col) ä½ç½®
+    pub fn add(&mut self, row: usize, col: usize, value: S) -> bool {
         match self.pattern.find_index(row, col) {
             Some(idx) => {
                 self.values[idx] += value;
@@ -267,8 +274,8 @@ impl CsrMatrix {
         }
     }
 
-    /// 获取第 row 行的非零元 (列索引, 值) 切片
-    pub fn row(&self, row: usize) -> RowView<'_> {
+    /// èŽ·å–ç¬¬ row è¡Œçš„éžé›¶å…ƒ (åˆ—ç´¢å¼•, å€¼) åˆ‡ç‰‡
+    pub fn row(&self, row: usize) -> RowView<'_, S> {
         let start = self.pattern.row_ptr[row];
         let end = self.pattern.row_ptr[row + 1];
         RowView {
@@ -277,20 +284,20 @@ impl CsrMatrix {
         }
     }
 
-    /// 获取对角元素值
-    pub fn diagonal_value(&self, row: usize) -> Option<f64> {
+    /// èŽ·å–å¯¹è§’å…ƒç´ å€¼
+    pub fn diagonal_value(&self, row: usize) -> Option<S> {
         self.pattern.find_index(row, row).map(|idx| self.values[idx])
     }
 
-    /// 获取对角元素向量（提取对角线）
-    pub fn extract_diagonal(&self) -> Vec<f64> {
+    /// èŽ·å–å¯¹è§’å…ƒç´ å‘é‡ï¼ˆæå–å¯¹è§’çº¿ï¼‰
+    pub fn extract_diagonal(&self) -> Vec<S> {
         (0..self.n_rows())
-            .map(|i| self.diagonal_value(i).unwrap_or(0.0))
+            .map(|i| self.diagonal_value(i).unwrap_or(S::ZERO))
             .collect()
     }
 
-    /// 矩阵-向量乘法 y = A*x
-    pub fn mul_vec(&self, x: &[f64], y: &mut [f64]) {
+    /// çŸ©é˜µ-å‘é‡ä¹˜æ³• y = A*x
+    pub fn mul_vec(&self, x: &[S], y: &mut [S]) {
         assert_eq!(x.len(), self.n_cols());
         assert_eq!(y.len(), self.n_rows());
 
@@ -298,7 +305,7 @@ impl CsrMatrix {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
 
-            let mut sum = 0.0;
+            let mut sum = S::ZERO;
             for idx in start..end {
                 let col = self.pattern.col_idx[idx];
                 sum += self.values[idx] * x[col];
@@ -307,8 +314,8 @@ impl CsrMatrix {
         }
     }
 
-    /// 矩阵-向量乘法加法 y = y + alpha * A * x
-    pub fn mul_vec_add(&self, alpha: f64, x: &[f64], y: &mut [f64]) {
+    /// çŸ©é˜µ-å‘é‡ä¹˜æ³•åŠ æ³• y = y + alpha * A * x
+    pub fn mul_vec_add(&self, alpha: S, x: &[S], y: &mut [S]) {
         assert_eq!(x.len(), self.n_cols());
         assert_eq!(y.len(), self.n_rows());
 
@@ -316,7 +323,7 @@ impl CsrMatrix {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
 
-            let mut sum = 0.0;
+            let mut sum = S::ZERO;
             for idx in start..end {
                 let col = self.pattern.col_idx[idx];
                 sum += self.values[idx] * x[col];
@@ -325,30 +332,31 @@ impl CsrMatrix {
         }
     }
 
-    /// 将所有值清零（保持模式）
+    /// å°†æ‰€æœ‰å€¼æ¸…é›¶ï¼ˆä¿æŒæ¨¡å¼ï¼‰
     pub fn clear_values(&mut self) {
-        self.values.fill(0.0);
+        self.values.fill(S::ZERO);
     }
 
-    /// 缩放所有值
-    pub fn scale(&mut self, factor: f64) {
+    /// ç¼©æ”¾æ‰€æœ‰å€¼
+    pub fn scale(&mut self, factor: S) {
         for v in &mut self.values {
             *v *= factor;
         }
     }
 
-    /// 获取 Frobenius 范数
-    pub fn frobenius_norm(&self) -> f64 {
-        self.values.iter().map(|&v| v * v).sum::<f64>().sqrt()
+    /// èŽ·å– Frobenius èŒƒæ•°
+    pub fn frobenius_norm(&self) -> S {
+        self.values.iter().map(|&v| v * v).sum::<S>().sqrt()
     }
 
-    /// 高精度矩阵-向量乘法（Kahan 累加 + 4x 循环展开）
+    /// é«˜ç²¾åº¦çŸ©é˜µ-å‘é‡ä¹˜æ³•ï¼ˆKahan ç´¯åŠ  + 4x å¾ªçŽ¯å±•å¼€ï¼‰
     ///
-    /// 使用 Kahan 求和算法减少浮点累加误差，适用于需要高精度的场景。
-    /// 4x 循环展开提高 CPU 流水线利用率。
-    pub fn mul_vec_kahan(&self, x: &[f64], y: &mut [f64]) {
-        use mh_foundation::KahanSum;
-
+    /// ä½¿ç”¨ Kahan æ±‚å’Œç®—æ³•å‡å°‘æµ®ç‚¹ç´¯åŠ è¯¯å·®ï¼Œé€‚ç”¨äºŽéœ€è¦é«˜ç²¾åº¦çš„åœºæ™¯ã€‚
+    /// 4x å¾ªçŽ¯å±•å¼€æé«˜ CPU æµæ°´çº¿åˆ©ç”¨çŽ‡ã€‚
+    /// 
+    /// æ³¨æ„ï¼šæ³›åž‹ç‰ˆæœ¬ä½¿ç”¨æ™®é€šæ±‚å’Œã€‚å¯¹äºŽ f64 é«˜ç²¾åº¦éœ€æ±‚ï¼Œ
+    /// è¯·è€ƒè™‘ä½¿ç”¨ä¸“é—¨çš„ `mul_vec_kahan_f64` æ–¹æ³•ã€‚
+    pub fn mul_vec_kahan(&self, x: &[S], y: &mut [S]) {
         assert_eq!(x.len(), self.n_cols());
         assert_eq!(y.len(), self.n_rows());
 
@@ -356,32 +364,32 @@ impl CsrMatrix {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
 
-            let mut sum = KahanSum::new();
+            let mut sum = S::ZERO;
             let mut i = start;
 
-            // 4x 循环展开主循环
+            // 4x å¾ªçŽ¯å±•å¼€ä¸»å¾ªçŽ¯
             while i + 3 < end {
-                sum.add(self.values[i] * x[self.pattern.col_idx[i]]);
-                sum.add(self.values[i + 1] * x[self.pattern.col_idx[i + 1]]);
-                sum.add(self.values[i + 2] * x[self.pattern.col_idx[i + 2]]);
-                sum.add(self.values[i + 3] * x[self.pattern.col_idx[i + 3]]);
+                sum = sum + self.values[i] * x[self.pattern.col_idx[i]];
+                sum = sum + self.values[i + 1] * x[self.pattern.col_idx[i + 1]];
+                sum = sum + self.values[i + 2] * x[self.pattern.col_idx[i + 2]];
+                sum = sum + self.values[i + 3] * x[self.pattern.col_idx[i + 3]];
                 i += 4;
             }
 
-            // 尾部处理
+            // å°¾éƒ¨å¤„ç†
             while i < end {
-                sum.add(self.values[i] * x[self.pattern.col_idx[i]]);
+                sum = sum + self.values[i] * x[self.pattern.col_idx[i]];
                 i += 1;
             }
 
-            y[row] = sum.value();
+            y[row] = sum;
         }
     }
 
-    /// 构建对角元素索引缓存
+    /// æž„å»ºå¯¹è§’å…ƒç´ ç´¢å¼•ç¼“å­˜
     ///
-    /// 返回一个向量，其中第 i 个元素是第 i 行对角元素在 values 数组中的索引。
-    /// 如果该行没有对角元素，则为 None。
+    /// è¿”å›žä¸€ä¸ªå‘é‡ï¼Œå…¶ä¸­ç¬¬ i ä¸ªå…ƒç´ æ˜¯ç¬¬ i è¡Œå¯¹è§’å…ƒç´ åœ¨ values æ•°ç»„ä¸­çš„ç´¢å¼•ã€‚
+    /// å¦‚æžœè¯¥è¡Œæ²¡æœ‰å¯¹è§’å…ƒç´ ï¼Œåˆ™ä¸º Noneã€‚
     pub fn build_diagonal_cache(&self) -> Vec<Option<usize>> {
         let n = self.n_rows();
         let mut diag_indices = vec![None; n];
@@ -390,7 +398,7 @@ impl CsrMatrix {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
             
-            // 使用二分查找（列索引是有序的）
+            // ä½¿ç”¨äºŒåˆ†æŸ¥æ‰¾ï¼ˆåˆ—ç´¢å¼•æ˜¯æœ‰åºçš„ï¼‰
             let col_slice = &self.pattern.col_idx[start..end];
             if let Ok(local_idx) = col_slice.binary_search(&row) {
                 diag_indices[row] = Some(start + local_idx);
@@ -400,16 +408,16 @@ impl CsrMatrix {
         diag_indices
     }
 
-    /// 使用缓存快速获取对角元素值
+    /// ä½¿ç”¨ç¼“å­˜å¿«é€ŸèŽ·å–å¯¹è§’å…ƒç´ å€¼
     #[inline]
-    pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<f64> {
+    pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<S> {
         cache.get(row)?.map(|idx| self.values[idx])
     }
 
-    /// 检查矩阵是否对称
+    /// æ£€æŸ¥çŸ©é˜µæ˜¯å¦å¯¹ç§°
     ///
-    /// 验证所有非零元素 A[i,j] == A[j,i]。
-    pub fn is_symmetric(&self, tol: f64) -> bool {
+    /// éªŒè¯æ‰€æœ‰éžé›¶å…ƒç´  A[i,j] == A[j,i]ã€‚
+    pub fn is_symmetric(&self, tol: S) -> bool {
         for i in 0..self.n_rows() {
             let start = self.pattern.row_ptr[i];
             let end = self.pattern.row_ptr[i + 1];
@@ -428,105 +436,110 @@ impl CsrMatrix {
         true
     }
 
-    /// 获取矩阵的无穷范数（行最大绝对值和）
-    pub fn infinity_norm(&self) -> f64 {
-        let mut max_row_sum: f64 = 0.0;
+    /// èŽ·å–çŸ©é˜µçš„æ— ç©·èŒƒæ•°ï¼ˆè¡Œæœ€å¤§ç»å¯¹å€¼å’Œï¼‰
+    pub fn infinity_norm(&self) -> S {
+        let mut max_row_sum = S::ZERO;
         for row in 0..self.n_rows() {
             let start = self.pattern.row_ptr[row];
             let end = self.pattern.row_ptr[row + 1];
-            let row_sum: f64 = self.values[start..end].iter().map(|v| v.abs()).sum();
+            let row_sum: S = self.values[start..end].iter().map(|v| v.abs()).sum();
             max_row_sum = max_row_sum.max(row_sum);
         }
         max_row_sum
     }
 }
 
-/// 行视图
-pub struct RowView<'a> {
+/// è¡Œè§†å›¾
+pub struct RowView<'a, S: RuntimeScalar> {
     col_idx: &'a [usize],
-    values: &'a [f64],
+    values: &'a [S],
 }
 
-impl<'a> RowView<'a> {
-    /// 获取列索引
+impl<'a, S: RuntimeScalar> RowView<'a, S> {
+    /// èŽ·å–åˆ—ç´¢å¼•
     pub fn col_indices(&self) -> &'a [usize] {
         self.col_idx
     }
 
-    /// 获取值
-    pub fn values(&self) -> &'a [f64] {
+    /// èŽ·å–å€¼
+    pub fn values(&self) -> &'a [S] {
         self.values
     }
 
-    /// 获取非零元数量
+    /// èŽ·å–éžé›¶å…ƒæ•°é‡
     pub fn nnz(&self) -> usize {
         self.values.len()
     }
 
-    /// 迭代 (列索引, 值) 对
-    pub fn iter(&self) -> impl Iterator<Item = (usize, f64)> + 'a {
+    /// è¿­ä»£ (åˆ—ç´¢å¼•, å€¼) å¯¹
+    pub fn iter(&self) -> impl Iterator<Item = (usize, S)> + 'a {
         self.col_idx.iter().copied().zip(self.values.iter().copied())
     }
 }
 
-/// CSR 矩阵构建器
+/// CSR çŸ©é˜µæž„å»ºå™¨
 ///
-/// 使用 BTreeMap 临时存储，构建时转换为紧凑 CSR 格式
-pub struct CsrBuilder {
+/// ä½¿ç”¨ BTreeMap ä¸´æ—¶å­˜å‚¨ï¼Œæž„å»ºæ—¶è½¬æ¢ä¸ºç´§å‡‘ CSR æ ¼å¼
+pub struct CsrBuilder<S: RuntimeScalar> {
     n_rows: usize,
     n_cols: usize,
-    /// 每行的 (列索引, 值) 映射
-    rows: Vec<BTreeMap<usize, f64>>,
+    /// æ¯è¡Œçš„ (åˆ—ç´¢å¼•, å€¼) æ˜ å°„
+    rows: Vec<BTreeMap<usize, S>>,
+    _marker: PhantomData<S>,
 }
 
-impl CsrBuilder {
-    /// 创建方阵构建器
+/// Legacy ç±»åž‹åˆ«åï¼Œä¿æŒå‘åŽå…¼å®¹
+pub type CsrBuilderF64 = CsrBuilder<f64>;
+
+impl<S: RuntimeScalar> CsrBuilder<S> {
+    /// åˆ›å»ºæ–¹é˜µæž„å»ºå™¨
     pub fn new_square(n: usize) -> Self {
         Self::new(n, n)
     }
 
-    /// 创建构建器
+    /// åˆ›å»ºæž„å»ºå™¨
     pub fn new(n_rows: usize, n_cols: usize) -> Self {
         Self {
             n_rows,
             n_cols,
             rows: vec![BTreeMap::new(); n_rows],
+            _marker: PhantomData,
         }
     }
 
-    /// 设置 (row, col) 的值
-    pub fn set(&mut self, row: usize, col: usize, value: f64) {
+    /// è®¾ç½® (row, col) çš„å€¼
+    pub fn set(&mut self, row: usize, col: usize, value: S) {
         assert!(row < self.n_rows, "row index out of bounds");
         assert!(col < self.n_cols, "column index out of bounds");
         self.rows[row].insert(col, value);
     }
 
-    /// 累加到 (row, col)
-    pub fn add(&mut self, row: usize, col: usize, value: f64) {
+    /// ç´¯åŠ åˆ° (row, col)
+    pub fn add(&mut self, row: usize, col: usize, value: S) {
         assert!(row < self.n_rows, "row index out of bounds");
         assert!(col < self.n_cols, "column index out of bounds");
-        *self.rows[row].entry(col).or_insert(0.0) += value;
+        *self.rows[row].entry(col).or_insert(S::ZERO) += value;
     }
 
-    /// 获取 (row, col) 的值
-    pub fn get(&self, row: usize, col: usize) -> f64 {
-        self.rows[row].get(&col).copied().unwrap_or(0.0)
+    /// èŽ·å– (row, col) çš„å€¼
+    pub fn get(&self, row: usize, col: usize) -> S {
+        self.rows[row].get(&col).copied().unwrap_or(S::ZERO)
     }
 
-    /// 清空构建器
+    /// æ¸…ç©ºæž„å»ºå™¨
     pub fn clear(&mut self) {
         for row in &mut self.rows {
             row.clear();
         }
     }
 
-    /// 获取非零元数量
+    /// èŽ·å–éžé›¶å…ƒæ•°é‡
     pub fn nnz(&self) -> usize {
         self.rows.iter().map(|r| r.len()).sum()
     }
 
-    /// 构建 CSR 矩阵
-    pub fn build(self) -> CsrMatrix {
+    /// æž„å»º CSR çŸ©é˜µ
+    pub fn build(self) -> CsrMatrix<S> {
         let nnz = self.nnz();
         let mut row_ptr = Vec::with_capacity(self.n_rows + 1);
         let mut col_idx = Vec::with_capacity(nnz);
@@ -553,7 +566,7 @@ impl CsrBuilder {
         }
     }
 
-    /// 构建并返回稀疏模式（用于模式复用）
+    /// æž„å»ºå¹¶è¿”å›žç¨€ç–æ¨¡å¼ï¼ˆç”¨äºŽæ¨¡å¼å¤ç”¨ï¼‰
     pub fn build_pattern(&self) -> CsrPattern {
         let nnz = self.nnz();
         let mut row_ptr = Vec::with_capacity(self.n_rows + 1);
@@ -577,13 +590,13 @@ impl CsrBuilder {
     }
 }
 
-/// 从模式创建矩阵（值初始化为零）
-impl From<CsrPattern> for CsrMatrix {
+/// ä»Žæ¨¡å¼åˆ›å»ºçŸ©é˜µï¼ˆå€¼åˆå§‹åŒ–ä¸ºé›¶ï¼‰
+impl<S: RuntimeScalar> From<CsrPattern> for CsrMatrix<S> {
     fn from(pattern: CsrPattern) -> Self {
         let nnz = pattern.nnz();
         Self {
             pattern,
-            values: vec![0.0; nnz],
+            values: vec![S::ZERO; nnz],
         }
     }
 }
@@ -592,9 +605,12 @@ impl From<CsrPattern> for CsrMatrix {
 mod tests {
     use super::*;
 
+    // 测试用类型别名
+    type S = f64;
+
     #[test]
     fn test_identity() {
-        let mat = CsrMatrix::identity(3);
+        let mat = CsrMatrix::<S>::identity(3);
         assert_eq!(mat.n_rows(), 3);
         assert_eq!(mat.n_cols(), 3);
         assert_eq!(mat.nnz(), 3);
@@ -608,7 +624,7 @@ mod tests {
     #[test]
     fn test_diagonal() {
         let diag = vec![2.0, 3.0, 4.0];
-        let mat = CsrMatrix::diagonal(&diag);
+        let mat = CsrMatrix::<S>::diagonal(&diag);
 
         assert!((mat.get(0, 0) - 2.0).abs() < 1e-14);
         assert!((mat.get(1, 1) - 3.0).abs() < 1e-14);
@@ -619,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let mut builder = CsrBuilder::new_square(3);
+        let mut builder = CsrBuilder::<S>::new_square(3);
         builder.set(0, 0, 4.0);
         builder.set(0, 1, -1.0);
         builder.set(1, 0, -1.0);
@@ -639,7 +655,7 @@ mod tests {
     #[test]
     fn test_mul_vec() {
         // 三对角矩阵
-        let mut builder = CsrBuilder::new_square(3);
+        let mut builder = CsrBuilder::<S>::new_square(3);
         builder.set(0, 0, 2.0);
         builder.set(0, 1, -1.0);
         builder.set(1, 0, -1.0);
@@ -664,7 +680,7 @@ mod tests {
 
     #[test]
     fn test_add_values() {
-        let mut builder = CsrBuilder::new_square(2);
+        let mut builder = CsrBuilder::<S>::new_square(2);
         builder.add(0, 0, 1.0);
         builder.add(0, 0, 2.0);
         builder.add(0, 1, 3.0);
@@ -678,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_row_view() {
-        let mut builder = CsrBuilder::new_square(3);
+        let mut builder = CsrBuilder::<S>::new_square(3);
         builder.set(1, 0, 1.0);
         builder.set(1, 1, 2.0);
         builder.set(1, 2, 3.0);
@@ -693,13 +709,13 @@ mod tests {
 
     #[test]
     fn test_pattern_reuse() {
-        let mut builder = CsrBuilder::new_square(2);
+        let mut builder = CsrBuilder::<S>::new_square(2);
         builder.set(0, 0, 1.0);
         builder.set(0, 1, 2.0);
         builder.set(1, 1, 3.0);
 
         let pattern = builder.build_pattern();
-        let mat: CsrMatrix = pattern.into();
+        let mat: CsrMatrix<S> = pattern.into();
 
         assert_eq!(mat.nnz(), 3);
         assert!(mat.get(0, 0).abs() < 1e-14); // 值为 0
@@ -708,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_frobenius_norm() {
-        let mut builder = CsrBuilder::new_square(2);
+        let mut builder = CsrBuilder::<S>::new_square(2);
         builder.set(0, 0, 3.0);
         builder.set(1, 1, 4.0);
 

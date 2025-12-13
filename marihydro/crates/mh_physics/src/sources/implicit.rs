@@ -54,6 +54,7 @@ impl ImplicitMethod {
     ///
     /// 返回 u_new / u 的比值
     #[inline]
+    // ALLOW_F64: 源项计算
     pub fn decay_factor(&self, gamma: f64, dt: f64) -> f64 {
         match self {
             Self::Explicit => 1.0 - dt * gamma,
@@ -75,9 +76,9 @@ pub struct ImplicitConfig {
     /// 最大迭代次数（用于非线性隐式）
     pub max_iterations: usize,
     /// 收敛容差
-    pub tolerance: f64,
+    pub tolerance: f64, // ALLOW_F64: Layer 4 配置参数
     /// 欠松弛因子
-    pub relaxation: f64,
+    pub relaxation: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for ImplicitConfig {
@@ -107,12 +108,14 @@ impl ImplicitConfig {
     }
 
     /// 设置容差
+    // ALLOW_F64: Layer 4 配置参数
     pub fn with_tolerance(mut self, tol: f64) -> Self {
         self.tolerance = tol;
         self
     }
 
     /// 设置欠松弛因子
+    // ALLOW_F64: Layer 4 配置参数
     pub fn with_relaxation(mut self, omega: f64) -> Self {
         self.relaxation = omega.clamp(0.1, 2.0);
         self
@@ -126,6 +129,7 @@ pub trait DampingCoefficient {
     /// 计算阻尼系数 γ（单位：1/s）
     ///
     /// 动量方程中的阻尼项形式为 -(γ/h) * (hu, hv)
+    // ALLOW_F64: 源项计算
     fn compute_gamma(&self, h: f64, speed: f64, cell_idx: usize) -> f64;
 
     /// 名称
@@ -136,15 +140,16 @@ pub trait DampingCoefficient {
 #[derive(Debug, Clone)]
 pub struct ManningDamping {
     /// 重力加速度
-    pub g: f64,
+    pub g: f64, // ALLOW_F64: 物理参数
     /// Manning 系数
-    pub n: f64,
+    pub n: f64, // ALLOW_F64: 物理参数
     /// 预计算 g*n²
-    gn2: f64,
+    gn2: f64, // ALLOW_F64: 物理参数
 }
 
 impl ManningDamping {
     /// 创建 Manning 阻尼
+    // ALLOW_F64: 物理参数
     pub fn new(g: f64, n: f64) -> Self {
         Self {
             g,
@@ -155,6 +160,7 @@ impl ManningDamping {
 }
 
 impl DampingCoefficient for ManningDamping {
+    // ALLOW_F64: 与物理参数配合
     fn compute_gamma(&self, h: f64, speed: f64, _cell_idx: usize) -> f64 {
         if h < 1e-6 {
             return 0.0;
@@ -172,15 +178,16 @@ impl DampingCoefficient for ManningDamping {
 #[derive(Debug, Clone)]
 pub struct ChezyDamping {
     /// 重力加速度
-    pub g: f64,
+    pub g: f64, // ALLOW_F64: 物理参数
     /// Chezy 系数
-    pub c: f64,
+    pub c: f64, // ALLOW_F64: 物理参数
     /// 预计算 g/C²
-    g_c2: f64,
+    g_c2: f64, // ALLOW_F64: 物理参数
 }
 
 impl ChezyDamping {
     /// 创建 Chezy 阻尼
+    // ALLOW_F64: 物理参数
     pub fn new(g: f64, c: f64) -> Self {
         Self {
             g,
@@ -191,6 +198,7 @@ impl ChezyDamping {
 }
 
 impl DampingCoefficient for ChezyDamping {
+    // ALLOW_F64: 与物理参数配合
     fn compute_gamma(&self, h: f64, speed: f64, _cell_idx: usize) -> f64 {
         if h < 1e-6 {
             return 0.0;
@@ -234,6 +242,7 @@ impl ImplicitMomentumDecay {
     ///
     /// # 返回
     /// 更新后的 (hu, hv)
+    // ALLOW_F64: 源项计算
     pub fn apply(&self, hu: f64, hv: f64, gamma: f64, dt: f64) -> (f64, f64) {
         if gamma.abs() < 1e-20 {
             return (hu, hv);
@@ -244,6 +253,7 @@ impl ImplicitMomentumDecay {
     }
 
     /// 应用隐式衰减到向量
+    // ALLOW_F64: 与 DVec2 配合
     pub fn apply_vec(&self, momentum: DVec2, gamma: f64, dt: f64) -> DVec2 {
         let (hu, hv) = self.apply(momentum.x, momentum.y, gamma, dt);
         DVec2::new(hu, hv)
@@ -252,12 +262,12 @@ impl ImplicitMomentumDecay {
     /// 批量应用隐式衰减
     pub fn apply_batch<D: DampingCoefficient>(
         &self,
-        h: &[f64],
-        hu: &mut [f64],
-        hv: &mut [f64],
+        h: &[f64], // ALLOW_F64: 源项计算
+        hu: &mut [f64], // ALLOW_F64: 源项计算
+        hv: &mut [f64], // ALLOW_F64: 源项计算
         damping: &D,
-        dt: f64,
-        h_dry: f64,
+        dt: f64, // ALLOW_F64: 时间步长
+        h_dry: f64, // ALLOW_F64: 配置参数
     ) {
         for i in 0..h.len() {
             if h[i] < h_dry {
@@ -280,12 +290,12 @@ impl ImplicitMomentumDecay {
     /// 应用隐式衰减到状态数组
     pub fn apply_to_state(
         &self,
-        h: &[f64],
-        hu: &mut [f64],
-        hv: &mut [f64],
-        gamma: &[f64],
-        dt: f64,
-        h_dry: f64,
+        h: &[f64], // ALLOW_F64: 源项计算
+        hu: &mut [f64], // ALLOW_F64: 源项计算
+        hv: &mut [f64], // ALLOW_F64: 源项计算
+        gamma: &[f64], // ALLOW_F64: 源项计算
+        dt: f64, // ALLOW_F64: 时间步长
+        h_dry: f64, // ALLOW_F64: 配置参数
     ) {
         for i in 0..h.len() {
             if h[i] < h_dry {

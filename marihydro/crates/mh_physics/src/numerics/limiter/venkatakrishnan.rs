@@ -41,9 +41,14 @@
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and 
 //! convergence to steady state solutions". AIAA Paper 93-0880.
 
-use super::traits::{LimiterContext, SlopeLimiter};
+use mh_core::RuntimeScalar;
+use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
-/// Venkatakrishnan 限制器
+// Re-export for tests
+#[cfg(test)]
+use super::traits::LimiterContext;
+
+/// 泛型 Venkatakrishnan 限制器
 ///
 /// 光滑的二阶精度限制器，推荐用于通用浅水模拟。
 ///
@@ -52,20 +57,20 @@ use super::traits::{LimiterContext, SlopeLimiter};
 /// 默认使用 K=0.3，适合浅水方程中常见的干湿过渡和强间断问题。
 /// 如需更高精度（较少耗散），可使用 `for_smooth_flow()` 预设。
 #[derive(Debug, Clone, Copy)]
-pub struct Venkatakrishnan {
+pub struct VenkatakrishnanGeneric<S: RuntimeScalar> {
     /// K 参数，控制限制强度
     /// - 小值 (0.1-0.3): 强限制，高稳定性
     /// - 大值 (1.0-5.0): 弱限制，高精度
-    k: f64,
+    k: S,
     
     /// ε² = (K * h)³，预计算的平滑参数
-    eps_squared: f64,
+    eps_squared: S,
     
     /// 判断梯度为零的容差
-    tol: f64,
+    tol: S,
 }
 
-impl Venkatakrishnan {
+impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// 创建新的 Venkatakrishnan 限制器
     ///
     /// # Arguments
@@ -76,7 +81,7 @@ impl Venkatakrishnan {
     /// - 激波/溃坝问题: 0.1-0.3
     /// - 一般流动: 0.3-1.0
     /// - 光滑稳态: 1.0-5.0
-    pub fn new(k: f64, mesh_scale: f64) -> Self {
+    pub fn new(k: S, mesh_scale: S) -> Self {
         // ε² = (K * h)³
         let kh = k * mesh_scale;
         let eps_squared = kh * kh * kh;
@@ -84,12 +89,12 @@ impl Venkatakrishnan {
         Self {
             k,
             eps_squared,
-            tol: 1e-12,
+            tol: S::from_config(1e-12).unwrap_or(S::MIN_POSITIVE),
         }
     }
     
     /// 创建具有自定义容差的限制器
-    pub fn with_tolerance(k: f64, mesh_scale: f64, tol: f64) -> Self {
+    pub fn with_tolerance(k: S, mesh_scale: S, tol: S) -> Self {
         let kh = k * mesh_scale;
         let eps_squared = kh * kh * kh;
         
@@ -108,32 +113,32 @@ impl Venkatakrishnan {
     ///
     /// 使用 K=0.1，提供最强的限制以确保稳定性。
     /// 适用于溃坝、水跃等强间断问题。
-    pub fn for_shock_capturing(mesh_scale: f64) -> Self {
-        Self::new(0.1, mesh_scale)
+    pub fn for_shock_capturing(mesh_scale: S) -> Self {
+        Self::new(S::from_config(0.1).unwrap_or(S::ZERO), mesh_scale)
     }
     
     /// 创建适合干湿过渡的限制器
     ///
     /// 使用 K=0.3（默认值），平衡稳定性和精度。
     /// 适用于大多数浅水模拟。
-    pub fn for_wetting_drying(mesh_scale: f64) -> Self {
-        Self::new(0.3, mesh_scale)
+    pub fn for_wetting_drying(mesh_scale: S) -> Self {
+        Self::new(S::from_config(0.3).unwrap_or(S::ZERO), mesh_scale)
     }
     
     /// 创建适合光滑流动的限制器
     ///
     /// 使用 K=2.0，减少数值耗散。
     /// 适用于平滑流动、稳态问题。
-    pub fn for_smooth_flow(mesh_scale: f64) -> Self {
-        Self::new(2.0, mesh_scale)
+    pub fn for_smooth_flow(mesh_scale: S) -> Self {
+        Self::new(S::TWO, mesh_scale)
     }
     
     /// 创建几乎不限制的限制器
     ///
     /// 使用 K=5.0，接近无限制器的二阶精度。
     /// 仅适用于非常光滑、无间断的问题。
-    pub fn minimal_limiting(mesh_scale: f64) -> Self {
-        Self::new(5.0, mesh_scale)
+    pub fn minimal_limiting(mesh_scale: S) -> Self {
+        Self::new(S::from_config(5.0).unwrap_or(S::ZERO), mesh_scale)
     }
     
     // =========================================================================
@@ -141,23 +146,23 @@ impl Venkatakrishnan {
     // =========================================================================
     
     /// 获取 K 参数
-    pub fn k(&self) -> f64 {
+    pub fn k(&self) -> S {
         self.k
     }
     
     /// 获取 ε² 值
-    pub fn eps_squared(&self) -> f64 {
+    pub fn eps_squared(&self) -> S {
         self.eps_squared
     }
     
     /// 更新网格尺度（当网格变化时）
-    pub fn update_mesh_scale(&mut self, mesh_scale: f64) {
+    pub fn update_mesh_scale(&mut self, mesh_scale: S) {
         let kh = self.k * mesh_scale;
         self.eps_squared = kh * kh * kh;
     }
     
     /// 更新 K 参数
-    pub fn set_k(&mut self, k: f64, mesh_scale: f64) {
+    pub fn set_k(&mut self, k: S, mesh_scale: S) {
         self.k = k;
         let kh = k * mesh_scale;
         self.eps_squared = kh * kh * kh;
@@ -171,57 +176,59 @@ impl Venkatakrishnan {
     ///         y² + 2 x² + x y + ε²
     /// ```
     #[inline]
-    fn phi(&self, x: f64, y: f64) -> f64 {
+    fn phi(&self, x: S, y: S) -> S {
         let x2 = x * x;
         let y2 = y * y;
         let eps2 = self.eps_squared;
         
-        let numerator = (y2 + eps2) * x + 2.0 * x2 * y;
-        let denominator = y2 + 2.0 * x2 + x * y + eps2;
+        let numerator = (y2 + eps2) * x + S::TWO * x2 * y;
+        let denominator = y2 + S::TWO * x2 + x * y + eps2;
         
         if denominator.abs() < self.tol {
-            1.0
+            S::ONE
         } else {
             numerator / denominator
         }
     }
 }
 
-impl Default for Venkatakrishnan {
+impl<S: RuntimeScalar> Default for VenkatakrishnanGeneric<S> {
     fn default() -> Self {
         // 默认 K=0.3（适合浅水方程的干湿过渡）, mesh_scale=1
         // 注意：这与传统推荐值 K=5 不同，但对浅水问题更稳定
-        Self::new(0.3, 1.0)
+        Self::new(S::from_config(0.3).unwrap_or(S::ZERO), S::ONE)
     }
 }
 
-impl SlopeLimiter for Venkatakrishnan {
-    fn compute_limiter(&self, ctx: &LimiterContext) -> f64 {
+impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for VenkatakrishnanGeneric<S> {
+    fn compute_limiter(&self, ctx: &LimiterContextGeneric<S>) -> S {
         // 如果梯度为零，不需要限制
         if ctx.is_gradient_zero(self.tol) {
-            return 1.0;
+            return S::ONE;
         }
         
         let delta = ctx.gradient;
         
-        if delta > 0.0 {
+        if delta > S::ZERO {
             // 正梯度：使用 Δ_max
             let delta_max = ctx.delta_max();
             if delta_max < self.tol {
                 // 已经在最大值附近
-                0.0
+                S::ZERO
             } else {
-                self.phi(delta, delta_max).min(1.0)
+                let result = self.phi(delta, delta_max);
+                if result < S::ONE { result } else { S::ONE }
             }
         } else {
             // 负梯度：使用 Δ_min
             let delta_min = ctx.delta_min();
             if delta_min > -self.tol {
                 // 已经在最小值附近
-                0.0
+                S::ZERO
             } else {
                 // 取绝对值来使用相同的 phi 函数
-                self.phi(-delta, -delta_min).min(1.0)
+                let result = self.phi(-delta, -delta_min);
+                if result < S::ONE { result } else { S::ONE }
             }
         }
     }
@@ -230,6 +237,13 @@ impl SlopeLimiter for Venkatakrishnan {
         "Venkatakrishnan"
     }
 }
+
+// =============================================================================
+// Type alias for f64 version
+// =============================================================================
+
+/// f64 特化版本 (默认)
+pub type Venkatakrishnan = VenkatakrishnanGeneric<f64>;
 
 #[cfg(test)]
 mod tests {
@@ -394,7 +408,9 @@ mod tests {
         
         // 测试限制器在梯度变化时是连续的（只测试正梯度区域）
         // 在 0 附近会有突变因为处理逻辑不同
+        // ALLOW_F64: 测试代码使用具体类型
         let gradients: Vec<f64> = (1..=100).map(|i| i as f64 * 0.01).collect();
+        // ALLOW_F64: 测试代码使用具体类型
         let alphas: Vec<f64> = gradients
             .iter()
             .map(|&g| {

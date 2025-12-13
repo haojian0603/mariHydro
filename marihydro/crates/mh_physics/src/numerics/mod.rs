@@ -18,12 +18,14 @@ pub mod operators;
 pub mod reconstruction;
 
 pub use gradient::{
-    FaceInterpolation, GradientMethod, GreenGaussConfig, GreenGaussGradient, LeastSquaresConfig,
-    LeastSquaresGradient, ScalarGradientStorage, VectorGradientStorage,
+    FaceInterpolation, GradientMethod, GradientMethodGeneric, GreenGaussConfig, GreenGaussGradient, LeastSquaresConfig,
+    LeastSquaresGradient, ScalarGradientStorage, ScalarGradientStorageGeneric, 
+    VectorGradientStorage, VectorGradientStorageGeneric,
 };
 
 pub use limiter::{
     create_limiter, BarthJespersen, LimiterContext, Minmod, NoLimiter, SlopeLimiter,
+    SlopeLimiterGeneric, LimiterContextGeneric, NoLimiterGeneric,
     Venkatakrishnan,
 };
 

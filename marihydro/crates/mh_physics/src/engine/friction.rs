@@ -34,9 +34,9 @@ pub struct FrictionConfig {
     /// 是否使用半隐式时间离散
     pub semi_implicit: bool,
     /// 最小水深阈值（低于此值不计算摩擦）
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 默认曼宁糙率（当未提供时使用）
-    pub default_manning_n: f64,
+    pub default_manning_n: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否启用并行计算
     pub parallel: bool,
     /// 并行阈值（单元数超过此值时使用并行）
@@ -79,12 +79,12 @@ pub struct ManningFriction {
     /// 配置
     config: FrictionConfig,
     /// 重力加速度
-    g: f64,
+    g: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl ManningFriction {
     /// 创建摩擦计算器
-    pub fn new(g: f64) -> Self {
+    pub fn new(g: f64) -> Self { // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         Self {
             config: FrictionConfig::default(),
             g,
@@ -92,7 +92,7 @@ impl ManningFriction {
     }
 
     /// 使用指定配置创建
-    pub fn with_config(g: f64, config: FrictionConfig) -> Self {
+    pub fn with_config(g: f64, config: FrictionConfig) -> Self { // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         Self { config, g }
     }
 
@@ -110,7 +110,7 @@ impl ManningFriction {
     ///
     /// 返回 C_f = g * n^2 * |V| / h^(4/3)
     #[inline]
-    pub fn compute_friction_coefficient(&self, h: f64, hu: f64, hv: f64, manning_n: f64) -> f64 {
+    pub fn compute_friction_coefficient(&self, h: f64, hu: f64, hv: f64, manning_n: f64) -> f64 { // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         if h < self.config.h_min {
             return 0.0;
         }
@@ -134,7 +134,7 @@ impl ManningFriction {
     ///
     /// 返回 (source_hu, source_hv)
     #[inline]
-    pub fn compute_explicit_source(&self, h: f64, hu: f64, hv: f64, manning_n: f64) -> (f64, f64) {
+    pub fn compute_explicit_source(&self, h: f64, hu: f64, hv: f64, manning_n: f64) -> (f64, f64) { // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         let cf = self.compute_friction_coefficient(h, hu, hv, manning_n);
         (-cf * hu, -cf * hv)
     }
@@ -143,13 +143,14 @@ impl ManningFriction {
     ///
     /// 更新后的流量: q^{n+1} = q^n / (1 + dt * C_f)
     #[inline]
+    // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
     pub fn apply_semi_implicit(
         &self,
-        h: f64,
-        hu: f64,
-        hv: f64,
-        manning_n: f64,
-        dt: f64,
+        h: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        hu: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        hv: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        manning_n: f64, // ALLOW_F64: 物理参数
+        dt: f64, // ALLOW_F64: 时间步长参数
     ) -> (f64, f64) {
         let cf = self.compute_friction_coefficient(h, hu, hv, manning_n);
         let factor = 1.0 / (1.0 + dt * cf);
@@ -197,7 +198,7 @@ impl ManningFriction {
         hv: &[f64],
         manning_n: &[f64],
         use_uniform_n: bool,
-        uniform_n: f64,
+        uniform_n: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         source_hu: &mut [f64],
         source_hv: &mut [f64],
     ) {
@@ -217,7 +218,7 @@ impl ManningFriction {
         hv: &[f64],
         manning_n: &[f64],
         use_uniform_n: bool,
-        uniform_n: f64,
+        uniform_n: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
         source_hu: &mut [f64],
         source_hv: &mut [f64],
     ) {
@@ -246,7 +247,7 @@ impl ManningFriction {
         hu: &mut [f64],
         hv: &mut [f64],
         manning_n: &[f64],
-        dt: f64,
+        dt: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
     ) {
         let n = h.len();
         assert_eq!(n, hu.len());
@@ -271,8 +272,8 @@ impl ManningFriction {
         hv: &mut [f64],
         manning_n: &[f64],
         use_uniform_n: bool,
-        uniform_n: f64,
-        dt: f64,
+        uniform_n: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
+        dt: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
     ) {
         for i in 0..h.len() {
             let n_val = if use_uniform_n { uniform_n } else { manning_n[i] };
@@ -290,8 +291,8 @@ impl ManningFriction {
         hv: &mut [f64],
         manning_n: &[f64],
         use_uniform_n: bool,
-        uniform_n: f64,
-        dt: f64,
+        uniform_n: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
+        dt: f64, // ALLOW_F64: 与 PhysicsMesh 配合/物理参数
     ) {
         hu.par_iter_mut()
             .zip(hv.par_iter_mut())

@@ -59,6 +59,7 @@ pub enum TurbulenceModel<S: Scalar> {
     /// 提醒用户浅水方程不应使用 3D 湍流模型
     Disabled,
     /// 常数涡粘性（仅用于水平扩散，建议值 0.1-10 m²/s）
+    // ALLOW_F64: Layer 4 配置参数 - 泛型参数
     ConstantViscosity(S),
 }
 
@@ -430,9 +431,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
     fn accumulate(
         &self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        _rhs_hu: &mut Vec<f64>,
-        _rhs_hv: &mut Vec<f64>,
+        _rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        _rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        _rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         ctx: &SourceContextGeneric<f64>,
     ) {
         if !self.is_enabled() {

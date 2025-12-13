@@ -117,7 +117,7 @@ impl<B: Backend> ProfileRestorer<B> {
     
     /// 设置糙率（仅 CPU 后端有效）
     pub fn set_roughness(&mut self, cell: usize, z0: B::Scalar) {
-        if let Some(slice) = self.roughness.as_slice_mut() {
+        if let Some(slice) = self.roughness.try_as_slice_mut() {
             slice[cell] = z0;
         }
     }

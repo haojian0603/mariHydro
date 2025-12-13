@@ -128,13 +128,14 @@ impl GhostStateCalculator {
     ///
     /// # 返回
     /// 幽灵单元的守恒量状态
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合使用
     pub fn compute_ghost(
         &self,
         interior: ConservedState,
         kind: BoundaryKind,
         normal: DVec2,
         external: Option<&ExternalForcing>,
-        z_bed: f64,
+        z_bed: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     ) -> ConservedState {
         match kind {
             BoundaryKind::Wall => self.compute_wall_ghost(interior, normal),
@@ -194,12 +195,13 @@ impl GhostStateCalculator {
     /// Flather 条件基于特征分解：
     /// un* = un_ext + (c/h)(η_int - η_ext)
     /// 其中 η = h + z_bed 是水位
+    // ALLOW_F64: 与 ConservedState、ExternalForcing 和 DVec2 配合使用
     fn compute_open_sea_ghost(
         &self,
         interior: ConservedState,
         normal: DVec2,
         external: &ExternalForcing,
-        z_bed: f64,
+        z_bed: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     ) -> ConservedState {
         let h_int = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h_int);

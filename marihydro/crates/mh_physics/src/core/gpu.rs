@@ -4,10 +4,11 @@
 //! 预留 CUDA 后端支持，当前仅提供接口定义。
 //! 实际 GPU 实现将在未来阶段完成。
 
-use super::buffer::DeviceBuffer;
+use mh_core::buffer::DeviceBuffer;
 use mh_core::Scalar;
 use bytemuck::Pod;
 use std::marker::PhantomData;
+use std::ops::{Index, IndexMut};
 
 /// CUDA 后端占位符
 /// 
@@ -36,6 +37,19 @@ pub struct GpuBuffer<T: Pod> {
 unsafe impl<T: Pod> Send for GpuBuffer<T> {}
 unsafe impl<T: Pod> Sync for GpuBuffer<T> {}
 
+impl<T: Pod> Index<usize> for GpuBuffer<T> {
+    type Output = T;
+    fn index(&self, _index: usize) -> &Self::Output {
+        unimplemented!("GPU buffer direct indexing not supported, use copy_to_vec first")
+    }
+}
+
+impl<T: Pod> IndexMut<usize> for GpuBuffer<T> {
+    fn index_mut(&mut self, _index: usize) -> &mut Self::Output {
+        unimplemented!("GPU buffer direct indexing not supported, use copy_to_vec first")
+    }
+}
+
 impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for GpuBuffer<T> {
     fn len(&self) -> usize {
         self.len
@@ -49,15 +63,27 @@ impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for GpuBuffer<T> {
         unimplemented!("GPU buffer not implemented")
     }
     
-    fn as_slice(&self) -> Option<&[T]> {
-        None // GPU 缓冲区无法直接访问
+    fn copy_to_slice(&self, _dst: &mut [T]) {
+        unimplemented!("GPU buffer not implemented")
     }
     
-    fn as_slice_mut(&mut self) -> Option<&mut [T]> {
-        None // GPU 缓冲区无法直接访问
+    fn as_slice(&self) -> &[T] {
+        panic!("Cannot access GPU buffer as slice directly")
+    }
+    
+    fn as_slice_mut(&mut self) -> &mut [T] {
+        panic!("Cannot access GPU buffer as slice directly")
     }
     
     fn fill(&mut self, _value: T) {
+        unimplemented!("GPU buffer not implemented")
+    }
+    
+    fn resize(&mut self, _new_len: usize, _value: T) {
+        unimplemented!("GPU buffer not implemented")
+    }
+    
+    fn clear(&mut self) {
         unimplemented!("GPU buffer not implemented")
     }
 }

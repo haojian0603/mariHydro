@@ -31,25 +31,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// CFL 时间步计算器
 ///
 /// 主要优化：预计算网格最小特征长度
+// ALLOW_F64: Layer 4 时间步长配置
 #[derive(Clone, Debug)]
 pub struct CflCalculator {
     /// 重力加速度
-    g: f64,
+    g: f64, // ALLOW_F64: Layer 4 配置参数
     /// CFL 数
-    cfl: f64,
+    cfl: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小时间步长
-    dt_min: f64,
+    dt_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大时间步长
-    dt_max: f64,
+    dt_max: f64, // ALLOW_F64: Layer 4 配置参数
     /// 预计算的最小特征长度
-    cached_dx_min: Option<f64>,
+    cached_dx_min: Option<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 最小波速阈值（低于此值视为静止）
-    min_wave_speed: f64,
+    min_wave_speed: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl CflCalculator {
     /// 创建计算器
-    pub fn new(g: f64, params: &NumericalParams) -> Self {
+    pub fn new(g: f64, params: &NumericalParams) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         Self {
             g,
             cfl: params.cfl,
@@ -103,7 +104,7 @@ impl CflCalculator {
     /// 从已知最大波速计算时间步长
     ///
     /// 当通量计算已得到最大波速时使用此方法，避免重复计算
-    pub fn compute_from_max_speed(&self, max_speed: f64) -> f64 {
+    pub fn compute_from_max_speed(&self, max_speed: f64) -> f64 { // ALLOW_F64: 时间步长配置/物理参数
         let min_length = self.cached_dx_min.unwrap_or(1.0);
 
         if max_speed < self.min_wave_speed {
@@ -183,16 +184,17 @@ impl CflCalculator {
 /// - 预计算 dx_min
 /// - 自适应增长/收缩因子
 /// - 时间步长历史追踪
+// ALLOW_F64: Layer 4 时间步长配置
 pub struct TimeStepController {
     calculator: CflCalculator,
     /// 当前时间步长
-    current_dt: f64,
+    current_dt: f64, // ALLOW_F64: Layer 4 配置参数
     /// 增长因子
-    growth_factor: f64,
+    growth_factor: f64, // ALLOW_F64: Layer 4 配置参数
     /// 收缩因子
-    shrink_factor: f64,
+    shrink_factor: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大允许增长因子
-    max_growth_factor: f64,
+    max_growth_factor: f64, // ALLOW_F64: Layer 4 配置参数
     /// 连续稳定步数
     stable_steps: usize,
     /// 稳定增长阈值
@@ -203,7 +205,7 @@ pub struct TimeStepController {
 
 impl TimeStepController {
     /// 创建控制器
-    pub fn new(g: f64, params: &NumericalParams) -> Self {
+    pub fn new(g: f64, params: &NumericalParams) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         Self {
             calculator: CflCalculator::new(g, params),
             current_dt: params.dt_max,
@@ -257,7 +259,7 @@ impl TimeStepController {
     }
 
     /// 从已知最大波速更新时间步长
-    pub fn update_from_max_speed(&mut self, max_speed: f64) -> f64 {
+    pub fn update_from_max_speed(&mut self, max_speed: f64) -> f64 { // ALLOW_F64: 时间步长配置/物理参数
         let suggested = self.calculator.compute_from_max_speed(max_speed);
 
         let growth = if self.adaptive_growth {
@@ -301,7 +303,7 @@ impl TimeStepController {
     }
 
     /// 强制收缩（严重问题时）
-    pub fn force_shrink(&mut self, factor: f64) {
+    pub fn force_shrink(&mut self, factor: f64) { // ALLOW_F64: 时间步长配置/物理参数
         self.current_dt *= factor;
         self.current_dt = self.current_dt.max(self.calculator.dt_min);
         self.stable_steps = 0;
@@ -313,18 +315,18 @@ impl TimeStepController {
     }
 
     /// 设置时间步长（手动覆盖）
-    pub fn set_dt(&mut self, dt: f64) {
+    pub fn set_dt(&mut self, dt: f64) { // ALLOW_F64: 时间步长配置/物理参数
         self.current_dt = dt.clamp(self.calculator.dt_min, self.calculator.dt_max);
         self.stable_steps = 0;
     }
 
     /// 设置增长因子
-    pub fn set_growth_factor(&mut self, factor: f64) {
+    pub fn set_growth_factor(&mut self, factor: f64) { // ALLOW_F64: 时间步长配置/物理参数
         self.growth_factor = factor.max(1.0);
     }
 
     /// 设置收缩因子
-    pub fn set_shrink_factor(&mut self, factor: f64) {
+    pub fn set_shrink_factor(&mut self, factor: f64) { // ALLOW_F64: 时间步长配置/物理参数
         self.shrink_factor = factor.clamp(0.1, 0.9);
     }
 
@@ -356,7 +358,7 @@ impl TimeStepController {
         iterations: usize,
         target_iterations: usize,
     ) -> f64 {
-        let ratio = iterations as f64 / target_iterations.max(1) as f64;
+        let ratio = iterations as f64 / target_iterations.max(1) as f64; // ALLOW_F64: 时间步长配置/物理参数
 
         if ratio < 0.5 {
             // 收敛太快，可以增大时间步长
@@ -404,18 +406,18 @@ impl TimeStepController {
     /// 计算科氏力稳定性限制
     ///
     /// 返回 dt < 2π / |f| 以保证惯性振荡稳定
-    pub fn coriolis_stability_limit(&self, f: f64) -> Option<f64> {
+    pub fn coriolis_stability_limit(&self, f: f64) -> Option<f64> { // ALLOW_F64: 时间步长配置/物理参数
         if f.abs() < 1e-14 {
             None
         } else {
-            Some(std::f64::consts::PI / f.abs())
+            Some(std::f64::consts::PI / f.abs()) // ALLOW_F64: 时间步长配置/物理参数
         }
     }
 
     /// 计算摩擦稳定性限制
     ///
     /// 对于曼宁公式的隐式摩擦
-    pub fn friction_stability_limit(&self, max_cf: f64) -> Option<f64> {
+    pub fn friction_stability_limit(&self, max_cf: f64) -> Option<f64> { // ALLOW_F64: 时间步长配置/物理参数
         if max_cf < 1e-14 {
             None
         } else {
@@ -430,18 +432,19 @@ impl TimeStepController {
     }
 
     /// 设置 CFL 数
-    pub fn set_cfl(&mut self, cfl: f64) {
+    pub fn set_cfl(&mut self, cfl: f64) { // ALLOW_F64: 时间步长配置/物理参数
         self.calculator.cfl = cfl.clamp(0.1, 1.0);
     }
 }
 
 /// 时间步长统计
+// ALLOW_F64: Layer 4 时间步长配置
 #[derive(Clone, Debug)]
 pub struct TimeStepStats {
     /// 当前时间步长
-    pub current_dt: f64,
+    pub current_dt: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小特征长度
-    pub dx_min: Option<f64>,
+    pub dx_min: Option<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 连续稳定步数
     pub stable_steps: usize,
     /// 是否启用自适应增长
@@ -449,19 +452,20 @@ pub struct TimeStepStats {
 }
 
 /// 时间步长控制器构建器
+// ALLOW_F64: Layer 4 时间步长配置
 pub struct TimeStepControllerBuilder {
-    g: f64,
-    cfl: f64,
-    dt_min: f64,
-    dt_max: f64,
-    growth_factor: f64,
-    shrink_factor: f64,
+    g: f64, // ALLOW_F64: Layer 4 配置参数
+    cfl: f64, // ALLOW_F64: Layer 4 配置参数
+    dt_min: f64, // ALLOW_F64: Layer 4 配置参数
+    dt_max: f64, // ALLOW_F64: Layer 4 配置参数
+    growth_factor: f64, // ALLOW_F64: Layer 4 配置参数
+    shrink_factor: f64, // ALLOW_F64: Layer 4 配置参数
     adaptive_growth: bool,
 }
 
 impl TimeStepControllerBuilder {
     /// 创建构建器
-    pub fn new(g: f64) -> Self {
+    pub fn new(g: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         Self {
             g,
             cfl: 0.5,
@@ -474,26 +478,26 @@ impl TimeStepControllerBuilder {
     }
 
     /// 设置 CFL 数
-    pub fn with_cfl(mut self, cfl: f64) -> Self {
+    pub fn with_cfl(mut self, cfl: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         self.cfl = cfl;
         self
     }
 
     /// 设置时间步限制
-    pub fn with_dt_limits(mut self, dt_min: f64, dt_max: f64) -> Self {
+    pub fn with_dt_limits(mut self, dt_min: f64, dt_max: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         self.dt_min = dt_min;
         self.dt_max = dt_max;
         self
     }
 
     /// 设置增长因子
-    pub fn with_growth_factor(mut self, factor: f64) -> Self {
+    pub fn with_growth_factor(mut self, factor: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         self.growth_factor = factor;
         self
     }
 
     /// 设置收缩因子
-    pub fn with_shrink_factor(mut self, factor: f64) -> Self {
+    pub fn with_shrink_factor(mut self, factor: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         self.shrink_factor = factor;
         self
     }

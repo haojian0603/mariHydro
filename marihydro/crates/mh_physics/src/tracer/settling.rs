@@ -97,8 +97,8 @@ impl<B: Backend> SettlingSolver<B> {
         // 计算隐式系数
         let n_coeff = depth.len().min(self.coeff.len());
         if let (Some(depth_slice), Some(coeff_slice)) = (
-            depth.as_slice(),
-            self.coeff.as_slice_mut(),
+            depth.try_as_slice(),
+            self.coeff.try_as_slice_mut(),
         ) {
             for i in 0..n_coeff {
                 let h = Float::max(depth_slice[i], self.config.min_depth);
@@ -119,10 +119,10 @@ impl<B: Backend> SettlingSolver<B> {
             let (mut max_rel, mut settled) = (B::Scalar::ZERO, B::Scalar::ZERO);
 
             if let (Some(c_old), Some(coeff), Some(c_new), Some(h_slice)) = (
-                self.c_old.as_slice(),
-                self.coeff.as_slice(),
-                concentration.as_slice_mut(),
-                depth.as_slice(),
+                self.c_old.try_as_slice(),
+                self.coeff.try_as_slice(),
+                concentration.try_as_slice_mut(),
+                depth.try_as_slice(),
             ) {
                 for i in 0..n {
                     let h = Float::max(h_slice[i], self.config.min_depth);
@@ -174,8 +174,8 @@ impl<B: Backend> SettlingSolver<B> {
     ) {
         let n = concentration.len().min(depth.len());
         if let (Some(conc), Some(depth_slice)) = (
-            concentration.as_slice_mut(),
-            depth.as_slice(),
+            concentration.try_as_slice_mut(),
+            depth.try_as_slice(),
         ) {
             for i in 0..n {
                 let h = Float::max(depth_slice[i], self.config.min_depth);
@@ -204,8 +204,8 @@ impl<B: Backend> SettlingSolver<B> {
     ) {
         let n = depth.len().min(coeff.len());
         if let (Some(depth_slice), Some(coeff_slice)) = (
-            depth.as_slice(),
-            coeff.as_slice_mut(),
+            depth.try_as_slice(),
+            coeff.try_as_slice_mut(),
         ) {
             for i in 0..n {
                 let h = Float::max(depth_slice[i], self.config.min_depth);
@@ -228,7 +228,7 @@ impl<B: Backend> SettlingSolver<B> {
         depth: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
     ) -> bool {
-        if let Some(depth_slice) = depth.as_slice() {
+        if let Some(depth_slice) = depth.try_as_slice() {
             for &h in depth_slice {
                 if h <= self.config.min_depth {
                     continue;

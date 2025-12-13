@@ -3,6 +3,7 @@
 //! 向量运算（BLAS Level 1 风格）
 //!
 //! 提供高效的向量运算函数，这些是迭代求解器的基础。
+//! 支持泛型标量类型 `S: RuntimeScalar`（f32 或 f64）。
 //!
 //! # 函数列表
 //!
@@ -28,6 +29,8 @@
 //! axpy(2.0, &x, &mut y);  // y = [6, 9, 12]
 //! ```
 
+use mh_core::RuntimeScalar;
+
 /// 点积 x·y
 ///
 /// # 参数
@@ -39,7 +42,7 @@
 ///
 /// 点积结果
 #[inline]
-pub fn dot(x: &[f64], y: &[f64]) -> f64 {
+pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
     debug_assert_eq!(x.len(), y.len());
     x.iter().zip(y.iter()).map(|(&xi, &yi)| xi * yi).sum()
 }
@@ -54,7 +57,7 @@ pub fn dot(x: &[f64], y: &[f64]) -> f64 {
 ///
 /// 二范数
 #[inline]
-pub fn norm2(x: &[f64]) -> f64 {
+pub fn norm2<S: RuntimeScalar>(x: &[S]) -> S {
     dot(x, x).sqrt()
 }
 
@@ -68,8 +71,8 @@ pub fn norm2(x: &[f64]) -> f64 {
 ///
 /// 无穷范数（最大绝对值）
 #[inline]
-pub fn norm_inf(x: &[f64]) -> f64 {
-    x.iter().map(|&v| v.abs()).fold(0.0, f64::max)
+pub fn norm_inf<S: RuntimeScalar>(x: &[S]) -> S {
+    x.iter().map(|&v| v.abs()).fold(S::ZERO, |a, b| a.max(b))
 }
 
 /// AXPY: y = α*x + y
@@ -80,7 +83,7 @@ pub fn norm_inf(x: &[f64]) -> f64 {
 /// - `x`: 向量 x
 /// - `y`: 向量 y（将被修改）
 #[inline]
-pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
+pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     for (yi, &xi) in y.iter_mut().zip(x.iter()) {
         *yi += alpha * xi;
@@ -95,7 +98,7 @@ pub fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
 /// - `alpha`: 标量 α
 /// - `y`: 向量 y（将被修改）
 #[inline]
-pub fn xpay(x: &[f64], alpha: f64, y: &mut [f64]) {
+pub fn xpay<S: RuntimeScalar>(x: &[S], alpha: S, y: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     for (yi, &xi) in y.iter_mut().zip(x.iter()) {
         *yi = xi + alpha * *yi;
@@ -109,7 +112,7 @@ pub fn xpay(x: &[f64], alpha: f64, y: &mut [f64]) {
 /// - `alpha`: 标量 α
 /// - `x`: 向量（将被修改）
 #[inline]
-pub fn scale(alpha: f64, x: &mut [f64]) {
+pub fn scale<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
     for xi in x.iter_mut() {
         *xi *= alpha;
     }
@@ -122,7 +125,7 @@ pub fn scale(alpha: f64, x: &mut [f64]) {
 /// - `x`: 源向量
 /// - `y`: 目标向量（将被覆盖）
 #[inline]
-pub fn copy(x: &[f64], y: &mut [f64]) {
+pub fn copy<S: RuntimeScalar>(x: &[S], y: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     y.copy_from_slice(x);
 }
@@ -134,7 +137,7 @@ pub fn copy(x: &[f64], y: &mut [f64]) {
 /// - `alpha`: 填充值
 /// - `x`: 向量（将被修改）
 #[inline]
-pub fn fill(alpha: f64, x: &mut [f64]) {
+pub fn fill<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
     x.fill(alpha);
 }
 
@@ -148,7 +151,7 @@ pub fn fill(alpha: f64, x: &mut [f64]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn linear_combination(alpha: f64, x: &[f64], beta: f64, y: &[f64], z: &mut [f64]) {
+pub fn linear_combination<S: RuntimeScalar>(alpha: S, x: &[S], beta: S, y: &[S], z: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -164,7 +167,7 @@ pub fn linear_combination(alpha: f64, x: &[f64], beta: f64, y: &[f64], z: &mut [
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn sub(x: &[f64], y: &[f64], z: &mut [f64]) {
+pub fn sub<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -180,7 +183,7 @@ pub fn sub(x: &[f64], y: &[f64], z: &mut [f64]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn add(x: &[f64], y: &[f64], z: &mut [f64]) {
+pub fn add<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -196,7 +199,7 @@ pub fn add(x: &[f64], y: &[f64], z: &mut [f64]) {
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
 #[inline]
-pub fn hadamard(x: &[f64], y: &[f64], z: &mut [f64]) {
+pub fn hadamard<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
@@ -214,13 +217,13 @@ pub fn hadamard(x: &[f64], y: &[f64], z: &mut [f64]) {
 ///
 /// # 注意
 ///
-/// y 中元素绝对值小于 f64::EPSILON 时，z 对应位置设为 0
+/// y 中元素绝对值小于 S::EPSILON 时，z 对应位置设为 0
 #[inline]
-pub fn hadamard_div(x: &[f64], y: &[f64], z: &mut [f64]) {
+pub fn hadamard_div<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
     debug_assert_eq!(x.len(), y.len());
     debug_assert_eq!(x.len(), z.len());
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
-        *zi = if yi.abs() > f64::EPSILON { xi / yi } else { 0.0 };
+        *zi = if yi.abs() > S::EPSILON { xi / yi } else { S::ZERO };
     }
 }
 
@@ -233,12 +236,12 @@ pub fn hadamard_div(x: &[f64], y: &[f64], z: &mut [f64]) {
 ///
 /// # 返回
 ///
-/// 相对残差 ||r|| / ||b||，若 ||b|| <= f64::MIN_POSITIVE 则返回绝对残差 ||r||
+/// 相对残差 ||r|| / ||b||，若 ||b|| <= S::MIN_POSITIVE 则返回绝对残差 ||r||
 #[inline]
-pub fn relative_residual(residual: &[f64], b: &[f64]) -> f64 {
+pub fn relative_residual<S: RuntimeScalar>(residual: &[S], b: &[S]) -> S {
     let norm_r = norm2(residual);
     let norm_b = norm2(b);
-    if norm_b <= f64::MIN_POSITIVE {
+    if norm_b <= S::MIN_POSITIVE {
         norm_r
     } else {
         norm_r / norm_b
@@ -249,7 +252,7 @@ pub fn relative_residual(residual: &[f64], b: &[f64]) -> f64 {
 ///
 /// 与 axpy 相同，提供语义更清晰的别名
 #[inline]
-pub fn add_scaled(alpha: f64, x: &[f64], y: &mut [f64]) {
+pub fn add_scaled<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
     axpy(alpha, x, y);
 }
 
@@ -257,30 +260,33 @@ pub fn add_scaled(alpha: f64, x: &[f64], y: &mut [f64]) {
 mod tests {
     use super::*;
 
+    // 测试用类型别名
+    type S = f64;
+
     #[test]
     fn test_dot() {
-        let x = vec![1.0, 2.0, 3.0];
-        let y = vec![4.0, 5.0, 6.0];
+        let x: Vec<S> = vec![1.0, 2.0, 3.0];
+        let y: Vec<S> = vec![4.0, 5.0, 6.0];
         let result = dot(&x, &y);
         assert!((result - 32.0).abs() < 1e-14);
     }
 
     #[test]
     fn test_norm2() {
-        let x = vec![3.0, 4.0];
+        let x: Vec<S> = vec![3.0, 4.0];
         assert!((norm2(&x) - 5.0).abs() < 1e-14);
     }
 
     #[test]
     fn test_norm_inf() {
-        let x = vec![-5.0, 2.0, 3.0];
+        let x: Vec<S> = vec![-5.0, 2.0, 3.0];
         assert!((norm_inf(&x) - 5.0).abs() < 1e-14);
     }
 
     #[test]
     fn test_axpy() {
-        let x = vec![1.0, 2.0, 3.0];
-        let mut y = vec![4.0, 5.0, 6.0];
+        let x: Vec<S> = vec![1.0, 2.0, 3.0];
+        let mut y: Vec<S> = vec![4.0, 5.0, 6.0];
         axpy(2.0, &x, &mut y);
         assert!((y[0] - 6.0).abs() < 1e-14);
         assert!((y[1] - 9.0).abs() < 1e-14);
@@ -289,8 +295,8 @@ mod tests {
 
     #[test]
     fn test_xpay() {
-        let x = vec![1.0, 2.0, 3.0];
-        let mut y = vec![4.0, 5.0, 6.0];
+        let x: Vec<S> = vec![1.0, 2.0, 3.0];
+        let mut y: Vec<S> = vec![4.0, 5.0, 6.0];
         xpay(&x, 2.0, &mut y);
         // y = x + 2*y = [1+8, 2+10, 3+12] = [9, 12, 15]
         assert!((y[0] - 9.0).abs() < 1e-14);
@@ -300,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_scale() {
-        let mut x = vec![1.0, 2.0, 3.0];
+        let mut x: Vec<S> = vec![1.0, 2.0, 3.0];
         scale(3.0, &mut x);
         assert!((x[0] - 3.0).abs() < 1e-14);
         assert!((x[1] - 6.0).abs() < 1e-14);
@@ -309,24 +315,24 @@ mod tests {
 
     #[test]
     fn test_copy() {
-        let x = vec![1.0, 2.0, 3.0];
-        let mut y = vec![0.0; 3];
+        let x: Vec<S> = vec![1.0, 2.0, 3.0];
+        let mut y: Vec<S> = vec![0.0; 3];
         copy(&x, &mut y);
         assert_eq!(y, x);
     }
 
     #[test]
     fn test_fill() {
-        let mut x = vec![1.0, 2.0, 3.0];
+        let mut x: Vec<S> = vec![1.0, 2.0, 3.0];
         fill(7.0, &mut x);
         assert!(x.iter().all(|&v| (v - 7.0).abs() < 1e-14));
     }
 
     #[test]
     fn test_linear_combination() {
-        let x = vec![1.0, 2.0];
-        let y = vec![3.0, 4.0];
-        let mut z = vec![0.0; 2];
+        let x: Vec<S> = vec![1.0, 2.0];
+        let y: Vec<S> = vec![3.0, 4.0];
+        let mut z: Vec<S> = vec![0.0; 2];
         linear_combination(2.0, &x, 3.0, &y, &mut z);
         // z = 2*[1,2] + 3*[3,4] = [2,4] + [9,12] = [11, 16]
         assert!((z[0] - 11.0).abs() < 1e-14);
@@ -335,9 +341,9 @@ mod tests {
 
     #[test]
     fn test_sub_add() {
-        let x = vec![5.0, 6.0];
-        let y = vec![2.0, 3.0];
-        let mut z = vec![0.0; 2];
+        let x: Vec<S> = vec![5.0, 6.0];
+        let y: Vec<S> = vec![2.0, 3.0];
+        let mut z: Vec<S> = vec![0.0; 2];
 
         sub(&x, &y, &mut z);
         assert!((z[0] - 3.0).abs() < 1e-14);
@@ -350,9 +356,9 @@ mod tests {
 
     #[test]
     fn test_hadamard() {
-        let x = vec![2.0, 3.0];
-        let y = vec![4.0, 5.0];
-        let mut z = vec![0.0; 2];
+        let x: Vec<S> = vec![2.0, 3.0];
+        let y: Vec<S> = vec![4.0, 5.0];
+        let mut z: Vec<S> = vec![0.0; 2];
         hadamard(&x, &y, &mut z);
         assert!((z[0] - 8.0).abs() < 1e-14);
         assert!((z[1] - 15.0).abs() < 1e-14);
@@ -360,9 +366,9 @@ mod tests {
 
     #[test]
     fn test_hadamard_div() {
-        let x = vec![8.0, 15.0, 1.0];
-        let y = vec![2.0, 3.0, 0.0];
-        let mut z = vec![0.0; 3];
+        let x: Vec<S> = vec![8.0, 15.0, 1.0];
+        let y: Vec<S> = vec![2.0, 3.0, 0.0];
+        let mut z: Vec<S> = vec![0.0; 3];
         hadamard_div(&x, &y, &mut z);
         assert!((z[0] - 4.0).abs() < 1e-14);
         assert!((z[1] - 5.0).abs() < 1e-14);
@@ -371,8 +377,8 @@ mod tests {
 
     #[test]
     fn test_relative_residual() {
-        let r = vec![0.1, 0.1];
-        let b = vec![1.0, 1.0];
+        let r: Vec<S> = vec![0.1, 0.1];
+        let b: Vec<S> = vec![1.0, 1.0];
         let rel = relative_residual(&r, &b);
         // ||r|| = sqrt(0.02) ≈ 0.1414
         // ||b|| = sqrt(2) ≈ 1.414

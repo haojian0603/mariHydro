@@ -16,11 +16,11 @@ use std::marker::PhantomData;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SourceContribution {
     /// 质量源 [m/s]
-    pub s_h: f64,
+    pub s_h: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     /// x动量源 [m²/s²]
-    pub s_hu: f64,
+    pub s_hu: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     /// y动量源 [m²/s²]
-    pub s_hv: f64,
+    pub s_hv: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
 }
 
 impl SourceContribution {
@@ -33,18 +33,21 @@ impl SourceContribution {
 
     /// 创建新的源项贡献
     #[inline]
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     pub fn new(s_h: f64, s_hu: f64, s_hv: f64) -> Self {
         Self { s_h, s_hu, s_hv }
     }
 
     /// 创建仅动量贡献
     #[inline]
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     pub fn momentum(s_hu: f64, s_hv: f64) -> Self {
         Self { s_h: 0.0, s_hu, s_hv }
     }
 
     /// 创建仅质量贡献
     #[inline]
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     pub fn mass(s_h: f64) -> Self {
         Self { s_h, s_hu: 0.0, s_hv: 0.0 }
     }
@@ -69,6 +72,7 @@ impl SourceContribution {
 
     /// 缩放
     #[inline]
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     pub fn scale(&self, factor: f64) -> Self {
         Self {
             s_h: self.s_h * factor,
@@ -85,6 +89,7 @@ impl SourceContribution {
 
     /// 钳位到安全范围
     #[inline]
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     pub fn clamp(&self, max_abs: f64) -> Self {
         Self {
             s_h: self.s_h.clamp(-max_abs, max_abs),
@@ -114,9 +119,11 @@ impl std::ops::AddAssign for SourceContribution {
     }
 }
 
+// ALLOW_F64: 与 ConservedState 和 DVec2 配合
 impl std::ops::Mul<f64> for SourceContribution {
     type Output = Self;
 
+    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
     fn mul(self, rhs: f64) -> Self::Output {
         self.scale(rhs)
     }
@@ -128,27 +135,30 @@ impl std::ops::Mul<f64> for SourceContribution {
 #[derive(Debug, Clone)]
 pub struct SourceContext<'a> {
     /// 当前模拟时间 [s]
-    pub time: f64,
+    pub time: f64, // ALLOW_F64: 时间参数与模拟进度配合
     /// 时间步长 [s]
-    pub dt: f64,
+    pub dt: f64, // ALLOW_F64: 时间参数与模拟进度配合
     /// 数值参数
     pub params: &'a NumericalParams,
 }
 
 impl<'a> SourceContext<'a> {
     /// 创建新的源项上下文
+    // ALLOW_F64: 时间参数与模拟进度配合
     pub fn new(time: f64, dt: f64, params: &'a NumericalParams) -> Self {
         Self { time, dt, params }
     }
 
     /// 检查单元是否干燥
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn is_dry(&self, h: f64) -> bool {
         h < self.params.h_dry
     }
 
     /// 检查单元是否湿润
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn is_wet(&self, h: f64) -> bool {
         h >= self.params.h_wet
     }
@@ -251,6 +261,7 @@ pub trait SourceTerm: Send + Sync {
     ///
     /// 返回 0.0 表示完全显式，1.0 表示完全隐式。
     /// 用于时间步长控制和稳定性分析。
+    // ALLOW_F64: 源项计算
     fn implicit_factor(&self) -> f64 {
         if self.is_locally_implicit() {
             1.0
@@ -262,6 +273,7 @@ pub trait SourceTerm: Send + Sync {
     /// 获取稳定性限制时间步长
     ///
     /// 返回 None 表示无限制，Some(dt) 表示最大允许时间步长。
+    // ALLOW_F64: 时间参数与模拟进度配合
     fn stability_limit(&self, _state: &ShallowWaterState, _ctx: &SourceContext) -> Option<f64> {
         None
     }
@@ -273,6 +285,7 @@ pub struct SourceHelpers;
 impl SourceHelpers {
     /// 安全累加（忽略无效值）
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn safe_accumulate(acc: &mut f64, val: f64) {
         if val.is_finite() {
             *acc += val;
@@ -281,6 +294,7 @@ impl SourceHelpers {
 
     /// 验证贡献值并钳位
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn validate_contribution(val: f64, max_abs: f64) -> f64 {
         if !val.is_finite() {
             return 0.0;
@@ -292,6 +306,7 @@ impl SourceHelpers {
     ///
     /// 返回 0.0 (完全干) 到 1.0 (完全湿) 之间的值
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn smooth_transition(h: f64, h_dry: f64, h_wet: f64) -> f64 {
         if h <= h_dry {
             0.0
@@ -304,6 +319,7 @@ impl SourceHelpers {
 
     /// 计算安全速度（避免除以零）
     #[inline]
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn safe_velocity(hu: f64, hv: f64, h: f64, h_min: f64) -> (f64, f64) {
         let h_safe = h.max(h_min);
         (hu / h_safe, hv / h_safe)
@@ -385,7 +401,7 @@ impl<S: Scalar> SourceContributionGeneric<S> {
 #[derive(Debug, Clone)]
 pub struct SourceContextGeneric<S: Scalar> {
     /// 当前模拟时间 [s]
-    pub time: f64,
+    pub time: f64, // ALLOW_F64: 时间参数与模拟进度配合
     /// 时间步长 [s]
     pub dt: S,
     /// 重力加速度 [m/s²]
@@ -399,11 +415,13 @@ pub struct SourceContextGeneric<S: Scalar> {
 
 impl<S: Scalar> SourceContextGeneric<S> {
     /// 创建新的源项上下文
+    // ALLOW_F64: 时间参数与模拟进度配合
     pub fn new(time: f64, dt: S, gravity: S, h_dry: S, h_wet: S) -> Self {
         Self { time, dt, gravity, h_dry, h_wet }
     }
     
     /// 使用默认物理参数创建
+    // ALLOW_F64: 时间参数与模拟进度配合
     pub fn with_defaults(time: f64, dt: S) -> Self {
         Self {
             time,
@@ -512,9 +530,9 @@ impl SourceRegistryGeneric<CpuBackend<f64>> {
     pub fn accumulate_all(
         &mut self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
+        rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         ctx: &SourceContextGeneric<f64>,
     ) {
         let n_cells = state.n_cells();

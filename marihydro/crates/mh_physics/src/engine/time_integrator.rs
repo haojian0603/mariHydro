@@ -67,7 +67,7 @@ pub trait RhsComputer {
     fn compute_rhs(
         &mut self,
         state: &ShallowWaterState,
-        time: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
         output: &mut RhsBuffers,
     ) -> MhResult<f64>;
 }
@@ -99,8 +99,8 @@ pub trait TimeIntegrator: Send + Sync {
     fn advance<R: RhsComputer>(
         &mut self,
         state: &mut ShallowWaterState,
-        time: f64,
-        dt: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
+        dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64>;
 
@@ -148,8 +148,8 @@ impl TimeIntegrator for ForwardEuler {
     fn advance<R: RhsComputer>(
         &mut self,
         state: &mut ShallowWaterState,
-        time: f64,
-        dt: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
+        dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
         self.rhs.reset();
@@ -214,8 +214,8 @@ impl TimeIntegrator for SspRk2 {
     fn advance<R: RhsComputer>(
         &mut self,
         state: &mut ShallowWaterState,
-        time: f64,
-        dt: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
+        dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
         // Stage 1: U^(1) = U^n + dt * L(U^n)
@@ -300,8 +300,8 @@ impl TimeIntegrator for SspRk3 {
     fn advance<R: RhsComputer>(
         &mut self,
         state: &mut ShallowWaterState,
-        time: f64,
-        dt: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
+        dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
         let mut max_wave_speed = 0.0f64;
@@ -450,8 +450,8 @@ impl TimeIntegratorEnum {
     pub fn advance<R: RhsComputer>(
         &mut self,
         state: &mut ShallowWaterState,
-        time: f64,
-        dt: f64,
+        time: f64, // ALLOW_F64: 时间步长参数
+        dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
         match self.kind {

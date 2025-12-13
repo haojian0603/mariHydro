@@ -35,7 +35,7 @@ use crate::numerics::discretization::{
     CellFaceTopology, DepthCorrector, PressureMatrixAssembler, VelocityCorrector,
 };
 use crate::numerics::linear_algebra::{
-    JacobiPreconditioner, PcgSolver, SolverConfig, SolverResult, SolverStatus,
+    JacobiPreconditioner, PcgSolver, Preconditioner, SolverConfig, SolverResult, SolverStatus,
 };
 use crate::schemes::riemann::{HllcSolver, RiemannSolver, SolverParams as RiemannParams};
 use crate::state::ShallowWaterState;
@@ -50,17 +50,17 @@ pub struct SemiImplicitConfig {
     /// 物理常数（包含重力等权威值）
     pub constants: PhysicalConstants,
     /// 最小水深阈值 [m]
-    pub h_min: f64,
+    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 干单元水深阈值 [m]
-    pub h_dry: f64,
+    pub h_dry: f64, // ALLOW_F64: Layer 4 配置参数
     /// 线性求解器相对容差
-    pub solver_rtol: f64,
+    pub solver_rtol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 线性求解器绝对容差
-    pub solver_atol: f64,
+    pub solver_atol: f64, // ALLOW_F64: Layer 4 配置参数
     /// 线性求解器最大迭代次数
     pub solver_max_iter: usize,
     /// 预测步的隐式因子 (0=显式, 1=全隐式, 0.5=Crank-Nicolson)
-    pub theta: f64,
+    pub theta: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否打印求解器信息
     pub verbose: bool,
 }
@@ -114,13 +114,13 @@ pub struct SemiImplicitStats {
     /// 压力求解迭代次数
     pub pressure_iterations: usize,
     /// 压力求解残差
-    pub pressure_residual: f64,
+    pub pressure_residual: f64, // ALLOW_F64: Layer 4 配置参数
     /// 压力求解状态
     pub pressure_converged: bool,
     /// 最大水深校正量
-    pub max_depth_correction: f64,
+    pub max_depth_correction: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最大速度校正量
-    pub max_velocity_correction: f64,
+    pub max_velocity_correction: f64, // ALLOW_F64: Layer 4 配置参数
     /// 湿单元数
     pub n_wet_cells: usize,
     /// 干单元数
@@ -136,41 +136,41 @@ pub struct SemiImplicitStrategy {
     /// 压力矩阵组装器
     pressure_assembler: PressureMatrixAssembler,
     /// 线性求解器
-    solver: PcgSolver,
+    solver: PcgSolver<f64>,
     /// 预条件器
-    precond: JacobiPreconditioner,
+    precond: JacobiPreconditioner<f64>,
     /// 求解器工作区
-    workspace: crate::numerics::linear_algebra::CgWorkspace,
+    workspace: crate::numerics::linear_algebra::CgWorkspace<f64>,
     /// 水深校正器
     depth_corrector: DepthCorrector,
     /// 速度校正器
     velocity_corrector: VelocityCorrector,
     /// 当前时刻速度 u^n
-    u_n: AlignedVec<f64>,
+    u_n: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 当前时刻速度 v^n
-    v_n: AlignedVec<f64>,
+    v_n: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 预测速度 u*
-    u_star: AlignedVec<f64>,
+    u_star: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 预测速度 v*
-    v_star: AlignedVec<f64>,
+    v_star: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 对流通量累加（u方向）
-    advection_flux_u: AlignedVec<f64>,
+    advection_flux_u: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 对流通量累加（v方向）
-    advection_flux_v: AlignedVec<f64>,
+    advection_flux_v: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 扩散通量累加（u方向）
-    diffusion_flux_u: AlignedVec<f64>,
+    diffusion_flux_u: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 扩散通量累加（v方向）
-    diffusion_flux_v: AlignedVec<f64>,
+    diffusion_flux_v: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 水位校正量 η'
-    eta_prime: AlignedVec<f64>,
+    eta_prime: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 上一步水位校正量
-    d_eta_prev: AlignedVec<f64>,
+    d_eta_prev: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 右端项
-    rhs: AlignedVec<f64>,
+    rhs: AlignedVec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 上一步干湿掩码
     prev_wet_mask: Vec<bool>,
     /// CFL 历史记录
-    cfl_history: Vec<f64>,
+    cfl_history: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 最新统计
     stats: SemiImplicitStats,
     /// Riemann 求解器（用于面通量计算）
@@ -260,7 +260,7 @@ impl SemiImplicitStrategy {
     /// # 返回
     ///
     /// 线性求解器是否收敛
-    pub fn step(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) -> bool {
+    pub fn step(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) -> bool { // ALLOW_F64: 时间步长参数
         // 重置统计
         self.stats = SemiImplicitStats::default();
 
@@ -332,12 +332,12 @@ impl SemiImplicitStrategy {
     }
 
     /// 执行半隐式时间推进（兼容旧接口）
-    pub fn advance(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: f64) {
+    pub fn advance(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: f64) { // ALLOW_F64: 时间步长参数
         let _ = self.step(mesh, state, dt);
     }
 
     /// 计算 CFL 数
-    fn compute_cfl(&self, state: &ShallowWaterState, mesh: &PhysicsMesh, dt: f64) -> f64 {
+    fn compute_cfl(&self, state: &ShallowWaterState, mesh: &PhysicsMesh, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数
         let g = self.config.constants.g;
         let h_dry = self.config.h_dry;
 
@@ -378,7 +378,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 计算预测步（对流+扩散）
-    fn compute_prediction_step(&mut self, mesh: &PhysicsMesh, state: &ShallowWaterState, dt: f64) {
+    fn compute_prediction_step(&mut self, mesh: &PhysicsMesh, state: &ShallowWaterState, dt: f64) { // ALLOW_F64: 时间步长参数
         // 清零通量累加器
         self.advection_flux_u.as_mut_slice().fill(0.0);
         self.advection_flux_v.as_mut_slice().fill(0.0);
@@ -474,7 +474,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 速度校正（Green-Gauss 梯度）
-    fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) {
+    fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) { // ALLOW_F64: 时间步长参数
         let g = self.config.constants.g;
         let theta = self.config.theta;
         let coeff = g * theta * dt;
@@ -545,7 +545,7 @@ impl SemiImplicitStrategy {
         &mut self,
         mesh: &PhysicsMesh,
         state: &ShallowWaterState,
-        dt: f64,
+        dt: f64, // ALLOW_F64: 时间步长参数
     ) {
         self.rhs.as_mut_slice().fill(0.0);
 
@@ -589,7 +589,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 更新求解器统计
-    fn update_solver_stats(&mut self, result: &SolverResult) {
+    fn update_solver_stats(&mut self, result: &SolverResult<f64>) {
         self.stats.pressure_iterations = result.iterations;
         self.stats.pressure_residual = result.relative_residual;
         self.stats.pressure_converged = result.status == SolverStatus::Converged;
@@ -606,7 +606,7 @@ impl SemiImplicitStrategy {
 
     /// 计算速度校正统计
     fn compute_velocity_correction_stats(&mut self, state: &ShallowWaterState) {
-        let mut max_correction: f64 = 0.0;
+        let mut max_correction: f64 = 0.0; // ALLOW_F64: 临时计算变量
         let h_dry = self.config.h_dry;
 
         for i in 0..state.n_cells() {

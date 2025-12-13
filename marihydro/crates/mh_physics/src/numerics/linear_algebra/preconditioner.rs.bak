@@ -1,18 +1,18 @@
-﻿// crates/mh_physics/src/numerics/linear_algebra/preconditioner.rs
+// crates/mh_physics/src/numerics/linear_algebra/preconditioner.rs
 
-//! é¢„æ¡ä»¶å™¨æ¨¡å—
+//! 预条件器模块
 //!
-//! é¢„æ¡ä»¶å™¨ç”¨äºŽåŠ é€Ÿè¿­ä»£æ±‚è§£å™¨çš„æ”¶æ•›ã€‚æ ¸å¿ƒæ€æƒ³æ˜¯å°†åŽŸé—®é¢˜ Ax = b
-//! è½¬æ¢ä¸ºæ¡ä»¶æ•°æ›´å¥½çš„é—®é¢˜ Mâ»Â¹Ax = Mâ»Â¹bã€‚
+//! 预条件器用于加速迭代求解器的收敛。核心思想是将原问题 Ax = b
+//! 转换为条件数更好的问题 M⁻¹Ax = M⁻¹b。
 //! 
-//! æ”¯æŒæ³›åž‹æ ‡é‡ç±»åž‹ `S: RuntimeScalar`ï¼ˆf32 æˆ– f64ï¼‰ã€‚
+//! 支持泛型标量类型 `S: RuntimeScalar`（f32 或 f64）。
 //!
-//! # é¢„æ¡ä»¶å™¨ç±»åž‹
+//! # 预条件器类型
 //!
-//! - [`IdentityPreconditioner`]: æ’ç­‰é¢„æ¡ä»¶å™¨ï¼ˆæ— é¢„æ¡ä»¶ï¼‰
-//! - [`JacobiPreconditioner`]: Jacobi é¢„æ¡ä»¶å™¨ï¼ˆå¯¹è§’é¢„æ¡ä»¶ï¼‰
+//! - [`IdentityPreconditioner`]: 恒等预条件器（无预条件）
+//! - [`JacobiPreconditioner`]: Jacobi 预条件器（对角预条件）
 //!
-//! # ä½¿ç”¨ç¤ºä¾‹
+//! # 使用示例
 //!
 //! ```ignore
 //! use mh_physics::numerics::linear_algebra::{
@@ -24,43 +24,44 @@
 //!
 //! let r = vec![1.0, 2.0, 3.0];
 //! let mut z = vec![0.0; 3];
-//! precond.apply(&r, &mut z);  // z = Mâ»Â¹ * r
+//! precond.apply(&r, &mut z);  // z = M⁻¹ * r
 //! ```
 
 use super::csr::CsrMatrix;
 use mh_core::RuntimeScalar;
 
-/// é¢„æ¡ä»¶å™¨ trait
+
+/// 预条件器 trait
 ///
-/// é¢„æ¡ä»¶å™¨çš„æ ¸å¿ƒæ“ä½œæ˜¯ `apply`: z = Mâ»Â¹ * r
+/// 预条件器的核心操作是 `apply`: z = M⁻¹ * r
 pub trait Preconditioner<S: RuntimeScalar>: Send + Sync {
-    /// åº”ç”¨é¢„æ¡ä»¶å™¨: z = Mâ»Â¹ * r
+    /// 应用预条件器: z = M⁻¹ * r
     ///
-    /// # å‚æ•°
+    /// # 参数
     ///
-    /// - `r`: è¾“å…¥å‘é‡ï¼ˆé€šå¸¸æ˜¯æ®‹å·®ï¼‰
-    /// - `z`: è¾“å‡ºå‘é‡ï¼ˆé¢„æ¡ä»¶åŽçš„æ–¹å‘ï¼‰
+    /// - `r`: 输入向量（通常是残差）
+    /// - `z`: 输出向量（预条件后的方向）
     fn apply(&self, r: &[S], z: &mut [S]);
 
-    /// èŽ·å–é¢„æ¡ä»¶å™¨åç§°
+    /// 获取预条件器名称
     fn name(&self) -> &'static str;
 
-    /// æ›´æ–°é¢„æ¡ä»¶å™¨ï¼ˆçŸ©é˜µå€¼å˜åŒ–ä½†ç»“æž„ä¸å˜æ—¶ï¼‰
+    /// 更新预条件器（矩阵值变化但结构不变时）
     ///
-    /// # å‚æ•°
+    /// # 参数
     ///
-    /// - `matrix`: æ›´æ–°åŽçš„ç³»æ•°çŸ©é˜µ
+    /// - `matrix`: 更新后的系数矩阵
     fn update(&mut self, matrix: &CsrMatrix<S>);
 }
 
-/// æ’ç­‰é¢„æ¡ä»¶å™¨ï¼ˆæ— é¢„æ¡ä»¶ï¼‰
+/// 恒等预条件器（无预条件）
 ///
-/// M = Iï¼Œå³ z = r
+/// M = I，即 z = r
 #[derive(Debug, Clone, Default)]
 pub struct IdentityPreconditioner;
 
 impl IdentityPreconditioner {
-    /// åˆ›å»ºæ’ç­‰é¢„æ¡ä»¶å™¨
+    /// 创建恒等预条件器
     pub fn new() -> Self {
         Self
     }
@@ -76,27 +77,27 @@ impl<S: RuntimeScalar> Preconditioner<S> for IdentityPreconditioner {
     }
 
     fn update(&mut self, _matrix: &CsrMatrix<S>) {
-        // æ’ç­‰é¢„æ¡ä»¶å™¨æ— éœ€æ›´æ–°
+        // 恒等预条件器无需更新
     }
 }
 
-/// Jacobi é¢„æ¡ä»¶å™¨ï¼ˆå¯¹è§’é¢„æ¡ä»¶ï¼‰
+/// Jacobi 预条件器（对角预条件）
 ///
-/// M = diag(A)ï¼Œå³ z_i = r_i / A_ii
+/// M = diag(A)，即 z_i = r_i / A_ii
 ///
-/// è¿™æ˜¯æœ€ç®€å•çš„é¢„æ¡ä»¶å™¨ï¼Œè®¡ç®—å¼€é”€æžä½Žï¼Œä½†æ•ˆæžœæœ‰é™ã€‚
-/// é€‚ç”¨äºŽå¯¹è§’å ä¼˜çŸ©é˜µã€‚
+/// 这是最简单的预条件器，计算开销极低，但效果有限。
+/// 适用于对角占优矩阵。
 #[derive(Debug, Clone)]
 pub struct JacobiPreconditioner<S: RuntimeScalar> {
-    /// å¯¹è§’å…ƒç´ çš„å€’æ•°
+    /// 对角元素的倒数
     inv_diag: Vec<S>,
 }
 
-/// Legacy ç±»åž‹åˆ«åï¼Œä¿æŒå‘åŽå…¼å®¹
+/// Legacy 类型别名，保持向后兼容
 pub type JacobiPreconditionerF64 = JacobiPreconditioner<f64>;
 
 impl<S: RuntimeScalar> JacobiPreconditioner<S> {
-    /// ä»Ž CSR çŸ©é˜µåˆ›å»º Jacobi é¢„æ¡ä»¶å™¨
+    /// 从 CSR 矩阵创建 Jacobi 预条件器
     pub fn from_matrix(matrix: &CsrMatrix<S>) -> Self {
         let n = matrix.n_rows();
         let mut inv_diag = vec![S::ONE; n];
@@ -113,10 +114,10 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         Self { inv_diag }
     }
 
-    /// ä»Ž CSR çŸ©é˜µåˆ›å»º Jacobi é¢„æ¡ä»¶å™¨ï¼ˆå¸¦å¹²å•å…ƒæ£€æµ‹ï¼‰
+    /// 从 CSR 矩阵创建 Jacobi 预条件器（带干单元检测）
     ///
-    /// å¯¹äºŽå¯¹è§’å…ƒç´ å°äºŽ `h_dry * 1e-6` çš„è¡Œï¼Œä½¿ç”¨å•ä½é¢„æ¡ä»¶ã€‚
-    /// è¿™é¿å…äº†å¹²å•å…ƒå¯¼è‡´çš„æ•°å€¼ä¸ç¨³å®šã€‚
+    /// 对于对角元素小于 `h_dry * 1e-6` 的行，使用单位预条件。
+    /// 这避免了干单元导致的数值不稳定。
     pub fn from_matrix_with_dry_detection(matrix: &CsrMatrix<S>, h_dry: S) -> Self {
         let n = matrix.n_rows();
         let mut inv_diag = vec![S::ONE; n];
@@ -126,7 +127,7 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         for i in 0..n {
             if let Some(diag) = matrix.diagonal_value(i) {
                 if diag.abs() < dry_threshold {
-                    // å¹²å•å…ƒï¼šä½¿ç”¨å•ä½é¢„æ¡ä»¶
+                    // 干单元：使用单位预条件
                     inv_diag[i] = S::ONE;
                 } else if diag.abs() > zero_threshold {
                     inv_diag[i] = S::ONE / diag;
@@ -137,7 +138,7 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         Self { inv_diag }
     }
 
-    /// ä»Žå¯¹è§’å‘é‡åˆ›å»º Jacobi é¢„æ¡ä»¶å™¨
+    /// 从对角向量创建 Jacobi 预条件器
     pub fn from_diagonal(diag: &[S]) -> Self {
         let threshold = S::from_config(1e-14).unwrap_or(S::MIN_POSITIVE);
         let inv_diag: Vec<_> = diag
@@ -147,7 +148,7 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         Self { inv_diag }
     }
 
-    /// æ›´æ–°é¢„æ¡ä»¶å™¨ï¼ˆçŸ©é˜µå€¼å˜åŒ–ä½†ç»“æž„ä¸å˜æ—¶ï¼‰
+    /// 更新预条件器（矩阵值变化但结构不变时）
     pub fn update_from_matrix(&mut self, matrix: &CsrMatrix<S>) {
         let threshold = S::from_config(1e-14).unwrap_or(S::MIN_POSITIVE);
         for i in 0..self.inv_diag.len().min(matrix.n_rows()) {
@@ -159,7 +160,7 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         }
     }
 
-    /// æ›´æ–°é¢„æ¡ä»¶å™¨ï¼ˆå¸¦å¹²å•å…ƒæ£€æµ‹ï¼‰
+    /// 更新预条件器（带干单元检测）
     pub fn update_with_dry_detection(&mut self, matrix: &CsrMatrix<S>, h_dry: S) {
         let dry_threshold = h_dry * S::from_config(1e-6).unwrap_or(S::MIN_POSITIVE);
         let zero_threshold = S::from_config(1e-14).unwrap_or(S::MIN_POSITIVE);
@@ -174,7 +175,7 @@ impl<S: RuntimeScalar> JacobiPreconditioner<S> {
         }
     }
 
-    /// èŽ·å–å¯¹è§’å…ƒç´ å€’æ•°å¼•ç”¨
+    /// 获取对角元素倒数引用
     pub fn inv_diagonal(&self) -> &[S] {
         &self.inv_diag
     }
@@ -206,37 +207,37 @@ impl<S: RuntimeScalar> Preconditioner<S> for JacobiPreconditioner<S> {
     }
 }
 
-/// SSOR é¢„æ¡ä»¶å™¨ï¼ˆå¯¹ç§°é€æ¬¡è¶…æ¾å¼›ï¼‰
+/// SSOR 预条件器（对称逐次超松弛）
 ///
-/// M = (D + Ï‰L) Dâ»Â¹ (D + Ï‰U)
+/// M = (D + ωL) D⁻¹ (D + ωU)
 ///
-/// å…¶ä¸­ Lã€U åˆ†åˆ«æ˜¯ A çš„ä¸¥æ ¼ä¸‹ä¸‰è§’å’Œä¸¥æ ¼ä¸Šä¸‰è§’éƒ¨åˆ†ï¼Œ
-/// D æ˜¯å¯¹è§’éƒ¨åˆ†ï¼ŒÏ‰ æ˜¯æ¾å¼›å› å­ã€‚
+/// 其中 L、U 分别是 A 的严格下三角和严格上三角部分，
+/// D 是对角部分，ω 是松弛因子。
 #[derive(Debug, Clone)]
 pub struct SsorPreconditioner<S: RuntimeScalar> {
-    /// çŸ©é˜µå¼•ç”¨ï¼ˆç”¨äºŽå‰å‘å’ŒåŽå‘æ‰«æï¼‰
+    /// 矩阵引用（用于前向和后向扫描）
     row_ptr: Vec<usize>,
     col_idx: Vec<usize>,
     values: Vec<S>,
-    /// å¯¹è§’å…ƒç´ 
+    /// 对角元素
     diag: Vec<S>,
-    /// æ¾å¼›å› å­
+    /// 松弛因子
     omega: S,
-    /// ä¸´æ—¶å·¥ä½œå‘é‡
+    /// 临时工作向量
     #[allow(dead_code)]
     work: Vec<S>,
 }
 
-/// Legacy ç±»åž‹åˆ«åï¼Œä¿æŒå‘åŽå…¼å®¹
+/// Legacy 类型别名，保持向后兼容
 pub type SsorPreconditionerF64 = SsorPreconditioner<f64>;
 
 impl<S: RuntimeScalar> SsorPreconditioner<S> {
-    /// ä»Ž CSR çŸ©é˜µåˆ›å»º SSOR é¢„æ¡ä»¶å™¨
+    /// 从 CSR 矩阵创建 SSOR 预条件器
     ///
-    /// # å‚æ•°
+    /// # 参数
     ///
-    /// - `matrix`: CSR çŸ©é˜µ
-    /// - `omega`: æ¾å¼›å› å­ï¼ˆé€šå¸¸å– 1.0-1.8ï¼‰
+    /// - `matrix`: CSR 矩阵
+    /// - `omega`: 松弛因子（通常取 1.0-1.8）
     pub fn from_matrix(matrix: &CsrMatrix<S>, omega: S) -> Self {
         let n = matrix.n_rows();
         let diag: Vec<_> = (0..n)
@@ -253,7 +254,7 @@ impl<S: RuntimeScalar> SsorPreconditioner<S> {
         }
     }
 
-    /// æ›´æ–°é¢„æ¡ä»¶å™¨
+    /// 更新预条件器
     pub fn update_from_matrix(&mut self, matrix: &CsrMatrix<S>) {
         self.values.copy_from_slice(matrix.values());
         for i in 0..self.diag.len().min(matrix.n_rows()) {
@@ -261,7 +262,7 @@ impl<S: RuntimeScalar> SsorPreconditioner<S> {
         }
     }
 
-    /// å‰å‘æ‰«æ (D + Ï‰L) y = r
+    /// 前向扫描 (D + ωL) y = r
     #[allow(dead_code)]
     fn forward_sweep(&self, r: &[S], y: &mut [S]) {
         let n = self.diag.len();
@@ -281,7 +282,7 @@ impl<S: RuntimeScalar> SsorPreconditioner<S> {
         }
     }
 
-    /// åŽå‘æ‰«æ (D + Ï‰U) z = D y
+    /// 后向扫描 (D + ωU) z = D y
     #[allow(dead_code)]
     fn backward_sweep(&self, y: &[S], z: &mut [S]) {
         let n = self.diag.len();
@@ -306,7 +307,7 @@ impl<S: RuntimeScalar> Preconditioner<S> for SsorPreconditioner<S> {
     fn apply(&self, r: &[S], z: &mut [S]) {
         let n = self.diag.len();
 
-        // å‰å‘æ‰«æ: (D + Ï‰L) y = r
+        // 前向扫描: (D + ωL) y = r
         for i in 0..n {
             let start = self.row_ptr[i];
             let end = self.row_ptr[i + 1];
@@ -321,13 +322,13 @@ impl<S: RuntimeScalar> Preconditioner<S> for SsorPreconditioner<S> {
             z[i] = sum / self.diag[i];
         }
 
-        // å¯¹è§’ç¼©æ”¾: y = D * (2 - Ï‰) * y
+        // 对角缩放: y = D * (2 - ω) * y
         let scale = S::TWO - self.omega;
         for i in 0..n {
             z[i] *= self.diag[i] * scale;
         }
 
-        // åŽå‘æ‰«æ: (D + Ï‰U) x = scaled_y
+        // 后向扫描: (D + ωU) x = scaled_y
         for i in (0..n).rev() {
             let start = self.row_ptr[i];
             let end = self.row_ptr[i + 1];
@@ -355,40 +356,40 @@ impl<S: RuntimeScalar> Preconditioner<S> for SsorPreconditioner<S> {
     }
 }
 
-/// ILU(0) ä¸å®Œå…¨ LU åˆ†è§£é¢„æ¡ä»¶å™¨
+/// ILU(0) 不完全 LU 分解预条件器
 ///
-/// ä¿æŒåŽŸçŸ©é˜µç¨€ç–æ¨¡å¼çš„ä¸å®Œå…¨ LU åˆ†è§£ã€‚
-/// æ¯” Jacobi æ›´å¼ºä½†è®¡ç®—å¼€é”€ä¹Ÿæ›´å¤§ã€‚
+/// 保持原矩阵稀疏模式的不完全 LU 分解。
+/// 比 Jacobi 更强但计算开销也更大。
 #[derive(Debug, Clone)]
 pub struct Ilu0Preconditioner<S: RuntimeScalar> {
-    /// çŸ©é˜µç»´åº¦
+    /// 矩阵维度
     n: usize,
-    /// è¡ŒæŒ‡é’ˆ
+    /// 行指针
     row_ptr: Vec<usize>,
-    /// åˆ—ç´¢å¼•
+    /// 列索引
     col_idx: Vec<usize>,
-    /// LU åˆ†è§£åŽçš„å€¼ï¼ˆL å’Œ U å…±ç”¨å­˜å‚¨ï¼‰
+    /// LU 分解后的值（L 和 U 共用存储）
     lu_values: Vec<S>,
-    /// å¯¹è§’å…ƒä½ç½®ç´¢å¼•
+    /// 对角元位置索引
     diag_ptr: Vec<usize>,
 }
 
-/// Legacy ç±»åž‹åˆ«åï¼Œä¿æŒå‘åŽå…¼å®¹
+/// Legacy 类型别名，保持向后兼容
 pub type Ilu0PreconditionerF64 = Ilu0Preconditioner<f64>;
 
 impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
-    /// ä»Ž CSR çŸ©é˜µåˆ›å»º ILU(0) é¢„æ¡ä»¶å™¨
+    /// 从 CSR 矩阵创建 ILU(0) 预条件器
     ///
-    /// # å‚æ•°
+    /// # 参数
     ///
-    /// - `matrix`: ç³»æ•°çŸ©é˜µ
+    /// - `matrix`: 系数矩阵
     pub fn new(matrix: &CsrMatrix<S>) -> Self {
         let n = matrix.n_rows();
         let mut lu_values = matrix.values().to_vec();
         let row_ptr = matrix.row_ptr().to_vec();
         let col_idx = matrix.col_idx().to_vec();
 
-        // æŸ¥æ‰¾å¯¹è§’å…ƒä½ç½®
+        // 查找对角元位置
         let mut diag_ptr = vec![0usize; n];
         for i in 0..n {
             for k in row_ptr[i]..row_ptr[i + 1] {
@@ -399,7 +400,7 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
             }
         }
 
-        // æ‰§è¡Œ ILU(0) åˆ†è§£
+        // 执行 ILU(0) 分解
         Self::factorize(&row_ptr, &col_idx, &mut lu_values, &diag_ptr, n);
 
         Self {
@@ -411,12 +412,12 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
         }
     }
 
-    /// æ‰§è¡Œ ILU(0) åˆ†è§£
+    /// 执行 ILU(0) 分解
     ///
-    /// åŽŸåœ°ä¿®æ”¹ lu æ•°ç»„ï¼Œä½¿å¾— L çš„ä¸¥æ ¼ä¸‹ä¸‰è§’éƒ¨åˆ†å’Œ U çš„ä¸Šä¸‰è§’éƒ¨åˆ†ï¼ˆå«å¯¹è§’ï¼‰
-    /// å­˜å‚¨åœ¨åŒä¸€æ•°ç»„ä¸­ã€‚
+    /// 原地修改 lu 数组，使得 L 的严格下三角部分和 U 的上三角部分（含对角）
+    /// 存储在同一数组中。
     ///
-    /// ä½¿ç”¨ä¸»å…ƒæ­£åˆ™åŒ–å’Œå¢žé•¿å› å­é™åˆ¶æé«˜æ•°å€¼ç¨³å®šæ€§ã€‚
+    /// 使用主元正则化和增长因子限制提高数值稳定性。
     fn factorize(
         row_ptr: &[usize],
         col_idx: &[usize],
@@ -424,19 +425,19 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
         diag_ptr: &[usize],
         n: usize,
     ) {
-        // æ•°å€¼ç¨³å®šæ€§å‚æ•°
+        // 数值稳定性参数
         let pivot_tol = S::from_config(1e-10).unwrap_or(S::MIN_POSITIVE);
         let growth_limit = S::from_config(1e3).unwrap_or(S::from_config(1000.0).unwrap_or(S::MAX));
 
         for i in 1..n {
-            // éåŽ†ç¬¬ i è¡Œçš„ä¸‹ä¸‰è§’éƒ¨åˆ† (j < i)
+            // 遍历第 i 行的下三角部分 (j < i)
             for k_idx in row_ptr[i]..row_ptr[i + 1] {
                 let k = col_idx[k_idx];
                 if k >= i {
                     break;
                 }
 
-                // ä¸»å…ƒæ­£åˆ™åŒ–ï¼šé¿å…é™¤é›¶
+                // 主元正则化：避免除零
                 let mut diag_k = lu[diag_ptr[k]];
                 if diag_k.abs() < pivot_tol {
                     diag_k = if diag_k >= S::ZERO { pivot_tol } else { -pivot_tol };
@@ -446,19 +447,19 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
                     lu[diag_ptr[k]] = diag_k;
                 }
 
-                // è®¡ç®—å› å­å¹¶é™åˆ¶å¢žé•¿
+                // 计算因子并限制增长
                 let mut factor = lu[k_idx] / diag_k;
                 factor = factor.clamp(-growth_limit, growth_limit);
                 lu[k_idx] = factor;
 
-                // æ›´æ–°ç¬¬ i è¡Œçš„å…¶ä½™å…ƒç´ 
+                // 更新第 i 行的其余元素
                 for j_idx in (k_idx + 1)..row_ptr[i + 1] {
                     let j = col_idx[j_idx];
-                    // æŸ¥æ‰¾ A[k,j]
+                    // 查找 A[k,j]
                     for m_idx in row_ptr[k]..row_ptr[k + 1] {
                         if col_idx[m_idx] == j {
                             let update = factor * lu[m_idx];
-                            // é™åˆ¶æ›´æ–°å¹…åº¦
+                            // 限制更新幅度
                             let limited_update = update.clamp(-growth_limit, growth_limit);
                             lu[j_idx] -= limited_update;
                             break;
@@ -469,7 +470,7 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
         }
     }
 
-    /// å‰å‘æ›¿æ¢: L * y = r
+    /// 前向替换: L * y = r
     fn forward_solve(&self, r: &[S], y: &mut [S]) {
         y.copy_from_slice(r);
 
@@ -481,7 +482,7 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
         }
     }
 
-    /// åŽå‘æ›¿æ¢: U * z = y
+    /// 后向替换: U * z = y
     fn backward_solve(&self, y: &[S], z: &mut [S]) {
         z.copy_from_slice(y);
         let threshold = S::from_config(1e-14).unwrap_or(S::MIN_POSITIVE);
@@ -502,8 +503,8 @@ impl<S: RuntimeScalar> Ilu0Preconditioner<S> {
 
 impl<S: RuntimeScalar> Preconditioner<S> for Ilu0Preconditioner<S> {
     fn apply(&self, r: &[S], z: &mut [S]) {
-        // è§£ L * U * z = r
-        // åˆ†ä¸¤æ­¥: L * y = r, ç„¶åŽ U * z = y
+        // 解 L * U * z = r
+        // 分两步: L * y = r, 然后 U * z = y
         let mut y = vec![S::ZERO; self.n];
         self.forward_solve(r, &mut y);
         self.backward_solve(&y, z);
@@ -514,7 +515,7 @@ impl<S: RuntimeScalar> Preconditioner<S> for Ilu0Preconditioner<S> {
     }
 
     fn update(&mut self, matrix: &CsrMatrix<S>) {
-        // é‡æ–°å¤åˆ¶çŸ©é˜µå€¼å¹¶é‡æ–°åˆ†è§£
+        // 重新复制矩阵值并重新分解
         self.lu_values.copy_from_slice(matrix.values());
         Self::factorize(
             &self.row_ptr,
@@ -531,11 +532,8 @@ mod tests {
     use super::*;
     use crate::numerics::linear_algebra::csr::CsrBuilder;
 
-    // 测试用类型别名
-    type S = f64;
-
-    fn create_test_matrix() -> CsrMatrix<S> {
-        let mut builder = CsrBuilder::<S>::new_square(3);
+    fn create_test_matrix() -> CsrMatrix {
+        let mut builder = CsrBuilder::new_square(3);
         builder.set(0, 0, 4.0);
         builder.set(0, 1, -1.0);
         builder.set(1, 0, -1.0);
@@ -552,15 +550,15 @@ mod tests {
         let r = vec![1.0, 2.0, 3.0];
         let mut z = vec![0.0; 3];
 
-        Preconditioner::<S>::apply(&precond, &r, &mut z);
+        precond.apply(&r, &mut z);
         assert_eq!(z, r);
-        assert_eq!(Preconditioner::<S>::name(&precond), "Identity");
+        assert_eq!(precond.name(), "Identity");
     }
 
     #[test]
     fn test_jacobi_preconditioner() {
         let matrix = create_test_matrix();
-        let precond = JacobiPreconditioner::<S>::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::from_matrix(&matrix);
 
         let r = vec![4.0, 8.0, 12.0];
         let mut z = vec![0.0; 3];
@@ -576,7 +574,7 @@ mod tests {
     #[test]
     fn test_jacobi_from_diagonal() {
         let diag = vec![2.0, 4.0, 8.0];
-        let precond = JacobiPreconditioner::<S>::from_diagonal(&diag);
+        let precond = JacobiPreconditioner::from_diagonal(&diag);
 
         let r = vec![2.0, 4.0, 8.0];
         let mut z = vec![0.0; 3];
@@ -591,7 +589,7 @@ mod tests {
     #[test]
     fn test_jacobi_zero_diagonal() {
         let diag = vec![2.0, 0.0, 4.0]; // 中间为零
-        let precond = JacobiPreconditioner::<S>::from_diagonal(&diag);
+        let precond = JacobiPreconditioner::from_diagonal(&diag);
 
         let r = vec![2.0, 3.0, 4.0];
         let mut z = vec![0.0; 3];
@@ -607,7 +605,7 @@ mod tests {
     #[test]
     fn test_ssor_preconditioner() {
         let matrix = create_test_matrix();
-        let precond = SsorPreconditioner::<S>::from_matrix(&matrix, 1.0);
+        let precond = SsorPreconditioner::from_matrix(&matrix, 1.0);
 
         let r = vec![1.0, 1.0, 1.0];
         let mut z = vec![0.0; 3];

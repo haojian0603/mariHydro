@@ -1,48 +1,56 @@
 // crates/mh_physics/src/numerics/gradient/traits.rs
 
 //! 梯度计算 trait 和存储类型
+//!
+//! **层级**: Layer 3 - Engine Layer
+//!
+//! 本模块提供泛型化的梯度存储和计算接口，支持 f32/f64 精度切换。
 
 use glam::DVec2;
+use mh_core::RuntimeScalar;
 
 // ============================================================
-// 梯度存储
+// 泛型梯度存储
 // ============================================================
 
-/// 标量场梯度存储 (SoA布局)
+/// 标量场梯度存储 (SoA布局) - 泛型版本
 #[derive(Debug, Clone, Default)]
-pub struct ScalarGradientStorage {
+pub struct ScalarGradientStorageGeneric<S: RuntimeScalar> {
     /// x方向梯度分量
-    pub grad_x: Vec<f64>,
+    pub grad_x: Vec<S>,
     /// y方向梯度分量
-    pub grad_y: Vec<f64>,
+    pub grad_y: Vec<S>,
 }
 
-impl ScalarGradientStorage {
+/// 标量场梯度存储 (SoA布局) - Legacy f64 版本
+pub type ScalarGradientStorage = ScalarGradientStorageGeneric<f64>;
+
+impl<S: RuntimeScalar> ScalarGradientStorageGeneric<S> {
     /// 创建指定大小的存储
     pub fn new(n: usize) -> Self {
         Self {
-            grad_x: vec![0.0; n],
-            grad_y: vec![0.0; n],
+            grad_x: vec![S::ZERO; n],
+            grad_y: vec![S::ZERO; n],
         }
     }
 
-    /// 获取单元梯度
+    /// 获取单元梯度 (返回元组)
     #[inline]
-    pub fn get(&self, i: usize) -> DVec2 {
-        DVec2::new(self.grad_x[i], self.grad_y[i])
+    pub fn get_tuple(&self, i: usize) -> (S, S) {
+        (self.grad_x[i], self.grad_y[i])
     }
 
-    /// 设置单元梯度
+    /// 设置单元梯度 (从元组)
     #[inline]
-    pub fn set(&mut self, i: usize, g: DVec2) {
-        self.grad_x[i] = g.x;
-        self.grad_y[i] = g.y;
+    pub fn set_tuple(&mut self, i: usize, g: (S, S)) {
+        self.grad_x[i] = g.0;
+        self.grad_y[i] = g.1;
     }
 
     /// 重置所有梯度为零
     pub fn reset(&mut self) {
-        self.grad_x.fill(0.0);
-        self.grad_y.fill(0.0);
+        self.grad_x.fill(S::ZERO);
+        self.grad_y.fill(S::ZERO);
     }
 
     /// 存储大小
@@ -57,20 +65,36 @@ impl ScalarGradientStorage {
 
     /// 调整大小
     pub fn resize(&mut self, n: usize) {
-        self.grad_x.resize(n, 0.0);
-        self.grad_y.resize(n, 0.0);
+        self.grad_x.resize(n, S::ZERO);
+        self.grad_y.resize(n, S::ZERO);
     }
 
     /// 应用限制器 (梯度乘以限制因子)
-    pub fn apply_limiter(&mut self, limiters: &[f64]) {
+    pub fn apply_limiter(&mut self, limiters: &[S]) {
         for (i, &alpha) in limiters.iter().enumerate() {
-            self.grad_x[i] *= alpha;
-            self.grad_y[i] *= alpha;
+            self.grad_x[i] = self.grad_x[i] * alpha;
+            self.grad_y[i] = self.grad_y[i] * alpha;
         }
     }
 }
 
-/// 向量场梯度存储 (速度梯度张量)
+// f64 版本的 DVec2 兼容方法
+impl ScalarGradientStorageGeneric<f64> {
+    /// 获取单元梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn get(&self, i: usize) -> DVec2 {
+        DVec2::new(self.grad_x[i], self.grad_y[i])
+    }
+
+    /// 设置单元梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn set(&mut self, i: usize, g: DVec2) {
+        self.grad_x[i] = g.x;
+        self.grad_y[i] = g.y;
+    }
+}
+
+/// 向量场梯度存储 (速度梯度张量) - 泛型版本
 ///
 /// 存储 ∇u 和 ∇v:
 /// ```text
@@ -79,60 +103,63 @@ impl ScalarGradientStorage {
 /// └ dv/dx  dv/dy ┘
 /// ```
 #[derive(Debug, Clone, Default)]
-pub struct VectorGradientStorage {
+pub struct VectorGradientStorageGeneric<S: RuntimeScalar> {
     /// ∂u/∂x
-    pub du_dx: Vec<f64>,
+    pub du_dx: Vec<S>,
     /// ∂u/∂y
-    pub du_dy: Vec<f64>,
+    pub du_dy: Vec<S>,
     /// ∂v/∂x
-    pub dv_dx: Vec<f64>,
+    pub dv_dx: Vec<S>,
     /// ∂v/∂y
-    pub dv_dy: Vec<f64>,
+    pub dv_dy: Vec<S>,
 }
 
-impl VectorGradientStorage {
+/// 向量场梯度存储 - Legacy f64 版本
+pub type VectorGradientStorage = VectorGradientStorageGeneric<f64>;
+
+impl<S: RuntimeScalar> VectorGradientStorageGeneric<S> {
     /// 创建指定大小的存储
     pub fn new(n: usize) -> Self {
         Self {
-            du_dx: vec![0.0; n],
-            du_dy: vec![0.0; n],
-            dv_dx: vec![0.0; n],
-            dv_dy: vec![0.0; n],
+            du_dx: vec![S::ZERO; n],
+            du_dy: vec![S::ZERO; n],
+            dv_dx: vec![S::ZERO; n],
+            dv_dy: vec![S::ZERO; n],
         }
     }
 
-    /// 获取 u 的梯度
+    /// 获取 u 的梯度 (元组版本)
     #[inline]
-    pub fn grad_u(&self, i: usize) -> DVec2 {
-        DVec2::new(self.du_dx[i], self.du_dy[i])
+    pub fn grad_u_tuple(&self, i: usize) -> (S, S) {
+        (self.du_dx[i], self.du_dy[i])
     }
 
-    /// 获取 v 的梯度
+    /// 获取 v 的梯度 (元组版本)
     #[inline]
-    pub fn grad_v(&self, i: usize) -> DVec2 {
-        DVec2::new(self.dv_dx[i], self.dv_dy[i])
+    pub fn grad_v_tuple(&self, i: usize) -> (S, S) {
+        (self.dv_dx[i], self.dv_dy[i])
     }
 
-    /// 设置 u 的梯度
+    /// 设置 u 的梯度 (元组版本)
     #[inline]
-    pub fn set_grad_u(&mut self, i: usize, g: DVec2) {
-        self.du_dx[i] = g.x;
-        self.du_dy[i] = g.y;
+    pub fn set_grad_u_tuple(&mut self, i: usize, g: (S, S)) {
+        self.du_dx[i] = g.0;
+        self.du_dy[i] = g.1;
     }
 
-    /// 设置 v 的梯度
+    /// 设置 v 的梯度 (元组版本)
     #[inline]
-    pub fn set_grad_v(&mut self, i: usize, g: DVec2) {
-        self.dv_dx[i] = g.x;
-        self.dv_dy[i] = g.y;
+    pub fn set_grad_v_tuple(&mut self, i: usize, g: (S, S)) {
+        self.dv_dx[i] = g.0;
+        self.dv_dy[i] = g.1;
     }
 
     /// 重置所有梯度为零
     pub fn reset(&mut self) {
-        self.du_dx.fill(0.0);
-        self.du_dy.fill(0.0);
-        self.dv_dx.fill(0.0);
-        self.dv_dy.fill(0.0);
+        self.du_dx.fill(S::ZERO);
+        self.du_dy.fill(S::ZERO);
+        self.dv_dx.fill(S::ZERO);
+        self.dv_dy.fill(S::ZERO);
     }
 
     /// 存储大小
@@ -147,33 +174,62 @@ impl VectorGradientStorage {
 
     /// 调整大小
     pub fn resize(&mut self, n: usize) {
-        self.du_dx.resize(n, 0.0);
-        self.du_dy.resize(n, 0.0);
-        self.dv_dx.resize(n, 0.0);
-        self.dv_dy.resize(n, 0.0);
+        self.du_dx.resize(n, S::ZERO);
+        self.du_dy.resize(n, S::ZERO);
+        self.dv_dx.resize(n, S::ZERO);
+        self.dv_dy.resize(n, S::ZERO);
     }
 
     /// 应变率张量模 |S| = √(2·S_ij·S_ij)
     ///
     /// 用于湍流模型的应变率计算
     #[inline]
-    pub fn strain_rate_magnitude(&self, i: usize) -> f64 {
+    pub fn strain_rate_magnitude(&self, i: usize) -> S {
         let s11 = self.du_dx[i];
         let s22 = self.dv_dy[i];
-        let s12 = 0.5 * (self.du_dy[i] + self.dv_dx[i]);
-        (2.0 * (s11 * s11 + s22 * s22 + 2.0 * s12 * s12)).sqrt()
+        let s12 = S::HALF * (self.du_dy[i] + self.dv_dx[i]);
+        (S::TWO * (s11 * s11 + s22 * s22 + S::TWO * s12 * s12)).sqrt()
     }
 
     /// 涡量 (2D): ω = ∂v/∂x - ∂u/∂y
     #[inline]
-    pub fn vorticity(&self, i: usize) -> f64 {
+    pub fn vorticity(&self, i: usize) -> S {
         self.dv_dx[i] - self.du_dy[i]
     }
 
     /// 散度: ∇·v = ∂u/∂x + ∂v/∂y
     #[inline]
-    pub fn divergence(&self, i: usize) -> f64 {
+    pub fn divergence(&self, i: usize) -> S {
         self.du_dx[i] + self.dv_dy[i]
+    }
+}
+
+// f64 版本的 DVec2 兼容方法
+impl VectorGradientStorageGeneric<f64> {
+    /// 获取 u 的梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn grad_u(&self, i: usize) -> DVec2 {
+        DVec2::new(self.du_dx[i], self.du_dy[i])
+    }
+
+    /// 获取 v 的梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn grad_v(&self, i: usize) -> DVec2 {
+        DVec2::new(self.dv_dx[i], self.dv_dy[i])
+    }
+
+    /// 设置 u 的梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn set_grad_u(&mut self, i: usize, g: DVec2) {
+        self.du_dx[i] = g.x;
+        self.du_dy[i] = g.y;
+    }
+
+    /// 设置 v 的梯度 (DVec2 版本，仅 f64)
+    #[inline]
+    pub fn set_grad_v(&mut self, i: usize, g: DVec2) {
+        self.dv_dx[i] = g.x;
+        self.dv_dy[i] = g.y;
     }
 }
 
@@ -183,23 +239,23 @@ impl VectorGradientStorage {
 
 use crate::adapter::PhysicsMesh;
 
-/// 梯度计算方法 trait
-pub trait GradientMethod: Send + Sync {
+/// 泛型梯度计算方法 trait
+pub trait GradientMethodGeneric<S: RuntimeScalar>: Send + Sync {
     /// 计算标量场梯度
     fn compute_scalar_gradient(
         &self,
-        field: &[f64],
+        field: &[S],
         mesh: &PhysicsMesh,
-        output: &mut ScalarGradientStorage,
+        output: &mut ScalarGradientStorageGeneric<S>,
     );
 
     /// 计算向量场梯度
     fn compute_vector_gradient(
         &self,
-        field_u: &[f64],
-        field_v: &[f64],
+        field_u: &[S],
+        field_v: &[S],
         mesh: &PhysicsMesh,
-        output: &mut VectorGradientStorage,
+        output: &mut VectorGradientStorageGeneric<S>,
     );
 
     /// 方法名称
@@ -210,6 +266,12 @@ pub trait GradientMethod: Send + Sync {
         true
     }
 }
+
+/// 梯度计算方法 trait - f64 版本别名
+pub trait GradientMethod: GradientMethodGeneric<f64> {}
+
+/// 为所有实现 GradientMethodGeneric<f64> 的类型自动实现 GradientMethod
+impl<T: GradientMethodGeneric<f64>> GradientMethod for T {}
 
 // ============================================================
 // 测试

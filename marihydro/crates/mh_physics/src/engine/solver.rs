@@ -7,11 +7,7 @@
 //! - 干湿处理
 //! - 静水重构
 //! - 多种时间积分方案
-//!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/engine/solver.rs 迁移，保持核心算法不变。
-//! 源项（摩擦、科氏力等）将在 sources 模块迁移后集成。
+
 
 use crate::adapter::PhysicsMesh;
 use crate::engine::timestep::{TimeStepController, TimeStepControllerBuilder};
@@ -78,6 +74,7 @@ impl std::fmt::Display for FallbackStrategy {
 }
 
 /// 稳定性检查选项
+// ALLOW_F64: Layer 4 配置结构
 #[derive(Debug, Clone, Copy)]
 pub struct StabilityOptions {
     /// 是否检查 NaN/Inf
@@ -87,9 +84,9 @@ pub struct StabilityOptions {
     /// 是否检查极大速度
     pub check_extreme_velocity: bool,
     /// 速度上限 [m/s]
-    pub velocity_limit: f64,
+    pub velocity_limit: f64, // ALLOW_F64: Layer 4 配置参数
     /// 水深上限 [m]
-    pub depth_limit: f64,
+    pub depth_limit: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
 impl Default for StabilityOptions {
@@ -148,12 +145,13 @@ impl std::fmt::Display for TimeIntegrator {
 }
 
 /// 求解器配置
+// ALLOW_F64: Layer 4 配置结构
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
     /// 数值参数
     pub params: NumericalParams,
     /// 重力加速度 [m/s²]
-    pub gravity: f64,
+    pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否启用静水重构
     pub use_hydrostatic_reconstruction: bool,
     /// 并行化阈值（面数）
@@ -169,7 +167,7 @@ pub struct SolverConfig {
     /// 最大回退次数
     pub max_fallback_attempts: u32,
     /// 时间步减小因子（回退时使用）
-    pub timestep_reduction_factor: f64,
+    pub timestep_reduction_factor: f64, // ALLOW_F64: Layer 4 配置参数
     /// 时间积分器类型
     pub integrator: TimeIntegrator,
 }
@@ -243,7 +241,7 @@ impl SolverConfigBuilder {
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self {
+    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
         self.config.gravity = g;
         self
     }
@@ -288,7 +286,7 @@ impl SolverConfigBuilder {
     }
 
     /// 设置时间步减小因子
-    pub fn timestep_reduction_factor(mut self, factor: f64) -> Self {
+    pub fn timestep_reduction_factor(mut self, factor: f64) -> Self { // ALLOW_F64: Layer 4 配置参数
         self.config.timestep_reduction_factor = factor.clamp(0.1, 0.9);
         self
     }
@@ -303,16 +301,17 @@ impl SolverConfigBuilder {
 // ============================================================
 
 /// 求解器步进统计
+// ALLOW_F64: Layer 4 统计输出结构
 #[derive(Debug, Clone, Default)]
 pub struct SolverStats {
     /// 最大波速 [m/s]
-    pub max_wave_speed: f64,
+    pub max_wave_speed: f64, // ALLOW_F64: 统计输出
     /// 干单元数量
     pub dry_cells: usize,
     /// 被限制的面数量
     pub limited_faces: usize,
     /// 当前时间步长 [s]
-    pub dt: f64,
+    pub dt: f64, // ALLOW_F64: 统计输出
     /// 回退次数
     pub fallback_count: u32,
     /// 当前使用的格式
@@ -373,24 +372,25 @@ impl SolverStats {
 /// 求解器工作区
 ///
 /// 存储中间计算结果，避免重复分配
+// ALLOW_F64: 与 CpuBackend<f64> 配合的工作区
 #[derive(Debug)]
 pub struct SolverWorkspace {
     /// 通量累加（质量）
-    pub flux_h: Vec<f64>,
+    pub flux_h: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 通量累加（x动量）
-    pub flux_hu: Vec<f64>,
+    pub flux_hu: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 通量累加（y动量）
-    pub flux_hv: Vec<f64>,
+    pub flux_hv: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 源项累加（x动量）
-    pub source_hu: Vec<f64>,
+    pub source_hu: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 源项累加（y动量）
-    pub source_hv: Vec<f64>,
+    pub source_hv: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 单元速度 u 分量（用于重构）
-    pub vel_u: Vec<f64>,
+    pub vel_u: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 单元速度 v 分量（用于重构）
-    pub vel_v: Vec<f64>,
+    pub vel_v: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
     /// 水位 η = h + z（用于 well-balanced 重构）
-    pub eta: Vec<f64>,
+    pub eta: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
 }
 
 impl SolverWorkspace {
@@ -445,55 +445,59 @@ impl SolverWorkspace {
 // ============================================================
 
 /// 面上的静水重构状态
+// ALLOW_F64: 与 PhysicsMesh(DVec2) 配合的计算结构
 #[derive(Debug, Clone, Copy)]
 pub struct HydrostaticFaceState {
     /// 左侧有效水深
-    pub h_left: f64,
+    pub h_left: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 右侧有效水深
-    pub h_right: f64,
+    pub h_right: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 左侧速度
     pub vel_left: DVec2,
     /// 右侧速度
     pub vel_right: DVec2,
     /// 面处高程
-    pub z_face: f64,
+    pub z_face: f64, // ALLOW_F64: 与 PhysicsMesh 配合
 }
 
 /// 床坡源项修正（分别给左右单元）
+// ALLOW_F64: 与 PhysicsMesh(DVec2) 配合的计算结构
 #[derive(Debug, Clone, Copy)]
 pub struct BedSlopeCorrection {
     /// 左侧（owner）单元 x 方向源项
-    pub source_left_x: f64,
+    pub source_left_x: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 左侧（owner）单元 y 方向源项
-    pub source_left_y: f64,
+    pub source_left_y: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 右侧（neighbor）单元 x 方向源项
-    pub source_right_x: f64,
+    pub source_right_x: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     /// 右侧（neighbor）单元 y 方向源项
-    pub source_right_y: f64,
+    pub source_right_y: f64, // ALLOW_F64: 与 PhysicsMesh 配合
 }
 
 impl BedSlopeCorrection {
     /// 零源项
+    // ALLOW_F64: 常量初始化
     pub const ZERO: Self = Self {
-        source_left_x: 0.0,
-        source_left_y: 0.0,
-        source_right_x: 0.0,
-        source_right_y: 0.0,
+        source_left_x: 0.0, // ALLOW_F64: 零常量
+        source_left_y: 0.0, // ALLOW_F64: 零常量
+        source_right_x: 0.0, // ALLOW_F64: 零常量
+        source_right_y: 0.0, // ALLOW_F64: 零常量
     };
 }
 
 /// 静水重构处理器
+// ALLOW_F64: 与 PhysicsMesh(DVec2) 配合的计算器
 #[derive(Debug, Clone)]
 pub struct HydrostaticReconstruction {
     /// 数值参数
     params: NumericalParams,
     /// 重力加速度
-    g: f64,
+    g: f64, // ALLOW_F64: 物理常数
 }
 
 impl HydrostaticReconstruction {
     /// 创建静水重构处理器
-    pub fn new(params: &NumericalParams, g: f64) -> Self {
+    pub fn new(params: &NumericalParams, g: f64) -> Self { // ALLOW_F64: 物理常数输入
         Self {
             params: params.clone(),
             g,
@@ -503,12 +507,13 @@ impl HydrostaticReconstruction {
     /// 简单静水重构
     ///
     /// 对面两侧的水深进行修正，确保静水平衡
+    // ALLOW_F64: 与 PhysicsMesh(DVec2) 配合
     pub fn reconstruct_face_simple(
         &self,
-        h_l: f64,
-        h_r: f64,
-        z_l: f64,
-        z_r: f64,
+        h_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        h_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        z_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        z_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
         vel_l: DVec2,
         vel_r: DVec2,
     ) -> HydrostaticFaceState {
@@ -535,14 +540,15 @@ impl HydrostaticReconstruction {
     /// 床坡源项修正
     ///
     /// 计算由于高程差产生的压力梯度源项
+    // ALLOW_F64: 与 PhysicsMesh(DVec2) 配合
     pub fn bed_slope_correction(
         &self,
-        h_l: f64,
-        h_r: f64,
-        z_l: f64,
-        z_r: f64,
+        h_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        h_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        z_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        z_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
         normal: DVec2,
-        length: f64,
+        length: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     ) -> BedSlopeCorrection {
         // 使用面平均水深
         let h_face = 0.5 * (h_l + h_r);
@@ -637,7 +643,7 @@ impl ShallowWaterSolver {
     /// 执行一个时间步
     ///
     /// 返回使用的时间步长
-    pub fn step(&mut self, state: &mut ShallowWaterState, dt: f64) -> f64 {
+    pub fn step(&mut self, state: &mut ShallowWaterState, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数和返回
         // 1. 重置工作区
         self.workspace.reset();
 
@@ -967,14 +973,15 @@ impl ShallowWaterSolver {
     /// - 但实际压力应为 0.5*g*h²
     /// - 因此需要补偿压力差: 0.5*g*(h² - h*²)
     /// - 这个补偿作为源项加到对应单元上
+    // ALLOW_F64: 与 PhysicsMesh(DVec2) 配合
     fn compute_hydrostatic_bed_slope(
         &self,
-        h_l: f64,
-        h_r: f64,
-        h_l_star: f64,  // 静水重构后的左侧水深
-        h_r_star: f64,  // 静水重构后的右侧水深
+        h_l: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        h_r: f64, // ALLOW_F64: 与 PhysicsMesh 配合
+        h_l_star: f64, // ALLOW_F64: 静水重构后的左侧水深
+        h_r_star: f64, // ALLOW_F64: 静水重构后的右侧水深
         normal: DVec2,
-        length: f64,
+        length: f64, // ALLOW_F64: 与 PhysicsMesh 配合
     ) -> BedSlopeCorrection {
         let g = self.config.gravity;
         
@@ -999,7 +1006,7 @@ impl ShallowWaterSolver {
     // 状态更新
     // =========================================================================
 
-    fn update_state(&self, state: &mut ShallowWaterState, dt: f64) {
+    fn update_state(&self, state: &mut ShallowWaterState, dt: f64) { // ALLOW_F64: 时间步长参数
         let n = state.n_cells();
 
         for i in 0..n {
@@ -1016,7 +1023,7 @@ impl ShallowWaterSolver {
     // 正性保持
     // =========================================================================
 
-    fn enforce_positivity(&mut self, state: &mut ShallowWaterState, _dt: f64) -> (usize, usize) {
+    fn enforce_positivity(&mut self, state: &mut ShallowWaterState, _dt: f64) -> (usize, usize) { // ALLOW_F64: 时间步长参数
         let h_min = self.config.params.h_min;
         let h_dry = self.config.params.h_dry;
         let mut dry_count = 0;
@@ -1110,7 +1117,7 @@ impl SolverBuilder {
     }
 
     /// 设置重力加速度
-    pub fn gravity(mut self, g: f64) -> Self {
+    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
         self.config.gravity = g;
         self
     }

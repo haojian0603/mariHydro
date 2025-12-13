@@ -1,8 +1,19 @@
 //! 限制器 trait 定义和上下文结构
 //!
+//! **层级**: Layer 3 - Engine Layer
+//!
 //! 定义了所有梯度限制器的公共接口。
+//!
+//! # 泛型设计
+//!
+//! 本模块使用泛型版本作为核心实现，并提供 f64 类型别名保持向后兼容。
 
 use std::fmt::Debug;
+use mh_core::RuntimeScalar;
+
+// ============================================================================
+// 泛型版本 (核心实现)
+// ============================================================================
 
 /// 限制器计算所需的上下文信息
 ///
@@ -15,31 +26,32 @@ use std::fmt::Debug;
 ///
 /// 其中 r 是从单元中心到面中心的向量。
 #[derive(Debug, Clone, Copy)]
-pub struct LimiterContext {
+pub struct LimiterContextGeneric<S: RuntimeScalar> {
     /// 当前单元的场值 q_i
-    pub cell_value: f64,
+    pub cell_value: S,
     
     /// 在最大距离方向的梯度投影 (∇q · r_max)
-    pub gradient: f64,
+    pub gradient: S,
     
     /// 相邻单元的最小值 q_min
-    pub min_neighbor: f64,
+    pub min_neighbor: S,
     
     /// 相邻单元的最大值 q_max
-    pub max_neighbor: f64,
+    pub max_neighbor: S,
     
     /// 到最远邻居面中心的距离
-    pub max_distance: f64,
+    pub max_distance: S,
 }
 
-impl LimiterContext {
+impl<S: RuntimeScalar> LimiterContextGeneric<S> {
     /// 创建新的限制器上下文
+    #[inline]
     pub fn new(
-        cell_value: f64,
-        gradient: f64,
-        min_neighbor: f64,
-        max_neighbor: f64,
-        max_distance: f64,
+        cell_value: S,
+        gradient: S,
+        min_neighbor: S,
+        max_neighbor: S,
+        max_distance: S,
     ) -> Self {
         Self {
             cell_value,
@@ -54,7 +66,7 @@ impl LimiterContext {
     ///
     /// Δ_max = q_max - q_i
     #[inline]
-    pub fn delta_max(&self) -> f64 {
+    pub fn delta_max(&self) -> S {
         self.max_neighbor - self.cell_value
     }
     
@@ -62,14 +74,26 @@ impl LimiterContext {
     ///
     /// Δ_min = q_min - q_i
     #[inline]
-    pub fn delta_min(&self) -> f64 {
+    pub fn delta_min(&self) -> S {
         self.min_neighbor - self.cell_value
     }
     
     /// 梯度是否为零（或接近零）
     #[inline]
-    pub fn is_gradient_zero(&self, eps: f64) -> bool {
+    pub fn is_gradient_zero(&self, eps: S) -> bool {
         self.gradient.abs() < eps
+    }
+}
+
+impl<S: RuntimeScalar> Default for LimiterContextGeneric<S> {
+    fn default() -> Self {
+        Self {
+            cell_value: S::ZERO,
+            gradient: S::ZERO,
+            min_neighbor: S::ZERO,
+            max_neighbor: S::ZERO,
+            max_distance: S::ONE,
+        }
     }
 }
 
@@ -86,7 +110,7 @@ impl LimiterContext {
 /// ```
 ///
 /// 其中 q_face = q_i + α * gradient
-pub trait SlopeLimiter: Debug + Send + Sync {
+pub trait SlopeLimiterGeneric<S: RuntimeScalar>: Debug + Send + Sync {
     /// 计算限制因子
     ///
     /// # Arguments
@@ -94,7 +118,7 @@ pub trait SlopeLimiter: Debug + Send + Sync {
     ///
     /// # Returns
     /// 限制因子 α ∈ [0, 1]
-    fn compute_limiter(&self, ctx: &LimiterContext) -> f64;
+    fn compute_limiter(&self, ctx: &LimiterContextGeneric<S>) -> S;
     
     /// 返回限制器名称
     fn name(&self) -> &'static str;
@@ -102,7 +126,7 @@ pub trait SlopeLimiter: Debug + Send + Sync {
     /// 批量计算限制因子
     ///
     /// 默认实现简单迭代，子类可以提供向量化版本。
-    fn compute_limiters(&self, contexts: &[LimiterContext]) -> Vec<f64> {
+    fn compute_limiters(&self, contexts: &[LimiterContextGeneric<S>]) -> Vec<S> {
         contexts.iter().map(|ctx| self.compute_limiter(ctx)).collect()
     }
 }
@@ -110,29 +134,50 @@ pub trait SlopeLimiter: Debug + Send + Sync {
 /// 无限制器（一阶精度）
 ///
 /// 始终返回 1.0，不限制梯度。
-/// 这等效于使用一阶精度，因为梯度不被使用。
-///
-/// # 使用场景
-/// - 调试目的
-/// - 与一阶方案对比
-/// - 极端情况下的稳定性
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoLimiter;
+pub struct NoLimiterGeneric<S: RuntimeScalar>(std::marker::PhantomData<S>);
 
-impl SlopeLimiter for NoLimiter {
+impl<S: RuntimeScalar> NoLimiterGeneric<S> {
+    /// 创建新的无限制器
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for NoLimiterGeneric<S> {
     #[inline]
-    fn compute_limiter(&self, _ctx: &LimiterContext) -> f64 {
-        1.0
+    fn compute_limiter(&self, _ctx: &LimiterContextGeneric<S>) -> S {
+        S::ONE
     }
     
     fn name(&self) -> &'static str {
         "NoLimiter"
     }
     
-    fn compute_limiters(&self, contexts: &[LimiterContext]) -> Vec<f64> {
-        vec![1.0; contexts.len()]
+    fn compute_limiters(&self, contexts: &[LimiterContextGeneric<S>]) -> Vec<S> {
+        vec![S::ONE; contexts.len()]
     }
 }
+
+// ============================================================================
+// 类型别名（向后兼容）
+// ============================================================================
+
+/// 限制器上下文 - f64 版本别名
+pub type LimiterContext = LimiterContextGeneric<f64>;
+
+/// 无限制器 - f64 版本别名
+pub type NoLimiter = NoLimiterGeneric<f64>;
+
+/// 梯度限制器 trait - f64 版本别名
+pub trait SlopeLimiter: SlopeLimiterGeneric<f64> {}
+
+/// 为所有实现 SlopeLimiterGeneric<f64> 的类型自动实现 SlopeLimiter
+impl<T: SlopeLimiterGeneric<f64>> SlopeLimiter for T {}
+
+// ============================================================================
+// 测试
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -169,7 +214,7 @@ mod tests {
     
     #[test]
     fn test_no_limiter() {
-        let limiter = NoLimiter;
+        let limiter = NoLimiter::new();
         
         // 应始终返回 1.0
         let ctx1 = LimiterContext::new(1.0, 0.5, 0.5, 1.5, 0.1);
@@ -184,13 +229,13 @@ mod tests {
     
     #[test]
     fn test_no_limiter_name() {
-        let limiter = NoLimiter;
+        let limiter = NoLimiter::new();
         assert_eq!(limiter.name(), "NoLimiter");
     }
     
     #[test]
     fn test_no_limiter_batch() {
-        let limiter = NoLimiter;
+        let limiter = NoLimiter::new();
         let contexts = vec![
             LimiterContext::new(1.0, 0.5, 0.5, 1.5, 0.1),
             LimiterContext::new(2.0, -0.5, 1.5, 2.5, 0.1),
@@ -200,5 +245,12 @@ mod tests {
         let results = limiter.compute_limiters(&contexts);
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|&x| x == 1.0));
+    }
+    
+    #[test]
+    fn test_generic_f32() {
+        let limiter: NoLimiterGeneric<f32> = NoLimiterGeneric::new();
+        let ctx = LimiterContextGeneric::<f32>::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        assert_eq!(limiter.compute_limiter(&ctx), 1.0f32);
     }
 }

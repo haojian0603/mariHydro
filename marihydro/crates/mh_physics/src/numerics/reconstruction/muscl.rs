@@ -8,9 +8,9 @@ use super::config::{GradientType, MusclConfig};
 use super::traits::{ReconstructedState, Reconstructor};
 use crate::adapter::PhysicsMesh;
 use crate::numerics::gradient::{
-    GradientMethod, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage,
+    GradientMethodGeneric, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage,
 };
-use crate::numerics::limiter::{create_limiter, LimiterContext, SlopeLimiter};
+use crate::numerics::limiter::{create_limiter, LimiterContext, SlopeLimiterGeneric};
 
 /// MUSCL 重构器
 ///
@@ -29,16 +29,16 @@ pub struct MusclReconstructor {
     gradients: ScalarGradientStorage,
     
     /// 限制因子存储
-    limiters: Vec<f64>,
+    limiters: Vec<f64>, // ALLOW_F64: PhysicsMesh 依赖 DVec2，重构器与 DVec2 交互
     
     /// 梯度计算器
     gradient_computer: GradientComputer,
     
     /// 限制器
-    limiter: Box<dyn SlopeLimiter>,
+    limiter: Box<dyn SlopeLimiterGeneric<f64> + Send + Sync>,
     
     /// 网格特征尺度（用于 Venkatakrishnan）
-    mesh_scale: f64,
+    mesh_scale: f64, // ALLOW_F64: 配置参数，来自 PhysicsMesh 计算
 }
 
 /// 梯度计算器枚举
@@ -222,6 +222,7 @@ impl MusclReconstructor {
     /// 应用正定约束
     /// 
     /// 使用 cell_faces 进行 O(单元面数) 查找
+    // ALLOW_F64: PhysicsMesh 依赖 DVec2，与 DVec2 交互
     fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: f64) {
         if cell_value <= 0.0 {
             self.limiters[cell_id] = 0.0;
@@ -319,16 +320,18 @@ impl Reconstructor for MusclReconstructor {
 }
 
 /// 计算网格特征尺度
+// ALLOW_F64: PhysicsMesh 返回 f64 面积，配置参数计算
 fn compute_mesh_scale(mesh: &PhysicsMesh) -> f64 {
     if mesh.n_cells() == 0 {
         return 1.0;
     }
     
     // 使用平均单元面积的平方根作为特征尺度
+    // ALLOW_F64: PhysicsMesh 返回 f64 面积
     let total_area: f64 = (0..mesh.n_cells())
         .filter_map(|i| mesh.cell_area(i))
         .sum();
-    
+    // ALLOW_F64: PhysicsMesh 返回 f64 面积
     (total_area / mesh.n_cells() as f64).sqrt()
 }
 

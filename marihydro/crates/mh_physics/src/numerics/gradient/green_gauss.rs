@@ -8,7 +8,7 @@
 //! 对于离散网格:
 //! ∇φ_i ≈ (1/A_i) Σ_f φ_f · n_f · L_f
 
-use super::traits::{GradientMethod, ScalarGradientStorage, VectorGradientStorage};
+use super::traits::{GradientMethodGeneric, ScalarGradientStorage, VectorGradientStorage};
 use crate::adapter::PhysicsMesh;
 
 use glam::DVec2;
@@ -217,6 +217,7 @@ impl GreenGaussGradient {
     ///
     /// phi_face = (phi_n * d_o + phi_o * d_n) / (d_o + d_n)
     #[inline]
+    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此辅助方法配合 DVec2 使用
     fn distance_weighted_interpolate(phi_o: f64, phi_n: f64, d_o: f64, d_n: f64) -> f64 {
         let d_total = d_o + d_n;
         if d_total < 1e-14 {
@@ -258,11 +259,12 @@ impl GreenGaussGradient {
     }
 
     /// 并行计算所有单元梯度（返回 (grad_x, grad_y) 向量）
+    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此方法配合 DVec2 使用
     pub fn compute_all_parallel(
         &self,
-        field: &[f64],
+        field: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
         mesh: &PhysicsMesh,
-    ) -> (Vec<f64>, Vec<f64>) {
+    ) -> (Vec<f64>, Vec<f64>) { // ALLOW_F64: 返回与 DVec2 配合的梯度数据
         let grads: Vec<DVec2> = (0..mesh.n_cells())
             .into_par_iter()
             .map(|cell| self.compute_cell_gradient(cell, field, mesh))
@@ -281,12 +283,13 @@ impl GreenGaussGradient {
     }
 
     /// 并行计算水面梯度（C-property 保持）
+    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此方法配合 DVec2 使用
     pub fn compute_water_level_parallel(
         &self,
-        h: &[f64],
-        z_bed: &[f64],
+        h: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
+        z_bed: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
         mesh: &PhysicsMesh,
-    ) -> (Vec<f64>, Vec<f64>) {
+    ) -> (Vec<f64>, Vec<f64>) { // ALLOW_F64: 返回与 DVec2 配合的梯度数据
         let grads: Vec<DVec2> = (0..mesh.n_cells())
             .into_par_iter()
             .map(|cell| self.compute_water_level_gradient(cell, h, z_bed, mesh))
@@ -305,7 +308,7 @@ impl GreenGaussGradient {
     }
 }
 
-impl GradientMethod for GreenGaussGradient {
+impl GradientMethodGeneric<f64> for GreenGaussGradient {
     fn compute_scalar_gradient(
         &self,
         field: &[f64],
