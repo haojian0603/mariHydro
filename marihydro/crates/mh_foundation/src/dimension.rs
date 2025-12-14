@@ -1,3 +1,4 @@
+// marihydro\crates\mh_foundation\src\dimension.rs
 //! 编译期维度系统
 //!
 //! 通过类型参数区分 2D/3D，实现零成本抽象。
