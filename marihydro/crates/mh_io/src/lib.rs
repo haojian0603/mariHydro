@@ -46,6 +46,7 @@ pub mod drivers;
 pub mod exporters;
 pub mod import;
 pub mod infra;
+pub mod error;
 pub mod project;
 
 // 计划四新增模块
@@ -56,6 +57,9 @@ pub mod snapshot;
 // 重导出常用类型
 pub use drivers::{GdalDriver, GdalError, NetCdfDriver, NetCdfError, RasterMetadata};
 pub use exporters::{VtuExporter, VtuMesh, VtuState};
+pub use error::{IoError, IoResult};
+/// 类型别名简化
+pub type Result<T> = IoResult<T>;
 
 // 重导出计划四新增类型
 pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManager};

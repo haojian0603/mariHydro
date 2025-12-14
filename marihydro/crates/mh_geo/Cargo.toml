@@ -12,6 +12,7 @@ mh_foundation = { path = "../mh_foundation" }
 serde = { version = "1.0", features = ["derive"] }
 rstar = "0.12"
 num-complex = "0.4"
+thiserror = "2.0"
 
 [dev-dependencies]
 approx = "0.5"

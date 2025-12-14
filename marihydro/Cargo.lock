@@ -597,6 +597,7 @@ dependencies = [
  "num-complex",
  "rstar",
  "serde",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -605,6 +606,7 @@ version = "0.1.0"
 dependencies = [
  "gdal",
  "mh_foundation",
+ "mh_geo",
  "mh_mesh",
  "mh_terrain",
  "netcdf",
@@ -622,6 +624,7 @@ dependencies = [
  "memmap2",
  "mh_foundation",
  "mh_geo",
+ "mh_runtime",
  "rayon",
  "rstar",
  "serde",

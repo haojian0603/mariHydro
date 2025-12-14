@@ -56,14 +56,75 @@ pub enum RuntimeError {
         message: String,
     },
 
+    /// 验证错误
+    #[error("验证失败: {message}")]
+    ValidationError {
+        /// 错误描述信息
+        message: String,
+    },
+
+    /// 尺寸不匹配错误
+    #[error("尺寸不匹配: {field} 需要 {required}，提供 {provided}")]
+    SizeMismatch {
+        /// 字段名称
+        field: String,
+        /// 期望尺寸
+        required: usize,
+        /// 实际尺寸
+        provided: usize,
+    },
+
+    /// 内部错误
+    #[error("内部错误: {message}")]
+    InternalError {
+        /// 错误描述信息
+        message: String,
+    },
+
     /// 从 Foundation 层错误转换
     #[error("基础层错误: {0}")]
     Foundation(#[from] MhError),
 }
 
-// =======================================================================
+// 转换到 Foundation 层错误
+impl From<RuntimeError> for MhError {
+    fn from(err: RuntimeError) -> Self {
+        match err {
+            RuntimeError::OutOfRange { value, min, max } => {
+                MhError::invalid_input(format!("数值超出范围: {} 不在 [{}, {}]范围内", value, min, max))
+            }
+            RuntimeError::InvalidIndex => {
+                MhError::invalid_input("无效索引: 元素已被删除或索引过期".to_string())
+            }
+            RuntimeError::NumericalError { message } => {
+                MhError::internal(format!("数值计算错误: {}", message))
+            }
+            RuntimeError::BackendError { message } => {
+                MhError::internal(format!("Backend 错误: {}", message))
+            }
+            RuntimeError::BufferError { message } => {
+                MhError::internal(format!("缓冲区错误: {}", message))
+            }
+            RuntimeError::NonFinite { value } => {
+                MhError::invalid_input(format!("非有限值: {}", value))
+            }
+            RuntimeError::ValidationError { message } => {
+                MhError::invalid_input(format!("验证失败: {}", message))
+            }
+            // FIX: 使用 invalid_input 而不是 size_mismatch 避免生命周期问题
+            RuntimeError::SizeMismatch { field, required, provided } => {
+                MhError::invalid_input(format!("尺寸不匹配: {} 需要 {}，提供 {}", field, required, provided))
+            }
+            RuntimeError::InternalError { message } => {
+                MhError::internal(format!("内部错误: {}", message))
+            }
+            RuntimeError::Foundation(foundation_err) => foundation_err,
+        }
+    }
+}
+
+
 // 便捷构造方法
-// =======================================================================
 
 impl RuntimeError {
     /// 创建数值范围错误
@@ -95,11 +156,34 @@ impl RuntimeError {
             message: message.into(),
         }
     }
+
+    /// 创建验证错误
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::ValidationError {
+            message: message.into(),
+        }
+    }
+
+    /// 创建尺寸不匹配错误
+    pub fn size_mismatch(field: impl Into<String>, required: usize, provided: usize) -> Self {
+        Self::SizeMismatch {
+            field: field.into(),
+            required,
+            provided,
+        }
+    }
+
+    /// 创建内部错误
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::InternalError {
+            message: message.into(),
+        }
+    }
 }
 
-// =======================================================================
+// ========================================================================
 // 测试
-// =======================================================================
+// ========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -126,6 +210,27 @@ mod tests {
         let err = RuntimeError::backend("CUDA unavailable");
         assert!(matches!(err, RuntimeError::BackendError { .. }));
         assert!(format!("{}", err).contains("CUDA"));
+    }
+
+    #[test]
+    fn test_validation_error() {
+        let err = RuntimeError::validation("cfl out of range");
+        assert!(matches!(err, RuntimeError::ValidationError { .. }));
+    }
+
+    #[test]
+    fn test_size_mismatch_error() {
+        let err = RuntimeError::size_mismatch("cells", 100, 50);
+        assert!(matches!(err, RuntimeError::SizeMismatch { .. }));
+        let msg = format!("{}", err);
+        assert!(msg.contains("50"));
+        assert!(msg.contains("100"));
+    }
+
+    #[test]
+    fn test_internal_error() {
+        let err = RuntimeError::internal("assertion failed");
+        assert!(matches!(err, RuntimeError::InternalError { .. }));
     }
 
     #[test]

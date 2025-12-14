@@ -25,6 +25,7 @@
 //! assert_eq!(cell_idx.index(), 0);
 //! ```
 
+use crate::ArenaTag;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::Hash;
@@ -298,6 +299,8 @@ impl<T> From<Idx<T>> for Option<usize> {
     }
 }
 
+
+
 // ============================================================================
 // 类型别名
 // ============================================================================
@@ -319,6 +322,19 @@ pub type HalfEdgeIndex = Idx<HalfEdgeTag>;
 
 /// 边界索引
 pub type BoundaryIndex = Idx<BoundaryTag>;
+
+
+// ============================================================================
+// 为标记类型实现 ArenaTag
+// ============================================================================
+
+impl ArenaTag for CellTag {}
+impl ArenaTag for FaceTag {}
+impl ArenaTag for NodeTag {}
+impl ArenaTag for VertexTag {}
+impl ArenaTag for HalfEdgeTag {}
+impl ArenaTag for BoundaryTag {}
+
 
 // ============================================================================
 // 便捷函数

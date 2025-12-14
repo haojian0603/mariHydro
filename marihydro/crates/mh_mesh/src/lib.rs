@@ -45,6 +45,8 @@
 
 pub mod attributes;
 pub mod compat;
+pub mod error;
+
 pub mod frozen;
 pub mod halfedge;
 pub mod io;
@@ -67,6 +69,7 @@ pub use attributes::{
 };
 pub use frozen::{FrozenMesh, MeshStatistics};
 pub use halfedge::{Face, HalfEdge, HalfEdgeMesh, Vertex};
+pub use error::{MeshError, MeshResult};
 
 // 重新导出 trait 抽象
 pub use traits::{

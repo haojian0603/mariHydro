@@ -49,6 +49,7 @@ pub mod geometry;
 pub mod projection;
 pub mod spatial_index;
 pub mod transform;
+pub mod error;
 
 /// 预导入模块
 pub mod prelude {
@@ -69,3 +70,4 @@ pub use geometry::{Point2D, Point3D};
 pub use projection::{Projection, ProjectionType};
 pub use spatial_index::{BoundingBox, SpatialIndex};
 pub use transform::{AffineTransform, GeoTransformer};
+pub use error::{GeoError, GeoResult};

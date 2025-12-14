@@ -1,68 +1,13 @@
-// marihydro\crates\mh_mesh\src/locator.rs
+// crates/mh_mesh/src/locator.rs
 
-//! 网格点定位器
+//! 网格点定位器（泛型版本）
 //!
-//! 提供高级的点定位功能，包括：
-//! - 单元查找
-//! - 重心坐标计算
-//! - 边界面查找
-//! - 最近点投影
-//! - 定位缓存（加速重复查询）
-//! - 可配置容差（用于边界判断）
-//!
-//! # 设计说明
-//!
-//! `MeshLocator` 持有对 `FrozenMesh` 的引用和独立的空间索引。
-//! 使用生命周期参数确保安全性，避免悬空引用。
-//!
-//! # 容差配置
-//!
-//! 使用 `LocateTolerance` 配置边界判断的容差值：
-//!
-//! ```ignore
-//! let tolerance = LocateTolerance {
-//!     boundary_tol: 1e-8,      // 边界判断容差
-//!     inside_tol: 1e-10,       // 内部点判断容差
-//!     degenerate_tol: 1e-12,   // 退化单元判断容差
-//! };
-//! let locator = MeshLocator::with_tolerance(&mesh, tolerance);
-//! ```
-//!
-//! # 缓存支持
-//!
-//! 对于轨迹追踪等场景，连续定位的点通常在同一单元或相邻单元内，
-//! 使用 `CachedLocator` 可显著提高性能：
-//!
-//! ```ignore
-//! let mut cached = CachedLocator::new(&mesh);
-//! for point in trajectory {
-//!     let result = cached.locate(point.x, point.y);  // 自动利用缓存
-//! }
-//! println!("缓存命中率: {:.1}%", cached.hit_rate() * 100.0);
-//! ```
-//!
-//! # 示例
-//!
-//! ```ignore
-//! use mh_mesh::locator::MeshLocator;
-//!
-//! let frozen_mesh = half_edge_mesh.freeze();
-//! let locator = MeshLocator::new(&frozen_mesh);
-//!
-//! match locator.locate(100.0, 200.0) {
-//!     LocateResult::InCell { cell_index, barycentric } => {
-//!         println!("点在单元 {} 内，重心坐标: {:?}", cell_index, barycentric);
-//!     }
-//!     LocateResult::Outside { nearest_face, distance } => {
-//!         println!("点在网格外，距离最近边界面 {} 的距离为 {}", nearest_face, distance);
-//!     }
-//!     _ => {}
-//! }
-//! ```
+//! 提供高级的点定位功能，支持 FrozenMesh<S> 泛型。
 
 use crate::frozen::FrozenMesh;
 use crate::spatial_index::MeshSpatialIndex;
 use mh_geo::Point2D;
+use mh_runtime::RuntimeScalar;
 use std::cell::Cell;
 
 // ============================================================
@@ -139,7 +84,6 @@ impl LocateTolerance {
 pub enum LocateResult {
     /// 点在单元内部
     InCell {
-        /// 单元索引
         cell_index: usize,
         /// 重心坐标（对于三角形单元为 [λ1, λ2, λ3]）
         /// 对于非三角形单元，返回均匀权重
@@ -152,9 +96,7 @@ pub enum LocateResult {
         /// 沿边的参数 t ∈ [0, 1]
         t: f64,
     },
-    /// 点在网格外部
     Outside {
-        /// 最近的边界面索引
         nearest_face: usize,
         /// 到最近边界面的距离
         distance: f64,
@@ -180,7 +122,6 @@ impl LocateResult {
         matches!(self, Self::Outside { .. })
     }
 
-    /// 获取单元索引（如果在单元内）
     pub fn cell_index(&self) -> Option<usize> {
         match self {
             Self::InCell { cell_index, .. } => Some(*cell_index),
@@ -204,21 +145,13 @@ impl LocateResult {
 pub struct MeshLocator<'a> {
     /// 空间索引
     index: MeshSpatialIndex,
-    /// 冻结网格引用
-    mesh: &'a FrozenMesh,
-    /// 容差配置
+    mesh: &'a FrozenMesh<S>,
     tolerance: LocateTolerance,
 }
 
-impl<'a> MeshLocator<'a> {
+impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     /// 从冻结网格创建定位器（使用默认容差）
-    ///
-    /// # 参数
-    /// - `mesh`: 冻结网格的引用
-    ///
-    /// # 性能
-    /// 构建空间索引的时间复杂度为 O(n log n)，其中 n 为单元数。
-    pub fn new(mesh: &'a FrozenMesh) -> Self {
+    pub fn new(mesh: &'a FrozenMesh<S>) -> Self {
         let index = MeshSpatialIndex::build(mesh.n_cells, |i| get_cell_vertices_from_mesh(mesh, i));
 
         Self { 
@@ -229,11 +162,7 @@ impl<'a> MeshLocator<'a> {
     }
 
     /// 使用自定义容差创建定位器
-    ///
-    /// # 参数
-    /// - `mesh`: 冻结网格的引用
-    /// - `tolerance`: 容差配置
-    pub fn with_tolerance(mesh: &'a FrozenMesh, tolerance: LocateTolerance) -> Self {
+    pub fn with_tolerance(mesh: &'a FrozenMesh<S>, tolerance: LocateTolerance) -> Self {
         let index = MeshSpatialIndex::build(mesh.n_cells, |i| get_cell_vertices_from_mesh(mesh, i));
 
         Self { 
@@ -244,9 +173,7 @@ impl<'a> MeshLocator<'a> {
     }
 
     /// 从已有的空间索引创建定位器
-    ///
-    /// 当需要复用空间索引时使用此方法。
-    pub fn with_index(mesh: &'a FrozenMesh, index: MeshSpatialIndex) -> Self {
+    pub fn with_index(mesh: &'a FrozenMesh<S>, index: MeshSpatialIndex) -> Self {
         Self { 
             index, 
             mesh,
@@ -256,7 +183,7 @@ impl<'a> MeshLocator<'a> {
 
     /// 从已有的空间索引和自定义容差创建定位器
     pub fn with_index_and_tolerance(
-        mesh: &'a FrozenMesh, 
+        mesh: &'a FrozenMesh<S>, 
         index: MeshSpatialIndex,
         tolerance: LocateTolerance,
     ) -> Self {
@@ -305,8 +232,6 @@ impl<'a> MeshLocator<'a> {
     }
 
     /// 快速判断点是否在网格内
-    ///
-    /// 比 `locate()` 更快，因为不计算额外信息。
     #[inline]
     pub fn contains(&self, x: f64, y: f64) -> bool {
         self.index.locate_point(x, y).is_some()
@@ -375,8 +300,6 @@ impl<'a> MeshLocator<'a> {
     }
 
     /// 查找最近的边界面
-    ///
-    /// 返回 (边界面索引, 距离)
     pub fn find_nearest_boundary_face(&self, x: f64, y: f64) -> (usize, f64) {
         let mut min_dist = f64::MAX;
         let mut nearest_face = 0usize;
@@ -396,17 +319,6 @@ impl<'a> MeshLocator<'a> {
     }
 
     /// 在指定单元内插值
-    ///
-    /// 使用重心坐标对单元顶点值进行插值。
-    ///
-    /// # 参数
-    /// - `cell`: 单元索引
-    /// - `x`: 插值点 x 坐标
-    /// - `y`: 插值点 y 坐标
-    /// - `vertex_values`: 单元顶点值列表
-    ///
-    /// # 返回
-    /// 插值结果
     pub fn interpolate_in_cell(&self, cell: usize, x: f64, y: f64, vertex_values: &[f64]) -> f64 {
         let bary = self.compute_barycentric(cell, x, y);
         let vertices = get_cell_vertices_from_mesh(self.mesh, cell);
@@ -422,7 +334,7 @@ impl<'a> MeshLocator<'a> {
 
     /// 获取网格引用
     #[inline]
-    pub fn mesh(&self) -> &FrozenMesh {
+    pub fn mesh(&self) -> &FrozenMesh<S> {
         self.mesh
     }
 
@@ -434,7 +346,7 @@ impl<'a> MeshLocator<'a> {
 }
 
 /// 从 FrozenMesh 获取单元顶点坐标
-fn get_cell_vertices_from_mesh(mesh: &FrozenMesh, cell: usize) -> Vec<Point2D> {
+fn get_cell_vertices_from_mesh<S: RuntimeScalar>(mesh: &FrozenMesh<S>, cell: usize) -> Vec<Point2D> {
     let node_indices = mesh.cell_nodes(cell);
     node_indices
         .iter()
@@ -445,64 +357,25 @@ fn get_cell_vertices_from_mesh(mesh: &FrozenMesh, cell: usize) -> Vec<Point2D> {
         .collect()
 }
 
-// ============================================================
+// =========================================================================
 // 缓存定位器
-// ============================================================
+// =========================================================================
 
-/// 缓存定位器
-///
-/// 带有位置缓存的定位器，适用于轨迹追踪等连续定位场景。
-/// 利用空间局部性原理，优先检查上一次定位结果的单元及其邻居。
-///
-/// # 缓存策略
-///
-/// 1. 首先检查上一次成功定位的单元
-/// 2. 如果不在该单元，检查其相邻单元
-/// 3. 如果仍未找到，回退到全局搜索
-///
-/// # 性能提升
-///
-/// 对于连续轨迹点，缓存命中率通常 > 90%，可将定位速度提升 5-10 倍。
-///
-/// # 示例
-///
-/// ```ignore
-/// let mut cached = CachedLocator::new(&mesh);
-///
-/// // 追踪粒子轨迹
-/// for (x, y) in particle_trajectory {
-///     if let Some(cell) = cached.find_cell(x, y) {
-///         // 处理粒子
-///     }
-/// }
-///
-/// // 查看统计信息
-/// let stats = cached.stats();
-/// println!("缓存命中率: {:.1}%", stats.hit_rate() * 100.0);
-/// ```
-pub struct CachedLocator<'a> {
-    /// 内部定位器
-    locator: MeshLocator<'a>,
-    /// 上一次定位的单元索引
+/// 缓存定位器（泛型版本）
+pub struct CachedLocator<'a, S: RuntimeScalar> {
+    locator: MeshLocator<'a, S>,
     last_cell: Cell<Option<usize>>,
-    /// 缓存命中次数
     cache_hits: Cell<u64>,
-    /// 总查询次数
     total_queries: Cell<u64>,
-    /// 邻居命中次数（在相邻单元找到）
     neighbor_hits: Cell<u64>,
 }
 
 /// 缓存定位统计信息
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocatorCacheStats {
-    /// 总查询次数
     pub total_queries: u64,
-    /// 直接缓存命中次数（在上一个单元找到）
     pub cache_hits: u64,
-    /// 邻居命中次数（在相邻单元找到）
     pub neighbor_hits: u64,
-    /// 全局搜索次数
     pub global_searches: u64,
 }
 
@@ -528,9 +401,9 @@ impl LocatorCacheStats {
     }
 }
 
-impl<'a> CachedLocator<'a> {
+impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     /// 创建新的缓存定位器
-    pub fn new(mesh: &'a FrozenMesh) -> Self {
+    pub fn new(mesh: &'a FrozenMesh<S>) -> Self {
         Self {
             locator: MeshLocator::new(mesh),
             last_cell: Cell::new(None),
@@ -541,7 +414,7 @@ impl<'a> CachedLocator<'a> {
     }
 
     /// 使用自定义容差创建缓存定位器
-    pub fn with_tolerance(mesh: &'a FrozenMesh, tolerance: LocateTolerance) -> Self {
+    pub fn with_tolerance(mesh: &'a FrozenMesh<S>, tolerance: LocateTolerance) -> Self {
         Self {
             locator: MeshLocator::with_tolerance(mesh, tolerance),
             last_cell: Cell::new(None),
@@ -565,9 +438,6 @@ impl<'a> CachedLocator<'a> {
                     barycentric: bary,
                 };
             }
-            
-            // TODO: 检查邻居单元（需要访问网格拓扑信息）
-            // 当前简化实现，直接回退到全局搜索
         }
 
         // 全局搜索
@@ -640,12 +510,12 @@ impl<'a> CachedLocator<'a> {
 
     /// 获取内部定位器引用
     #[inline]
-    pub fn inner(&self) -> &MeshLocator<'a> {
+    pub fn inner(&self) -> &MeshLocator<'a, S> {
         &self.locator
     }
 }
 
-/// 射线法判断点是否在多边形内（独立函数版本）
+/// 射线法判断点是否在多边形内
 fn point_in_polygon(x: f64, y: f64, vertices: &[Point2D]) -> bool {
     let n = vertices.len();
     if n < 3 {
@@ -674,13 +544,11 @@ fn point_in_polygon(x: f64, y: f64, vertices: &[Point2D]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::RuntimeScalar;
 
-    fn create_test_mesh() -> FrozenMesh {
-        // 创建一个简单的测试网格
-        // 由于 FrozenMesh 构造较复杂，这里使用 empty_with_cells
+    fn create_test_mesh<S: RuntimeScalar>() -> FrozenMesh<S> {
         let mut mesh = FrozenMesh::empty_with_cells(1);
 
-        // 添加节点
         mesh.n_nodes = 3;
         mesh.node_coords = vec![
             mh_geo::Point3D::new(0.0, 0.0, 0.0),
@@ -688,7 +556,6 @@ mod tests {
             mh_geo::Point3D::new(0.5, 1.0, 0.0),
         ];
 
-        // 设置单元节点
         mesh.cell_node_offsets = vec![0, 3];
         mesh.cell_node_indices = vec![0, 1, 2];
 
@@ -716,47 +583,46 @@ mod tests {
 
     #[test]
     fn test_mesh_locator_creation() {
-        let mesh = create_test_mesh();
+        let mesh = create_test_mesh::<f64>();
         let locator = MeshLocator::new(&mesh);
 
-        // 验证空间索引已创建
         assert_eq!(locator.spatial_index().n_cells(), 1);
     }
 
     #[test]
     fn test_barycentric_computation() {
-        let mesh = create_test_mesh();
+        let mesh = create_test_mesh::<f64>();
         let locator = MeshLocator::new(&mesh);
 
-        // 三角形重心应该有均匀的重心坐标
         let bary = locator.compute_barycentric(0, 0.5, 1.0 / 3.0);
-
-        // 验证重心坐标之和为 1
         let sum: f64 = bary.iter().sum();
         assert!((sum - 1.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_contains() {
-        let mesh = create_test_mesh();
+        let mesh = create_test_mesh::<f64>();
         let locator = MeshLocator::new(&mesh);
 
-        // 三角形内的点
         assert!(locator.contains(0.5, 0.3));
-
-        // 三角形外的点
         assert!(!locator.contains(2.0, 2.0));
     }
 
     #[test]
     fn test_find_cell() {
-        let mesh = create_test_mesh();
+        let mesh = create_test_mesh::<f64>();
         let locator = MeshLocator::new(&mesh);
 
-        // 在单元内的点
         assert_eq!(locator.find_cell(0.5, 0.3), Some(0));
-
-        // 不在任何单元内的点
         assert_eq!(locator.find_cell(2.0, 2.0), None);
+    }
+
+    #[test]
+    fn test_cached_locator() {
+        let mesh = create_test_mesh::<f64>();
+        let cached = CachedLocator::new(&mesh);
+
+        assert_eq!(cached.find_cell(0.5, 0.3), Some(0));
+        assert!(cached.hit_rate() > 0.0);
     }
 }

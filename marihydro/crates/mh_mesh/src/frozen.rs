@@ -1,40 +1,35 @@
-// marihydro\crates\mh_mesh\src/frozen.rs
+// crates/mh_mesh/src/frozen.rs
 
-//! 冻结网格
+//! 冻结网格（泛型版本）
 //!
 //! 从半边网格导出的只读 SoA 布局，优化计算性能。
-//!
-//! # 设计要点
-//!
-//! 1. **SoA布局**: 类似旧 UnstructuredMesh 的数组布局
-//! 2. **只读**: 冻结后不可修改
-//! 3. **空间索引**: 内置 R-tree 用于空间查询
-//! 4. **零拷贝序列化**: 支持 mmap 加载
+//! 支持 f32/f64 运行时精度切换。
 
 use mh_geo::{Point2D, Point3D};
+use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 
-/// 冻结网格
+/// 冻结网格（泛型版本）
 ///
-/// 从 HalfEdgeMesh 导出的只读计算用网格
+/// 从 HalfEdgeMesh 导出的只读计算用网格，支持 f32/f64 精度运行时切换
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrozenMesh {
+pub struct FrozenMesh<S: RuntimeScalar = f64> {
     // ===== 节点数据 =====
-    /// 节点数量
+    /// 节点数量（几何数据，保持 usize）
     pub n_nodes: usize,
-    /// 节点坐标 (3D)
+    /// 节点坐标 (3D，几何数据保持 f64)
     pub node_coords: Vec<Point3D>,
 
     // ===== 单元数据 =====
     /// 单元数量
     pub n_cells: usize,
-    /// 单元中心坐标（2D，用于空间查询）
+    /// 单元中心坐标（2D，几何数据保持 f64）
     pub cell_center: Vec<Point2D>,
-    /// 单元面积
-    pub cell_area: Vec<f64>,
-    /// 单元底床高程
-    pub cell_z_bed: Vec<f64>,
-    /// 单元节点索引 (压缩格式: offsets + indices)
+    /// 单元面积（物理场数据，泛型化）
+    pub cell_area: Vec<S>,
+    /// 单元底床高程（物理场数据，泛型化）
+    pub cell_z_bed: Vec<S>,
+    /// 单元节点索引 (压缩格式，索引数据保持 u32)
     pub cell_node_offsets: Vec<usize>,
     /// 单元节点索引列表
     pub cell_node_indices: Vec<u32>,
@@ -52,29 +47,29 @@ pub struct FrozenMesh {
     pub n_faces: usize,
     /// 内部面数量
     pub n_interior_faces: usize,
-    /// 面中心坐标（2D）
+    /// 面中心坐标（2D，几何数据）
     pub face_center: Vec<Point2D>,
-    /// 面法向量 (3D，用于坡度计算)
+    /// 面法向量 (3D，几何数据)
     pub face_normal: Vec<Point3D>,
-    /// 面长度
-    pub face_length: Vec<f64>,
-    /// 面左侧高程
-    pub face_z_left: Vec<f64>,
-    /// 面右侧高程
-    pub face_z_right: Vec<f64>,
-    /// 面 owner 单元索引
+    /// 面长度（物理场数据，泛型化）
+    pub face_length: Vec<S>,
+    /// 面左侧高程（物理场数据，泛型化）
+    pub face_z_left: Vec<S>,
+    /// 面右侧高程（物理场数据，泛型化）
+    pub face_z_right: Vec<S>,
+    /// 面 owner 单元索引（索引数据）
     pub face_owner: Vec<u32>,
     /// 面 neighbor 单元索引 (u32::MAX 表示边界)
     pub face_neighbor: Vec<u32>,
-    /// 面到 owner 中心的向量（2D）
+    /// 面到 owner 中心的向量（2D，几何数据）
     pub face_delta_owner: Vec<Point2D>,
-    /// 面到 neighbor 中心的向量（2D）
+    /// 面到 neighbor 中心的向量（2D，几何数据）
     pub face_delta_neighbor: Vec<Point2D>,
-    /// owner 到 neighbor 的距离
-    pub face_dist_o2n: Vec<f64>,
+    /// owner 到 neighbor 的距离（物理场数据，泛型化）
+    pub face_dist_o2n: Vec<S>,
 
     // ===== 边界数据 =====
-    /// 边界面索引列表
+    /// 边界面索引列表（索引数据）
     pub boundary_face_indices: Vec<u32>,
     /// 边界名称
     pub boundary_names: Vec<String>,
@@ -82,10 +77,10 @@ pub struct FrozenMesh {
     pub face_boundary_id: Vec<Option<u32>>,
 
     // ===== 统计 =====
-    /// 最小单元尺寸
-    pub min_cell_size: f64,
-    /// 最大单元尺寸
-    pub max_cell_size: f64,
+    /// 最小单元尺寸（物理场数据，泛型化）
+    pub min_cell_size: S,
+    /// 最大单元尺寸（物理场数据，泛型化）
+    pub max_cell_size: S,
 
     // ===== AMR 预分配字段 (Phase 2+) =====
     /// 单元细化级别 (0=基础网格, 1,2,3=细化级别)
@@ -111,13 +106,13 @@ pub struct FrozenMesh {
 }
 
 
-impl Default for FrozenMesh {
+impl<S: RuntimeScalar> Default for FrozenMesh<S> {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl FrozenMesh {
+impl<S: RuntimeScalar> FrozenMesh<S> {
     /// 创建空的冻结网格
     pub fn empty() -> Self {
         Self {
@@ -148,8 +143,8 @@ impl FrozenMesh {
             boundary_face_indices: Vec::new(),
             boundary_names: Vec::new(),
             face_boundary_id: Vec::new(),
-            min_cell_size: f64::MAX,
-            max_cell_size: 0.0,
+            min_cell_size: S::MAX,
+            max_cell_size: S::ZERO,
             // AMR 预分配字段
             cell_refinement_level: Vec::new(),
             cell_parent: Vec::new(),
@@ -171,8 +166,8 @@ impl FrozenMesh {
             node_coords: Vec::new(),
             n_cells,
             cell_center: vec![Point2D::new(0.0, 0.0); n_cells],
-            cell_area: vec![1.0; n_cells],
-            cell_z_bed: vec![0.0; n_cells],
+            cell_area: vec![S::ONE; n_cells],
+            cell_z_bed: vec![S::ZERO; n_cells],
             cell_node_offsets: vec![0; n_cells + 1],
             cell_node_indices: Vec::new(),
             cell_face_offsets: vec![0; n_cells + 1],
@@ -194,8 +189,8 @@ impl FrozenMesh {
             boundary_face_indices: Vec::new(),
             boundary_names: Vec::new(),
             face_boundary_id: Vec::new(),
-            min_cell_size: 1.0,
-            max_cell_size: 1.0,
+            min_cell_size: S::ONE,
+            max_cell_size: S::ONE,
             // AMR 预分配字段
             cell_refinement_level: vec![0; n_cells],
             cell_parent: (0..n_cells as u32).collect(),
@@ -246,21 +241,21 @@ impl FrozenMesh {
     // 单元访问
     // =========================================================================
 
-    /// 获取单元中心
+    /// 获取单元中心（几何数据，返回 f64）
     #[inline]
     pub fn cell_center(&self, cell: usize) -> Point2D {
         self.cell_center[cell]
     }
 
-    /// 获取单元面积
+    /// 获取单元面积（物理场数据，返回 S）
     #[inline]
-    pub fn cell_area(&self, cell: usize) -> f64 {
+    pub fn cell_area(&self, cell: usize) -> S {
         self.cell_area[cell]
     }
 
-    /// 获取单元底床高程
+    /// 获取单元底床高程（物理场数据，返回 S）
     #[inline]
-    pub fn cell_z_bed(&self, cell: usize) -> f64 {
+    pub fn cell_z_bed(&self, cell: usize) -> S {
         self.cell_z_bed[cell]
     }
 
@@ -292,31 +287,43 @@ impl FrozenMesh {
     // 面访问
     // =========================================================================
 
-    /// 获取面中心
+    /// 获取面中心（几何数据，返回 f64）
     #[inline]
     pub fn face_center(&self, face: usize) -> Point2D {
         self.face_center[face]
     }
 
-    /// 获取面法向量（3D）
+    /// 获取面法向量（3D，几何数据）
     #[inline]
     pub fn face_normal(&self, face: usize) -> Point3D {
         self.face_normal[face]
     }
 
-    /// 获取面长度
+    /// 获取面长度（物理场数据，返回 S）
     #[inline]
-    pub fn face_length(&self, face: usize) -> f64 {
+    pub fn face_length(&self, face: usize) -> S {
         self.face_length[face]
     }
 
-    /// 获取面 owner
+    /// 获取面左侧高程（物理场数据，返回 S）
+    #[inline]
+    pub fn face_z_left(&self, face: usize) -> S {
+        self.face_z_left[face]
+    }
+
+    /// 获取面右侧高程（物理场数据，返回 S）
+    #[inline]
+    pub fn face_z_right(&self, face: usize) -> S {
+        self.face_z_right[face]
+    }
+
+    /// 获取面 owner（索引数据）
     #[inline]
     pub fn face_owner(&self, face: usize) -> u32 {
         self.face_owner[face]
     }
 
-    /// 获取面 neighbor
+    /// 获取面 neighbor（索引数据）
     #[inline]
     pub fn face_neighbor(&self, face: usize) -> Option<u32> {
         let n = self.face_neighbor[face];
@@ -378,19 +385,19 @@ impl FrozenMesh {
     // 节点访问
     // =========================================================================
 
-    /// 获取节点3D坐标
+    /// 获取节点3D坐标（几何数据，返回 f64）
     #[inline]
     pub fn node_coords(&self, node: usize) -> Point3D {
         self.node_coords[node]
     }
 
-    /// 获取节点2D坐标 (x, y)
+    /// 获取节点2D坐标 (x, y)（几何数据）
     #[inline]
     pub fn node_xy(&self, node: usize) -> Point2D {
         self.node_coords[node].xy()
     }
 
-    /// 获取节点高程 (z)
+    /// 获取节点高程 (z)（几何数据）
     #[inline]
     pub fn node_z(&self, node: usize) -> f64 {
         self.node_coords[node].z
@@ -429,19 +436,19 @@ impl FrozenMesh {
     // =========================================================================
 
     /// 计算统计信息
-    pub fn statistics(&self) -> MeshStatistics {
-        let mut min_area = f64::MAX;
-        let mut max_area = f64::MIN;
-        let mut total_area = 0.0;
+    pub fn statistics(&self) -> MeshStatistics<S> {
+        let mut min_area = S::MAX;
+        let mut max_area = S::ZERO;
+        let mut total_area = S::ZERO;
 
         for &area in &self.cell_area {
             min_area = min_area.min(area);
             max_area = max_area.max(area);
-            total_area += area;
+            total_area = total_area + area;
         }
 
-        let mut min_length = f64::MAX;
-        let mut max_length = f64::MIN;
+        let mut min_length = S::MAX;
+        let mut max_length = S::ZERO;
 
         for &len in &self.face_length {
             min_length = min_length.min(len);
@@ -509,24 +516,49 @@ impl FrozenMesh {
 
         Ok(())
     }
+
+    /// 计算网格中心点（几何中心）
+    pub fn centroid(&self) -> Point2D {
+        if self.n_cells == 0 {
+            return Point2D::new(0.0, 0.0);
+        }
+
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let mut total_area = 0.0_f64; // 使用 f64 累加器避免精度损失
+
+        for cell in 0..self.n_cells {
+            let center = self.cell_center(cell);
+            let area = self.cell_area(cell).to_f64(); // 转换为 f64
+            sum_x += center.x * area;
+            sum_y += center.y * area;
+            total_area += area;
+        }
+
+        if total_area > 0.0 {
+            Point2D::new(sum_x / total_area, sum_y / total_area)
+        } else {
+            Point2D::new(0.0, 0.0)
+        }
+    }
 }
 
-/// 网格统计信息
+/// 网格统计信息（泛型版本）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeshStatistics {
+pub struct MeshStatistics<S: RuntimeScalar> {
     pub n_cells: usize,
     pub n_faces: usize,
     pub n_interior_faces: usize,
     pub n_boundary_faces: usize,
     pub n_nodes: usize,
-    pub total_area: f64,
-    pub min_cell_area: f64,
-    pub max_cell_area: f64,
-    pub min_edge_length: f64,
-    pub max_edge_length: f64,
+    pub total_area: S,
+    pub min_cell_area: S,
+    pub max_cell_area: S,
+    pub min_edge_length: S,
+    pub max_edge_length: S,
 }
 
-impl std::fmt::Display for MeshStatistics {
+impl<S: RuntimeScalar> std::fmt::Display for MeshStatistics<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== 网格统计 ===")?;
         writeln!(f, "单元数: {}", self.n_cells)?;
@@ -536,16 +568,16 @@ impl std::fmt::Display for MeshStatistics {
             self.n_faces, self.n_interior_faces, self.n_boundary_faces
         )?;
         writeln!(f, "节点数: {}", self.n_nodes)?;
-        writeln!(f, "总面积: {:.2} m²", self.total_area)?;
+        writeln!(f, "总面积: {:.2}", self.total_area.to_f64())?;
         writeln!(
             f,
-            "单元面积: [{:.2}, {:.2}] m²",
-            self.min_cell_area, self.max_cell_area
+            "单元面积: [{:.2}, {:.2}]",
+            self.min_cell_area.to_f64(), self.max_cell_area.to_f64()
         )?;
         writeln!(
             f,
-            "边长: [{:.2}, {:.2}] m",
-            self.min_edge_length, self.max_edge_length
+            "边长: [{:.2}, {:.2}]",
+            self.min_edge_length.to_f64(), self.max_edge_length.to_f64()
         )
     }
 }
@@ -556,7 +588,7 @@ impl std::fmt::Display for MeshStatistics {
 
 use crate::traits::{MeshAccess, MeshTopology};
 
-impl MeshAccess for FrozenMesh {
+impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
     #[inline]
     fn n_cells(&self) -> usize {
         self.n_cells
@@ -584,7 +616,7 @@ impl MeshAccess for FrozenMesh {
 
     #[inline]
     fn cell_area(&self, cell: usize) -> f64 {
-        self.cell_area[cell]
+        self.cell_area[cell].to_f64()
     }
 
     #[inline]
@@ -594,7 +626,7 @@ impl MeshAccess for FrozenMesh {
 
     #[inline]
     fn face_length(&self, face: usize) -> f64 {
-        self.face_length[face]
+        self.face_length[face].to_f64()
     }
 
     #[inline]
@@ -609,7 +641,7 @@ impl MeshAccess for FrozenMesh {
 
     #[inline]
     fn cell_bed_elevation(&self, cell: usize) -> f64 {
-        self.cell_z_bed[cell]
+        self.cell_z_bed[cell].to_f64()
     }
 
     #[inline]
@@ -677,19 +709,19 @@ impl MeshAccess for FrozenMesh {
 
     #[inline]
     fn face_z_left(&self, face: usize) -> f64 {
-        self.face_z_left[face]
+        self.face_z_left[face].to_f64()
     }
 
     #[inline]
     fn face_z_right(&self, face: usize) -> f64 {
-        self.face_z_right[face]
+        self.face_z_right[face].to_f64()
     }
 }
 
-impl MeshTopology for FrozenMesh {
+impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
     #[inline]
     fn face_o2n_distance(&self, face: usize) -> f64 {
-        self.face_dist_o2n[face]
+        self.face_dist_o2n[face].to_f64()
     }
 
     #[inline]
@@ -704,12 +736,12 @@ impl MeshTopology for FrozenMesh {
 
     #[inline]
     fn min_cell_size(&self) -> f64 {
-        self.min_cell_size
+        self.min_cell_size.to_f64()
     }
 
     #[inline]
     fn max_cell_size(&self) -> f64 {
-        self.max_cell_size
+        self.max_cell_size.to_f64()
     }
 }
 
@@ -720,7 +752,7 @@ impl MeshTopology for FrozenMesh {
 use crate::locator::MeshLocator;
 use crate::spatial_index::MeshSpatialIndex;
 
-impl FrozenMesh {
+impl<S: RuntimeScalar> FrozenMesh<S> {
     // =========================================================================
     // 空间索引创建
     // =========================================================================
@@ -740,22 +772,8 @@ impl FrozenMesh {
         MeshSpatialIndex::build(self.n_cells, |i| self.get_cell_vertices(i))
     }
 
-    /// 创建网格定位器
-    ///
-    /// 高级定位器，支持精确点定位和批量查询。
-    ///
-    /// # 示例
-    ///
-    /// ```ignore
-    /// let mesh = FrozenMesh::load("mesh.bin")?;
-    /// let locator = mesh.create_locator();
-    /// match locator.locate(Point2D::new(100.0, 200.0)) {
-    ///     LocateResult::InCell { cell, .. } => println!("在单元 {} 内", cell),
-    ///     LocateResult::OnBoundary { .. } => println!("在边界上"),
-    ///     LocateResult::Outside { .. } => println!("在网格外"),
-    /// }
-    /// ```
-    pub fn create_locator(&self) -> MeshLocator<'_> {
+    /// 创建网格定位器（支持泛型）
+    pub fn create_locator(&self) -> MeshLocator<'_, S> {
         MeshLocator::new(self)
     }
 
@@ -862,7 +880,7 @@ impl FrozenMesh {
             return false;
         }
 
-        // 射线法：从点向右发射水平射线，计算与多边形边的交点数
+        // 射线法
         let mut inside = false;
 
         for i in 0..n {
@@ -1042,54 +1060,37 @@ impl FrozenMesh {
 
         (Point2D::new(min_x, min_y), Point2D::new(max_x, max_y))
     }
-
-    /// 计算网格中心点
-    pub fn centroid(&self) -> Point2D {
-        if self.n_cells == 0 {
-            return Point2D::new(0.0, 0.0);
-        }
-
-        let mut sum_x = 0.0;
-        let mut sum_y = 0.0;
-        let mut total_area = 0.0;
-
-        for cell in 0..self.n_cells {
-            let center = self.cell_center(cell);
-            let area = self.cell_area(cell);
-            sum_x += center.x * area;
-            sum_y += center.y * area;
-            total_area += area;
-        }
-
-        if total_area > 0.0 {
-            Point2D::new(sum_x / total_area, sum_y / total_area)
-        } else {
-            Point2D::new(0.0, 0.0)
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::RuntimeScalar;
 
     #[test]
     fn test_empty_frozen_mesh() {
-        let mesh = FrozenMesh::empty();
+        let mesh: FrozenMesh<f64> = FrozenMesh::empty();
         assert_eq!(mesh.n_cells(), 0);
         assert_eq!(mesh.n_faces(), 0);
         assert_eq!(mesh.n_nodes(), 0);
     }
 
     #[test]
+    fn test_frozen_mesh_f32() {
+        let mesh: FrozenMesh<f32> = FrozenMesh::empty_with_cells(5);
+        assert_eq!(mesh.n_cells(), 5);
+        assert_eq!(mesh.cell_area(0), f32::ONE);
+    }
+
+    #[test]
     fn test_validate_empty() {
-        let mesh = FrozenMesh::empty();
+        let mesh: FrozenMesh<f64> = FrozenMesh::empty();
         assert!(mesh.validate().is_ok());
     }
 
     #[test]
     fn test_mesh_access_trait() {
-        let mesh = FrozenMesh::empty_with_cells(5);
+        let mesh: FrozenMesh<f64> = FrozenMesh::empty_with_cells(5);
         
         // 通过 trait 访问
         fn check_mesh<M: MeshAccess>(m: &M) -> usize {
@@ -1100,15 +1101,24 @@ mod tests {
     }
 
     #[test]
-    fn test_mesh_topology_trait() {
-        let mesh = FrozenMesh::empty_with_cells(5);
-        
-        // 通过 trait 访问
-        fn check_topology<M: MeshTopology>(m: &M) -> f64 {
-            m.min_cell_size()
-        }
-        
-        assert_eq!(check_topology(&mesh), 1.0);
+    fn test_statistics_f32() {
+        let mesh: FrozenMesh<f32> = FrozenMesh::empty_with_cells(3);
+        let stats = mesh.statistics();
+        assert_eq!(stats.n_cells, 3);
+        assert_eq!(stats.total_area.to_f64(), 3.0);
+    }
+
+    #[test]
+    fn test_centroid() {
+        let mesh: FrozenMesh<f64> = FrozenMesh::empty_with_cells(2);
+        // 设置测试数据
+        let mesh = FrozenMesh {
+            cell_center: vec![Point2D::new(0.0, 0.0), Point2D::new(2.0, 2.0)],
+            cell_area: vec![1.0, 1.0],
+            ..mesh
+        };
+        let centroid = mesh.centroid();
+        assert_eq!(centroid.x, 1.0);
+        assert_eq!(centroid.y, 1.0);
     }
 }
-

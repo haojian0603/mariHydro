@@ -163,7 +163,7 @@ impl From<GeoError> for MhError {
             GeoError::ConvergenceAngleError { message } => {
                 MhError::internal(format!("收敛角计算失败: {message}"))
             }
-            GeoError::Io(err) => err,
+            GeoError::Foundation(err) => err,  // 直接返回包含的 MhError
         }
     }
 }

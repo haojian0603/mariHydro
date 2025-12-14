@@ -6,6 +6,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mh_runtime = { path = "../mh_runtime" }
 mh_foundation = { path = "../mh_foundation" }
 mh_geo = { path = "../mh_geo" }
 memmap2 = "0.9"

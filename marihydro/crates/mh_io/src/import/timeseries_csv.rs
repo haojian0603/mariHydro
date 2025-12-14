@@ -1,5 +1,3 @@
-// crates/mh_io/src/import/timeseries_csv.rs
-
 //! CSV 时序数据导入
 //!
 //! 提供从 CSV 文件加载时间序列数据的功能，支持：
@@ -27,6 +25,7 @@
 
 use std::path::Path;
 use mh_foundation::error::{MhError, MhResult};
+use crate::error::IoError;
 
 /// CSV 加载配置
 #[derive(Debug, Clone)]
@@ -190,15 +189,15 @@ fn parse_csv_content(
         let max_col = config.time_column.max(config.value_column);
         if parts.len() <= max_col {
             if !config.skip_invalid {
-                return Err(MhError::ParseError {
-                    file: path.map(|p| p.to_path_buf()).unwrap_or_default(),
+                return Err(IoError::ParseError {
+                    file: path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                     line: line_num + 1,
                     message: format!(
                         "Insufficient columns: expected at least {}, got {}",
                         max_col + 1,
                         parts.len()
                     ),
-                });
+                }.into());
             }
             errors.push(line_num + 1);
             skipped_lines += 1;
@@ -216,14 +215,14 @@ fn parse_csv_content(
             }
             _ => {
                 if !config.skip_invalid {
-                    return Err(MhError::ParseError {
-                        file: path.map(|p| p.to_path_buf()).unwrap_or_default(),
+                    return Err(IoError::ParseError {
+                        file: path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
                         line: line_num + 1,
                         message: format!(
                             "Failed to parse time='{}' or value='{}'",
                             time_str, value_str
                         ),
-                    });
+                    }.into());
                 }
                 errors.push(line_num + 1);
                 skipped_lines += 1;
@@ -346,11 +345,11 @@ pub fn load_multi_column_timeseries(
             if config.skip_invalid {
                 continue;
             }
-            return Err(MhError::ParseError {
-                file: path.to_path_buf(),
+            return Err(IoError::ParseError {
+                file: path.to_string_lossy().to_string(),
                 line: line_num + 1,
                 message: "Need at least 2 columns".into(),
-            });
+            }.into());
         }
 
         // 初始化列数
@@ -366,11 +365,11 @@ pub fn load_multi_column_timeseries(
                 if config.skip_invalid {
                     continue;
                 }
-                return Err(MhError::ParseError {
-                    file: path.to_path_buf(),
+                return Err(IoError::ParseError {
+                    file: path.to_string_lossy().to_string(),
                     line: line_num + 1,
                     message: format!("Failed to parse time: {}", parts[0]),
-                });
+                }.into());
             }
         };
 
@@ -394,11 +393,11 @@ pub fn load_multi_column_timeseries(
                 all_values[i].push(v);
             }
         } else if !config.skip_invalid {
-            return Err(MhError::ParseError {
-                file: path.to_path_buf(),
+            return Err(IoError::ParseError {
+                file: path.to_string_lossy().to_string(),
                 line: line_num + 1,
                 message: "Failed to parse values".into(),
-            });
+            }.into());
         }
     }
 

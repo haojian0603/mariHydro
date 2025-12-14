@@ -41,7 +41,8 @@ pub use utm::*;
 pub use web_mercator::*;
 
 use crate::ellipsoid::Ellipsoid;
-use mh_foundation::error::{MhError, MhResult};
+use crate::error::{GeoError, GeoResult};
+use mh_foundation::error::{MhResult};
 
 // ============================================================================
 // 投影类型定义
@@ -78,7 +79,7 @@ impl ProjectionType {
     ///
     /// # Errors
     /// 如果 EPSG 代码不支持则返回错误
-    pub fn from_epsg(code: u32) -> MhResult<Self> {
+    pub fn from_epsg(code: u32) -> GeoResult<Self> {
         match code {
             4326 => Ok(Self::Geographic),
             3857 | 900913 => Ok(Self::WebMercator),
@@ -100,11 +101,10 @@ impl ProjectionType {
             4502..=4512 => Ok(Self::GaussKruger6 {
                 zone: (code - 4502 + 13) as u8,
             }),
-            _ => Err(MhError::Config {
-                message: format!(
-                    "Unsupported EPSG code: {code}. Supported: 4326, 3857, 32601-32660, 32701-32760, 4502-4554"
-                ),
-            }),
+            _ => Err(GeoError::unsupported_epsg(  
+                code,
+                "4326, 3857, 32601-32660, 32701-32760, 4502-4554"
+            )),
         }
     }
 
@@ -232,11 +232,11 @@ impl Projection {
     ///
     /// # Errors
     /// 如果 EPSG 代码无效则返回错误
-    pub fn from_epsg(source_epsg: u32, target_epsg: u32) -> MhResult<Self> {
-        Ok(Self::new(
-            ProjectionType::from_epsg(source_epsg)?,
-            ProjectionType::from_epsg(target_epsg)?,
-        ))
+    pub fn from_epsg(source_epsg: u32, target_epsg: u32) -> MhResult<Self> { 
+        // GeoError 会通过 From trait 自动转换为 MhError
+        let source = ProjectionType::from_epsg(source_epsg)?;  
+        let target = ProjectionType::from_epsg(target_epsg)?;  
+        Ok(Self::new(source, target))
     }
 
     /// 正向投影：将源坐标转换为目标坐标

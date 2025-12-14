@@ -1,3 +1,5 @@
+// marihydro\crates\mh_foundation\src/arena.rs
+
 //! 泛型Arena内存池
 //! 
 //! 提供高效的内存分配与回收机制，适用于管理同类型对象。
@@ -9,7 +11,7 @@
 //! - **类型安全**: 通过标记类型防止不同Arena的索引混用
 //! - **缓存友好**: 连续内存布局优化性能
 //! 
-//! # 注意事项
+//! # 重要说明
 //! 
 //! 本实现**不包含代际验证**，因此无法检测悬垂引用。
 //! 删除后复用的索引仍可访问当前存储的数据。
@@ -57,9 +59,10 @@
 //! ```
 
 use std::marker::PhantomData;
+use std::fmt;
 
 // ============================================================================
-// 标记类型
+// 标记类型 trait
 // ============================================================================
 
 /// Arena标记trait，用于类型安全地区分不同用途的Arena
@@ -78,125 +81,11 @@ use std::marker::PhantomData;
 pub trait ArenaTag: 'static + Copy + Send + Sync {}
 
 // ============================================================================
-// 索引类型
+// 索引类型（使用 mh_foundation/src/index.rs 中的 Idx<Tag>）
 // ============================================================================
 
-/// 轻量级类型安全索引（4字节）
-/// 
-/// 通过标记类型 `Tag` 防止不同Arena的索引混用，编译期保证类型安全。
-/// 
-/// # 内存表示
-/// 
-/// 与 `u32` 完全相同的内存布局，使用 `#[repr(transparent)]` 保证零开销。
-/// 
-/// **关键**：使用 `PhantomData<fn() -> Tag>` 确保自动实现 `Copy` 和 `Clone`。
-#[derive(Debug, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct Idx<Tag> {
-    /// 索引值
-    index: u32,
-    /// 类型标记（函数指针类型确保自动Copy）
-    _marker: PhantomData<fn() -> Tag>,
-}
-
-// 必须手动实现 Copy 和 Clone，因为 derive 可能失败
-impl<Tag> Copy for Idx<Tag> {}
-
-impl<Tag> Clone for Idx<Tag> {
-    #[inline]
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Tag> Idx<Tag> {
-    /// 无效索引常量
-    /// 
-    /// 用于表示未初始化或无效的索引。
-    pub const INVALID: Self = Self {
-        index: u32::MAX,
-        _marker: PhantomData,
-    };
-
-    /// 创建新索引
-    /// 
-    /// # 参数
-    /// - `index`: 槽位索引值
-    /// 
-    /// # Panics
-    /// 
-    /// Debug模式下，若`index`为`u32::MAX`会触发panic（因为与INVALID冲突）。
-    #[inline]
-    pub const fn new(index: u32) -> Self {
-        debug_assert!(index != u32::MAX, "index cannot be u32::MAX (reserved for INVALID)");
-        Self {
-            index,
-            _marker: PhantomData,
-        }
-    }
-
-    /// 从`usize`创建索引
-    /// 
-    /// # Panics
-    /// 
-    /// 若值超过`u32::MAX`会panic。
-    #[inline]
-    pub fn from_usize(index: usize) -> Self {
-        Self::new(index as u32)
-    }
-
-    /// 获取原始索引值
-    #[inline]
-    pub const fn index(self) -> u32 {
-        self.index
-    }
-
-    /// 转换为`usize`
-    #[inline]
-    pub const fn as_usize(self) -> usize {
-        self.index as usize
-    }
-
-    /// 检查索引是否有效
-    #[inline]
-    pub const fn is_valid(self) -> bool {
-        self.index != u32::MAX
-    }
-
-    /// 检查索引是否无效
-    #[inline]
-    pub const fn is_invalid(self) -> bool {
-        self.index == u32::MAX
-    }
-}
-
-impl<Tag> Default for Idx<Tag> {
-    #[inline]
-    fn default() -> Self {
-        Self::INVALID
-    }
-}
-
-impl<Tag> From<u32> for Idx<Tag> {
-    #[inline]
-    fn from(value: u32) -> Self {
-        Self::new(value)
-    }
-}
-
-impl<Tag> From<usize> for Idx<Tag> {
-    #[inline]
-    fn from(value: usize) -> Self {
-        Self::from_usize(value)
-    }
-}
-
-impl<Tag> From<Idx<Tag>> for usize {
-    #[inline]
-    fn from(idx: Idx<Tag>) -> Self {
-        idx.as_usize()
-    }
-}
+// 从 index.rs 导入
+use crate::index::Idx;
 
 // ============================================================================
 // Slot 定义
@@ -224,12 +113,7 @@ enum Slot<T> {
 /// 
 /// # 类型参数
 /// - `T`: 存储的元素类型
-/// - `Tag`: 标记类型，用于防止不同Arena的索引混用
-/// 
-/// # 容量管理
-/// 
-/// Arena自动管理容量，当空闲链表耗尽时扩展内部向量。
-/// 扩展策略为倍增，均摊时间复杂度为O(1)。
+/// - `Tag`: 标记类型，用于防止不同 Arena 的索引混用
 pub struct Arena<T, Tag: ArenaTag> {
     /// 槽位数组
     slots: Vec<Slot<T>>,
@@ -306,20 +190,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
     }
 
     /// 插入元素并返回索引
-    /// 
-    /// # 复杂度
-    /// 
-    /// 平均O(1)，最坏情况O(n)（需要重新分配内存）。
-    /// 
-    /// # 示例
-    /// 
-    /// ```
-    /// # use mh_foundation::arena::{Arena, ArenaTag};
-    /// # #[derive(Clone, Copy)] struct Tag; impl ArenaTag for Tag {}
-    /// let mut arena = Arena::new();
-    /// let idx = arena.insert(42);
-    /// assert_eq!(arena[idx], 42);
-    /// ```
+    #[inline]
     pub fn insert(&mut self, value: T) -> Idx<Tag> {
         match self.free_head {
             Some(free_idx) => {
@@ -423,7 +294,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
             return None;
         }
 
-        // 取出值并替换为Vacant
+        // 取出值并替换为 Vacant
         let old_slot = std::mem::replace(
             &mut self.slots[slot_idx],
             Slot::Vacant { next_free: self.free_head },
@@ -443,9 +314,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
         }
     }
 
-    /// 清空Arena
-    /// 
-    /// 释放所有槽位并重置状态。容量保持不变。
+    /// 清空 Arena
     pub fn clear(&mut self) {
         self.slots.clear();
         self.free_head = None;
@@ -463,7 +332,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
     /// 
     /// 遍历所有有效元素，跳过空闲槽位。
     pub fn iter(&self) -> Iter<'_, T, Tag> {
-        let remaining = self.len;  // 先取值，避免借用冲突
+        let remaining = self.len;
         Iter {
             arena: self,
             slot_idx: 0,
@@ -473,7 +342,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
 
     /// 可变迭代器
     pub fn iter_mut(&mut self) -> IterMut<'_, T, Tag> {
-        let remaining = self.len;  // 先取值，避免借用冲突
+        let remaining = self.len;
         IterMut {
             arena: self,
             slot_idx: 0,
@@ -485,7 +354,7 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
     /// 
     /// 遍历所有有效元素的索引。
     pub fn indices(&self) -> Indices<'_, T, Tag> {
-        let remaining = self.len;  // 先取值，避免借用冲突
+        let remaining = self.len;
         Indices {
             arena: self,
             slot_idx: 0,
@@ -515,6 +384,24 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
         } else {
             self.slots.as_mut_ptr() as *mut T
         }
+    }
+}
+
+// ============================================================================
+// Debug 实现
+// ============================================================================
+
+impl<T, Tag: ArenaTag> fmt::Debug for Arena<T, Tag>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Arena")
+            .field("slots", &self.slots)
+            .field("free_head", &self.free_head)
+            .field("len", &self.len)
+            .field("capacity", &self.capacity())
+            .finish()
     }
 }
 
@@ -846,7 +733,7 @@ mod tests {
         let mut arena: TestArena = Arena::new();
         let idx = arena.insert(42);
         arena.remove(idx);
-        let _ = arena[idx]; // 应该panic
+        let _ = arena[idx]; // 应该 panic
     }
 
     #[test]

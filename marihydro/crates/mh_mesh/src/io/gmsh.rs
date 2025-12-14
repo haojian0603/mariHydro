@@ -1,5 +1,3 @@
-// marihydro\crates\mh_mesh\src/io/gmsh.rs
-
 //! GMSH 格式读写
 //!
 //! 支持 GMSH 2.x 和 4.x 格式。
@@ -13,6 +11,7 @@
 //! println!("Loaded {} nodes and {} cells", mesh_data.nodes.len(), mesh_data.cells.len());
 //! ```
 
+use crate::error::MeshError;
 use mh_foundation::error::{MhError, MhResult};
 use mh_geo::Point2D;
 use std::collections::HashMap;
@@ -126,11 +125,14 @@ impl GmshLoader {
             MhError::io(format!("Cannot open {}: {}", path.display(), e))
         })?;
         let reader = BufReader::new(file);
-        Self::load_from_reader(reader)
+        Self::load_from_reader(reader, path.to_string_lossy().to_string())
     }
 
     /// 从 reader 加载
-    pub fn load_from_reader<R: BufRead>(reader: R) -> MhResult<GmshMeshData> {
+    pub fn load_from_reader<R: BufRead>(
+        reader: R, 
+        filename: String
+    ) -> MhResult<GmshMeshData> {
         let mut lines = reader.lines();
         let mut nodes = Vec::new();
         let mut nodes_z = Vec::new();
@@ -139,6 +141,8 @@ impl GmshLoader {
         let mut boundary_edges = Vec::new();
         let mut physical_names = HashMap::new();
         let mut version = 2;
+
+        use crate::error::MeshError as ME;
 
         while let Some(Ok(line)) = lines.next() {
             match line.trim() {
@@ -157,9 +161,9 @@ impl GmshLoader {
                 }
                 "$Nodes" => {
                     let (xy, z, map) = if version >= 4 {
-                        Self::parse_nodes_v4(&mut lines)?
+                        Self::parse_nodes_v4(&mut lines, &filename)?
                     } else {
-                        Self::parse_nodes_v2(&mut lines)?
+                        Self::parse_nodes_v2(&mut lines, &filename)?
                     };
                     nodes = xy;
                     nodes_z = z;
@@ -167,9 +171,9 @@ impl GmshLoader {
                 }
                 "$Elements" => {
                     let (c, b) = if version >= 4 {
-                        Self::parse_elements_v4(&mut lines, &node_map)?
+                        Self::parse_elements_v4(&mut lines, &node_map, &filename)?
                     } else {
-                        Self::parse_elements_v2(&mut lines, &node_map)?
+                        Self::parse_elements_v2(&mut lines, &node_map, &filename)?
                     };
                     cells = c;
                     boundary_edges = b;
@@ -179,14 +183,20 @@ impl GmshLoader {
         }
 
         if nodes.is_empty() {
-            return Err(MhError::InvalidMesh {
-                message: "No nodes in GMSH file".into(),
-            });
+            return Err(ME::MeshFormatError {
+                format: "gmsh",
+                file: filename.clone(),
+                line: 0,
+                message: "No nodes in GMSH file".to_string(),
+            }.into());
         }
         if cells.is_empty() {
-            return Err(MhError::InvalidMesh {
-                message: "No cells in GMSH file".into(),
-            });
+            return Err(ME::MeshFormatError {
+                format: "gmsh",
+                file: filename.clone(),
+                line: 0,
+                message: "No cells in GMSH file".to_string(),
+            }.into());
         }
 
         Ok(GmshMeshData {
@@ -212,7 +222,7 @@ impl GmshLoader {
         lines: &mut I,
     ) -> MhResult<HashMap<usize, String>> {
         let mut m = HashMap::new();
-        lines.next(); // 跳过数量行
+        lines.next();
 
         while let Some(Ok(l)) = lines.next() {
             let t = l.trim();
@@ -237,12 +247,12 @@ impl GmshLoader {
     /// 解析节点 (v2 格式)
     fn parse_nodes_v2<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
+        _filename: &str,
     ) -> MhResult<(Vec<Point2D>, Vec<f64>, HashMap<usize, usize>)> {
         let mut xy = Vec::new();
         let mut z = Vec::new();
         let mut m = HashMap::new();
 
-        // 读取节点数量
         if let Some(Ok(c)) = lines.next() {
             if let Ok(n) = c.trim().parse::<usize>() {
                 xy.reserve(n);
@@ -259,14 +269,14 @@ impl GmshLoader {
 
             let parts: Vec<&str> = t.split_whitespace().collect();
             if parts.len() >= 4 {
-                if let (Ok(tag), Ok(x), Ok(y), Ok(zv)) = (
+                if let (Ok(tag), Ok(xv), Ok(yv), Ok(zv)) = (
                     parts[0].parse(),
                     parts[1].parse(),
                     parts[2].parse(),
                     parts[3].parse(),
                 ) {
                     m.insert(tag, xy.len());
-                    xy.push(Point2D::new(x, y));
+                    xy.push(Point2D::new(xv, yv));
                     z.push(zv);
                 }
             }
@@ -277,16 +287,23 @@ impl GmshLoader {
     /// 解析节点 (v4 格式)
     fn parse_nodes_v4<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
+        _filename: &str,
     ) -> MhResult<(Vec<Point2D>, Vec<f64>, HashMap<usize, usize>)> {
         let mut xy = Vec::new();
         let mut z = Vec::new();
         let mut m = HashMap::new();
 
-        let header = lines
-            .next()
-            .ok_or_else(|| MhError::InvalidMesh {
-                message: "Missing node header".into(),
-            })??;
+        let header = match lines.next() {
+            Some(Ok(h)) => h,
+            _ => {
+                return Err(MeshError::MeshFormatError {
+                    format: "gmsh",
+                    file: "".to_string(),
+                    line: 0,
+                    message: "Missing node header".to_string(),
+                }.into());
+            }
+        };
 
         let parts: Vec<usize> = header
             .split_whitespace()
@@ -294,9 +311,12 @@ impl GmshLoader {
             .collect();
 
         if parts.len() < 4 {
-            return Err(MhError::InvalidMesh {
-                message: "Bad node header".into(),
-            });
+            return Err(MeshError::MeshFormatError {
+                format: "gmsh",
+                file: "".to_string(),
+                line: 0,
+                message: "Bad node header".to_string(),
+            }.into());
         }
 
         let (num_blocks, total) = (parts[0], parts[1]);
@@ -305,12 +325,17 @@ impl GmshLoader {
         m.reserve(total);
 
         for _ in 0..num_blocks {
-            let bh = lines
-                .next()
-                .ok_or_else(|| MhError::InvalidMesh {
-                    message: "Missing block header".into(),
-                })??;
-
+            let bh = match lines.next() {
+                Some(Ok(b)) => b,
+                _ => {
+                    return Err(MeshError::MeshFormatError {
+                        format: "gmsh",
+                        file: "".to_string(),
+                        line: 0,
+                        message: "Missing block".to_string(),
+                    }.into());
+                }
+            };
             let bh: Vec<usize> = bh
                 .split_whitespace()
                 .filter_map(|s| s.parse().ok())
@@ -321,7 +346,6 @@ impl GmshLoader {
             }
             let n = bh[3];
 
-            // 读取标签
             let mut tags = Vec::with_capacity(n);
             for _ in 0..n {
                 if let Some(Ok(tl)) = lines.next() {
@@ -331,7 +355,6 @@ impl GmshLoader {
                 }
             }
 
-            // 读取坐标
             for tag in tags {
                 if let Some(Ok(cl)) = lines.next() {
                     let c: Vec<f64> = cl
@@ -355,11 +378,12 @@ impl GmshLoader {
     fn parse_elements_v2<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
         nm: &HashMap<usize, usize>,
+        _filename: &str,
     ) -> MhResult<(Vec<Vec<usize>>, Vec<(usize, Vec<usize>)>)> {
         let mut cells = Vec::new();
         let mut edges = Vec::new();
 
-        lines.next(); // 跳过数量行
+        lines.next();
 
         while let Some(Ok(l)) = lines.next() {
             let t = l.trim();
@@ -383,7 +407,6 @@ impl GmshLoader {
 
             match elem_type {
                 1 => {
-                    // 2-node line
                     if parts.len() >= start + 2 {
                         let ns: Option<Vec<usize>> = parts[start..]
                             .iter()
@@ -396,7 +419,6 @@ impl GmshLoader {
                     }
                 }
                 2 => {
-                    // 3-node triangle
                     if parts.len() >= start + 3 {
                         let ns: Option<Vec<usize>> = parts[start..]
                             .iter()
@@ -409,7 +431,6 @@ impl GmshLoader {
                     }
                 }
                 3 => {
-                    // 4-node quadrilateral
                     if parts.len() >= start + 4 {
                         let ns: Option<Vec<usize>> = parts[start..]
                             .iter()
@@ -431,15 +452,22 @@ impl GmshLoader {
     fn parse_elements_v4<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
         nm: &HashMap<usize, usize>,
+        _filename: &str,
     ) -> MhResult<(Vec<Vec<usize>>, Vec<(usize, Vec<usize>)>)> {
         let mut cells = Vec::new();
         let mut edges = Vec::new();
 
-        let header = lines
-            .next()
-            .ok_or_else(|| MhError::InvalidMesh {
-                message: "Missing element header".into(),
-            })??;
+        let header = match lines.next() {
+            Some(Ok(h)) => h,
+            _ => {
+                return Err(MeshError::MeshFormatError {
+                    format: "gmsh",
+                    file: "".to_string(),
+                    line: 0,
+                    message: "Missing element header".to_string(),
+                }.into());
+            }
+        };
 
         let parts: Vec<usize> = header
             .split_whitespace()
@@ -447,20 +475,28 @@ impl GmshLoader {
             .collect();
 
         if parts.len() < 4 {
-            return Err(MhError::InvalidMesh {
-                message: "Bad element header".into(),
-            });
+            return Err(MeshError::MeshFormatError {
+                format: "gmsh",
+                file: "".to_string(),
+                line: 0,
+                message: "Bad element header".to_string(),
+            }.into());
         }
 
         let num_blocks = parts[0];
 
         for _ in 0..num_blocks {
-            let bh = lines
-                .next()
-                .ok_or_else(|| MhError::InvalidMesh {
-                    message: "Missing block".into(),
-                })??;
-
+            let bh = match lines.next() {
+                Some(Ok(b)) => b,
+                _ => {
+                    return Err(MeshError::MeshFormatError {
+                        format: "gmsh",
+                        file: "".to_string(),
+                        line: 0,
+                        message: "Missing block".to_string(),
+                    }.into());
+                }
+            };
             let bh: Vec<usize> = bh
                 .split_whitespace()
                 .filter_map(|s| s.parse().ok())
@@ -486,7 +522,6 @@ impl GmshLoader {
 
                     match elem_type {
                         1 => {
-                            // 2-node line
                             if node_tags.len() >= 2 {
                                 let ns: Option<Vec<usize>> = node_tags
                                     .iter()
@@ -499,7 +534,6 @@ impl GmshLoader {
                             }
                         }
                         2 => {
-                            // 3-node triangle
                             if node_tags.len() >= 3 {
                                 let ns: Option<Vec<usize>> = node_tags
                                     .iter()
@@ -512,7 +546,6 @@ impl GmshLoader {
                             }
                         }
                         3 => {
-                            // 4-node quadrilateral
                             if node_tags.len() >= 4 {
                                 let ns: Option<Vec<usize>> = node_tags
                                     .iter()
@@ -550,7 +583,6 @@ impl GmshWriter {
 
     /// 写入到 writer
     pub fn write_to<W: Write>(writer: &mut W, data: &GmshMeshData) -> MhResult<()> {
-        // 写入文件头
         writeln!(writer, "$MeshFormat").map_err(|e| MhError::io(e.to_string()))?;
         writeln!(writer, "2.2 0 8").map_err(|e| MhError::io(e.to_string()))?;
         writeln!(writer, "$EndMeshFormat").map_err(|e| MhError::io(e.to_string()))?;
@@ -564,14 +596,12 @@ impl GmshWriter {
         }
         writeln!(writer, "$EndNodes").map_err(|e| MhError::io(e.to_string()))?;
 
-        // 写入单元
         let total_elems = data.cells.len() + data.boundary_edges.len();
         writeln!(writer, "$Elements").map_err(|e| MhError::io(e.to_string()))?;
         writeln!(writer, "{}", total_elems).map_err(|e| MhError::io(e.to_string()))?;
 
         let mut elem_id = 1;
 
-        // 写入边界边
         for (tag, nodes) in &data.boundary_edges {
             write!(writer, "{} 1 2 {} 0", elem_id, tag)
                 .map_err(|e| MhError::io(e.to_string()))?;
@@ -582,7 +612,6 @@ impl GmshWriter {
             elem_id += 1;
         }
 
-        // 写入单元
         for nodes in &data.cells {
             let elem_type = if nodes.len() == 3 { 2 } else { 3 };
             write!(writer, "{} {} 2 0 0", elem_id, elem_type)
@@ -623,7 +652,7 @@ $EndElements
     #[test]
     fn test_load_v2() {
         let cursor = Cursor::new(SIMPLE_MSH_V2);
-        let data = GmshLoader::load_from_reader(cursor).unwrap();
+        let data = GmshLoader::load_from_reader(cursor, "test.msh".to_string()).unwrap();
 
         assert_eq!(data.n_nodes(), 3);
         assert_eq!(data.n_cells(), 1);
@@ -656,7 +685,7 @@ $EndElements
         GmshWriter::write_to(&mut buffer, &original).unwrap();
 
         let cursor = Cursor::new(buffer);
-        let loaded = GmshLoader::load_from_reader(cursor).unwrap();
+        let loaded = GmshLoader::load_from_reader(cursor, "test.msh".to_string()).unwrap();
 
         assert_eq!(loaded.n_nodes(), original.n_nodes());
         assert_eq!(loaded.n_cells(), original.n_cells());

@@ -9,6 +9,7 @@ description = "MariHydro IO 模块 - 数据输入输出、异步管道、检查�
 [dependencies]
 mh_foundation = { path = "../mh_foundation" }
 mh_mesh = { path = "../mh_mesh" }
+mh_geo = { path = "../mh_geo" }
 mh_terrain = { path = "../mh_terrain" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
