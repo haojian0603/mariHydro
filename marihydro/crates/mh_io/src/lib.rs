@@ -45,7 +45,6 @@
 pub mod drivers;
 pub mod exporters;
 pub mod import;
-pub mod infra;
 pub mod error;
 pub mod project;
 
@@ -63,5 +62,5 @@ pub type Result<T> = IoResult<T>;
 
 // 重导出计划四新增类型
 pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManager};
-pub use pipeline::{IoError, IoPipeline, OutputRequest, PipelineConfig, PipelineStats, PvdEntry};
+pub use pipeline::{IoPipeline, OutputRequest, PipelineConfig, PipelineStats, PvdEntry};
 pub use snapshot::{MeshSnapshot, SnapshotMeta, StateSnapshot, StateSnapshotMeta, StateStatistics};

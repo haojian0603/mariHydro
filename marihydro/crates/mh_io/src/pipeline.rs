@@ -35,12 +35,12 @@ use std::time::{Duration, Instant};
 use crate::snapshot::{MeshSnapshot, StateSnapshot};
 
 // ============================================================
-// 错误类型
+// 错误类型（内部实现细节）
 // ============================================================
 
-/// IO 管道错误
+/// IO 管道内部错误（不对外暴露）
 #[derive(Debug)]
-pub enum IoError {
+pub(crate) enum PipelineError {
     /// IO 错误
     Io(std::io::Error),
     /// 管道已关闭
@@ -53,28 +53,28 @@ pub enum IoError {
     Timeout,
 }
 
-impl std::fmt::Display for IoError {
+impl std::fmt::Display for PipelineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IoError::Io(e) => write!(f, "IO 错误: {}", e),
-            IoError::PipelineClosed => write!(f, "管道已关闭"),
-            IoError::Serialization(msg) => write!(f, "序列化错误: {}", msg),
-            IoError::QueueFull => write!(f, "队列已满"),
-            IoError::Timeout => write!(f, "操作超时"),
+            PipelineError::Io(e) => write!(f, "IO 错误: {}", e),
+            PipelineError::PipelineClosed => write!(f, "管道已关闭"),
+            PipelineError::Serialization(msg) => write!(f, "序列化错误: {}", msg),
+            PipelineError::QueueFull => write!(f, "队列已满"),
+            PipelineError::Timeout => write!(f, "操作超时"),
         }
     }
 }
 
-impl std::error::Error for IoError {}
+impl std::error::Error for PipelineError {}
 
-impl From<std::io::Error> for IoError {
+impl From<std::io::Error> for PipelineError {
     fn from(e: std::io::Error) -> Self {
-        IoError::Io(e)
+        PipelineError::Io(e)
     }
 }
 
-/// IO 操作结果
-pub type IoResult<T> = Result<T, IoError>;
+/// IO 管道内部操作结果
+type PipelineResult<T> = Result<T, PipelineError>;
 
 // ============================================================
 // 输出请求
@@ -247,18 +247,24 @@ impl IoPipeline {
         })
     }
 
-    /// 提交输出请求
-    pub fn submit(&self, request: OutputRequest) -> IoResult<()> {
+    /// 提交输出请求（公共 API）
+    pub fn submit(&self, request: OutputRequest) -> crate::error::IoResult<()> {
         // 检查是否已关闭
         if self.shutdown_flag.load(Ordering::SeqCst) {
-            return Err(IoError::PipelineClosed);
+            return Err(crate::error::IoError::PipelineFailed {
+                stage: "submit".to_string(),
+                message: "管道已关闭".to_string(),
+            });
         }
 
         // 检查队列容量（背压控制）
         if self.config.max_pending > 0 {
             let current = self.pending_count.load(Ordering::SeqCst);
             if current >= self.config.max_pending {
-                return Err(IoError::QueueFull);
+                return Err(crate::error::IoError::PipelineFailed {
+                    stage: "submit".to_string(),
+                    message: "队列已满".to_string(),
+                });
             }
         }
 
@@ -274,20 +280,23 @@ impl IoPipeline {
             }
         }
 
-        // 发送请求
+        // 发送请求（内部使用 PipelineError）
         self.sender
             .send(request)
-            .map_err(|_| IoError::PipelineClosed)
+            .map_err(|_| crate::error::IoError::PipelineFailed {
+                stage: "submit".to_string(),
+                message: "管道已关闭".to_string(),
+            })
     }
 
-    /// 提交 VTU ASCII 写入
+    /// 提交 VTU ASCII 写入（公共 API）
     pub fn write_vtu_ascii(
         &self,
         path: impl Into<PathBuf>,
         mesh: MeshSnapshot,
         state: StateSnapshot,
         time: f64,
-    ) -> IoResult<()> {
+    ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuAscii {
             path: path.into(),
             mesh_data: mesh,
@@ -296,14 +305,14 @@ impl IoPipeline {
         })
     }
 
-    /// 提交 VTU 二进制写入
+    /// 提交 VTU 二进制写入（公共 API）
     pub fn write_vtu_binary(
         &self,
         path: impl Into<PathBuf>,
         mesh: MeshSnapshot,
         state: StateSnapshot,
         time: f64,
-    ) -> IoResult<()> {
+    ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuBinary {
             path: path.into(),
             mesh_data: mesh,
@@ -312,7 +321,7 @@ impl IoPipeline {
         })
     }
 
-    /// 提交检查点写入
+    /// 提交检查点写入（公共 API）
     pub fn write_checkpoint(
         &self,
         path: impl Into<PathBuf>,
@@ -320,7 +329,7 @@ impl IoPipeline {
         mesh: Option<MeshSnapshot>,
         time: f64,
         step: usize,
-    ) -> IoResult<()> {
+    ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteCheckpoint {
             path: path.into(),
             state_data: state,
@@ -330,16 +339,16 @@ impl IoPipeline {
         })
     }
 
-    /// 提交 PVD 写入
-    pub fn write_pvd(&self, path: impl Into<PathBuf>, entries: Vec<PvdEntry>) -> IoResult<()> {
+    /// 提交 PVD 写入（公共 API）
+    pub fn write_pvd(&self, path: impl Into<PathBuf>, entries: Vec<PvdEntry>) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WritePvd {
             path: path.into(),
             entries,
         })
     }
 
-    /// 刷新待处理请求
-    pub fn flush(&self) -> IoResult<()> {
+    /// 刷新待处理请求（公共 API）
+    pub fn flush(&self) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::Flush)
     }
 
@@ -374,7 +383,7 @@ impl IoPipeline {
         }
     }
 
-    /// 工作线程主循环
+    /// 工作线程主循环（内部使用 PipelineResult）
     fn worker_loop(
         receiver: Receiver<OutputRequest>,
         pending_count: Arc<AtomicUsize>,
@@ -425,8 +434,8 @@ impl IoPipeline {
         }
     }
 
-    /// 处理单个请求
-    fn process_request(request: &OutputRequest) -> IoResult<()> {
+    /// 处理单个请求（内部使用 PipelineResult）
+    fn process_request(request: &OutputRequest) -> PipelineResult<()> {
         match request {
             OutputRequest::WriteVtuAscii {
                 path,
@@ -457,13 +466,13 @@ impl IoPipeline {
         }
     }
 
-    /// VTU ASCII 写入实现
+    /// VTU ASCII 写入实现（内部使用 PipelineResult）
     fn write_vtu_ascii_impl(
         path: &Path,
         mesh: &MeshSnapshot,
         state: &StateSnapshot,
         time: f64,
-    ) -> IoResult<()> {
+    ) -> PipelineResult<()> {
         // 创建目录（如果不存在）
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -630,26 +639,26 @@ impl IoPipeline {
         Ok(())
     }
 
-    /// VTU 二进制写入实现
+    /// VTU 二进制写入实现（内部使用 PipelineResult）
     fn write_vtu_binary_impl(
         path: &Path,
         mesh: &MeshSnapshot,
         state: &StateSnapshot,
         time: f64,
-    ) -> IoResult<()> {
+    ) -> PipelineResult<()> {
         // TODO: 实现完整的二进制 VTU 输出（带 base64 编码）
         // 当前回退到 ASCII 格式
         Self::write_vtu_ascii_impl(path, mesh, state, time)
     }
 
-    /// 检查点写入实现
+    /// 检查点写入实现（内部使用 PipelineResult）
     fn write_checkpoint_impl(
         path: &Path,
         state: &StateSnapshot,
         mesh: Option<&MeshSnapshot>,
         time: f64,
         step: usize,
-    ) -> IoResult<()> {
+    ) -> PipelineResult<()> {
         // 创建目录
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -700,8 +709,8 @@ impl IoPipeline {
         Ok(())
     }
 
-    /// PVD 写入实现
-    fn write_pvd_impl(path: &Path, entries: &[PvdEntry]) -> IoResult<()> {
+    /// PVD 写入实现（内部使用 PipelineResult）
+    fn write_pvd_impl(path: &Path, entries: &[PvdEntry]) -> PipelineResult<()> {
         // 创建目录
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

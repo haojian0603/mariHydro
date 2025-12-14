@@ -80,7 +80,7 @@ impl From<IoError> for MhError {
             }
             IoError::TimeSeriesDiscontinuity { expected_interval, actual_interval, timestamp } => {
                 MhError::invalid_input(format!(
-                    "时间序列数据不连续 (期望间隔 {expected_interval}s, 实际 {actual_interval}s, 时间 {timestamp})"
+                    "时间序列数据不连续 (期望间隔 {expected_interval}s, 实际间隔 {actual_interval}s, 时间 {timestamp})"
                 ))
             }
             IoError::MissingProjection { file } => {
@@ -100,6 +100,7 @@ impl From<IoError> for MhError {
             IoError::ParseError { file, line, message } => {
                 MhError::invalid_input(format!("文件解析错误 [{file}:{line}]: {message}"))
             }
+            IoError::Foundation(mh_err) => mh_err,
         }
     }
 }

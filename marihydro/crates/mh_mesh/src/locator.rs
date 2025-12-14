@@ -17,30 +17,13 @@ use std::cell::Cell;
 /// 定位容差配置
 ///
 /// 控制各种几何判断的容差阈值，用于处理浮点精度问题。
-/// 
-/// # 使用建议
-///
-/// - 对于精度要求高的科学计算，使用较小的容差值
-/// - 对于可视化等容错性强的场景，可使用较大的容差值
 #[derive(Debug, Clone, Copy)]
 pub struct LocateTolerance {
     /// 边界判断容差
-    ///
-    /// 当点到边界的距离小于此值时，认为点在边界上。
-    /// 默认值: 1e-8
     pub boundary_tol: f64,
-    
     /// 内部点判断容差
-    ///
-    /// 用于重心坐标判断时的容差。
-    /// 当重心坐标值大于 -inside_tol 时认为有效。
-    /// 默认值: 1e-10
     pub inside_tol: f64,
-    
     /// 退化单元判断容差
-    ///
-    /// 当单元面积或边长小于此值时认为是退化单元。
-    /// 默认值: 1e-12
     pub degenerate_tol: f64,
 }
 
@@ -61,14 +44,14 @@ impl LocateTolerance {
         inside_tol: 1e-14,
         degenerate_tol: 1e-15,
     };
-    
+
     /// 标准容差（默认设置）
     pub const STANDARD: Self = Self {
         boundary_tol: 1e-8,
         inside_tol: 1e-10,
         degenerate_tol: 1e-12,
     };
-    
+
     /// 宽松容差（适用于可视化）
     pub const RELAXED: Self = Self {
         boundary_tol: 1e-6,
@@ -78,27 +61,21 @@ impl LocateTolerance {
 }
 
 /// 定位结果
-///
-/// 描述点相对于网格的位置关系
 #[derive(Debug, Clone)]
 pub enum LocateResult {
     /// 点在单元内部
     InCell {
         cell_index: usize,
-        /// 重心坐标（对于三角形单元为 [λ1, λ2, λ3]）
-        /// 对于非三角形单元，返回均匀权重
         barycentric: [f64; 3],
     },
     /// 点在边界边上
     OnBoundary {
-        /// 边界面索引
         face_index: usize,
-        /// 沿边的参数 t ∈ [0, 1]
         t: f64,
     },
+    /// 点在网格外
     Outside {
         nearest_face: usize,
-        /// 到最近边界面的距离
         distance: f64,
     },
 }
@@ -130,32 +107,24 @@ impl LocateResult {
     }
 }
 
-/// 网格定位器
+/// 网格定位器（泛型版本）
 ///
 /// 提供高效的点定位和空间查询功能。
-/// 内部使用 R-Tree 空间索引加速查询。
-///
-/// # 容差设置
-///
-/// 可通过 `with_tolerance` 方法设置自定义容差：
-///
-/// ```ignore
-/// let locator = MeshLocator::with_tolerance(&mesh, LocateTolerance::HIGH_PRECISION);
-/// ```
-pub struct MeshLocator<'a> {
+pub struct MeshLocator<'a, S: RuntimeScalar> {
     /// 空间索引
     index: MeshSpatialIndex,
+    /// 网格引用
     mesh: &'a FrozenMesh<S>,
+    /// 容差配置
     tolerance: LocateTolerance,
 }
 
 impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     /// 从冻结网格创建定位器（使用默认容差）
     pub fn new(mesh: &'a FrozenMesh<S>) -> Self {
-        let index = MeshSpatialIndex::build(mesh.n_cells, |i| get_cell_vertices_from_mesh(mesh, i));
-
-        Self { 
-            index, 
+        let index = MeshSpatialIndex::build(mesh.n_cells(), |i| mesh.get_cell_vertices(i));
+        Self {
+            index,
             mesh,
             tolerance: LocateTolerance::default(),
         }
@@ -163,10 +132,9 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 使用自定义容差创建定位器
     pub fn with_tolerance(mesh: &'a FrozenMesh<S>, tolerance: LocateTolerance) -> Self {
-        let index = MeshSpatialIndex::build(mesh.n_cells, |i| get_cell_vertices_from_mesh(mesh, i));
-
-        Self { 
-            index, 
+        let index = MeshSpatialIndex::build(mesh.n_cells(), |i| mesh.get_cell_vertices(i));
+        Self {
+            index,
             mesh,
             tolerance,
         }
@@ -174,8 +142,8 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 从已有的空间索引创建定位器
     pub fn with_index(mesh: &'a FrozenMesh<S>, index: MeshSpatialIndex) -> Self {
-        Self { 
-            index, 
+        Self {
+            index,
             mesh,
             tolerance: LocateTolerance::default(),
         }
@@ -183,12 +151,12 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 从已有的空间索引和自定义容差创建定位器
     pub fn with_index_and_tolerance(
-        mesh: &'a FrozenMesh<S>, 
+        mesh: &'a FrozenMesh<S>,
         index: MeshSpatialIndex,
         tolerance: LocateTolerance,
     ) -> Self {
-        Self { 
-            index, 
+        Self {
+            index,
             mesh,
             tolerance,
         }
@@ -201,19 +169,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     }
 
     /// 定位点
-    ///
-    /// 返回点相对于网格的位置信息。
-    ///
-    /// # 参数
-    /// - `x`: 点的 x 坐标
-    /// - `y`: 点的 y 坐标
-    ///
-    /// # 返回
-    /// - `InCell`: 点在某个单元内，包含单元索引和重心坐标
-    /// - `OnBoundary`: 点在边界边上
-    /// - `Outside`: 点在网格外部，包含最近边界面信息
     pub fn locate(&self, x: f64, y: f64) -> LocateResult {
-        // 首先尝试在单元内定位
         if let Some(cell_idx) = self.index.locate_point(x, y) {
             let bary = self.compute_barycentric(cell_idx, x, y);
             return LocateResult::InCell {
@@ -222,7 +178,6 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
             };
         }
 
-        // 点不在任何单元内，查找最近边界
         let (nearest_face, distance) = self.find_nearest_boundary_face(x, y);
 
         LocateResult::Outside {
@@ -243,37 +198,16 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
         self.index.locate_point(x, y)
     }
 
-    /// 查找最近的单元
-    #[inline]
-    pub fn find_nearest_cell(&self, x: f64, y: f64) -> Option<usize> {
-        self.index.locate_nearest(x, y)
-    }
-
     /// 批量定位点
     pub fn locate_batch(&self, points: &[(f64, f64)]) -> Vec<LocateResult> {
         points.iter().map(|&(x, y)| self.locate(x, y)).collect()
     }
 
-    /// 并行批量定位点
-    #[cfg(feature = "parallel")]
-    pub fn locate_batch_parallel(&self, points: &[(f64, f64)]) -> Vec<LocateResult> {
-        use rayon::prelude::*;
-        points.par_iter().map(|&(x, y)| self.locate(x, y)).collect()
-    }
-
     /// 计算重心坐标
-    ///
-    /// 对于三角形单元，返回精确的重心坐标 [λ1, λ2, λ3]。
-    /// 对于非三角形单元，返回均匀权重 [1/n, 1/n, 1-2/n]。
-    ///
-    /// # 重心坐标性质
-    /// - 所有坐标之和为 1
-    /// - 点在单元内时，所有坐标为正
     pub fn compute_barycentric(&self, cell: usize, x: f64, y: f64) -> [f64; 3] {
-        let vertices = get_cell_vertices_from_mesh(self.mesh, cell);
+        let vertices = self.mesh.get_cell_vertices(cell);
 
         if vertices.len() != 3 {
-            // 非三角形，返回简单的 1/n 权重
             let n = vertices.len() as f64;
             let w = 1.0 / n;
             return [w, w, 1.0 - 2.0 * w];
@@ -281,14 +215,8 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
         let (v0, v1, v2) = (&vertices[0], &vertices[1], &vertices[2]);
 
-        // 使用面积法计算重心坐标
-        // λ1 = Area(P, V1, V2) / Area(V0, V1, V2)
-        // λ2 = Area(V0, P, V2) / Area(V0, V1, V2)
-        // λ3 = 1 - λ1 - λ2
-
         let denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
         if denom.abs() < 1e-12 {
-            // 退化三角形
             return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
         }
 
@@ -301,13 +229,15 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 查找最近的边界面
     pub fn find_nearest_boundary_face(&self, x: f64, y: f64) -> (usize, f64) {
-        let mut min_dist = f64::MAX;
+        let mut min_dist = f64::INFINITY;
         let mut nearest_face = 0usize;
 
         for &face_idx in &self.mesh.boundary_face_indices {
             let face = face_idx as usize;
             let center = self.mesh.face_center[face];
-            let dist = ((center.x - x).powi(2) + (center.y - y).powi(2)).sqrt();
+            let dx = center.x - x;
+            let dy = center.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
 
             if dist < min_dist {
                 min_dist = dist;
@@ -321,13 +251,9 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     /// 在指定单元内插值
     pub fn interpolate_in_cell(&self, cell: usize, x: f64, y: f64, vertex_values: &[f64]) -> f64 {
         let bary = self.compute_barycentric(cell, x, y);
-        let vertices = get_cell_vertices_from_mesh(self.mesh, cell);
-
-        if vertices.len() == 3 && vertex_values.len() >= 3 {
-            // 三角形插值
+        if vertex_values.len() >= 3 {
             bary[0] * vertex_values[0] + bary[1] * vertex_values[1] + bary[2] * vertex_values[2]
         } else {
-            // 简单平均
             vertex_values.iter().sum::<f64>() / vertex_values.len() as f64
         }
     }
@@ -343,18 +269,6 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     pub fn spatial_index(&self) -> &MeshSpatialIndex {
         &self.index
     }
-}
-
-/// 从 FrozenMesh 获取单元顶点坐标
-fn get_cell_vertices_from_mesh<S: RuntimeScalar>(mesh: &FrozenMesh<S>, cell: usize) -> Vec<Point2D> {
-    let node_indices = mesh.cell_nodes(cell);
-    node_indices
-        .iter()
-        .map(|&node_idx| {
-            let coord = mesh.node_coords[node_idx as usize];
-            Point2D::new(coord.x, coord.y)
-        })
-        .collect()
 }
 
 // =========================================================================
@@ -380,7 +294,7 @@ pub struct LocatorCacheStats {
 }
 
 impl LocatorCacheStats {
-    /// 计算总缓存命中率（包括邻居命中）
+    /// 计算总缓存命中率
     #[inline]
     pub fn hit_rate(&self) -> f64 {
         if self.total_queries == 0 {
@@ -390,7 +304,7 @@ impl LocatorCacheStats {
         }
     }
 
-    /// 计算直接命中率（仅上一个单元）
+    /// 计算直接命中率
     #[inline]
     pub fn direct_hit_rate(&self) -> f64 {
         if self.total_queries == 0 {
@@ -428,7 +342,6 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     pub fn locate(&self, x: f64, y: f64) -> LocateResult {
         self.total_queries.set(self.total_queries.get() + 1);
 
-        // 尝试使用缓存
         if let Some(last) = self.last_cell.get() {
             if self.point_in_cell(last, x, y) {
                 self.cache_hits.set(self.cache_hits.get() + 1);
@@ -440,10 +353,8 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
             }
         }
 
-        // 全局搜索
         let result = self.locator.locate(x, y);
-        
-        // 更新缓存
+
         if let LocateResult::InCell { cell_index, .. } = &result {
             self.last_cell.set(Some(*cell_index));
         }
@@ -455,7 +366,6 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     pub fn find_cell(&self, x: f64, y: f64) -> Option<usize> {
         self.total_queries.set(self.total_queries.get() + 1);
 
-        // 尝试使用缓存
         if let Some(last) = self.last_cell.get() {
             if self.point_in_cell(last, x, y) {
                 self.cache_hits.set(self.cache_hits.get() + 1);
@@ -463,10 +373,8 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
             }
         }
 
-        // 全局搜索
         let result = self.locator.find_cell(x, y);
-        
-        // 更新缓存
+
         if let Some(cell) = result {
             self.last_cell.set(Some(cell));
         }
@@ -485,7 +393,7 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
         let total = self.total_queries.get();
         let hits = self.cache_hits.get();
         let neighbor = self.neighbor_hits.get();
-        
+
         LocatorCacheStats {
             total_queries: total,
             cache_hits: hits,
@@ -513,6 +421,18 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     pub fn inner(&self) -> &MeshLocator<'a, S> {
         &self.locator
     }
+}
+
+/// 从 FrozenMesh 获取单元顶点坐标
+fn get_cell_vertices_from_mesh<S: RuntimeScalar>(mesh: &FrozenMesh<S>, cell: usize) -> Vec<Point2D> {
+    let node_indices = mesh.cell_nodes(cell);
+    node_indices
+        .iter()
+        .map(|&node_idx| {
+            let coord = mesh.node_coords[node_idx as usize];
+            Point2D::new(coord.x, coord.y)
+        })
+        .collect()
 }
 
 /// 射线法判断点是否在多边形内
