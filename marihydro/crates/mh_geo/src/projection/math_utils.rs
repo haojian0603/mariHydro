@@ -1,5 +1,4 @@
-//! High-precision math utilities ported from `GeographicLib`
-
+// marihydro\crates\mh_geo\src\projection\math_utils.rs
 /// 误差补偿求和 (Kahan summation)
 #[inline]
 pub fn sum_exact(u: f64, v: f64) -> (f64, f64) {

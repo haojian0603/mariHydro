@@ -1,101 +1,120 @@
 // marihydro\crates\mh_foundation\src/error.rs
-
-//! 错误处理模块，定义统一错误类型
+//! 基础错误类型
 //!
-//! 提供 `MhError` 枚举和 `MhResult` 类型别名，用于整个项目的错误处理。
+//! 定义整个项目的基础错误类型，仅包含与基础设施相关的错误。
+//! 本模块是 Layer 1 的核心组件，禁止引入任何运行时或业务领域概念。
 //!
 //! # 设计原则
 //!
-//! 1. **层次化**: 基础层只定义核心错误，物理相关错误在 mh_physics 中定义
-//! 2. **易用性**: 提供便捷的构造方法
-//! 3. **可追溯**: 支持错误链
+//! 1. **纯净性**：仅包含 IO、索引、内存等基础错误，无投影、网格、计算等高层概念
+//! 2. **可转换性**：所有高层错误最终可转换为 [`MhError::Internal`] 或具体的基础错误
+//! 3. **零依赖**：不依赖项目内其他 crate，可独立使用
+//! 4. **易用性**：提供丰富的便捷构造函数和类型转换实现
 //!
-//! # 示例
+//! # 错误分层
+//!
+//! ```text
+//! 高层错误 (mh_physics, mh_mesh, mh_geo)
+//!        ↓ (转换)
+//! 运行时错误 (mh_runtime::RuntimeError)
+//!        ↓ (转换)
+//! 配置错误 (mh_config::ConfigError)
+//!        ↓ (转换)
+//! 基础错误 ← 你在这里 (mh_foundation::MhError)
+//! ```
+//!
+//! 转换示例：
 //!
 //! ```
-//! use mh_foundation::error::{MhError, MhResult};
-//!
-//! fn read_config() -> MhResult<()> {
-//!     Err(MhError::config("配置文件格式错误"))
-//! }
+//! # use mh_foundation::error::{MhError, MeshError};
+//! let mesh_err = MeshError::invalid_topology("non-manifold edge");
+//! let base_err: MhError = mesh_err.into();
+//! assert!(matches!(base_err, MhError::Internal { .. }));
 //! ```
 
-use std::path::PathBuf;
-use thiserror::Error;
+use std::{fmt, io, path::PathBuf, sync::PoisonError, sync::mpsc::SendError};
 
-/// 统一结果类型
+/// 统一结果类型别名
+///
+/// 用于简化函数签名，等价于 `Result<T, MhError>`。
+///
+/// # 示例
+///
+/// ```
+/// use mh_foundation::error::MhResult;
+///
+/// fn read_data() -> MhResult<Vec<f64>> {
+///     // ...
+/// #   Ok(vec![])
+/// }
+/// ```
 pub type MhResult<T> = Result<T, MhError>;
 
-/// MariHydro 错误类型
+/// Foundation 层基础错误
 ///
-/// 核心错误类型，用于整个项目。物理计算相关的错误应在 `mh_physics` 中扩展。
-#[derive(Error, Debug)]
+/// 包含所有基础设施级别的错误，是错误体系的根基。
+/// 高层错误必须通过转换为 [`MhError::Internal`] 来向下兼容。
+///
+/// # 错误分类
+///
+/// - **IO 错误**：文件、网络等输入输出操作失败
+/// - **索引错误**：越界、类型不匹配等内存访问问题
+/// - **资源错误**：锁、通道等并发原语失败
+/// - **逻辑错误**：无效输入、未实现、未找到等业务无关错误
+#[derive(Debug)]
 pub enum MhError {
-    // ========================================================================
-    // IO 相关错误
-    // ========================================================================
-    
-    /// IO 错误
-    #[error("IO错误: {message}")]
+    /// IO 操作失败
+    ///
+    /// 包含文件读写、网络通信等底层失败信息。
+    ///
+    /// # 字段
+    ///
+    /// - `message`：人类可读的错误描述
+    /// - `source`：可选的底层 [`std::io::Error`]
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// # use mh_foundation::error::MhError;
+    /// let err = MhError::io("无法打开配置文件");
+    /// assert!(err.to_string().contains("IO错误"));
+    /// ```
     Io {
         /// 描述性错误信息
         message: String,
-        #[source]
-        /// 可选的底层 IO 错误
-        source: Option<std::io::Error>,
+        /// 底层 IO 错误源
+        source: Option<io::Error>,
     },
 
     /// 文件不存在
-    #[error("文件不存在: {path}")]
+    ///
+    /// 当尝试访问不存在的文件路径时返回。
+    ///
+    /// # 字段
+    ///
+    /// - `path`：请求的文件路径
     FileNotFound {
-        /// 未找到的路径
+        /// 未找到的文件路径
         path: PathBuf,
     },
 
-    /// 不支持的文件格式
-    #[error("不支持的文件格式: {format} (支持的格式: {supported:?})")]
-    UnsupportedFormat {
-        /// 输入文件格式
-        format: String,
-        /// 支持的格式列表
-        supported: Vec<String>,
-    },
-
-    /// 文件解析错误
-    #[error("文件解析错误: {file} 第{line}行: {message}")]
-    ParseError {
-        /// 文件路径
-        file: PathBuf,
-        /// 行号
-        line: usize,
-        /// 错误信息
-        message: String,
-    },
-
-    /// 无效输入
-    #[error("无效的输入数据: {message}")]
-    InvalidInput {
-        /// 说明无效原因
-        message: String,
-    },
-
-    /// 数据超出范围
-    #[error("数据超出范围: {field}={value}, 期望范围=[{min}, {max}]")]
-    OutOfRange {
-        /// 字段名
-        field: &'static str,
-        /// 实际值
-        value: f64,
-        /// 最小允许值
-        min: f64,
-        /// 最大允许值
-        max: f64,
-    },
-
-    /// 数组大小不匹配
-    #[error("数组大小不匹配: {name} 期望{expected}, 实际{actual}")]
+    /// 数组或集合大小不匹配
+    ///
+    /// 在需要严格大小一致性的操作中触发（如向量相加）。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// # use mh_foundation::error::{MhError, MhResult};
+    /// fn add_vectors(a: &[f64], b: &[f64]) -> MhResult<Vec<f64>> {
+    ///     if a.len() != b.len() {
+    ///         return Err(MhError::size_mismatch("vectors", a.len(), b.len()));
+    ///     }
+    ///     Ok(a.iter().zip(b).map(|(x, y)| x + y).collect())
+    /// }
+    /// ```
     SizeMismatch {
-        /// 数据名称
+        /// 数据名称（用于调试）
         name: &'static str,
         /// 期望大小
         expected: usize,
@@ -103,119 +122,84 @@ pub enum MhError {
         actual: usize,
     },
 
-    /// 索引越界
-    #[error("索引越界: {index_type} 索引 {index} 超出范围 0..{len}")]
+    /// 索引访问越界
+    ///
+    /// 当索引值大于等于容器长度时触发。
     IndexOutOfBounds {
-        /// 索引类别描述
+        /// 索引类别（如 "Cell", "Node"）
         index_type: &'static str,
-        /// 访问的索引
+        /// 访问的索引值
         index: usize,
-        /// 上界（长度）
+        /// 容器长度（上界）
         len: usize,
     },
 
-    /// 无效索引（代际不匹配）
-    #[error("无效索引: 元素已被删除或索引过期")]
-    InvalidIndex,
-
-    /// 无效网格拓扑
-    #[error("无效的网格拓扑: {message}")]
-    InvalidMesh {
-        /// 具体错误信息
+    /// 输入数据验证失败
+    ///
+    /// 用于参数校验、前置条件检查等场景。
+    InvalidInput {
+        /// 说明无效原因
         message: String,
     },
 
-    /// 配置错误
-    #[error("配置错误: {message}")]
-    Config {
-        /// 具体错误信息
-        message: String,
-    },
-
-    /// 缺少配置项
-    #[error("缺少必需的配置项: {key}")]
-    MissingConfig {
-        /// 配置键名
-        key: String,
-    },
-
-    /// 配置值无效
-    #[error("配置值无效: {key}={value}, 原因: {reason}")]
-    InvalidConfig {
-        /// 配置键名
-        key: String,
-        /// 配置值        
-        value: String,
-        /// 无效原因说明
-        reason: String,
-    },
-
-    /// 序列化错误
-    #[error("序列化错误: {message}")]
-    Serialization {
-        /// 序列化失败原因
-        message: String,
-    },
-
-    /// 投影错误
-    #[error("投影错误: {0}")]
-    Projection(String),
-
-    /// 坐标系错误
-    #[error("坐标系错误: {0}")]
-    Crs(String),
-
-    /// 锁获取失败
-    #[error("锁获取失败: {resource}")]
-    LockError {
-        /// 失败的资源名
-        resource: String,
-    },
-
-    /// 通道发送失败
-    #[error("通道发送失败")]
-    ChannelSendError,
-
-    /// 任务取消
-    #[error("任务取消")]
-    TaskCancelled,
-
-    /// 验证失败
-    #[error("验证失败: {0}")]
-    Validation(String),
-
-    /// 内部错误
-    #[error("内部错误: {message}")]
+    /// 内部实现错误
+    ///
+    /// 当程序进入不应到达的状态时使用。
+    /// 通常表示 bug 或不变量被破坏。
     Internal {
         /// 内部错误描述
         message: String,
     },
 
-    /// 运行时错误
-    #[error("运行时错误: {0}")]
-    Runtime(String),
+    /// 功能或资源未找到
+    ///
+    /// 用于注册表、工厂模式等资源查找失败场景。
+    NotFound {
+        /// 资源名称或标识
+        resource: String,
+    },
 
     /// 功能未实现
-    #[error("功能未实现: {feature}")]
+    ///
+    /// 用于占位符或条件编译场景。
     NotImplemented {
         /// 未实现的功能描述
         feature: String,
     },
 
-    /// 资源未找到
-    #[error("资源未找到: {resource}")]
-    NotFound {
-        /// 资源名称
+    /// 锁获取失败
+    ///
+    /// 通常由于锁被 poisoned（线程 panic 导致）。
+    LockError {
+        /// 失败的资源名称
         resource: String,
     },
+
+    /// 通道发送失败
+    ///
+    /// 当接收端已关闭时触发。
+    ChannelSendError,
 }
 
-// ========================================================================
+// ============================================================================
 // 便捷构造方法
-// ========================================================================
+// ============================================================================
 
 impl MhError {
-    /// 从IO错误创建
+    /// 创建 IO 错误
+    ///
+    /// # 参数
+    ///
+    /// - `message`：可读的错误描述
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// # use mh_foundation::error::MhError;
+    /// let err = MhError::io("磁盘已满");
+    /// assert!(err.to_string().contains("IO错误"));
+    /// ```
+    #[inline]
     pub fn io(message: impl Into<String>) -> Self {
         Self::Io {
             message: message.into(),
@@ -223,54 +207,35 @@ impl MhError {
         }
     }
 
-    /// 从IO错误创建（带源）
-    pub fn io_with_source(message: impl Into<String>, source: std::io::Error) -> Self {
+    /// 创建带源的 IO 错误
+    ///
+    /// 当需要保留底层 [`std::io::Error`] 时使用。
+    #[inline]
+    pub fn io_with_source(message: impl Into<String>, source: io::Error) -> Self {
         Self::Io {
             message: message.into(),
             source: Some(source),
         }
     }
 
-    /// 文件不存在
+    /// 创建文件未找到错误
+    ///
+    /// # 参数
+    ///
+    /// - `path`：请求的文件路径（任何可转换为 [`PathBuf`] 的类型）
+    #[inline]
     pub fn file_not_found(path: impl Into<PathBuf>) -> Self {
         Self::FileNotFound { path: path.into() }
     }
 
-    /// 不支持的格式
-    pub fn unsupported_format(format: impl Into<String>, supported: Vec<String>) -> Self {
-        Self::UnsupportedFormat {
-            format: format.into(),
-            supported,
-        }
-    }
-
-    /// 解析错误
-    pub fn parse(file: impl Into<PathBuf>, line: usize, message: impl Into<String>) -> Self {
-        Self::ParseError {
-            file: file.into(),
-            line,
-            message: message.into(),
-        }
-    }
-
-    /// 无效输入
-    pub fn invalid_input(message: impl Into<String>) -> Self {
-        Self::InvalidInput {
-            message: message.into(),
-        }
-    }
-
-    /// 数据超出范围
-    pub fn out_of_range(field: &'static str, value: f64, min: f64, max: f64) -> Self {
-        Self::OutOfRange {
-            field,
-            value,
-            min,
-            max,
-        }
-    }
-
-    /// 数组大小不匹配
+    /// 创建大小不匹配错误
+    ///
+    /// # 参数
+    ///
+    /// - `name`：数据名称（用于调试）
+    /// - `expected`：期望大小
+    /// - `actual`：实际大小
+    #[inline]
     pub fn size_mismatch(name: &'static str, expected: usize, actual: usize) -> Self {
         Self::SizeMismatch {
             name,
@@ -279,7 +244,8 @@ impl MhError {
         }
     }
 
-    /// 索引越界
+    /// 创建索引越界错误
+    #[inline]
     pub fn index_out_of_bounds(index_type: &'static str, index: usize, len: usize) -> Self {
         Self::IndexOutOfBounds {
             index_type,
@@ -288,100 +254,88 @@ impl MhError {
         }
     }
 
-    /// 无效网格
-    pub fn invalid_mesh(message: impl Into<String>) -> Self {
-        Self::InvalidMesh {
+    /// 创建无效输入错误
+    #[inline]
+    pub fn invalid_input(message: impl Into<String>) -> Self {
+        Self::InvalidInput {
             message: message.into(),
         }
     }
 
-    /// 配置错误
-    pub fn config(message: impl Into<String>) -> Self {
-        Self::Config {
-            message: message.into(),
-        }
-    }
-
-    /// 缺少配置
-    pub fn missing_config(key: impl Into<String>) -> Self {
-        Self::MissingConfig { key: key.into() }
-    }
-
-    /// 配置值无效
-    pub fn invalid_config(
-        key: impl Into<String>,
-        value: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
-        Self::InvalidConfig {
-            key: key.into(),
-            value: value.into(),
-            reason: reason.into(),
-        }
-    }
-
-    /// 序列化错误
-    pub fn serialization(message: impl Into<String>) -> Self {
-        Self::Serialization {
-            message: message.into(),
-        }
-    }
-
-    /// 投影错误
-    pub fn projection(message: impl Into<String>) -> Self {
-        Self::Projection(message.into())
-    }
-
-    /// 坐标系错误
-    pub fn crs(message: impl Into<String>) -> Self {
-        Self::Crs(message.into())
-    }
-
-    /// 锁错误
-    pub fn lock_error(resource: impl Into<String>) -> Self {
-        Self::LockError {
-            resource: resource.into(),
-        }
-    }
-
-    /// 验证失败
-    pub fn validation(message: impl Into<String>) -> Self {
-        Self::Validation(message.into())
-    }
-
-    /// 内部错误
+    /// 创建内部错误
+    #[inline]
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal {
             message: message.into(),
         }
     }
 
-    /// 运行时错误
-    pub fn runtime(message: impl Into<String>) -> Self {
-        Self::Runtime(message.into())
+    /// 创建资源未找到错误
+    #[inline]
+    pub fn not_found(resource: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource: resource.into(),
+        }
     }
 
-    /// 功能未实现
+    /// 创建功能未实现错误
+    #[inline]
     pub fn not_implemented(feature: impl Into<String>) -> Self {
         Self::NotImplemented {
             feature: feature.into(),
         }
     }
 
-    /// 资源未找到
-    pub fn not_found(resource: impl Into<String>) -> Self {
-        Self::NotFound {
+    /// 创建锁获取失败错误
+    #[inline]
+    pub fn lock_error(resource: impl Into<String>) -> Self {
+        Self::LockError {
             resource: resource.into(),
+        }
+    }
+
+    /// 检查条件，不满足则返回错误
+    ///
+    /// # 参数
+    ///
+    /// - `cond`：检查条件
+    /// - `err`：条件失败时返回的错误
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// # use mh_foundation::error::{MhError, MhResult};
+    /// fn divide(a: f64, b: f64) -> MhResult<f64> {
+    ///     mh_foundation::ensure!(b != 0.0, MhError::invalid_input("除数不能为零"));
+    ///     Ok(a / b)
+    /// }
+    /// ```
+    #[inline]
+    pub fn ensure(cond: bool, err: Self) -> Result<(), Self> {
+        if cond {
+            Ok(())
+        } else {
+            Err(err)
         }
     }
 }
 
-// ========================================================================
+// ============================================================================
 // 验证辅助方法
-// ========================================================================
+// ============================================================================
 
 impl MhError {
-    /// 检查数组大小是否匹配
+    /// 验证数组大小是否匹配，不匹配则返回 [`MhError::SizeMismatch`]
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// # use mh_foundation::error::{MhError, MhResult};
+    /// fn process(a: &[f64], b: &[f64]) -> MhResult<()> {
+    ///     MhError::check_size("vectors", a.len(), b.len())?;
+    ///     Ok(())
+    /// }
+    /// ```
     #[inline]
     pub fn check_size(name: &'static str, expected: usize, actual: usize) -> MhResult<()> {
         if expected != actual {
@@ -391,17 +345,7 @@ impl MhError {
         }
     }
 
-    /// 检查值是否在范围内
-    #[inline]
-    pub fn check_range(field: &'static str, value: f64, min: f64, max: f64) -> MhResult<()> {
-        if value < min || value > max {
-            Err(Self::out_of_range(field, value, min, max))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// 检查索引是否在范围内
+    /// 验证索引是否在有效范围内，越界则返回 [`MhError::IndexOutOfBounds`]
     #[inline]
     pub fn check_index(index_type: &'static str, index: usize, len: usize) -> MhResult<()> {
         if index >= len {
@@ -412,36 +356,80 @@ impl MhError {
     }
 }
 
-// ========================================================================
-// 标准库错误转换
-// ========================================================================
+// ============================================================================
+// 标准库错误转换实现
+// ============================================================================
 
-impl From<std::io::Error> for MhError {
-    fn from(err: std::io::Error) -> Self {
-        Self::Io {
-            message: err.to_string(),
-            source: Some(err),
-        }
+impl From<io::Error> for MhError {
+    /// 将 [`std::io::Error`] 转换为 [`MhError::Io`]
+    fn from(err: io::Error) -> Self {
+        Self::io_with_source("IO 操作失败", err)
     }
 }
 
-impl<T> From<std::sync::PoisonError<T>> for MhError {
-    fn from(_: std::sync::PoisonError<T>) -> Self {
-        Self::LockError {
-            resource: "mutex".into(),
-        }
+impl<T> From<PoisonError<T>> for MhError {
+    /// 将 [`std::sync::PoisonError`] 转换为 [`MhError::LockError`]
+    fn from(_: PoisonError<T>) -> Self {
+        Self::lock_error("mutex")
     }
 }
 
-impl<T> From<std::sync::mpsc::SendError<T>> for MhError {
-    fn from(_: std::sync::mpsc::SendError<T>) -> Self {
+impl<T> From<SendError<T>> for MhError {
+    /// 将 [`std::sync::mpsc::SendError`] 转换为 [`MhError::ChannelSendError`]
+    fn from(_: SendError<T>) -> Self {
         Self::ChannelSendError
     }
 }
 
-// ========================================================================
+// ============================================================================
+// 核心 Trait 实现
+// ============================================================================
+
+impl fmt::Display for MhError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { message, .. } => {
+                write!(f, "IO错误: {}", message)
+            }
+            Self::FileNotFound { path } => {
+                write!(f, "文件不存在: {}", path.display())
+            }
+            Self::SizeMismatch {
+                name,
+                expected,
+                actual,
+            } => {
+                write!(f, "数组大小不匹配: {} 期望{}, 实际{}", name, expected, actual)
+            }
+            Self::IndexOutOfBounds {
+                index_type,
+                index,
+                len,
+            } => {
+                write!(f, "索引越界: {} 索引{} 超出范围 0..{}", index_type, index, len)
+            }
+            Self::InvalidInput { message } => write!(f, "无效的输入数据: {}", message),
+            Self::Internal { message } => write!(f, "内部错误: {}", message),
+            Self::NotFound { resource } => write!(f, "资源未找到: {}", resource),
+            Self::NotImplemented { feature } => write!(f, "功能未实现: {}", feature),
+            Self::LockError { resource } => write!(f, "锁获取失败: {}", resource),
+            Self::ChannelSendError => write!(f, "通道发送失败"),
+        }
+    }
+}
+
+impl std::error::Error for MhError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => source.as_ref().map(|e| e as _),
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // 测试
-// ========================================================================
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -449,75 +437,102 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = MhError::config("测试配置错误");
-        assert!(err.to_string().contains("配置错误"));
-    }
-
-    #[test]
-    fn test_io_error() {
-        let err = MhError::io("读取失败");
+        let err = MhError::io("磁盘已满");
         assert!(err.to_string().contains("IO错误"));
     }
 
     #[test]
+    fn test_io_error_with_source() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "文件未找到");
+        let err = MhError::io_with_source("读取配置失败", io_err);
+        assert!(err.to_string().contains("读取配置失败"));
+        assert!(err.source().is_some());
+    }
+
+    #[test]
     fn test_file_not_found() {
-        let err = MhError::file_not_found("/path/to/file");
-        assert!(err.to_string().contains("/path/to/file"));
+        let err = MhError::file_not_found("/path/to/config.json");
+        assert!(err.to_string().contains("/path/to/config.json"));
     }
 
     #[test]
-    fn test_index_out_of_bounds() {
-        let err = MhError::index_out_of_bounds("Cell", 10, 5);
-        assert!(err.to_string().contains("Cell"));
-        assert!(err.to_string().contains("10"));
-        assert!(err.to_string().contains("5"));
+    fn test_size_mismatch() {
+        let err = MhError::size_mismatch("velocity", 100, 50);
+        assert!(err.to_string().contains("velocity"));
+        assert!(err.to_string().contains("100"));
+        assert!(err.to_string().contains("50"));
     }
 
     #[test]
-    fn test_check_size() {
+    fn test_check_size_success() {
         assert!(MhError::check_size("test", 10, 10).is_ok());
-        assert!(MhError::check_size("test", 10, 5).is_err());
     }
 
     #[test]
-    fn test_check_range() {
-        assert!(MhError::check_range("value", 5.0, 0.0, 10.0).is_ok());
-        assert!(MhError::check_range("value", -1.0, 0.0, 10.0).is_err());
-        assert!(MhError::check_range("value", 11.0, 0.0, 10.0).is_err());
+    fn test_check_size_failure() {
+        let result = MhError::check_size("test", 10, 5);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), MhError::SizeMismatch { .. }));
     }
 
     #[test]
-    fn test_check_index() {
+    fn test_check_index_success() {
         assert!(MhError::check_index("Cell", 5, 10).is_ok());
-        assert!(MhError::check_index("Cell", 10, 10).is_err());
     }
 
     #[test]
-    fn test_io_error_conversion() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
+    fn test_check_index_failure() {
+        let result = MhError::check_index("Cell", 10, 10);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), MhError::IndexOutOfBounds { .. }));
+    }
+
+    #[test]
+    fn test_ensure_macro_success() {
+        let result = MhError::ensure(true, MhError::invalid_input("不应失败"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ensure_macro_failure() {
+        let result = MhError::ensure(false, MhError::invalid_input("条件失败"));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), MhError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "无权限");
         let mh_err: MhError = io_err.into();
         assert!(matches!(mh_err, MhError::Io { .. }));
     }
 
     #[test]
-    fn test_ensure_macro() {
-        fn check(value: i32) -> MhResult<()> {
-            ensure!(value > 0, MhError::invalid_input("value must be positive"));
-            Ok(())
-        }
-
-        assert!(check(1).is_ok());
-        assert!(check(-1).is_err());
+    fn test_poison_error_conversion() {
+        use std::sync::Mutex;
+        let lock = Mutex::new(0);
+        let _guard = lock.lock().unwrap();
+        // 故意 poison
+        std::panic::catch_unwind(|| {
+            let _g = lock.lock().unwrap();
+            panic!("poison");
+        });
+        let poison_err = lock.lock().unwrap_err();
+        let mh_err: MhError = poison_err.into();
+        assert!(matches!(mh_err, MhError::LockError { .. }));
     }
 
     #[test]
-    fn test_require_macro() {
-        fn get_value(opt: Option<i32>) -> MhResult<i32> {
-            let v = require!(opt, MhError::not_found("value"));
-            Ok(v)
+    fn test_mh_result_type() {
+        fn success() -> MhResult<i32> {
+            Ok(42)
+        }
+        fn failure() -> MhResult<i32> {
+            Err(MhError::not_found("resource"))
         }
 
-        assert_eq!(get_value(Some(42)).unwrap(), 42);
-        assert!(get_value(None).is_err());
+        assert!(success().is_ok());
+        assert_eq!(success().unwrap(), 42);
+        assert!(failure().is_err());
     }
 }

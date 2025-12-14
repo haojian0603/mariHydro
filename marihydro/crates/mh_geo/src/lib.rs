@@ -1,3 +1,4 @@
+// marihydro\crates\mh_geo\src\lib.rs
 //! `MariHydro` 地理空间处理模块
 //!
 //! 提供坐标参考系统 (CRS)、投影转换、空间索引等功能。

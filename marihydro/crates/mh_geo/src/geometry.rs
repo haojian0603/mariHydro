@@ -1,3 +1,4 @@
+// marihydro\crates\mh_geo\src\geometry.rs
 //! 几何类型定义
 //!
 //! 提供项目统一的几何类型，包括2D和3D点，以及地理距离计算。
