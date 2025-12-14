@@ -98,6 +98,13 @@ function Is-WhiteListLine($line) {
     return $false
 }
 
+# === 新增：检查是否为顶层项开头 ===
+function Is-TopLevelItemStart($line) {
+    $trimmed = $line.Trim()
+    # 匹配顶层项：fn, pub fn, struct, pub struct, enum, pub enum, impl, pub impl, trait, pub trait
+    return $trimmed -match '^(pub\s+)?(fn|struct|enum|impl|trait)\b'
+}
+
 $FoundIssues = 0
 $IssueDetails = @()
 
@@ -126,6 +133,7 @@ foreach ($dir in $ScanDirs) {
         $TestScopeStartLine = 0
         
         $InAllowF64Block = $false    # 是否在 // ALLOW_F64_BEGIN 块注释影响范围内
+        
         $InAllowF64LineScope = $false # 是否在 // ALLOW_F64: 行注释影响范围内
         $AllowF64StartLine = 0
         
@@ -217,13 +225,13 @@ foreach ($dir in $ScanDirs) {
                 
                 # 在 struct 块内，每行都应检查（用于检测字段类型）
                 if ($StructBraceDepth -gt 0) {
-                    # 如果离开 struct 块
-                    if ($StructBraceDepth -le 0) {
-                        $InStructBlock = $false
-                    }
-                    
-                    # 在 struct 块内，即使不在下一行，也要检查
-                    # 这将允许更灵活的字段定义
+                    # 修正：只要还在 struct 块内，就应该一直检查
+                    # 原逻辑在此处继续，而不是跳过
+                }
+                
+                # 如果离开 struct 块
+                if ($StructBraceDepth -le 0) {
+                    $InStructBlock = $false
                 }
             }
             
@@ -257,12 +265,26 @@ foreach ($dir in $ScanDirs) {
             # 如果是白名单行，跳过检测
             if (Is-WhiteListLine $TrimmedLine) { continue }
             
+            # 新增：检测顶层项，重置行注释作用域
+            if ($InAllowF64LineScope -and (Is-TopLevelItemStart $line)) {
+                # 如果遇到了新的顶层项，且已经在行注释作用域内，重置
+                if ($LineNum -gt $AllowF64StartLine + 1) {
+                    $InAllowF64LineScope = $false
+                }
+            }
+            
             # 匹配各种 f64 硬编码模式
             $Patterns = @(
                 ':\s*f64\b',           # 类型注解
                 'as\s+f64\b',          # 类型转换
                 '\[f64\b',             # 数组类型
-                'Vec<f64>'             # 泛型容器
+                'Vec<f64>',            # 泛型容器
+                '\(\s*f64\b',          # 元组类型开始
+                ',\s*f64\b',           # 元组类型中间
+                '->\s*f64\b',          # 返回类型
+                '->\s*\(\s*f64',       # 元组返回类型开始
+                '->\s*Vec<f64>',       # Vec返回类型
+                '->\s*\[f64'           # 数组返回类型
             )
             
             foreach ($pattern in $Patterns) {
@@ -322,8 +344,8 @@ if ($FoundIssues -eq 0) {
     $Report += "  1. Vec<f64> → B::Buffer<S> (Backend 泛型缓冲区)`n"
     $Report += "  2. Type: f64 → Type: S (RuntimeScalar)`n"
     $Report += "  3. as f64 → Scalar::from_f64() 或直接修改`n"
-    $Report += "  4. 在 Layer 3 中移除 // ALLOW_F64: 注释（配置层除外）`n"
-    $Report += "  5. 使用 // ALLOW_F64_BEGIN: 和 // ALLOW_F64_END: 进行块排除`n"
+    $Report += "  4. // ALLOW_F64: 注释对 struct 字段和函数参数列表跨行有效，直到下一个顶层项`n"
+    $Report += "  5. // ALLOW_F64_BEGIN/END: 用于包围代码块`n"
     $Report += "  6. where 子句中的 f64 属于 trait bound，已自动排除`n"
     $Report += "`n================================================================"
     
