@@ -6,11 +6,11 @@
 //!
 //! # 设计说明
 //!
-//! 由于 `DeviceBuffer` trait 定义在 `mh_core`，`AlignedVec` 定义在 `mh_foundation`，
+//! 由于 `DeviceBuffer` trait 定义在 `mh_runtime`，`AlignedVec` 定义在 `mh_foundation`，
 //! 两者都是"外部"类型，无法直接实现。通过 newtype 包装绕过限制。
 
 use bytemuck::Pod;
-use mh_core::buffer::DeviceBuffer;
+use mh_runtime::DeviceBuffer;
 use mh_foundation::memory::AlignedVec;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 

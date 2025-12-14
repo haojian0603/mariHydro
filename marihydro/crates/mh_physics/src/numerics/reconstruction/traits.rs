@@ -5,7 +5,7 @@
 //! 本模块提供泛型化的重构器接口，支持 f32/f64 精度切换。
 
 use glam::DVec2;
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 
 // ============================================================
 // 泛型重构状态
@@ -76,6 +76,7 @@ impl<S: RuntimeScalar> Default for ReconstructedStateGeneric<S> {
 /// 重构器 trait - 泛型版本
 ///
 /// 所有重构方案实现此 trait。
+#[allow(dead_code)]
 pub trait ReconstructorGeneric<S: RuntimeScalar>: Send + Sync {
     /// 计算所有单元的梯度
     fn compute_gradients(&mut self, values: &[S]);

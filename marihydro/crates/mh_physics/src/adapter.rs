@@ -29,7 +29,7 @@ use glam::DVec2;
 use mh_mesh::FrozenMesh;
 use std::sync::Arc;
 
-// 使用 types 模块中从 mh_core 导入的统一索引类型
+// 使用 types 模块中从 mh_runtime 导入的统一索引类型
 use crate::types::{INVALID_INDEX};
 
 /// 无效单元索引常量 (保留用于向后兼容)
@@ -393,7 +393,7 @@ impl PhysicsMesh {
 }
 
 // 注：CellIndex, FaceIndex, NodeIndex 现在从 crate::types 导入
-// 该模块从 mh_core 重新导出这些类型，确保整个项目使用统一定义
+// 该模块从 mh_runtime 重新导出这些类型，确保整个项目使用统一定义
 
 // ============================================================================
 // 测试
@@ -402,7 +402,7 @@ impl PhysicsMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_core::{CellIndex, FaceIndex, NodeIndex};
+    use mh_runtime::{CellIndex, FaceIndex, NodeIndex};
 
     #[test]
     fn test_cell_index() {

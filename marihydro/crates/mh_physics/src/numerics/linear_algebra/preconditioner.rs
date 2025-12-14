@@ -28,7 +28,7 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 
 /// é¢„æ¡ä»¶å™¨ trait
 ///

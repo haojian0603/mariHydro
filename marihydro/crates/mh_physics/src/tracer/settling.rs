@@ -1,7 +1,7 @@
 ﻿// crates/mh_physics/src/tracer/settling.rs
 
 use crate::core::{Backend, DeviceBuffer};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use num_traits::Float;
 
 /// 沉降求解器配置

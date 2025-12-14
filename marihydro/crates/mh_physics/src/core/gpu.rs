@@ -4,8 +4,8 @@
 //! 预留 CUDA 后端支持，当前仅提供接口定义。
 //! 实际 GPU 实现将在未来阶段完成。
 
-use mh_core::buffer::DeviceBuffer;
-use mh_core::Scalar;
+use mh_runtime::DeviceBuffer;
+use mh_runtime::RuntimeScalar as Scalar;
 use bytemuck::Pod;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};

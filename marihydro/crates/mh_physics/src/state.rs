@@ -1292,7 +1292,7 @@ mod tests {
 // ============================================================
 
 use crate::core::{Backend, CpuBackend, DeviceBuffer};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 
 /// 泛型浅水状态
 ///

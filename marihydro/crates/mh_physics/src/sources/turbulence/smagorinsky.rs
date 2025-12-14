@@ -43,7 +43,7 @@ use crate::sources::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterStateGeneric;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use std::marker::PhantomData;
 
 /// 湍流模型类型（完全泛型化）

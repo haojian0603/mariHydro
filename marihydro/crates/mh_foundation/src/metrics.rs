@@ -1,3 +1,4 @@
+// marihydro\crates\mh_foundation\src\metrics.rs
 //! 性能计数器和指标系统
 //!
 //! 提供轻量级的性能监控功能，用于识别热点和优化。

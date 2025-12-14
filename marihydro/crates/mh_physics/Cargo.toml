@@ -6,7 +6,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mh_core = { path = "../mh_core" }
+# 架构层级
+mh_runtime = { path = "../mh_runtime" }
+mh_config = { path = "../mh_config" }
 mh_foundation = { path = "../mh_foundation" }
 mh_mesh = { path = "../mh_mesh" }
 mh_geo = { path = "../mh_geo" }

@@ -121,7 +121,7 @@ impl<T, Tag> Arena<T, Tag> {
                         let new_generation = generation.wrapping_add(1);
                         self.slots[idx] = Slot::Occupied { value, generation: new_generation };
                         self.len += 1;
-                        Idx::new(free_idx, new_generation)
+                        Idx::new(free_idx)
                     }
                     Slot::Occupied { .. } => {
                         // 这不应该发生
@@ -135,12 +135,15 @@ impl<T, Tag> Arena<T, Tag> {
                 let generation = 1;
                 self.slots.push(Slot::Occupied { value, generation });
                 self.len += 1;
-                Idx::new(idx, generation)
+                Idx::new(idx)
             }
         }
     }
 
     /// 移除元素，返回被移除的值
+    ///
+    /// 注意：由于 `Idx<T>` 不再携带 generation 信息，
+    /// 无法检测悬垂引用。如需安全检查，请使用 `mh_runtime::SafeArena`。
     pub fn remove(&mut self, idx: Idx<Tag>) -> Option<T> {
         if !idx.is_valid() {
             return None;
@@ -152,12 +155,7 @@ impl<T, Tag> Arena<T, Tag> {
         }
 
         let current_generation = match &self.slots[slot_idx] {
-            Slot::Occupied { generation, .. } => {
-                if *generation != idx.generation() {
-                    return None;
-                }
-                *generation
-            }
+            Slot::Occupied { generation, .. } => *generation,
             Slot::Vacant { .. } => return None,
         };
 
@@ -181,6 +179,9 @@ impl<T, Tag> Arena<T, Tag> {
     }
 
     /// 获取元素的不可变引用
+    ///
+    /// 注意：由于 `Idx<T>` 不再携带 generation 信息，
+    /// 无法检测悬垂引用。如需安全检查，请使用 `mh_runtime::SafeArena`。
     #[inline]
     pub fn get(&self, idx: Idx<Tag>) -> Option<&T> {
         if !idx.is_valid() {
@@ -193,18 +194,15 @@ impl<T, Tag> Arena<T, Tag> {
         }
 
         match &self.slots[slot_idx] {
-            Slot::Occupied { value, generation } => {
-                if *generation == idx.generation() {
-                    Some(value)
-                } else {
-                    None
-                }
-            }
+            Slot::Occupied { value, generation: _ } => Some(value),
             Slot::Vacant { .. } => None,
         }
     }
 
     /// 获取元素的可变引用
+    ///
+    /// 注意：由于 `Idx<T>` 不再携带 generation 信息，
+    /// 无法检测悬垂引用。如需安全检查，请使用 `mh_runtime::SafeArena`。
     #[inline]
     pub fn get_mut(&mut self, idx: Idx<Tag>) -> Option<&mut T> {
         if !idx.is_valid() {
@@ -217,13 +215,7 @@ impl<T, Tag> Arena<T, Tag> {
         }
 
         match &mut self.slots[slot_idx] {
-            Slot::Occupied { value, generation } => {
-                if *generation == idx.generation() {
-                    Some(value)
-                } else {
-                    None
-                }
-            }
+            Slot::Occupied { value, generation: _ } => Some(value),
             Slot::Vacant { .. } => None,
         }
     }
@@ -326,9 +318,9 @@ impl<'a, T, Tag> Iterator for ArenaIter<'a, T, Tag> {
             let current_idx = self.index;
             self.index += 1;
 
-            if let Slot::Occupied { value, generation } = &self.slots[current_idx] {
+            if let Slot::Occupied { value, generation: _ } = &self.slots[current_idx] {
                 self.remaining -= 1;
-                return Some((Idx::new(current_idx as u32, *generation), value));
+                return Some((Idx::new(current_idx as u32), value));
             }
         }
         None
@@ -360,9 +352,9 @@ impl<'a, T, Tag> Iterator for ArenaIterMut<'a, T, Tag> {
             // SAFETY: 我们只访问每个元素一次
             let slot = unsafe { &mut *self.slots.as_mut_ptr().add(current_idx) };
 
-            if let Slot::Occupied { value, generation } = slot {
+            if let Slot::Occupied { value, generation: _ } = slot {
                 self.remaining -= 1;
-                return Some((Idx::new(current_idx as u32, *generation), value));
+                return Some((Idx::new(current_idx as u32), value));
             }
         }
         None
@@ -391,9 +383,9 @@ impl<T, Tag> Iterator for ArenaIndices<'_, T, Tag> {
             let current_idx = self.index;
             self.index += 1;
 
-            if let Slot::Occupied { generation, .. } = &self.slots[current_idx] {
+            if let Slot::Occupied { generation: _, .. } = &self.slots[current_idx] {
                 self.remaining -= 1;
-                return Some(Idx::new(current_idx as u32, *generation));
+                return Some(Idx::new(current_idx as u32));
             }
         }
         None
@@ -518,8 +510,10 @@ mod tests {
         let idx2 = arena.insert(2);
         assert_eq!(idx2.index(), idx1.index());
         
-        // 但旧索引不应有效
-        assert_eq!(arena.get(idx1), None);
+        // 注意：由于 Idx 不再携带 generation，
+        // idx1 和 idx2 现在指向相同的槽位，都能访问新值
+        // 如需悬垂引用检测，请使用 mh_runtime::SafeArena
+        assert_eq!(arena.get(idx1), Some(&2));
         assert_eq!(arena.get(idx2), Some(&2));
     }
 
@@ -634,7 +628,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generation_prevents_dangling() {
+    fn test_slot_reuse_without_generation() {
+        // 注意：由于 Idx<T> 不再携带 generation 信息，
+        // Arena 无法检测悬垂引用。
+        // 如需安全检查，请使用 mh_runtime::SafeArena。
         let mut arena: TestArena = Arena::new();
         let old_idx = arena.insert(42);
         arena.remove(old_idx);
@@ -642,10 +639,8 @@ mod tests {
         // 复用槽位
         let new_idx = arena.insert(100);
         
-        // 旧索引的代际不匹配，无法访问
-        assert!(arena.get(old_idx).is_none());
-        
-        // 新索引有效
+        // old_idx 和 new_idx 指向相同槽位，都能访问新值
+        assert_eq!(arena.get(old_idx), Some(&100));
         assert_eq!(arena.get(new_idx), Some(&100));
     }
 

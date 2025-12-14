@@ -4,7 +4,7 @@
 //!
 //! App层直接使用的配置类型，完全不包含泛型参数。
 
-use mh_core::Precision;
+use mh_config::Precision;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

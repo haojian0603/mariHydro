@@ -31,7 +31,7 @@
 //! - 干湿交界处
 //! - 需要无条件稳定的情况
 
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
 // Re-export for tests

@@ -1,0 +1,17 @@
+[package]
+name = "mh_runtime"
+version = "0.1.0"
+edition = "2021"
+authors = ["MariHydro Team"]
+description = "MariHydro Runtime Layer - Backend, Scalar, Buffer abstractions"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+mh_foundation = { path = "../mh_foundation" }
+bytemuck = { version = "1.14", features = ["derive"] }
+num-traits = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+
+[features]
+default = []
+layer-guard = []  # CI中启用，防止低层crate错误引用

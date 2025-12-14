@@ -9,7 +9,7 @@
 use super::{ExplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
 use crate::core::{Backend, CpuBackend};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
 

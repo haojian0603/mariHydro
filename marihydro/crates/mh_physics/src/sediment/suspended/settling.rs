@@ -18,7 +18,7 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use std::marker::PhantomData;
 
 /// 沉降速度公式 trait

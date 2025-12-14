@@ -3,8 +3,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/mh_core",
+    # Layer 1: Foundation (零依赖)
     "crates/mh_foundation",
+    # Layer 2: Runtime (依赖 Foundation)
+    "crates/mh_runtime",
+    # Layer 4: Config (依赖 Runtime)
+    "crates/mh_config",
+    # 功能模块
     "crates/mh_geo",
     "crates/mh_mesh",
     "crates/mh_terrain",

@@ -3,7 +3,7 @@
 //! 提供通量、残差、临时变量的统一管理。
 
 use crate::core::{Backend, DeviceBuffer};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 
 /// 泛型求解器工作区
 ///

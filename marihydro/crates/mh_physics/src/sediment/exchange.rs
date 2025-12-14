@@ -1,7 +1,7 @@
 ﻿// crates/mh_physics/src/sediment/exchange.rs
 
 use crate::core::{Backend, DeviceBuffer};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 
 /// 泥沙交换参数
 #[derive(Debug, Clone)]
@@ -162,6 +162,7 @@ impl<B: Backend> SedimentExchange<B> {
     }
     
     /// 计算侵蚀率（Partheniades公式）
+    #[allow(dead_code)]
     fn compute_erosion_rate(&self, tau: B::Scalar) -> B::Scalar {
         if tau > self.params.tau_critical {
             self.params.erosion_rate * (tau - self.params.tau_critical)
@@ -171,6 +172,7 @@ impl<B: Backend> SedimentExchange<B> {
     }
     
     /// 计算沉降率
+    #[allow(dead_code)]
     fn compute_deposition_rate(&self, concentration: B::Scalar) -> B::Scalar {
         self.params.settling_velocity * concentration
     }

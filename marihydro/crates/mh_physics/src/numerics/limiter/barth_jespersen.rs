@@ -30,7 +30,7 @@
 //! Barth, T.J. and Jespersen, D.C. (1989). "The design and application 
 //! of upwind schemes on unstructured meshes". AIAA Paper 89-0366.
 
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 use std::marker::PhantomData;
 
 use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};

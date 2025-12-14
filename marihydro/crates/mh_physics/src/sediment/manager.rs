@@ -14,7 +14,7 @@
 //! 3. **可扩展**: 支持多种泥沙粒径和分层
 
 use crate::core::{Backend, CpuBackend};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use crate::state::ShallowWaterStateGeneric;
 use std::marker::PhantomData;
 

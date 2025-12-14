@@ -41,7 +41,7 @@
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and 
 //! convergence to steady state solutions". AIAA Paper 93-0880.
 
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
 // Re-export for tests

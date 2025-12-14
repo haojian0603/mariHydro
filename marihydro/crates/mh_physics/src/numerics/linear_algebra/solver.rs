@@ -33,7 +33,7 @@
 use super::csr::CsrMatrix;
 use super::preconditioner::Preconditioner;
 use super::vector_ops::{axpy, copy, dot, norm2};
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

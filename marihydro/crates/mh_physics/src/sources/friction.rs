@@ -29,7 +29,7 @@ use super::traits::{
     SourceTermGeneric,
 };
 use crate::core::{Backend, CpuBackend};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 
 /// Manning 摩擦配置

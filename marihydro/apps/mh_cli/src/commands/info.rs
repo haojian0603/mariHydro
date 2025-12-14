@@ -84,13 +84,13 @@ fn print_default_config() {
     println!("最小水深: {} m", config.h_min);
     
     println!("\n容差设置 (f64):");
-    let tol = mh_core::Tolerance::<f64>::default();
+    let tol = mh_runtime::Tolerance::<f64>::default();
     println!("  h_min: {}", tol.h_min);
     println!("  h_dry: {}", tol.h_dry);
     println!("  velocity_cap: {}", tol.velocity_cap);
     
     println!("\n容差设置 (f32):");
-    let tol32 = mh_core::Tolerance::<f32>::default();
+    let tol32 = mh_runtime::Tolerance::<f32>::default();
     println!("  h_min: {}", tol32.h_min);
     println!("  h_dry: {}", tol32.h_dry);
     println!("  velocity_cap: {}", tol32.velocity_cap);

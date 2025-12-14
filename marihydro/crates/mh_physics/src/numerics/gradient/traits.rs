@@ -7,7 +7,7 @@
 //! 本模块提供泛型化的梯度存储和计算接口，支持 f32/f64 精度切换。
 
 use glam::DVec2;
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 
 // ============================================================
 // 泛型梯度存储

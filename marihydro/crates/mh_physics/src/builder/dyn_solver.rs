@@ -3,14 +3,28 @@
 //! 动态求解器trait
 //!
 //! 提供运行时多态的求解器接口，使App层可以无泛型地使用求解器。
+//!
+//! # 迁移说明
+//!
+//! 新代码应使用 `mh_config::DynSolver`，本模块保留用于向后兼容。
 
-use mh_core::Precision;
+use mh_config::Precision;
 use std::fmt;
+
+// 从 mh_config 重导出规范接口（供新代码使用）
+pub use mh_config::dyn_solver::DynSolver as ConfigDynSolver;
 
 /// 动态求解器trait（运行时多态）
 ///
 /// 所有具体求解器（如 `ShallowWaterSolver<CpuBackend<f32>>`）都自动实现此trait。
 /// App层通过 `Box<dyn DynSolver>` 使用求解器，无需关心底层精度。
+///
+/// # 迁移指南
+///
+/// 新代码建议使用 `mh_config::DynSolver`：
+/// ```ignore
+/// use mh_config::{DynSolver, SolverConfig};
+/// ```
 ///
 /// # 示例
 ///

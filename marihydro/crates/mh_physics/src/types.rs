@@ -3,7 +3,7 @@
 //! 物理计算核心类型定义
 //!
 //! 本模块提供物理求解器所需的类型定义，包括：
-//! - 类型安全索引 (从 mh_core 重新导出)
+//! - 类型安全索引 (从 mh_runtime 重新导出)
 //! - 安全包装类型 (SafeDepth, SafeVelocity)
 //! - 数值参数配置 (NumericalParams)
 //! - 物理常数 (PhysicalConstants)
@@ -15,14 +15,20 @@ use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
 // ============================================================
-// 类型安全索引 (从 mh_core 重新导出)
+// 类型安全索引 (从 mh_runtime 重新导出 - 新架构)
 // ============================================================
 
-// 重新导出 mh_core 中统一定义的索引类型
-pub use mh_core::{
+// 使用 mh_runtime 的索引类型
+pub use mh_runtime::{
     CellIndex, FaceIndex, NodeIndex, BoundaryIndex,
     INVALID_INDEX,
 };
+
+// VertexIndex 和 HalfEdgeIndex 的本地定义（已从 mh_core 迁移）
+/// 顶点索引类型
+pub type VertexIndex = u32;
+/// 半边索引类型
+pub type HalfEdgeIndex = u32;
 
 // ============================================================
 // 索引类型扩展 - 为物理引擎添加额外方法

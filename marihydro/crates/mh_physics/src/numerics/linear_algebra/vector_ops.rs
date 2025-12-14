@@ -29,7 +29,7 @@
 //! axpy(2.0, &x, &mut y);  // y = [6, 9, 12]
 //! ```
 
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 
 /// 点积 x·y
 ///

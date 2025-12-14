@@ -5,7 +5,7 @@
 //! 定义源项的核心接口和数据结构。
 
 use crate::core::{Backend, CpuBackend};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 use crate::types::NumericalParams;
 use std::marker::PhantomData;

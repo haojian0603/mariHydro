@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
-use mh_core::Precision;
+use mh_config::Precision;
 use mh_physics::builder::{SolverBuilder, SolverConfig};
 use std::path::PathBuf;
 use std::time::Instant;

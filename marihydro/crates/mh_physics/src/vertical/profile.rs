@@ -3,7 +3,7 @@
 //! 从2D深度平均状态恢复垂向速度剖面。
 
 use crate::core::{Backend, DeviceBuffer, CpuBackend};
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use crate::state::ShallowWaterStateGeneric;
 use crate::vertical::sigma::SigmaCoordinate;
 

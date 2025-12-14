@@ -39,7 +39,7 @@
 //! matrix.mul_vec(&x, &mut y);
 //! ```
 
-use mh_core::RuntimeScalar;
+use mh_runtime::RuntimeScalar;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 

@@ -4,7 +4,7 @@
 //!
 //! 定义湍流模型的公共接口，为不同湍流闭合提供统一抽象。
 
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 
 /// 速度梯度张量（完全泛型化）
 ///

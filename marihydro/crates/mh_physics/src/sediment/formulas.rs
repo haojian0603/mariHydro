@@ -29,7 +29,7 @@
 
 use super::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 

@@ -6,7 +6,8 @@
 
 use super::config::{ConfigError, SolverConfig};
 use super::dyn_solver::{DynSolver, DynState, DynStepResult, SolverStats};
-use mh_core::{Precision, Scalar, Tolerance};
+use mh_config::Precision;
+use mh_runtime::{RuntimeScalar as Scalar, Tolerance};
 use std::time::Instant;
 
 /// 构建错误

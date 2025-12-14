@@ -30,7 +30,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use bytemuck::Pod;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};

@@ -10,7 +10,7 @@
 //! # 使用示例
 //!
 //! ```rust
-//! use mh_core::Scalar;
+//! use mh_runtime::RuntimeScalar as Scalar;
 //! use mh_physics::tracer::boundary::{
 //!     TracerBoundaryManager, TracerBoundaryCondition, TracerBoundaryType
 //! };
@@ -38,7 +38,7 @@
 
 use crate::forcing::timeseries::TimeSeries;
 use crate::types::BoundaryValueProvider;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

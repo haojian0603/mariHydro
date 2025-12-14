@@ -3,7 +3,7 @@
 //! 提供结构化和非结构化网格的统一接口。
 
 use crate::core::Backend;
-use mh_core::Scalar;
+use mh_runtime::RuntimeScalar as Scalar;
 
 /// 网格类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

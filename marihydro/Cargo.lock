@@ -546,9 +546,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "mh_core",
+ "mh_config",
  "mh_io",
  "mh_physics",
+ "mh_runtime",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -557,13 +558,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "mh_core"
+name = "mh_config"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
- "num-traits",
+ "mh_runtime",
  "serde",
  "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -635,10 +636,11 @@ dependencies = [
  "bytemuck",
  "glam",
  "log",
- "mh_core",
+ "mh_config",
  "mh_foundation",
  "mh_geo",
  "mh_mesh",
+ "mh_runtime",
  "ndarray 0.16.1",
  "num-traits",
  "rand",
@@ -647,6 +649,16 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mh_runtime"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "mh_foundation",
+ "num-traits",
+ "serde",
 ]
 
 [[package]]

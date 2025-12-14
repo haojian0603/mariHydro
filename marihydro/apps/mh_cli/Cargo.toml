@@ -8,8 +8,10 @@ description = "MariHydro Command Line Interface"
 authors = ["MariHydro Team"]
 
 [dependencies]
+# 架构层级
+mh_runtime = { path = "../../crates/mh_runtime" }
+mh_config = { path = "../../crates/mh_config" }
 # 核心库
-mh_core = { path = "../../crates/mh_core" }
 mh_physics = { path = "../../crates/mh_physics" }
 mh_io = { path = "../../crates/mh_io" }
 

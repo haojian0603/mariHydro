@@ -55,7 +55,6 @@ impl Dimension for D2 {
     
     fn name() -> &'static str { "2D" }
 }
-
 /// 3D 维度标记（编译期指定层数）
 /// 
 /// 用于三维分层模拟，层数在编译期确定。

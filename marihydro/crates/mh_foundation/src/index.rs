@@ -2,24 +2,27 @@
 
 //! 强类型索引系统
 //!
-//! 使用泛型 `Idx<T>` 实现带代际验证的类型安全索引。
+//! 使用泛型 `Idx<T>` 实现类型安全的轻量级索引。
 //!
 //! # 设计目标
 //!
 //! 1. **类型安全**: 编译期区分不同类型的索引（Cell/Face/Node等）
-//! 2. **零开销**: 在release模式下与 usize 完全相同的性能
-//! 3. **悬垂检测**: 通过代际(generation)检测已删除元素的访问
-//! 4. **简洁API**: 提供类型别名和便捷方法
+//! 2. **零开销**: 与 u32 完全相同的内存布局和性能
+//! 3. **简洁API**: 提供类型别名和便捷方法
+//!
+//! # 注意
+//!
+//! 此模块的 `Idx<T>` 是**无代际验证**的轻量级索引。
+//! 如需悬垂引用检测，请使用 `mh_runtime::SafeIdx`。
 //!
 //! # 示例
 //!
 //! ```
 //! use mh_foundation::index::{Idx, CellIndex, FaceIndex};
 //!
-//! let cell_idx = CellIndex::new(0, 1);
+//! let cell_idx = CellIndex::new(0);
 //! assert!(cell_idx.is_valid());
 //! assert_eq!(cell_idx.index(), 0);
-//! assert_eq!(cell_idx.generation(), 1);
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +34,7 @@ use std::marker::PhantomData;
 pub const INVALID_INDEX: u32 = u32::MAX;
 
 /// 无效代际标记
+#[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
 pub const INVALID_GENERATION: u32 = 0;
 
 // ============================================================================
@@ -65,23 +69,23 @@ pub struct BoundaryTag;
 // 泛型索引类型
 // ============================================================================
 
-/// 带代际验证的泛型索引
+/// 轻量级泛型索引（4 字节）
 ///
 /// 使用 Phantom Type `T` 区分不同类型的索引，避免误用。
-/// `generation` 字段用于检测悬垂引用。
 ///
 /// # 内存布局
 ///
-/// 使用两个 u32 字段，总共 8 字节：
-/// - `index`: 实际索引值 (0 到 2^32-2)
-/// - `generation`: 代际号 (1 起始，0 表示无效)
+/// 与 u32 完全相同的内存布局（4 字节）。
+/// 使用 `#[repr(transparent)]` 保证零开销抽象。
+///
+/// # 注意
+///
+/// 此类型不带代际验证。如需悬垂引用检测，请使用 `mh_runtime::SafeIdx`。
 #[derive(Serialize, Deserialize)]
-#[repr(C)]
+#[repr(transparent)]
 pub struct Idx<T> {
     /// 索引值
     index: u32,
-    /// 代际号 (用于检测悬垂引用)
-    generation: u32,
     /// 类型标记
     #[serde(skip)]
     _marker: PhantomData<fn() -> T>,
@@ -100,7 +104,6 @@ impl<T> Idx<T> {
     /// 无效索引常量
     pub const INVALID: Self = Self {
         index: INVALID_INDEX,
-        generation: INVALID_GENERATION,
         _marker: PhantomData,
     };
 
@@ -108,26 +111,33 @@ impl<T> Idx<T> {
     ///
     /// # 参数
     /// - `index`: 索引值
-    /// - `generation`: 代际号 (应 >= 1)
     #[inline]
-    pub const fn new(index: u32, generation: u32) -> Self {
+    pub const fn new(index: u32) -> Self {
         Self {
             index,
-            generation,
             _marker: PhantomData,
         }
     }
 
-    /// 从 usize 创建（代际默认为1）
+    /// 兼容旧 API：创建带 generation 参数的索引
+    ///
+    /// generation 参数会被忽略。
+    #[deprecated(note = "Use Idx::new(index) instead. Generation moved to mh_runtime::SafeIdx")]
     #[inline]
-    pub fn from_usize(index: usize) -> Self {
-        Self::new(index as u32, 1)
+    pub const fn new_with_generation(index: u32, _generation: u32) -> Self {
+        Self::new(index)
     }
 
-    /// 仅用于索引位置已知有效的情况，不带代际检查
+    /// 从 usize 创建
+    #[inline]
+    pub fn from_usize(index: usize) -> Self {
+        Self::new(index as u32)
+    }
+
+    /// 从原始 u32 创建
     #[inline]
     pub const fn from_raw(index: u32) -> Self {
-        Self::new(index, 1)
+        Self::new(index)
     }
 
     /// 获取索引值
@@ -142,35 +152,37 @@ impl<T> Idx<T> {
         self.index as usize
     }
 
-    /// 获取代际号
+    /// 获取代际号（兼容旧 API，始终返回 1）
+    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
     #[inline]
     pub const fn generation(self) -> u32 {
-        self.generation
+        1
     }
 
     /// 判断索引是否有效
     #[inline]
     pub const fn is_valid(self) -> bool {
-        self.index != INVALID_INDEX && self.generation != INVALID_GENERATION
+        self.index != INVALID_INDEX
     }
 
     /// 判断索引是否无效
     #[inline]
     pub const fn is_invalid(self) -> bool {
-        !self.is_valid()
+        self.index == INVALID_INDEX
     }
 
-    /// 创建下一代索引（用于重用slot）
+    /// 创建下一代索引（兼容旧 API，返回自身）
+    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
     #[inline]
     pub fn next_generation(self) -> Self {
-        let next_gen = self.generation.wrapping_add(1);
-        Self::new(self.index, if next_gen == 0 { 1 } else { next_gen })
+        self
     }
 
-    /// 检查代际是否匹配
+    /// 检查代际是否匹配（兼容旧 API，始终返回 true）
+    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
     #[inline]
-    pub const fn matches_generation(self, generation: u32) -> bool {
-        self.generation == generation
+    pub const fn matches_generation(self, _generation: u32) -> bool {
+        true
     }
 
     /// 转换为 `Option<usize>`
@@ -196,7 +208,7 @@ impl<T> Default for Idx<T> {
 
 impl<T> PartialEq for Idx<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.generation == other.generation
+        self.index == other.index
     }
 }
 
@@ -210,24 +222,20 @@ impl<T> PartialOrd for Idx<T> {
 
 impl<T> Ord for Idx<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.generation.cmp(&other.generation) {
-            std::cmp::Ordering::Equal => self.index.cmp(&other.index),
-            other => other,
-        }
+        self.index.cmp(&other.index)
     }
 }
 
 impl<T> Hash for Idx<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.index.hash(state);
-        self.generation.hash(state);
     }
 }
 
 impl<T> fmt::Debug for Idx<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_valid() {
-            write!(f, "Idx({}@{})", self.index, self.generation)
+            write!(f, "Idx({})", self.index)
         } else {
             write!(f, "Idx(INVALID)")
         }
@@ -356,9 +364,8 @@ mod tests {
 
     #[test]
     fn test_idx_creation() {
-        let idx = CellIndex::new(10, 1);
+        let idx = CellIndex::new(10);
         assert_eq!(idx.index(), 10);
-        assert_eq!(idx.generation(), 1);
         assert!(idx.is_valid());
     }
 
@@ -373,32 +380,30 @@ mod tests {
     fn test_idx_from_usize() {
         let idx: CellIndex = 42usize.into();
         assert_eq!(idx.index(), 42);
-        assert_eq!(idx.generation(), 1);
+        assert!(idx.is_valid());
     }
 
     #[test]
     fn test_idx_to_usize() {
-        let idx = CellIndex::new(100, 2);
+        let idx = CellIndex::new(100);
         let val: usize = idx.into();
         assert_eq!(val, 100);
     }
 
     #[test]
     fn test_idx_equality() {
-        let a = CellIndex::new(1, 1);
-        let b = CellIndex::new(1, 1);
-        let c = CellIndex::new(1, 2);
-        let d = CellIndex::new(2, 1);
+        let a = CellIndex::new(1);
+        let b = CellIndex::new(1);
+        let c = CellIndex::new(2);
 
-        assert_eq!(a, b);
-        assert_ne!(a, c); // 不同代际
-        assert_ne!(a, d); // 不同索引
+        assert_eq!(a, b); // 相同索引
+        assert_ne!(a, c); // 不同索引
     }
 
     #[test]
     fn test_type_safety() {
-        let cell_idx = CellIndex::new(0, 1);
-        let face_idx = FaceIndex::new(0, 1);
+        let cell_idx = CellIndex::new(0);
+        let face_idx = FaceIndex::new(0);
         
         // 编译时类型检查：下面的代码如果取消注释会编译失败
         // let _: CellIndex = face_idx;
@@ -408,23 +413,16 @@ mod tests {
     }
 
     #[test]
-    fn test_next_generation() {
-        let idx = CellIndex::new(5, 1);
-        let next = idx.next_generation();
-        assert_eq!(next.index(), 5);
-        assert_eq!(next.generation(), 2);
-    }
-
-    #[test]
-    fn test_generation_match() {
-        let idx = CellIndex::new(5, 3);
-        assert!(idx.matches_generation(3));
-        assert!(!idx.matches_generation(2));
+    fn test_idx_size() {
+        // 确保 Idx<T> 与 u32 大小相同（4 字节）
+        assert_eq!(std::mem::size_of::<CellIndex>(), 4);
+        assert_eq!(std::mem::size_of::<FaceIndex>(), 4);
+        assert_eq!(std::mem::size_of::<NodeIndex>(), 4);
     }
 
     #[test]
     fn test_to_option() {
-        let valid = CellIndex::new(10, 1);
+        let valid = CellIndex::new(10);
         assert_eq!(valid.to_option(), Some(10));
 
         let invalid = CellIndex::INVALID;
@@ -433,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let valid = CellIndex::new(42, 1);
+        let valid = CellIndex::new(42);
         assert_eq!(format!("{}", valid), "42");
 
         let invalid = CellIndex::INVALID;
@@ -442,8 +440,8 @@ mod tests {
 
     #[test]
     fn test_debug() {
-        let valid = CellIndex::new(42, 3);
-        assert_eq!(format!("{:?}", valid), "Idx(42@3)");
+        let valid = CellIndex::new(42);
+        assert_eq!(format!("{:?}", valid), "Idx(42)");
 
         let invalid = CellIndex::INVALID;
         assert_eq!(format!("{:?}", invalid), "Idx(INVALID)");
@@ -451,12 +449,13 @@ mod tests {
 
     #[test]
     fn test_ordering() {
-        let a = CellIndex::new(1, 1);
-        let b = CellIndex::new(2, 1);
-        let c = CellIndex::new(1, 2);
+        let a = CellIndex::new(1);
+        let b = CellIndex::new(2);
+        let c = CellIndex::new(3);
 
-        assert!(a < b); // 同代际，比较索引
-        assert!(a < c); // 不同代际，先比较代际
+        assert!(a < b);
+        assert!(b < c);
+        assert!(a < c);
     }
 
     #[test]
@@ -479,20 +478,22 @@ mod tests {
         use std::collections::HashSet;
         
         let mut set = HashSet::new();
-        set.insert(CellIndex::new(1, 1));
-        set.insert(CellIndex::new(2, 1));
-        set.insert(CellIndex::new(1, 2));
+        set.insert(CellIndex::new(1));
+        set.insert(CellIndex::new(2));
+        set.insert(CellIndex::new(3));
         
         assert_eq!(set.len(), 3);
-        assert!(set.contains(&CellIndex::new(1, 1)));
+        assert!(set.contains(&CellIndex::new(1)));
+        assert!(set.contains(&CellIndex::new(2)));
     }
 
     #[test]
     fn test_serialization() {
-        let idx = CellIndex::new(42, 3);
+        let idx = CellIndex::new(42);
         let json = serde_json::to_string(&idx).unwrap();
         let deserialized: CellIndex = serde_json::from_str(&json).unwrap();
         assert_eq!(idx, deserialized);
+        assert_eq!(idx.index(), 42);
     }
 }
 

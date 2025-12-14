@@ -4,21 +4,21 @@
 //!
 //! # 模块结构
 //!
-//! - [`buffer`]: AlignedVec 的 DeviceBuffer 实现（扩展 mh_core）
+//! - [`buffer`]: AlignedVec 的 DeviceBuffer 实现（扩展 mh_runtime）
 //! - [`dimension`]: 维度标记 (2D/3D)
 //! - [`kernel`]: GPU Kernel 接口规范
 //! - [`gpu`]: GPU 后端占位符
 //!
 //! # 设计原则
 //!
-//! 所有核心抽象（Backend, DeviceBuffer, RuntimeScalar）统一定义在 mh_core，
+//! 所有核心抽象（Backend, DeviceBuffer, RuntimeScalar）统一定义在 mh_runtime，
 //! 本模块仅提供维度标记、GPU扩展、AlignedVec支持等 physics 层专用类型。
 //!
 //! # 使用示例
 //!
 //! ```ignore
 //! use mh_physics::core::{Backend, CpuBackend};
-//! use mh_core::Scalar;
+//! use mh_runtime::RuntimeScalar as Scalar;
 //!
 //! // 创建 f64 精度的 CPU 后端实例
 //! let backend = CpuBackend::<f64>::new();
@@ -36,9 +36,12 @@ pub mod dimension;
 pub mod kernel;
 pub mod gpu;
 
-// 从 mh_core 重导出核心抽象（Single Source of Truth）
-pub use mh_core::buffer::DeviceBuffer;
-pub use mh_core::backend::{Backend, CpuBackend, MemoryLocation, DefaultBackend};
+// 从 mh_runtime 重导出核心抽象（Single Source of Truth）
+pub use mh_runtime::DeviceBuffer;
+pub use mh_runtime::{Backend, CpuBackend, MemoryLocation};
+
+// DefaultBackend 需要单独定义
+pub type DefaultBackend = CpuBackend<f64>;
 
 // AlignedBuffer - AlignedVec 的 DeviceBuffer 适配器
 pub use buffer::AlignedBuffer;
