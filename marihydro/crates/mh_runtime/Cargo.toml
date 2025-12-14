@@ -7,6 +7,7 @@ description = "MariHydro Runtime Layer - Backend, Scalar, Buffer abstractions"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+thiserror = "2.0"
 mh_foundation = { path = "../mh_foundation" }
 bytemuck = { version = "1.14", features = ["derive"] }
 num-traits = "0.2"

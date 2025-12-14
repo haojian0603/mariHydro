@@ -659,6 +659,7 @@ dependencies = [
  "mh_foundation",
  "num-traits",
  "serde",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

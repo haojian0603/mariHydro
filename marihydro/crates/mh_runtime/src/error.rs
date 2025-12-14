@@ -2,73 +2,104 @@
 
 //! 运行时错误类型
 //!
-//! 定义 Runtime 层的错误类型，包括计算错误、缓冲区错误等。
+//! 包含数值计算、索引验证、Backend 操作等运行时相关的错误。
+//! 与 Foundation 层的 MhError 不同，此错误类型面向 Layer 3 引擎层。
 
-use std::fmt;
-
-/// 运行时错误
-#[derive(Debug)]
-pub enum RuntimeError {
-    /// 索引越界
-    IndexOutOfBounds {
-        /// 索引类型名称
-        index_type: &'static str,
-        /// 索引值
-        index: usize,
-        /// 容量
-        len: usize,
-    },
-    /// 缓冲区大小不匹配
-    BufferSizeMismatch {
-        /// 期望大小
-        expected: usize,
-        /// 实际大小
-        actual: usize,
-    },
-    /// 无效操作
-    InvalidOperation {
-        /// 操作描述
-        operation: String,
-        /// 原因
-        reason: String,
-    },
-    /// 数值错误（NaN/Inf）
-    NumericalError {
-        /// 错误描述
-        message: String,
-    },
-    /// 配置转换错误
-    ConfigConversionError {
-        /// 字段名
-        field: String,
-        /// 原始值
-        value: f64,
-    },
-}
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::IndexOutOfBounds { index_type, index, len } => {
-                write!(f, "{}({}) 越界，长度为 {}", index_type, index, len)
-            }
-            Self::BufferSizeMismatch { expected, actual } => {
-                write!(f, "缓冲区大小不匹配: 期望 {}, 实际 {}", expected, actual)
-            }
-            Self::InvalidOperation { operation, reason } => {
-                write!(f, "无效操作 '{}': {}", operation, reason)
-            }
-            Self::NumericalError { message } => {
-                write!(f, "数值错误: {}", message)
-            }
-            Self::ConfigConversionError { field, value } => {
-                write!(f, "配置转换失败: {} = {} 无法转换", field, value)
-            }
-        }
-    }
-}
-
-impl std::error::Error for RuntimeError {}
+use thiserror::Error;
+use mh_foundation::MhError;
 
 /// 运行时结果类型
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
+
+/// 运行时错误（面向 Layer 3 引擎层）
+#[derive(Error, Debug)]
+pub enum RuntimeError {
+    /// 数值超出范围
+    #[error("数值超出范围: {value} 不在 [{min}, {max}] 范围内")]
+    OutOfRange {
+        // 超出范围的数值
+        value: f64,
+        // 数值范围最小值
+        min: f64,
+        // 数值范围最大值
+        max: f64,
+    },
+
+    /// 无效索引（代际不匹配）
+    #[error("无效索引: 元素已被删除或索引过期")]
+    InvalidIndex,
+
+    /// 数值计算错误
+    #[error("数值计算错误: {message}")]
+    NumericalError {
+        // 错误信息
+        message: String,
+    },
+
+    /// 非有限值（NaN 或 Inf）
+    #[error("非有限值: {value}")]
+    NonFinite {
+        // 非有限值
+        value: f64,
+    },
+
+    /// Backend 操作错误
+    #[error("Backend 错误: {message}")]
+    BackendError {
+        // 错误信息
+        message: String,
+    },
+
+    /// 缓冲区操作错误
+    #[error("缓冲区错误: {message}")]
+    BufferError {
+        // 缓冲区操作错误信息
+        message: String,
+    },
+
+    /// 从 Foundation 层错误转换
+    #[error("基础层错误: {0}")]
+    Foundation(#[from] MhError),
+}
+
+// ========================================================================
+// 便捷构造方法
+// ========================================================================
+
+impl RuntimeError {
+    /// 创建数值范围错误
+    pub fn out_of_range(value: impl Into<f64>, min: impl Into<f64>, max: impl Into<f64>) -> Self {
+        Self::OutOfRange {
+            // 数值范围错误信息
+            value: value.into(),
+            // 最小值
+            min: min.into(),
+            // 最大值
+            max: max.into(),
+        }
+    }
+
+    /// 创建数值计算错误
+    pub fn numerical(message: impl Into<String>) -> Self {
+        Self::NumericalError {
+            // 数值计算错误信息
+            message: message.into(),
+        }
+    }
+
+    /// 创建 Backend 错误
+    pub fn backend(message: impl Into<String>) -> Self {
+        Self::BackendError {
+            // Backend错误信息
+            message: message.into(),
+        }
+    }
+
+    /// 创建缓冲区错误
+    pub fn buffer(message: impl Into<String>) -> Self {
+        Self::BufferError {
+            // 缓冲区操作错误信息
+            message: message.into(),
+        }
+    }
+}

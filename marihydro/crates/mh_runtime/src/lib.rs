@@ -40,6 +40,8 @@ pub mod scalar;
 pub mod backend;
 pub mod buffer;
 pub mod indices;
+pub mod metrics;  // 运行时指标
+pub mod numerics; // 新增：数值算法（KahanSum等）
 pub mod tolerance;
 pub mod arena_ext;
 pub mod error;
@@ -60,8 +62,9 @@ pub use arena_ext::{
     StaleIndexError, INVALID_GENERATION,
     same_slot, is_newer,
 };
+pub use metrics::{MetricsCollector, MetricsSnapshot, Timer};
+pub use numerics::KahanSum;  // 新增
 pub use error::RuntimeError;
-
 /// SafeIndex 是 SafeIdx 的别名（向后兼容）
 pub type SafeIndex<Tag> = arena_ext::SafeIdx<Tag>;
 

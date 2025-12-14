@@ -3,45 +3,6 @@
 //! MariHydro Foundation Layer
 //!
 //! 零依赖基础层，提供整个项目的基础抽象。
-//!
-//! # 模块概览
-//!
-//! - dimension: 编译期维度系统（2D/3D）
-//! - memory: 对齐内存容器和预分配策略
-//! - index: 强类型索引系统，带代际验证
-//! - arena: 泛型 Arena 内存池
-//! - float: 安全浮点数类型和数值常量
-//! - error: 统一错误类型
-//! - validation: 运行时验证工具
-//!
-//! # 设计原则
-//!
-//! 1. **零外部依赖**: 仅依赖 serde、thiserror、bytemuck
-//! 2. **类型安全**: 编译期防止索引误用
-//! 3. **零开销抽象**: release 模式下最小化运行时开销
-//! 4. **悬垂检测**: 通过代际机制检测已删除元素的访问
-//!
-//! # 示例
-//!
-//! ```
-//! use mh_foundation::{
-//!     index::{CellIndex, Idx},
-//!     arena::Arena,
-//!     float::SafeF64,
-//!     error::{MhError, MhResult},
-//! };
-//!
-//! // 创建 Arena 并插入元素
-//! use mh_foundation::index::CellTag;
-//! let mut arena: Arena<f64, CellTag> = Arena::new();
-//! let idx = arena.insert(42.0);
-//!
-//! // 安全浮点数运算
-//! let x = SafeF64::new(1.0).unwrap();
-//! let y = SafeF64::new(2.0).unwrap();
-//! let z = x + y;
-//! assert_eq!(z.get(), 3.0);
-//! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
@@ -49,36 +10,72 @@
 pub mod arena;
 pub mod dimension;
 pub mod error;
-pub mod float;
+// 已删除: pub mod float;  // 迁移到 mh_runtime::RuntimeScalar
 pub mod index;
 pub mod memory;
 pub mod metrics;
 pub mod tolerance;
 pub mod validation;
 
-// 重导出常用类型
+// 重导出核心类型（仅限基础层）
 pub use arena::Arena;
 pub use dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
+
+// ✅ 修复：使用正确的类型名
 pub use error::{MhError, MhResult};
-pub use float::{SafeF64, KahanSum};
+
+// 已删除 float 相关导出
+// pub use float::{SafeF64, KahanSum};
+
+// ✅ 仅导出轻量级索引类型
 pub use index::{
-    BoundaryIndex, CellIndex, FaceIndex, HalfEdgeIndex, Idx, NodeIndex, VertexIndex,
     CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,
 };
+
 pub use memory::{AlignedVec, Alignment, CpuAlign, GpuAlign};
+
+// ✅ 修复：导出 ArenaTag trait
+pub use arena::ArenaTag;
 
 /// Prelude 模块，包含常用类型
 pub mod prelude {
     pub use crate::arena::Arena;
     pub use crate::dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
     pub use crate::error::{MhError, MhResult};
-    pub use crate::float::{SafeF64, safe_div, safe_sqrt};
+    
+    // 已删除 float 引用
+    // pub use crate::float::{SafeF64, safe_div, safe_sqrt};
+    
+    // ✅ 仅保留轻量级索引
     pub use crate::index::{
-        BoundaryIndex, CellIndex, FaceIndex, HalfEdgeIndex, Idx, NodeIndex, VertexIndex,
         CellIdx, FaceIdx, NodeIdx, BoundaryId, INVALID_IDX,
-        cell, face, halfedge, node, vertex,
     };
+    
     pub use crate::memory::{AlignedVec, CpuAlign, GpuAlign};
     pub use crate::validation::{ValidationReport, ValidationError, ValidationWarning};
-    pub use crate::{ensure, require};
+    // 宏在 lib.rs 中定义，prelude 自动包含
+}
+
+/// 层级标识（Layer 1）
+pub const LAYER: u8 = 1;
+
+/// 验证宏（定义在 lib.rs，避免重复）
+#[macro_export]
+macro_rules! ensure {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+}
+
+/// 验证 Option（定义在 lib.rs，避免重复）
+#[macro_export]
+macro_rules! require {
+    ($opt:expr, $err:expr) => {
+        match $opt {
+            Some(v) => v,
+            None => return Err($err),
+        }
+    };
 }

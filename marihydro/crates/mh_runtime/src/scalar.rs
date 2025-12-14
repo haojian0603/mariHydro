@@ -349,4 +349,26 @@ mod tests {
         let bad_data = vec![1.0f64, f64::NAN, 3.0];
         assert!(f64::validate_slice(&bad_data).is_err());
     }
+
+    #[test]
+    fn test_sin_cos_safe() {
+        let x = std::f64::consts::PI / 4.0;
+        let (sin, cos) = x.sin_cos_safe();
+        assert!((sin - cos).abs() < 1e-10); // sin(π/4) == cos(π/4)
+    }
+
+    #[test]
+    fn test_is_near_zero() {
+        let x = 1e-15f64;
+        assert!(x.is_near_zero(1e-14));
+        assert!(!x.is_near_zero(1e-16));
+    }
+
+    #[test]
+    fn test_approx_eq() {
+        let a = 1.0f64;
+        let b = 1.0 + 1e-15;
+        assert!(a.approx_eq(b, 1e-14));
+        assert!(!a.approx_eq(b, 1e-16));
+    }
 }

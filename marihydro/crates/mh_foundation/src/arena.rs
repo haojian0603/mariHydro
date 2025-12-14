@@ -27,6 +27,8 @@
 
 use crate::index::Idx;
 use std::marker::PhantomData;
+/// 用于区分不同类型的 Arena，防止索引混用。
+pub trait ArenaTag: 'static + Copy + Send + Sync {}
 
 /// Arena 中的槽位
 #[derive(Debug, Clone)]
