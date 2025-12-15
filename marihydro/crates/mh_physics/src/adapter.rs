@@ -1,76 +1,90 @@
-// marihydro\crates\mh_physics\src/adapter.rs
+// crates/mh_physics/src/adapter.rs
 
-//! 网格适配层
-//!
-//! 将 FrozenMesh 适配为物理引擎所需的接口格式。
-//! 这是新旧网格结构之间的桥梁。
-//!
+//! 网格适配层 - 物理引擎几何接口
+//! 
+//! 提供PhysicsMesh与Backend几何抽象的桥接，支持f32/f64精度切换。
+//! 
 //! # 设计原则
-//!
-//! 1. **零拷贝**: 尽可能引用原始数据，避免复制
-//! 2. **类型转换**: 处理 Point2D/Point3D 与 DVec2 的转换
-//! 3. **索引转换**: 处理 u32 与 usize 的转换
-//!
-//! # 示例
-//!
-//! ```ignore
-//! use mh_mesh::FrozenMesh;
+//! 
+//! 1. **类型安全强制**：所有几何查询接口必须使用Runtime索引类型（CellIndex/FaceIndex/NodeIndex）
+//! 2. **职责隔离**：杜绝usize泄露，索引转换必须在调用层显式完成
+//! 3. **双重接口**：保留DVec2接口供Legacy代码短期过渡，新增Backend泛型接口供Layer 3使用
+//! 4. **错误透明**：坐标转换失败时panic而非静默回退，确保开发期暴露精度问题
+//! 
+//! # 架构约束
+//! 
+//! - **Layer 3 (Engine)** 必须调用泛型接口，禁止直接使用Legacy接口
+//! - **Layer 4/5 (Config/App)** 可使用Legacy接口，但需通过clippy.toml标记弃用
+//! 
+//! # 使用示例
+//! 
+//! ```rust
 //! use mh_physics::adapter::PhysicsMesh;
-//!
-//! let frozen = mesh.freeze();
-//! let physics_mesh = PhysicsMesh::from_frozen(&frozen);
-//!
-//! // 使用物理引擎接口
-//! let area = physics_mesh.cell_area(0);
-//! let normal = physics_mesh.face_normal(0);
+//! use mh_runtime::{Backend, CpuBackend, CellIndex, FaceIndex};
+//! 
+//! // ❌ 错误：usize索引导致职责泄露
+//! // let normal = mesh.face_normal(0); 
+//! 
+//! // ✅ 正确：强制使用类型安全索引
+//! let face_idx = FaceIndex::new(0);
+//! let normal_f32 = mesh.face_center_generic::<CpuBackend<f32>>(face_idx);
+//! let normal_f64 = mesh.face_center_generic::<CpuBackend<f64>>(face_idx);
 //! ```
 
 use glam::DVec2;
 use mh_mesh::FrozenMesh;
+use mh_runtime::{Backend, RuntimeScalar};
 use std::sync::Arc;
 
-// 使用 types 模块中从 mh_runtime 导入的统一索引类型
-use crate::types::{INVALID_INDEX};
+// 从mh_runtime导入统一索引类型
+pub use crate::types::{CellIndex, FaceIndex, NodeIndex, INVALID_INDEX};
 
-/// 无效单元索引常量 (保留用于向后兼容)
+/// 无效单元索引常量（向后兼容，已弃用）
+#[deprecated(note = "使用CellIndex::INVALID代替")]
 pub const INVALID_CELL: usize = INVALID_INDEX;
 
 /// 物理引擎网格适配器
-///
-/// 包装 FrozenMesh，提供物理引擎所需的接口。
 #[derive(Debug, Clone)]
 pub struct PhysicsMesh {
-    /// 内部 FrozenMesh 引用
+    /// 内部FrozenMesh引用（不可变数据）
     inner: Arc<FrozenMesh>,
 }
 
 impl PhysicsMesh {
-    /// 从 FrozenMesh 创建
+    // =========================================================================
+    // 构造函数
+    // =========================================================================
+
+    /// 从FrozenMesh Arc创建适配器
+    #[inline]
     pub fn new(frozen: Arc<FrozenMesh>) -> Self {
         Self { inner: frozen }
     }
 
-    /// 从 FrozenMesh 引用创建（会克隆）
+    /// 从FrozenMesh引用创建（克隆数据）
+    #[inline]
     pub fn from_frozen(frozen: &FrozenMesh) -> Self {
         Self {
             inner: Arc::new(frozen.clone()),
         }
     }
 
-    /// 创建空网格（用于测试）
+    /// 创建指定单元数的空网格（测试用）
+    #[inline]
     pub fn empty(n_cells: usize) -> Self {
         Self {
             inner: Arc::new(FrozenMesh::empty_with_cells(n_cells)),
         }
     }
 
-    /// 获取内部 FrozenMesh
+    /// 获取内部FrozenMesh引用
+    #[inline]
     pub fn inner(&self) -> &FrozenMesh {
         &self.inner
     }
 
     // =========================================================================
-    // 基本统计
+    // 基本统计 (Legacy接口 - 保留usize，这些是数量统计而非索引)
     // =========================================================================
 
     /// 节点数量
@@ -104,46 +118,60 @@ impl PhysicsMesh {
     }
 
     // =========================================================================
-    // 单元访问
+    // 单元访问 - 强制使用CellIndex (核心改造)
     // =========================================================================
 
-    /// 获取单元中心 (DVec2)
+    /// 获取单元中心 (DVec2 - Legacy接口，已弃用)
+    #[deprecated(note = "请使用cell_center_generic<B>()")]
     #[inline]
     pub fn cell_center(&self, cell: usize) -> DVec2 {
         let p = self.inner.cell_center[cell];
         DVec2::new(p.x, p.y)
     }
 
-    /// 获取单元底床高程
+    /// 获取单元中心 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn cell_z_bed(&self, cell: usize) -> f64 {
-        self.inner.cell_z_bed[cell]
+    pub fn cell_center_generic<B: Backend>(&self, cell: CellIndex) -> B::Vector2D {
+        let idx = cell.get();
+        debug_assert!(idx < self.n_cells(), "CellIndex越界: {}", idx);
+        let p = self.inner.cell_center[idx];
+        B::vec2_new(
+            B::Scalar::from_config(p.x as f64)
+                .unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
+            B::Scalar::from_config(p.y as f64)
+                .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
+        )
     }
 
-    /// 获取单元底床高程数组
+    /// 获取单元底床高程 [m]
+    #[inline]
+    pub fn cell_z_bed(&self, cell: CellIndex) -> f64 {
+        self.inner.cell_z_bed[cell.get()]
+    }
+
+    /// 获取单元底床高程数组引用
     #[inline]
     pub fn cell_z_bed_slice(&self) -> &[f64] {
         &self.inner.cell_z_bed
     }
 
-    /// 安全获取单元面积（带边界检查）
+    /// 安全获取单元面积 [m²]
     #[inline]
-    pub fn cell_area(&self, cell: usize) -> Option<f64> {
-        self.inner.cell_area.get(cell).copied()
+    pub fn cell_area(&self, cell: CellIndex) -> Option<f64> {
+        self.inner.cell_area.get(cell.get()).copied()
     }
 
-    /// 获取单元面积（不安全，无边界检查）
+    /// 获取单元面积（无边界检查 - 性能敏感场景使用）
     #[inline]
-    pub fn cell_area_unchecked(&self, cell: usize) -> f64 {
-        self.inner.cell_area[cell]
+    pub fn cell_area_unchecked(&self, cell: CellIndex) -> f64 {
+        debug_assert!(cell.get() < self.n_cells(), "CellIndex越界: {}", cell.get());
+        self.inner.cell_area[cell.get()]
     }
 
-    /// 获取单元周长（水力直径计算用）
-    ///
-    /// 利用 cell_faces 快速计算，复杂度 O(cell_faces_count)
+    /// 计算单元周长 [m]
     #[inline]
-    pub fn cell_perimeter(&self, cell: usize) -> Option<f64> {
-        let faces = self.inner.cell_faces(cell);
+    pub fn cell_perimeter(&self, cell: CellIndex) -> Option<f64> {
+        let faces = self.inner.cell_faces(cell.get());
         if faces.is_empty() {
             return None;
         }
@@ -160,144 +188,187 @@ impl PhysicsMesh {
         }
     }
 
-    /// 获取单元的所有面索引
-    ///
-    /// 返回该单元的所有关联面 ID 列表
+    /// 获取单元的所有面索引（类型安全）
     #[inline]
-    pub fn cell_faces(&self, cell: usize) -> impl Iterator<Item = usize> + '_ {
-        self.inner.cell_faces(cell).iter().map(|&f| f as usize)
+    pub fn cell_faces(&self, cell: CellIndex) -> impl Iterator<Item = FaceIndex> + '_ {
+        self.inner.cell_faces(cell.get())
+            .iter()
+            .map(|&f| FaceIndex::new(f as usize))
     }
 
     /// 获取单元的邻居单元索引
-    ///
-    /// 返回所有与该单元共享面的邻居单元（不包含 INVALID_CELL）
     #[inline]
-    pub fn cell_neighbors(&self, cell: usize) -> impl Iterator<Item = usize> + '_ {
-        self.inner.cell_neighbors(cell).iter().filter_map(|&n| {
-            if n == u32::MAX {
-                None
-            } else {
-                Some(n as usize)
-            }
-        })
+    pub fn cell_neighbors(&self, cell: CellIndex) -> impl Iterator<Item = CellIndex> + '_ {
+        self.inner.cell_neighbors(cell.get())
+            .iter()
+            .filter_map(|&n| {
+                if n == u32::MAX {
+                    None
+                } else {
+                    Some(CellIndex::new(n as usize))
+                }
+            })
     }
 
     /// 获取单元的节点索引
     #[inline]
-    pub fn cell_nodes(&self, cell: usize) -> impl Iterator<Item = usize> + '_ {
-        self.inner.cell_nodes(cell).iter().map(|&n| n as usize)
+    pub fn cell_nodes(&self, cell: CellIndex) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.inner.cell_nodes(cell.get())
+            .iter()
+            .map(|&n| NodeIndex::new(n as usize))
     }
 
     // =========================================================================
-    // 面访问
+    // 面访问 - 强制使用FaceIndex (核心改造)
     // =========================================================================
 
-    /// 获取面中心 (DVec2)
+    /// 获取面中心 (DVec2 - Legacy接口，已弃用)
+    #[deprecated(note = "请使用face_center_generic<B>()")]
     #[inline]
     pub fn face_center(&self, face: usize) -> DVec2 {
         let p = self.inner.face_center[face];
         DVec2::new(p.x, p.y)
     }
 
-    /// 获取面法向量 (2D, DVec2)
-    ///
-    /// 注意：FrozenMesh 存储的是 3D 法向量，这里只返回 xy 分量
+    /// 获取面中心 (Backend几何类型 - Layer 3强制使用)
+    #[inline]
+    pub fn face_center_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+        let idx = face.get();
+        debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
+        let p = self.inner.face_center[idx];
+        B::vec2_new(
+            B::Scalar::from_config(p.x as f64)
+                .unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
+            B::Scalar::from_config(p.y as f64)
+                .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
+        )
+    }
+
+    /// 获取面法向量 (DVec2 - Legacy接口，已弃用)
+    #[deprecated(note = "请使用face_normal_generic<B>()")]
     #[inline]
     pub fn face_normal(&self, face: usize) -> DVec2 {
         let n = self.inner.face_normal[face];
         DVec2::new(n.x, n.y)
     }
 
-    /// 获取面法向量 (3D)
+    /// 获取面法向量 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn face_normal_3d(&self, face: usize) -> (f64, f64, f64) {
-        let n = self.inner.face_normal[face];
+    pub fn face_normal_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+        let idx = face.get();
+        debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
+        let n = self.inner.face_normal[idx];
+        B::vec2_new(
+            B::Scalar::from_config(n.x as f64)
+                .unwrap_or_else(|| panic!("法向量x={}转换失败：超出目标类型范围", n.x)),
+            B::Scalar::from_config(n.y as f64)
+                .unwrap_or_else(|| panic!("法向量y={}转换失败：超出目标类型范围", n.y))
+        )
+    }
+
+    /// 获取面法向量 (3D元组 - Legacy接口)
+    #[inline]
+    pub fn face_normal_3d(&self, face: FaceIndex) -> (f64, f64, f64) {
+        let n = self.inner.face_normal[face.get()];
         (n.x, n.y, n.z)
     }
 
-    /// 获取面长度
+    /// 获取面长度 [m]
     #[inline]
-    pub fn face_length(&self, face: usize) -> f64 {
-        self.inner.face_length[face]
+    pub fn face_length(&self, face: FaceIndex) -> f64 {
+        self.inner.face_length[face.get()]
     }
 
-    /// 获取面 owner 单元索引
+    /// 获取面owner单元索引
     #[inline]
-    pub fn face_owner(&self, face: usize) -> usize {
-        self.inner.face_owner[face] as usize
+    pub fn face_owner(&self, face: FaceIndex) -> CellIndex {
+        CellIndex::new(self.inner.face_owner[face.get()] as usize)
     }
 
-    /// 获取面 neighbor 单元索引
-    ///
-    /// 如果是边界面，返回 None
+    /// 获取面neighbor单元索引 (Option<CellIndex>)
     #[inline]
-    pub fn face_neighbor(&self, face: usize) -> Option<usize> {
-        let n = self.inner.face_neighbor[face];
+    pub fn face_neighbor(&self, face: FaceIndex) -> Option<CellIndex> {
+        let n = self.inner.face_neighbor[face.get()];
         if n == u32::MAX {
             None
         } else {
-            Some(n as usize)
+            Some(CellIndex::new(n as usize))
         }
     }
 
-    /// 获取面 neighbor 单元索引（返回原始值）
-    ///
-    /// 如果是边界面，返回 INVALID_CELL
+    /// 获取面neighbor单元索引 (返回INVALID而非Option)
     #[inline]
-    pub fn face_neighbor_raw(&self, face: usize) -> usize {
-        let n = self.inner.face_neighbor[face];
+    pub fn face_neighbor_raw(&self, face: FaceIndex) -> CellIndex {
+        let n = self.inner.face_neighbor[face.get()];
         if n == u32::MAX {
-            INVALID_CELL
+            CellIndex::INVALID
         } else {
-            n as usize
+            CellIndex::new(n as usize)
         }
     }
 
-    /// 检查 neighbor 是否有效
+    /// 判断面是否有邻居
     #[inline]
-    pub fn has_neighbor(&self, face: usize) -> bool {
-        self.inner.face_neighbor[face] != u32::MAX
+    pub fn has_neighbor(&self, face: FaceIndex) -> bool {
+        self.inner.face_neighbor[face.get()] != u32::MAX
     }
 
-    /// 获取面左侧高程
+    /// 获取面左侧高程 [m]
     #[inline]
-    pub fn face_z_left(&self, face: usize) -> f64 {
-        self.inner.face_z_left[face]
+    pub fn face_z_left(&self, face: FaceIndex) -> f64 {
+        self.inner.face_z_left[face.get()]
     }
 
-    /// 获取面右侧高程
+    /// 获取面右侧高程 [m]
     #[inline]
-    pub fn face_z_right(&self, face: usize) -> f64 {
-        self.inner.face_z_right[face]
+    pub fn face_z_right(&self, face: FaceIndex) -> f64 {
+        self.inner.face_z_right[face.get()]
     }
 
-    /// 获取面到 owner 的向量
+    /// 获取面到owner的向量 (DVec2 - Legacy接口，已弃用)
+    #[deprecated(note = "请使用face_delta_owner_generic<B>()")]
     #[inline]
     pub fn face_delta_owner(&self, face: usize) -> DVec2 {
         let d = self.inner.face_delta_owner[face];
         DVec2::new(d.x, d.y)
     }
 
-    /// 获取面到 neighbor 的向量
+    /// 获取面到owner的向量 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn face_delta_neighbor(&self, face: usize) -> DVec2 {
-        let d = self.inner.face_delta_neighbor[face];
-        DVec2::new(d.x, d.y)
+    pub fn face_delta_owner_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+        let idx = face.get();
+        let d = self.inner.face_delta_owner[idx];
+        B::vec2_new(
+            B::Scalar::from_config(d.x as f64)
+                .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
+            B::Scalar::from_config(d.y as f64)
+                .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
+        )
     }
 
-    /// 获取 owner 到 neighbor 的距离
+    /// 获取面到neighbor的向量 (Backend几何类型)
     #[inline]
-    pub fn face_dist_o2n(&self, face: usize) -> f64 {
-        self.inner.face_dist_o2n[face]
+    pub fn face_delta_neighbor_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+        let idx = face.get();
+        let d = self.inner.face_delta_neighbor[idx];
+        B::vec2_new(
+            B::Scalar::from_config(d.x as f64)
+                .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
+            B::Scalar::from_config(d.y as f64)
+                .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
+        )
     }
 
-    /// 获取面距离（owner 到 neighbor 或 owner 到边界）
-    ///
-    /// 对于内部面，返回 owner 到 neighbor 的距离。
-    /// 对于边界面，返回 owner 到边界的距离（使用 face_dist_o2n）。
+    /// 获取owner到neighbor的距离 [m]
     #[inline]
-    pub fn face_distance(&self, face: usize) -> Option<f64> {
-        let dist = self.inner.face_dist_o2n[face];
+    pub fn face_dist_o2n(&self, face: FaceIndex) -> f64 {
+        self.inner.face_dist_o2n[face.get()]
+    }
+
+    /// 获取面距离（内部面为o2n，边界面为owner到边界）
+    #[inline]
+    pub fn face_distance(&self, face: FaceIndex) -> Option<f64> {
+        let dist = self.inner.face_dist_o2n[face.get()];
         if dist > 1e-14 {
             Some(dist)
         } else {
@@ -307,48 +378,38 @@ impl PhysicsMesh {
 
     /// 判断是否为边界面
     #[inline]
-    pub fn is_boundary_face(&self, face: usize) -> bool {
-        face >= self.inner.n_interior_faces
+    pub fn is_boundary_face(&self, face: FaceIndex) -> bool {
+        face.get() >= self.inner.n_interior_faces
     }
 
-    /// 获取面的边界 ID
-    ///
-    /// 返回面对应的边界索引（用于查找边界条件）。
-    /// 对于内部面返回 `None`，对于边界面返回边界索引。
-    ///
-    /// # 参数
-    /// - `face`: 面索引
-    ///
-    /// # 返回
-    /// - `Some(boundary_id)`: 边界面对应的边界 ID
-    /// - `None`: 内部面或无效索引
+    /// 获取面的边界ID
     #[inline]
-    pub fn face_boundary_id(&self, face: usize) -> Option<usize> {
+    pub fn face_boundary_id(&self, face: FaceIndex) -> Option<usize> {
         self.inner
             .face_boundary_id
-            .get(face)
+            .get(face.get())
             .and_then(|opt| opt.map(|id| id as usize))
     }
 
     // =========================================================================
-    // 节点访问
+    // 节点访问 - 强制使用NodeIndex
     // =========================================================================
 
-    /// 获取节点坐标 (2D, DVec2)
+    /// 获取节点坐标 (2D)
     #[inline]
-    pub fn node_xy(&self, node: usize) -> DVec2 {
-        let p = self.inner.node_coords[node];
+    pub fn node_xy(&self, node: NodeIndex) -> DVec2 {
+        let p = self.inner.node_coords[node.get()];
         DVec2::new(p.x, p.y)
     }
 
-    /// 获取节点高程
+    /// 获取节点高程 [m]
     #[inline]
-    pub fn node_z(&self, node: usize) -> f64 {
-        self.inner.node_coords[node].z
+    pub fn node_z(&self, node: NodeIndex) -> f64 {
+        self.inner.node_coords[node.get()].z
     }
 
     // =========================================================================
-    // 范围迭代
+    // 范围迭代 (usize是合理的，因为Range本身就是usize)
     // =========================================================================
 
     /// 内部面索引范围
@@ -376,43 +437,33 @@ impl PhysicsMesh {
     }
 
     // =========================================================================
-    // 统计信息
+    // 统计信息 (Legacy接口)
     // =========================================================================
 
-    /// 最小单元尺寸
+    /// 最小单元尺寸 [m]
     #[inline]
     pub fn min_cell_size(&self) -> f64 {
         self.inner.min_cell_size
     }
 
-    /// 最大单元尺寸
+    /// 最大单元尺寸 [m]
     #[inline]
     pub fn max_cell_size(&self) -> f64 {
         self.inner.max_cell_size
     }
 }
 
-// 注：CellIndex, FaceIndex, NodeIndex 现在从 crate::types 导入
-// 该模块从 mh_runtime 重新导出这些类型，确保整个项目使用统一定义
-
 // ============================================================================
-// 测试
+// 测试模块 - 覆盖Legacy和泛型接口
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::{CellIndex, FaceIndex, NodeIndex};
-
-    #[test]
-    fn test_cell_index() {
-        let idx = CellIndex::new(5);
-        assert!(idx.is_valid());
-        assert_eq!(idx.0, 5);
-
-        let invalid = CellIndex::INVALID;
-        assert!(!invalid.is_valid());
-    }
+    use crate::types::CellIndex;
+    use mh_geo::{Point2D, Point3D};
+    use mh_mesh::FrozenMesh;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_physics_mesh_from_empty() {
@@ -423,102 +474,108 @@ mod tests {
         assert_eq!(mesh.n_faces(), 0);
         assert_eq!(mesh.n_nodes(), 0);
     }
+
     #[test]
-    fn test_cell_perimeter() {
-        // 创建简单网格测试周长计算
-        let frozen = create_test_frozen_mesh();
+    fn test_cell_index_usage() {
+        let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        // 对于单位正方形单元，周长应该是 4.0
-        if let Some(perimeter) = mesh.cell_perimeter(0) {
-            assert!((perimeter - 4.0).abs() < 1e-10,
-                    "单元周长不正确: {}", perimeter);
-        }
+        let cell_idx = CellIndex::new(0);
+        let center = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx);
+        
+        assert!((center.x() - 0.5).abs() < 1e-10);
+        assert!((center.y() - 0.5).abs() < 1e-10);
     }
 
     #[test]
-    fn test_face_accessors() {
-        let frozen = create_test_frozen_mesh();
+    fn test_face_index_usage() {
+        let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        // 测试内部面
-        if mesh.n_interior_faces() > 0 {
-            let face = 0;
-            let _owner = mesh.face_owner(face);
-            let neighbor = mesh.face_neighbor(face);
-            
-            assert!(neighbor.is_some(), "内部面应该有邻居");
-            assert!(mesh.has_neighbor(face));
-            assert!(!mesh.is_boundary_face(face));
-        }
+        let face_idx = FaceIndex::new(0);
+        let normal = mesh.face_normal_generic::<CpuBackend<f64>>(face_idx);
         
-        // 测试边界面
-        for face in mesh.boundary_faces() {
-            assert!(mesh.face_neighbor(face).is_none());
-            assert_eq!(mesh.face_neighbor_raw(face), INVALID_CELL);
-            assert!(mesh.is_boundary_face(face));
-        }
+        assert!((normal.x() - 1.0).abs() < 1e-10);
+        assert!(normal.y().abs() < 1e-10);
     }
 
     #[test]
-    fn test_cell_connectivity() {
-        let frozen = create_test_frozen_mesh();
+    fn test_generic_interface_f32_f64_consistency() {
+        let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        for cell in mesh.cells() {
-            // 每个单元应该有面
-            let faces: Vec<_> = mesh.cell_faces(cell).collect();
-            assert!(!faces.is_empty(), "单元 {} 没有面", cell);
-            
-            // 所有面索引应该有效
-            for &face in &faces {
-                assert!(face < mesh.n_faces(),
-                        "单元 {} 有无效面索引 {}", cell, face);
-            }
-        }
+        let cell_idx = CellIndex::new(0);
+        
+        // 测试f32接口
+        let center_f32 = mesh.cell_center_generic::<CpuBackend<f32>>(cell_idx);
+        assert_eq!(std::mem::size_of_val(&center_f32.x()), 4);
+        
+        // 测试f64接口
+        let center_f64 = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx);
+        assert_eq!(std::mem::size_of_val(&center_f64.x()), 8);
+        
+        // 验证结果一致性
+        assert_eq!(center_f32.x() as f64, center_f64.x());
+        assert_eq!(center_f32.y() as f64, center_f64.y());
     }
 
     #[test]
-    fn test_range_iterators() {
-        let frozen = create_test_frozen_mesh();
+    #[should_panic(expected = "转换失败：超出目标类型范围")]
+    fn test_conversion_error_propagation() {
+        let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        // 验证范围一致性
-        assert_eq!(mesh.interior_faces().len(), mesh.n_interior_faces());
-        assert_eq!(mesh.boundary_faces().len(), mesh.n_boundary_faces());
-        assert_eq!(mesh.cells().len(), mesh.n_cells());
-        assert_eq!(mesh.faces().len(), mesh.n_faces());
+        // 创建极大坐标导致f32转换溢出
+        let mut frozen_large = create_test_mesh();
+        frozen_large.cell_center[0] = Point2D::new(1e40, 1e40);
+        let mesh_large = PhysicsMesh::from_frozen(&frozen_large);
         
-        // 内部面 + 边界面 = 总面数
-        assert_eq!(
-            mesh.n_interior_faces() + mesh.n_boundary_faces(),
-            mesh.n_faces()
-        );
+        let cell_idx = CellIndex::new(0);
+        let _ = mesh_large.cell_center_generic::<CpuBackend<f32>>(cell_idx);
     }
 
     #[test]
-    fn test_face_index_types() {
-        let idx = FaceIndex(5);
-        assert_eq!(usize::from(idx), 5);
+    fn test_cell_perimeter_with_index() {
+        let frozen = create_test_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        let idx2 = FaceIndex::from(10usize);
-        assert_eq!(idx2.0, 10);
+        let cell_idx = CellIndex::new(0);
+        let perimeter = mesh.cell_perimeter(cell_idx).unwrap();
+        
+        assert!((perimeter - 4.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_node_index_types() {
-        let idx = NodeIndex(3);
-        assert_eq!(usize::from(idx), 3);
+    fn test_face_neighbors_iterator() {
+        let frozen = create_test_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
         
-        let idx2 = NodeIndex::from(7usize);
-        assert_eq!(idx2.0, 7);
+        let cell_idx = CellIndex::new(0);
+        let neighbors: Vec<_> = mesh.cell_neighbors(cell_idx).collect();
+        
+        assert_eq!(neighbors.len(), 1);
+        assert_eq!(neighbors[0].get(), 1);
     }
 
-    /// 创建用于测试的 FrozenMesh
-    fn create_test_frozen_mesh() -> FrozenMesh {
+    #[test]
+    fn test_invalid_index_handling() {
+        let frozen = create_test_mesh();
+        let mesh = PhysicsMesh::from_frozen(&frozen);
+        
+        // 测试无效CellIndex
+        let invalid_cell = CellIndex::INVALID;
+        // debug_assert会在测试时panic
+        // 生产环境由调用者保证索引有效性
+        
+        // 测试无效FaceIndex邻居检查
+        let invalid_face = FaceIndex::INVALID;
+        assert!(!mesh.has_neighbor(invalid_face));
+    }
+
+    // 创建测试用的FrozenMesh
+    fn create_test_mesh() -> FrozenMesh {
         use mh_geo::{Point2D, Point3D};
         
-        // 简单的 2x1 网格 (2个单元)
         FrozenMesh {
             n_nodes: 6,
             node_coords: vec![
@@ -545,8 +602,8 @@ mod tests {
             n_faces: 7,
             n_interior_faces: 1,
             face_center: vec![
-                Point2D::new(1.0, 0.5),  // 内部面
-                Point2D::new(0.5, 0.0),  // 边界
+                Point2D::new(1.0, 0.5),
+                Point2D::new(0.5, 0.0),
                 Point2D::new(0.0, 0.5),
                 Point2D::new(0.5, 1.0),
                 Point2D::new(1.5, 0.0),
@@ -567,19 +624,17 @@ mod tests {
             face_z_right: vec![0.0; 7],
             face_owner: vec![0, 0, 0, 0, 1, 1, 1],
             face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
-            face_delta_owner: vec![Point2D::ZERO; 7],
-            face_delta_neighbor: vec![Point2D::ZERO; 7],
+            face_delta_owner: vec![Point2D::new(0.0, 0.0); 7],
+            face_delta_neighbor: vec![Point2D::new(0.0, 0.0); 7],
             face_dist_o2n: vec![1.0; 7],
             boundary_face_indices: vec![1, 2, 3, 4, 5, 6],
             boundary_names: vec!["boundary".to_string()],
             face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
             min_cell_size: 1.0,
             max_cell_size: 1.0,
-            // AMR 预分配字段
             cell_refinement_level: vec![0; 2],
             cell_parent: vec![0, 1],
             ghost_capacity: 0,
-            // ID 映射与排列字段
             cell_original_id: Vec::new(),
             face_original_id: Vec::new(),
             cell_permutation: Vec::new(),

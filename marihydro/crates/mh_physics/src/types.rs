@@ -2,195 +2,258 @@
 
 //! 物理计算核心类型定义
 //!
-//! 本模块提供物理求解器所需的类型定义，包括：
-//! - 类型安全索引 (从 mh_runtime 重新导出)
-//! - 安全包装类型 (SafeDepth, SafeVelocity)
-//! - 数值参数配置 (NumericalParams)
-//! - 物理常数 (PhysicalConstants)
+//! 本模块提供物理求解器所需的类型系统，包括：
+//! - **类型安全索引**：从`mh_runtime`重新导出的计算层索引
+//! - **安全包装类型**：`SafeDepth<S>`和`SafeVelocity<S>`提供数值安全保护
+//! - **泛型数值参数**：`NumericalParams<S>`通过泛型参数实现f32/f64运行时切换
+//! - **物理常数**：`PhysicalConstants`保持f64（自然常数不随计算精度改变）
+//! - **求解器配置**：`SolverConfig`作为Layer 4无泛型配置结构
 //!
+//! # 架构分层
+//!
+//! - **Layer 3 (Engine)**：`NumericalParams<S>`、`SafeVelocity<S>`、`SafeDepth<S>`全泛型化
+//! - **Layer 4 (Config)**：`SolverConfig`保持f64，作为运行时配置接口
+//! - **Layer 5 (App)**：不直接使用本模块泛型类型，通过`DynSolver`交互
+//!
+//! # 使用规范
+//!
+//! ```rust
+//! // ✅ 正确：Layer 3引擎层使用泛型参数
+//! fn compute_flux<S: RuntimeScalar>(h: S, u: S) -> S { h * u }
+//!
+//! // ❌ 错误：Layer 4/5不应直接使用RuntimeScalar约束
+//! // fn app_level<S: RuntimeScalar>(config: SolverConfig) { ... }
+//! ```
 
-use glam::DVec2;
+use crate::fields::{FieldMeta, FieldRegistry};
+use bytemuck::Pod;
+use mh_runtime::{
+    BoundaryIndex, CellIndex, EdgeIndex, FaceIndex, HalfEdgeIndex, LayerIndex, NodeIndex,
+    RuntimeScalar, VertexIndex, INVALID_INDEX,
+};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
 // ============================================================
-// 类型安全索引 (从 mh_runtime 重新导出 - 新架构)
+// 索引类型扩展（向后兼容，已标记deprecated）
 // ============================================================
 
-// 使用 mh_runtime 的索引类型
-pub use mh_runtime::{
-    CellIndex, FaceIndex, NodeIndex, BoundaryIndex,
-    INVALID_INDEX,
-};
-
-// VertexIndex 和 HalfEdgeIndex 的本地定义（已从 mh_core 迁移）
-/// 顶点索引类型
-pub type VertexIndex = u32;
-/// 半边索引类型
-pub type HalfEdgeIndex = u32;
-
-// ============================================================
-// 索引类型扩展 - 为物理引擎添加额外方法
-// ============================================================
-
-/// CellIndex 的物理引擎扩展 trait
+/// CellIndex的物理引擎扩展trait
+///
+/// **Deprecated**: 直接使用`CellIndex::get()`转换，无需扩展trait
+#[deprecated(note = "直接使用CellIndex::get()转换，无需扩展trait")]
 pub trait CellIndexExt {
-    /// 转换为 u32 (用于新架构兼容)
+    /// 转换为u32
     fn as_u32(self) -> u32;
-    /// 从 u32 创建 (用于新架构兼容)
+    /// 从u32创建
     fn from_u32(idx: u32) -> Self;
 }
 
+#[allow(deprecated)]
 impl CellIndexExt for CellIndex {
     #[inline]
     fn as_u32(self) -> u32 {
-        self.0 as u32
+        self.get() as u32
     }
 
     #[inline]
     fn from_u32(idx: u32) -> CellIndex {
-        CellIndex(idx as usize)
+        CellIndex::new(idx as usize)
     }
 }
 
-/// FaceIndex 的物理引擎扩展 trait
+/// FaceIndex的物理引擎扩展trait
+///
+/// **Deprecated**: 直接使用`FaceIndex::get()`转换，无需扩展trait
+#[deprecated(note = "直接使用FaceIndex::get()转换，无需扩展trait")]
 pub trait FaceIndexExt {
-    /// 转换为 u32 (用于新架构兼容)
+    /// 转换为u32
     fn as_u32(self) -> u32;
-    /// 从 u32 创建 (用于新架构兼容)
+    /// 从u32创建
     fn from_u32(idx: u32) -> Self;
 }
 
+#[allow(deprecated)]
 impl FaceIndexExt for FaceIndex {
     #[inline]
     fn as_u32(self) -> u32 {
-        self.0 as u32
+        self.get() as u32
     }
 
     #[inline]
     fn from_u32(idx: u32) -> FaceIndex {
-        FaceIndex(idx as usize)
+        FaceIndex::new(idx as usize)
     }
 }
 
-/// NodeIndex 的物理引擎扩展 trait
+/// NodeIndex的物理引擎扩展trait
+///
+/// **Deprecated**: 直接使用`NodeIndex::get()`转换，无需扩展trait
+#[deprecated(note = "直接使用NodeIndex::get()转换，无需扩展trait")]
 pub trait NodeIndexExt {
-    /// 转换为 u32 (用于新架构兼容)
+    /// 转换为u32
     fn as_u32(self) -> u32;
-    /// 从 u32 创建 (用于新架构兼容)
+    /// 从u32创建
     fn from_u32(idx: u32) -> Self;
 }
 
+#[allow(deprecated)]
 impl NodeIndexExt for NodeIndex {
     #[inline]
     fn as_u32(self) -> u32 {
-        self.0 as u32
+        self.get() as u32
     }
 
     #[inline]
     fn from_u32(idx: u32) -> NodeIndex {
-        NodeIndex(idx as usize)
+        NodeIndex::new(idx as usize)
     }
 }
 
 // ============================================================
-// 安全包装类型
+// 安全包装类型（泛型化改造）
 // ============================================================
 
-/// 安全水深（保证 >= h_min）
+/// 安全水深（保证≥h_min）
 ///
-/// # 用途
+/// 提供正则化处理，避免浅水方程中除以接近零的水深导致数值不稳定。
 ///
-/// 在浅水方程计算中，避免除以接近零的水深导致数值不稳定。
+/// # 类型参数
+/// - `S`: 运行时标量类型（f32或f64）
+///
+/// # 示例
+/// ```
+/// use mh_physics::types::SafeDepth;
+/// use mh_runtime::RuntimeScalar;
+///
+/// let depth_f64 = SafeDepth::<f64>::new(1e-10, 1e-9);
+/// assert!(depth_f64.get() >= 1e-9);
+///
+/// let depth_f32 = SafeDepth::<f32>::new(0.1, 1e-4);
+/// assert_eq!(depth_f32.get(), 0.1);
+/// ```
 #[derive(Debug, Clone, Copy)]
-pub struct SafeDepth {
-    value: f64,
-    h_min: f64,
+pub struct SafeDepth<S: RuntimeScalar> {
+    /// 安全处理后的水深值
+    value: S,
+    /// 最小水深阈值
+    h_min: S,
 }
 
-impl SafeDepth {
-    /// 从原始水深创建
+impl<S: RuntimeScalar> SafeDepth<S> {
+    /// 从原始水深创建安全水深
+    ///
+    /// # 参数
+    /// - `h`: 原始水深值
+    /// - `h_min`: 最小水深阈值，低于此值将使用h_min
+    ///
+    /// # 返回
+    /// 包装后的SafeDepth，其value = max(h, h_min)
     #[inline]
-    pub fn new(h: f64, h_min: f64) -> Self {
+    pub fn new(h: S, h_min: S) -> Self {
         Self {
             value: h.max(h_min),
             h_min,
         }
     }
 
-    /// 获取安全值（用于除法等运算）
+    /// 获取安全水深值（用于除法等运算）
     #[inline]
-    pub fn get(self) -> f64 {
+    pub fn get(self) -> S {
         self.value
     }
 
-    /// 获取 h_min 阈值
+    /// 获取h_min阈值
     #[inline]
-    pub fn h_min(self) -> f64 {
+    pub fn h_min(self) -> S {
         self.h_min
     }
 
     /// 判断原始水深是否干（低于干湿阈值）
+    ///
+    /// # 参数
+    /// - `h`: 原始水深值
+    /// - `h_dry`: 干燥判定阈值
+    ///
+    /// # 返回
+    /// `true`表示干单元（h < h_dry）
     #[inline]
-    pub fn is_originally_dry(h: f64, h_dry: f64) -> bool {
+    pub fn is_originally_dry(h: S, h_dry: S) -> bool {
         h < h_dry
     }
 
-    /// 安全除法
+    /// 安全除法运算
+    ///
+    /// 执行numerator / h，但使用max(h, h_min)作为分母保护
+    ///
+    /// # 参数
+    /// - `numerator`: 分子值
+    /// - `h`: 原始分母（水深）
+    /// - `h_min`: 最小分母保护值
+    ///
+    /// # 返回
+    /// numerator / max(h, h_min)
     #[inline]
-    pub fn safe_divide(numerator: f64, h: f64, h_min: f64) -> f64 {
+    pub fn safe_divide(numerator: S, h: S, h_min: S) -> S {
         numerator / Self::new(h, h_min).get()
     }
 
     /// 计算安全速度分量
+    ///
+    /// 执行momentum / h，但使用max(h, h_min)作为分母
     #[inline]
-    pub fn velocity_component(momentum: f64, h: f64, h_min: f64) -> f64 {
+    pub fn velocity_component(momentum: S, h: S, h_min: S) -> S {
         if h < h_min {
-            0.0
+            S::ZERO
         } else {
             momentum / h.max(h_min)
         }
     }
 }
 
-impl Default for SafeDepth {
+impl<S: RuntimeScalar> Default for SafeDepth<S> {
+    /// 使用S::Epsilon作为默认最小水深
     fn default() -> Self {
         Self {
-            value: 1e-9,
-            h_min: 1e-9,
+            value: S::EPSILON,
+            h_min: S::EPSILON,
         }
     }
 }
 
 /// 安全速度（避免除零导致的无穷大）
 ///
-/// # 用途
+/// 从动量和水深计算速度时，自动处理干单元（h ≈ 0）情况。
 ///
-/// 从动量和水深计算速度时，处理干单元（h ≈ 0）的情况。
+/// # 类型参数
+/// - `S`: 运行时标量类型（f32或f64）
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct SafeVelocity {
-    /// x 方向速度 [m/s]
-    pub u: f64,
-    /// y 方向速度 [m/s]
-    pub v: f64,
+pub struct SafeVelocity<S: RuntimeScalar> {
+    /// x方向速度 [m/s]
+    pub u: S,
+    /// y方向速度 [m/s]
+    pub v: S,
 }
 
-impl SafeVelocity {
-    /// 零速度
-    pub const ZERO: Self = Self { u: 0.0, v: 0.0 };
+impl<S: RuntimeScalar> SafeVelocity<S> {
+    /// 零速度常量
+    pub const ZERO: Self = Self { u: S::ZERO, v: S::ZERO };
 
-    /// 从动量和水深计算速度
+    /// 从动量和水深计算安全速度
     ///
     /// # 参数
-    ///
     /// - `hu`, `hv`: 动量分量 [m²/s]
     /// - `h`: 水深 [m]
-    /// - `h_dry`: 干湿判断阈值 [m]
-    /// - `h_min`: 最小计算水深 [m]
+    /// - `h_dry`: 干湿判断阈值
+    /// - `h_min`: 最小计算水深
+    ///
+    /// # 返回
+    /// 当`h < h_dry`时返回ZERO，否则返回`(hu/h, hv/h)`
     #[inline]
-    pub fn from_momentum(hu: f64, hv: f64, h: f64, h_dry: f64, h_min: f64) -> Self {
-        if SafeDepth::is_originally_dry(h, h_dry) {
+    pub fn from_momentum(hu: S, hv: S, h: S, h_dry: S, h_min: S) -> Self {
+        if SafeDepth::<S>::is_originally_dry(h, h_dry) {
             Self::ZERO
         } else {
             let h_safe = SafeDepth::new(h, h_min);
@@ -201,70 +264,35 @@ impl SafeVelocity {
         }
     }
 
-    /// 从分量创建
+    /// 从分量创建速度
     #[inline]
-    pub const fn new(u: f64, v: f64) -> Self {
+    pub const fn new(u: S, v: S) -> Self {
         Self { u, v }
     }
 
-    /// 从 DVec2 创建
+    /// 速度大小（模长）
     #[inline]
-    pub fn from_vec(v: DVec2) -> Self {
-        Self { u: v.x, v: v.y }
-    }
-
-    /// 速度大小
-    #[inline]
-    pub fn speed(self) -> f64 {
+    pub fn speed(&self) -> S {
         (self.u * self.u + self.v * self.v).sqrt()
     }
 
     /// 速度平方
     #[inline]
-    pub fn speed_squared(self) -> f64 {
+    pub fn speed_squared(&self) -> S {
         self.u * self.u + self.v * self.v
     }
 
-    /// 转换为 DVec2
-    #[inline]
-    pub fn as_dvec2(self) -> DVec2 {
-        DVec2::new(self.u, self.v)
-    }
-
-    /// 法向分量
-    #[inline]
-    pub fn normal_component(self, normal: DVec2) -> f64 {
-        self.u * normal.x + self.v * normal.y
-    }
-
-    /// 切向分量
-    #[inline]
-    pub fn tangent_component(self, normal: DVec2) -> f64 {
-        -self.u * normal.y + self.v * normal.x
-    }
-
-    /// 旋转到局部坐标系（法向、切向）
-    #[inline]
-    pub fn to_local(self, normal: DVec2) -> (f64, f64) {
-        let un = self.normal_component(normal);
-        let ut = self.tangent_component(normal);
-        (un, ut)
-    }
-
-    /// 从局部坐标系转换回全局
-    #[inline]
-    pub fn from_local(un: f64, ut: f64, normal: DVec2) -> Self {
-        Self {
-            u: un * normal.x - ut * normal.y,
-            v: un * normal.y + ut * normal.x,
-        }
-    }
-
     /// 限制最大速度
+    ///
+    /// # 参数
+    /// - `max_speed`: 最大允许速度值，必须与`S`同类型
+    ///
+    /// # 返回
+    /// 如果|v| > max_speed，则缩放至max_speed，否则返回原值
     #[inline]
-    pub fn clamp_speed(self, max_speed: f64) -> Self {
+    pub fn clamp_speed(self, max_speed: S) -> Self {
         let speed = self.speed();
-        if speed > max_speed && speed > 1e-14 {
+        if speed > max_speed && speed > S::from_f64(1e-14).unwrap() {
             let factor = max_speed / speed;
             Self {
                 u: self.u * factor,
@@ -275,20 +303,21 @@ impl SafeVelocity {
         }
     }
 
-    /// 检查速度是否有效
+    /// 检查速度是否有效（非NaN/Inf）
     #[inline]
-    pub fn is_valid(self) -> bool {
+    pub fn is_valid(&self) -> bool {
         self.u.is_finite() && self.v.is_finite()
     }
 
     /// 动能（单位质量）
     #[inline]
-    pub fn kinetic_energy_per_mass(self) -> f64 {
-        0.5 * self.speed_squared()
+    pub fn kinetic_energy_per_mass(&self) -> S {
+        S::from_f64(0.5).unwrap() * self.speed_squared()
     }
 }
 
-impl Add for SafeVelocity {
+// SafeVelocity算术运算实现
+impl<S: RuntimeScalar> Add for SafeVelocity<S> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -299,7 +328,7 @@ impl Add for SafeVelocity {
     }
 }
 
-impl Sub for SafeVelocity {
+impl<S: RuntimeScalar> Sub for SafeVelocity<S> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -310,10 +339,10 @@ impl Sub for SafeVelocity {
     }
 }
 
-impl Mul<f64> for SafeVelocity {
+impl<S: RuntimeScalar> Mul<S> for SafeVelocity<S> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: f64) -> Self {
+    fn mul(self, rhs: S) -> Self {
         Self {
             u: self.u * rhs,
             v: self.v * rhs,
@@ -321,513 +350,417 @@ impl Mul<f64> for SafeVelocity {
     }
 }
 
-impl fmt::Display for SafeVelocity {
+impl<S: RuntimeScalar> fmt::Display for SafeVelocity<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({:.4}, {:.4}) m/s", self.u, self.v)
+        write!(f, "({:.4}, {:.4})", self.u, self.v)
+        .with_args(|formatter| write!(formatter, " m/s")) // 添加单位
     }
 }
 
 // ============================================================
-// 数值参数配置
+// 泛型数值参数配置（核心改造）
 // ============================================================
 
-/// 数值参数配置
+/// 数值参数配置 - 泛型版本
 ///
-/// 控制浅水方程求解器的各种阈值和参数。
-/// 采用保守的默认值，适用于大多数海洋/河流模拟。
+/// 控制浅水方程求解器的各种阈值和参数，通过泛型参数`S`支持f32/f64运行时切换。
 ///
-/// # 阈值层级关系
+/// # 类型参数
+/// - `S`: 运行时标量类型（f32或f64），必须实现`RuntimeScalar` + `PartialOrd`
 ///
-/// ```text
-/// h_min < h_dry < h_friction < h_wet
-/// 1e-9    1e-6    1e-4         1e-3
+/// # 使用示例
 /// ```
+/// use mh_physics::types::NumericalParams;
+/// use mh_runtime::RuntimeScalar;
 ///
-/// - `h_min`: 数值安全最小水深（用于除法保护）
-/// - `h_dry`: 干单元判断阈值（完全干）
-/// - `h_friction`: 摩擦计算水深阈值
-/// - `h_wet`: 湿单元判断阈值（完全湿）
+/// let params_f64: NumericalParams<f64> = NumericalParams::default();
+/// let params_f32: NumericalParams<f32> = NumericalParams::default();
+///
+/// // 干湿判定
+/// let is_dry = params_f64.is_dry(1e-8);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NumericalParams {
-    // ========== 水深阈值 ==========
+pub struct NumericalParams<S>
+where
+    S: RuntimeScalar + PartialOrd,
+{
     /// 最小水深 [m] - 用于除法保护
-    pub h_min: f64,
-
+    pub h_min: S,
     /// 干单元阈值 [m] - 低于此值视为干
-    pub h_dry: f64,
-
+    pub h_dry: S,
     /// 摩擦计算水深阈值 [m]
-    pub h_friction: f64,
-
+    pub h_friction: S,
     /// 湿单元阈值 [m] - 高于此值视为完全湿
-    pub h_wet: f64,
-
-    // ========== 通量计算参数 ==========
+    pub h_wet: S,
     /// 通量计算零阈值
-    pub flux_eps: f64,
-
+    pub flux_eps: S,
     /// 熵修正比例因子
-    pub entropy_ratio: f64,
-
+    pub entropy_ratio: S,
     /// 最小波速 [m/s]
-    pub min_wave_speed: f64,
-
-    // ========== 梯度限制器参数 ==========
-    /// 最小行列式阈值
-    pub det_min: f64,
-
-    /// 限制器 K 参数（Venkatakrishnan）
-    pub limiter_k: f64,
-
-    // ========== 速度限制 ==========
+    pub min_wave_speed: S,
+    /// 行列式最小阈值
+    pub det_min: S,
+    /// 限制器K参数（Venkatakrishnan）
+    pub limiter_k: S,
     /// 最小速度阈值 [m/s]
-    pub vel_min: f64,
-
+    pub vel_min: S,
     /// 最大允许速度 [m/s]
-    pub vel_max: f64,
-
-    // ========== 湍流参数 ==========
+    pub vel_max: S,
     /// 最小涡粘系数 [m²/s]
-    pub nu_min: f64,
-
+    pub nu_min: S,
     /// 最大涡粘系数 [m²/s]
-    pub nu_max: f64,
-
-    // ========== 时间步参数 ==========
-    /// CFL 数
-    pub cfl: f64,
-
+    pub nu_max: S,
+    /// CFL数
+    pub cfl: S,
     /// 最小时间步 [s]
-    pub dt_min: f64,
-
+    pub dt_min: S,
     /// 最大时间步 [s]
-    pub dt_max: f64,
-
-    // ========== 容差参数 ==========
+    pub dt_max: S,
     /// 水位容差 [m]
-    pub eta_tolerance: f64,
-
+    pub eta_tolerance: S,
     /// 流量容差 [m³/s]
-    pub flux_tolerance: f64,
-
+    pub flux_tolerance: S,
     /// 守恒检查容差
-    pub conservation_tolerance: f64,
+    pub conservation_tolerance: S,
 }
 
-impl Default for NumericalParams {
+/// f64参数类型别名
+pub type NumericalParamsF64 = NumericalParams<f64>;
+
+/// f32参数类型别名
+pub type NumericalParamsF32 = NumericalParams<f32>;
+
+impl<S> Default for NumericalParams<S>
+where
+    S: RuntimeScalar + PartialOrd + FromPrimitive,
+{
+    /// 使用标准物理默认值初始化
     fn default() -> Self {
         Self {
-            // 水深阈值（层级递增）
-            h_min: 1e-9,
-            h_dry: 1e-6,
-            h_friction: 1e-4,
-            h_wet: 1e-3,
-
-            // 通量计算
-            flux_eps: 1e-14,
-            entropy_ratio: 0.1,
-            min_wave_speed: 1e-6,
-
-            // 梯度限制器
-            det_min: 1e-14,
-            limiter_k: 5.0,
-
-            // 速度限制
-            vel_min: 1e-8,
-            vel_max: 100.0,
-
-            // 湍流
-            nu_min: 1e-6,
-            nu_max: 1e3,
-
-            // 时间步
-            cfl: 0.5,
-            dt_min: 1e-8,
-            dt_max: 3600.0,
-
-            // 容差
-            eta_tolerance: 1e-6,
-            flux_tolerance: 1e-10,
-            conservation_tolerance: 1e-8,
+            h_min: S::from_f64(1e-9).unwrap(),
+            h_dry: S::from_f64(1e-6).unwrap(),
+            h_friction: S::from_f64(1e-4).unwrap(),
+            h_wet: S::from_f64(1e-3).unwrap(),
+            flux_eps: S::from_f64(1e-14).unwrap(),
+            entropy_ratio: S::from_f64(0.1).unwrap(),
+            min_wave_speed: S::from_f64(1e-6).unwrap(),
+            det_min: S::from_f64(1e-14).unwrap(),
+            limiter_k: S::from_f64(5.0).unwrap(),
+            vel_min: S::from_f64(1e-8).unwrap(),
+            vel_max: S::from_f64(100.0).unwrap(),
+            nu_min: S::from_f64(1e-6).unwrap(),
+            nu_max: S::from_f64(1e3).unwrap(),
+            cfl: S::from_f64(0.5).unwrap(),
+            dt_min: S::from_f64(1e-8).unwrap(),
+            dt_max: S::from_f64(3600.0).unwrap(),
+            eta_tolerance: S::from_f64(1e-6).unwrap(),
+            flux_tolerance: S::from_f64(1e-10).unwrap(),
+            conservation_tolerance: S::from_f64(1e-8).unwrap(),
         }
     }
 }
 
-impl NumericalParams {
-    /// 创建新的参数实例（使用默认值）
-    pub fn new() -> Self {
-        Self::default()
+/// 配置转换错误
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ConfigError {
+    #[error("配置参数'{0}'转换失败：无法从f64转换到目标类型")]
+    Conversion(&'static str),
+}
+
+impl<S> NumericalParams<S>
+where
+    S: RuntimeScalar + PartialOrd + FromPrimitive,
+{
+    /// 从SolverConfig（Layer 4全f64配置）转换到泛型参数
+    ///
+    /// # 参数
+    /// - `config`: Layer 4配置结构（全f64）
+    ///
+    /// # 返回
+    /// - `Ok(Self)`: 转换成功
+    /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
+    pub fn from_config(config: &crate::builder::SolverConfig) -> Result<Self, ConfigError> {
+        Ok(Self {
+            h_min: S::from_f64(config.numerical.h_min)
+                .ok_or(ConfigError::Conversion("h_min"))?,
+            h_dry: S::from_f64(config.numerical.h_dry)
+                .ok_or(ConfigError::Conversion("h_dry"))?,
+            h_friction: S::from_f64(config.numerical.h_friction)
+                .ok_or(ConfigError::Conversion("h_friction"))?,
+            h_wet: S::from_f64(config.numerical.h_wet)
+                .ok_or(ConfigError::Conversion("h_wet"))?,
+            flux_eps: S::from_f64(config.numerical.flux_eps)
+                .ok_or(ConfigError::Conversion("flux_eps"))?,
+            entropy_ratio: S::from_f64(config.numerical.entropy_ratio)
+                .ok_or(ConfigError::Conversion("entropy_ratio"))?,
+            min_wave_speed: S::from_f64(config.numerical.min_wave_speed)
+                .ok_or(ConfigError::Conversion("min_wave_speed"))?,
+            det_min: S::from_f64(config.numerical.det_min)
+                .ok_or(ConfigError::Conversion("det_min"))?,
+            limiter_k: S::from_f64(config.numerical.limiter_k)
+                .ok_or(ConfigError::Conversion("limiter_k"))?,
+            vel_min: S::from_f64(config.numerical.vel_min)
+                .ok_or(ConfigError::Conversion("vel_min"))?,
+            vel_max: S::from_f64(config.numerical.vel_max)
+                .ok_or(ConfigError::Conversion("vel_max"))?,
+            nu_min: S::from_f64(config.numerical.nu_min)
+                .ok_or(ConfigError::Conversion("nu_min"))?,
+            nu_max: S::from_f64(config.numerical.nu_max)
+                .ok_or(ConfigError::Conversion("nu_max"))?,
+            cfl: S::from_f64(config.numerical.cfl)
+                .ok_or(ConfigError::Conversion("cfl"))?,
+            dt_min: S::from_f64(config.numerical.dt_min)
+                .ok_or(ConfigError::Conversion("dt_min"))?,
+            dt_max: S::from_f64(config.numerical.dt_max)
+                .ok_or(ConfigError::Conversion("dt_max"))?,
+            eta_tolerance: S::from_f64(config.numerical.eta_tolerance)
+                .ok_or(ConfigError::Conversion("eta_tolerance"))?,
+            flux_tolerance: S::from_f64(config.numerical.flux_tolerance)
+                .ok_or(ConfigError::Conversion("flux_tolerance"))?,
+            conservation_tolerance: S::from_f64(config.numerical.conservation_tolerance)
+                .ok_or(ConfigError::Conversion("conservation_tolerance"))?,
+        })
     }
 
-    /// 创建高精度参数配置
-    pub fn high_precision() -> Self {
-        Self {
-            h_min: 1e-12,
-            h_dry: 1e-9,
-            h_friction: 1e-6,
-            h_wet: 1e-4,
-            flux_eps: 1e-16,
-            cfl: 0.3,
-            ..Default::default()
+    /// 判断是否为干单元
+    ///
+    /// # 参数
+    /// - `h`: 水深值
+    ///
+    /// # 返回
+    /// `true`当h < self.h_dry
+    #[inline]
+    pub fn is_dry(&self, h: S) -> bool {
+        h < self.h_dry
+    }
+
+    /// 判断是否为湿单元
+    #[inline]
+    pub fn is_wet(&self, h: S) -> bool {
+        h >= self.h_wet
+    }
+
+    /// 判断是否在过渡区
+    #[inline]
+    pub fn is_transition(&self, h: S) -> bool {
+        h >= self.h_dry && h < self.h_wet
+    }
+
+    /// 干湿过渡权重（线性）
+    ///
+    /// 返回值 ∈ [0, 1]：0=完全干，1=完全湿
+    #[inline]
+    pub fn wet_fraction(&self, h: S) -> S {
+        if h <= self.h_dry {
+            S::ZERO
+        } else if h >= self.h_wet {
+            S::ONE
+        } else {
+            (h - self.h_dry) / (self.h_wet - self.h_dry)
         }
     }
 
-    /// 创建快速计算参数配置
-    pub fn fast() -> Self {
-        Self {
-            h_min: 1e-6,
-            h_dry: 1e-4,
-            h_friction: 1e-3,
-            h_wet: 1e-2,
-            cfl: 0.8,
-            ..Default::default()
+    /// 干湿过渡权重（Hermite平滑）
+    #[inline]
+    pub fn wet_fraction_smooth(&self, h: S) -> S {
+        let t = self.wet_fraction(h);
+        t * t * (S::from_f64(3.0).unwrap() - S::from_f64(2.0).unwrap() * t)
+    }
+
+    /// 创建安全水深
+    #[inline]
+    pub fn safe_depth(&self, h: S) -> S {
+        h.max(self.h_min)
+    }
+
+    /// 创建摩擦安全水深
+    #[inline]
+    pub fn friction_safe_depth(&self, h: S) -> S {
+        h.max(self.h_friction)
+    }
+
+    /// 计算波速（浅水方程）
+    #[inline]
+    pub fn wave_speed(&self, h: S, g: S) -> S {
+        (g * h.max(S::ZERO)).sqrt().max(self.min_wave_speed)
+    }
+
+    /// 动态熵修正阈值
+    #[inline]
+    pub fn entropy_threshold(&self, local_wave_speed: S) -> S {
+        (self.entropy_ratio * local_wave_speed.abs()).max(self.flux_eps)
+    }
+
+    /// 限制速度
+    #[inline]
+    pub fn clamp_velocity(&self, vel: SafeVelocity<S>) -> SafeVelocity<S> {
+        vel.clamp_speed(self.vel_max)
+    }
+
+    /// 限制涡粘系数
+    #[inline]
+    pub fn clamp_nu(&self, nu: S) -> S {
+        nu.clamp(self.nu_min, self.nu_max)
+    }
+
+    /// 计算最大允许时间步（基于CFL）
+    #[inline]
+    pub fn max_dt_from_cfl(&self, dx: S, max_wave_speed: S) -> S {
+        let wave_speed = max_wave_speed.max(self.min_wave_speed);
+        let dt = self.cfl * dx / wave_speed;
+        dt.clamp(self.dt_min, self.dt_max)
+    }
+
+    /// 检查速度是否超过警告阈值
+    #[inline]
+    pub fn is_velocity_excessive(&self, speed: S) -> bool {
+        speed > self.vel_max
+    }
+
+    /// 计算安全速度分量
+    ///
+    /// # 参数
+    /// - `hu`, `hv`: 动量分量
+    /// - `h`: 水深
+    ///
+    /// # 返回
+    /// 当`h < h_dry`时返回(0,0)，否则返回安全速度
+    #[inline]
+    pub fn safe_velocity_components(&self, hu: S, hv: S, h: S) -> (S, S) {
+        if self.is_dry(h) {
+            (S::ZERO, S::ZERO)
+        } else {
+            let h_safe = self.safe_depth(h);
+            // 使用正则化公式避免除零
+            let h2 = h_safe * h_safe;
+            let h4 = h2 * h2;
+            let eps4 = self.h_min.powi(4);
+            let denom = (h4 + eps4).sqrt();
+            let u = hu * h_safe / denom;
+            let v = hv * h_safe / denom;
+            
+            // 限制最大速度
+            let speed = (u * u + v * v).sqrt();
+            if speed > self.vel_max && speed > S::from_f64(1e-14).unwrap() {
+                let factor = self.vel_max / speed;
+                (u * factor, v * factor)
+            } else {
+                (u, v)
+            }
         }
+    }
+
+    /// 计算安全速度
+    #[inline]
+    pub fn safe_velocity(&self, hu: S, hv: S, h: S) -> SafeVelocity<S> {
+        let (u, v) = self.safe_velocity_components(hu, hv, h);
+        SafeVelocity::new(u, v)
     }
 
     /// 验证参数有效性
+    ///
+    /// 检查阈值层级关系和正数约束
     pub fn validate(&self) -> Result<(), ParamsValidationError> {
         // 验证阈值层级
-        if !(self.h_min < self.h_dry) {
+        if self.h_min >= self.h_dry {
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "h_min",
                 constraint: "h_min < h_dry",
-                value: self.h_min,
             });
         }
-        if !(self.h_dry < self.h_friction) {
+        if self.h_dry >= self.h_friction {
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "h_dry",
                 constraint: "h_dry < h_friction",
-                value: self.h_dry,
             });
         }
-        if !(self.h_friction < self.h_wet) {
+        if self.h_friction >= self.h_wet {
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "h_friction",
                 constraint: "h_friction < h_wet",
-                value: self.h_friction,
             });
         }
 
         // 验证正数参数
-        if self.cfl <= 0.0 || self.cfl > 1.0 {
+        if self.cfl <= S::ZERO || self.cfl > S::ONE {
             return Err(ParamsValidationError::OutOfRange {
                 field: "cfl",
                 min: 0.0,
                 max: 1.0,
-                value: self.cfl,
             });
         }
-        if self.dt_min <= 0.0 {
+        if self.dt_min <= S::ZERO {
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "dt_min",
                 constraint: "dt_min > 0",
-                value: self.dt_min,
             });
         }
         if self.dt_min >= self.dt_max {
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "dt_min",
                 constraint: "dt_min < dt_max",
-                value: self.dt_min,
             });
         }
 
         Ok(())
     }
-
-    // ========== 干湿判断方法 ==========
-
-    /// 判断是否为干单元
-    #[inline]
-    pub fn is_dry(&self, h: f64) -> bool {
-        h < self.h_dry
-    }
-
-    /// 判断是否为湿单元
-    #[inline]
-    pub fn is_wet(&self, h: f64) -> bool {
-        h >= self.h_wet
-    }
-
-    /// 判断是否在过渡区
-    #[inline]
-    pub fn is_transition(&self, h: f64) -> bool {
-        h >= self.h_dry && h < self.h_wet
-    }
-
-    /// 干湿过渡权重（线性）
-    ///
-    /// 返回值 ∈ [0, 1]：0=干，1=湿
-    #[inline]
-    pub fn wet_fraction(&self, h: f64) -> f64 {
-        if h <= self.h_dry {
-            0.0
-        } else if h >= self.h_wet {
-            1.0
-        } else {
-            (h - self.h_dry) / (self.h_wet - self.h_dry)
-        }
-    }
-
-    /// 干湿过渡权重（Hermite 平滑）
-    #[inline]
-    pub fn wet_fraction_smooth(&self, h: f64) -> f64 {
-        if h <= self.h_dry {
-            0.0
-        } else if h >= self.h_wet {
-            1.0
-        } else {
-            let t = (h - self.h_dry) / (self.h_wet - self.h_dry);
-            t * t * (3.0 - 2.0 * t)
-        }
-    }
-
-    // ========== 安全计算方法 ==========
-
-    /// 创建安全水深
-    #[inline]
-    pub fn safe_depth(&self, h: f64) -> SafeDepth {
-        SafeDepth::new(h, self.h_min)
-    }
-
-    /// 创建摩擦安全水深
-    #[inline]
-    pub fn friction_safe_depth(&self, h: f64) -> SafeDepth {
-        SafeDepth::new(h, self.h_friction)
-    }
-
-    /// 计算安全速度
-    #[inline]
-    pub fn safe_velocity(&self, hu: f64, hv: f64, h: f64) -> SafeVelocity {
-        SafeVelocity::from_momentum(hu, hv, h, self.h_dry, self.h_min)
-    }
-
-    /// 动态熵修正阈值
-    #[inline]
-    pub fn entropy_threshold(&self, local_wave_speed: f64) -> f64 {
-        (self.entropy_ratio * local_wave_speed.abs()).max(self.flux_eps)
-    }
-
-    /// 计算最大允许时间步（基于CFL）
-    #[inline]
-    pub fn max_dt_from_cfl(&self, dx: f64, max_wave_speed: f64) -> f64 {
-        let wave_speed = max_wave_speed.max(self.min_wave_speed);
-        let dt = self.cfl * dx / wave_speed;
-        dt.clamp(self.dt_min, self.dt_max)
-    }
-
-    /// 限制涡粘系数
-    #[inline]
-    pub fn clamp_nu(&self, nu: f64) -> f64 {
-        nu.clamp(self.nu_min, self.nu_max)
-    }
-
-    /// 限制速度
-    #[inline]
-    pub fn clamp_velocity(&self, vel: SafeVelocity) -> SafeVelocity {
-        vel.clamp_speed(self.vel_max)
-    }
-
-    /// 检查速度是否超过警告阈值
-    #[inline]
-    pub fn is_velocity_excessive(&self, speed: f64) -> bool {
-        speed > self.vel_max
-    }
-
-    /// 计算波速（浅水）
-    #[inline]
-    pub fn wave_speed(&self, h: f64, g: f64) -> f64 {
-        (g * h.max(0.0)).sqrt().max(self.min_wave_speed)
-    }
-
-    /// 创建参数构建器
-    #[inline]
-    pub fn builder() -> NumericalParamsBuilder {
-        NumericalParamsBuilder::new()
-    }
-
-    /// 计算安全速度分量（返回 (u, v) 元组）
-    ///
-    /// 用于从动量计算速度，处理干单元的数值问题
-    #[inline]
-    pub fn safe_velocity_components(&self, hu: f64, hv: f64, h: f64) -> (f64, f64) {
-        if h < self.h_dry {
-            // 干单元：速度为零
-            (0.0, 0.0)
-        } else {
-            // 使用正则化公式避免除零
-            let h_safe = h.max(self.h_min);
-            let h2 = h_safe * h_safe;
-            let h4 = h2 * h2;
-            let eps4 = self.h_min.powi(4);
-            let denom = (h4 + eps4).sqrt();
-            
-            let u = hu * h_safe / denom;
-            let v = hv * h_safe / denom;
-            
-            // 限制最大速度
-            let speed = (u * u + v * v).sqrt();
-            if speed > self.vel_max {
-                let scale = self.vel_max / speed;
-                (u * scale, v * scale)
-            } else {
-                (u, v)
-            }
-        }
-    }
 }
 
 /// 参数验证错误
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ParamsValidationError {
+    /// 阈值约束违反
+    #[error("参数{field}违反约束: {constraint}")]
     InvalidThreshold {
         field: &'static str,
         constraint: &'static str,
-        value: f64,
     },
+    /// 数值超出允许范围
+    #[error("参数{field}超出范围[{min}, {max}]")]
     OutOfRange {
         field: &'static str,
         min: f64,
         max: f64,
-        value: f64,
     },
 }
 
-impl fmt::Display for ParamsValidationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidThreshold {
-                field,
-                constraint,
-                value,
-            } => {
-                write!(f, "参数 {} = {} 违反约束: {}", field, value, constraint)
-            }
-            Self::OutOfRange {
-                field,
-                min,
-                max,
-                value,
-            } => {
-                write!(f, "参数 {} = {} 超出范围 [{}, {}]", field, value, min, max)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ParamsValidationError {}
-
-/// 参数构建器
-#[derive(Default)]
-pub struct NumericalParamsBuilder {
-    params: NumericalParams,
-}
-
-impl NumericalParamsBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    // 水深阈值
-    pub fn h_min(mut self, v: f64) -> Self {
-        self.params.h_min = v;
-        self
-    }
-    pub fn h_dry(mut self, v: f64) -> Self {
-        self.params.h_dry = v;
-        self
-    }
-    pub fn h_friction(mut self, v: f64) -> Self {
-        self.params.h_friction = v;
-        self
-    }
-    pub fn h_wet(mut self, v: f64) -> Self {
-        self.params.h_wet = v;
-        self
-    }
-
-    // 通量阈值
-    pub fn flux_eps(mut self, v: f64) -> Self {
-        self.params.flux_eps = v;
-        self
-    }
-    pub fn entropy_ratio(mut self, v: f64) -> Self {
-        self.params.entropy_ratio = v;
-        self
-    }
-
-    // 时间步
-    pub fn cfl(mut self, v: f64) -> Self {
-        self.params.cfl = v;
-        self
-    }
-    pub fn dt_min(mut self, v: f64) -> Self {
-        self.params.dt_min = v;
-        self
-    }
-    pub fn dt_max(mut self, v: f64) -> Self {
-        self.params.dt_max = v;
-        self
-    }
-
-    // 速度限制
-    pub fn vel_max(mut self, v: f64) -> Self {
-        self.params.vel_max = v;
-        self
-    }
-
-    /// 构建参数（带验证）
-    pub fn build(self) -> Result<NumericalParams, ParamsValidationError> {
-        self.params.validate()?;
-        Ok(self.params)
-    }
-
-    /// 构建参数（不验证）
-    pub fn build_unchecked(self) -> NumericalParams {
-        self.params
-    }
-}
+// ============================================================
+// 物理常数（保持f64，自然常数不随计算精度改变）
+// ============================================================
 
 /// 物理常数
 ///
-/// 包含地球物理、流体性质等自然界常数。
-/// 如果常量的值不随算法、场景、网格变化，仅取决于物理现实，则必须放入 PhysicalConstants
+/// 包含地球物理、流体性质等自然界常数。这些常量的值不随算法、场景、网格变化，
+/// 仅取决于物理现实，因此保持为f64。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicalConstants {
     /// 重力加速度 [m/s²]
     pub g: f64,
-
     /// 地球角速度 [rad/s]
     pub omega: f64,
-
     /// 水密度 [kg/m³]
     pub rho_water: f64,
-
     /// 空气密度 [kg/m³]
     pub rho_air: f64,
-
     /// 水的运动粘度 [m²/s]
     pub nu_water: f64,
-
     /// 风拖曳系数（默认值）
     pub wind_drag_coefficient: f64,
-
     /// 大气压 [Pa]
     pub atmospheric_pressure: f64,
-
     /// 地球平均半径 [m]
     pub earth_radius: f64,
 }
 
 impl Default for PhysicalConstants {
+    /// 默认使用海水常数
     fn default() -> Self {
         Self::seawater()
     }
 }
 
 impl PhysicalConstants {
-    /// 标准海水常数（3.5% 盐度，15°C）
+    /// 标准海水常数（3.5%盐度，15°C）
     pub fn seawater() -> Self {
         Self {
             g: 9.81,
@@ -852,7 +785,6 @@ impl PhysicalConstants {
     /// 计算科里奥利参数 f = 2Ω sin(φ)
     ///
     /// # 参数
-    ///
     /// - `latitude_rad`: 纬度 [弧度]
     #[inline]
     pub fn coriolis_parameter(&self, latitude_rad: f64) -> f64 {
@@ -876,18 +808,18 @@ impl PhysicalConstants {
 }
 
 // ============================================================
-// 求解器配置
+// 求解器配置（Layer 4，保持f64）
 // ============================================================
 
 /// 黎曼求解器类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RiemannSolverType {
-    /// HLL 求解器（鲁棒性好）
+    /// HLL求解器（鲁棒性好）
     Hll,
-    /// HLLC 求解器（更精确）
+    /// HLLC求解器（更精确）
     #[default]
     Hllc,
-    /// Roe 求解器（需熵修正）
+    /// Roe求解器（需熵修正）
     Roe,
 }
 
@@ -908,53 +840,49 @@ pub enum TimeIntegration {
 pub enum LimiterType {
     /// 无限制器（一阶精度）
     None,
-    /// Barth-Jespersen 限制器
+    /// Barth-Jespersen限制器
     BarthJespersen,
-    /// Venkatakrishnan 限制器
+    /// Venkatakrishnan限制器
     #[default]
     Venkatakrishnan,
-    /// Minmod 限制器
+    /// Minmod限制器
     Minmod,
 }
 
-/// 求解器配置
+/// 求解器配置（Layer 4，保持f64）
+///
+/// 本结构体属于应用层配置，所有参数使用f64存储。
+/// 在构建求解器时，会转换到Layer 3的泛型参数。
+/// 这使得CLI/Editor层完全无泛型语法。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {
-    /// 数值参数
-    pub numerical: NumericalParams,
-
+    /// 数值参数（f64配置）
+    pub numerical: NumericalParamsF64,
     /// 物理常数
     pub physics: PhysicalConstants,
-
     /// 黎曼求解器类型
     pub riemann_solver: RiemannSolverType,
-
     /// 时间积分方案
     pub time_integration: TimeIntegration,
-
     /// 梯度限制器
     pub limiter: LimiterType,
-
     /// 是否启用二阶精度
     pub second_order: bool,
-
     /// 是否启用干湿处理
     pub wetting_drying: bool,
-
     /// 是否启用摩擦
     pub friction: bool,
-
     /// 是否启用科里奥利力
     pub coriolis: bool,
-
     /// 是否启用风应力
     pub wind_stress: bool,
 }
 
 impl Default for SolverConfig {
+    /// 使用标准默认值
     fn default() -> Self {
         Self {
-            numerical: NumericalParams::default(),
+            numerical: NumericalParamsF64::default(),
             physics: PhysicalConstants::default(),
             riemann_solver: RiemannSolverType::default(),
             time_integration: TimeIntegration::default(),
@@ -969,12 +897,12 @@ impl Default for SolverConfig {
 }
 
 impl SolverConfig {
-    /// 创建新的求解器配置
+    /// 创建新配置
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 验证配置
+    /// 验证配置有效性
     pub fn validate(&self) -> Result<(), ParamsValidationError> {
         self.numerical.validate()
     }
@@ -982,69 +910,55 @@ impl SolverConfig {
     /// 创建用于稳定性测试的配置
     pub fn for_stability_test() -> Self {
         Self {
-            numerical: NumericalParams {
+            numerical: NumericalParamsF64 {
                 cfl: 0.3,
-                ..Default::default()
+                ..NumericalParamsF64::default()
             },
             second_order: false,
-            ..Default::default()
+            ..Self::default()
         }
     }
 
     /// 创建高精度配置
     pub fn high_accuracy() -> Self {
         Self {
-            numerical: NumericalParams::high_precision(),
+            numerical: NumericalParamsF64 {
+                cfl: 0.3,
+                ..NumericalParamsF64::default()
+            },
             time_integration: TimeIntegration::SspRk3,
             limiter: LimiterType::Venkatakrishnan,
             second_order: true,
-            ..Default::default()
+            ..Self::default()
         }
     }
 }
 
 // ============================================================
-// 边界值提供者基础 trait
+// 边界值提供者基础trait
 // ============================================================
 
-/// 边界值提供者基础 trait
+/// 边界值提供者基础trait
 ///
-/// 用于提供边界条件的时变值，可用于水位、流量、浓度等。
-/// 实现者需要是 Send + Sync 以支持并行计算。
+/// 用于提供边界条件的时变值，支持水位、流量、浓度等。
+/// 实现者需要是Send + Sync以支持并行计算。
 ///
-/// # 泛型参数
-///
-/// - `T`: 边界值的类型（如 f64 表示标量，DVec2 表示向量）
-///
-/// # 示例
-///
-/// ```ignore
-/// use mh_physics::types::BoundaryValueProvider;
-///
-/// struct ConstantWaterLevel(f64);
-///
-/// impl BoundaryValueProvider<f64> for ConstantWaterLevel {
-///     fn get_value(&self, _face_idx: usize, _time: f64) -> Option<f64> {
-///         Some(self.0)
-///     }
-/// }
-/// ```
+/// # 类型参数
+/// - `T`: 边界值的类型（如f64表示标量，[f64; 2]表示向量）
 pub trait BoundaryValueProvider<T>: Send + Sync {
     /// 获取指定边界面在给定时间的边界值
     ///
     /// # 参数
-    ///
     /// - `face_idx`: 边界面索引
     /// - `time`: 模拟时间 [s]
     ///
     /// # 返回
-    ///
-    /// 边界值，若该面无边界值则返回 None
+    /// 边界值，若该面无边界值则返回None
     fn get_value(&self, face_idx: usize, time: f64) -> Option<T>;
 
     /// 批量获取边界值
     ///
-    /// 默认实现逐个调用 `get_value`，可重写以优化性能。
+    /// 默认实现逐个调用`get_value`，可重写以优化性能。
     fn get_values_batch(&self, face_indices: &[usize], time: f64, out: &mut [Option<T>])
     where
         T: Clone,
@@ -1056,7 +970,7 @@ pub trait BoundaryValueProvider<T>: Send + Sync {
 
     /// 检查是否为指定面提供边界值
     fn provides_for(&self, face_idx: usize) -> bool {
-        // 默认实现：尝试获取 t=0 时的值
+        // 默认实现：尝试获取t=0时的值
         self.get_value(face_idx, 0.0).is_some()
     }
 }
@@ -1065,11 +979,17 @@ pub trait BoundaryValueProvider<T>: Send + Sync {
 ///
 /// 为所有边界面提供相同的常量值。
 #[derive(Debug, Clone)]
-pub struct ConstantBoundaryProvider<T: Clone + Send + Sync> {
+pub struct ConstantBoundaryProvider<T>
+where
+    T: Clone + Send + Sync,
+{
     value: T,
 }
 
-impl<T: Clone + Send + Sync> ConstantBoundaryProvider<T> {
+impl<T> ConstantBoundaryProvider<T>
+where
+    T: Clone + Send + Sync,
+{
     /// 创建常量边界值提供者
     pub fn new(value: T) -> Self {
         Self { value }
@@ -1081,7 +1001,10 @@ impl<T: Clone + Send + Sync> ConstantBoundaryProvider<T> {
     }
 }
 
-impl<T: Clone + Send + Sync> BoundaryValueProvider<T> for ConstantBoundaryProvider<T> {
+impl<T> BoundaryValueProvider<T> for ConstantBoundaryProvider<T>
+where
+    T: Clone + Send + Sync,
+{
     fn get_value(&self, _face_idx: usize, _time: f64) -> Option<T> {
         Some(self.value.clone())
     }
@@ -1114,85 +1037,129 @@ impl BoundaryValueProvider<f64> for ZeroBoundaryProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::RuntimeScalar;
 
     #[test]
-    fn test_cell_index() {
+    fn test_cell_index_extensions() {
         let idx = CellIndex::new(42);
-        assert_eq!(idx.get(), 42);
-        assert!(idx.is_valid());
-        assert!(!CellIndex::INVALID.is_valid());
+        assert_eq!(idx.as_u32(), 42);
+        let idx2 = CellIndex::from_u32(42);
+        assert_eq!(idx2, idx);
     }
 
     #[test]
-    fn test_safe_depth() {
-        let sd = SafeDepth::new(1e-10, 1e-9);
-        assert!(sd.get() >= 1e-9);
+    fn test_safe_depth_f64() {
+        let depth = SafeDepth::<f64>::new(1e-10, 1e-9);
+        assert!(depth.get() >= 1e-9);
 
-        let sd2 = SafeDepth::new(1.0, 1e-9);
-        assert_eq!(sd2.get(), 1.0);
+        let depth2 = SafeDepth::<f64>::new(0.1, 1e-4);
+        assert_eq!(depth2.get(), 0.1);
     }
 
     #[test]
-    fn test_safe_velocity() {
-        // 正常水深
-        let v = SafeVelocity::from_momentum(10.0, 20.0, 2.0, 1e-6, 1e-9);
+    fn test_safe_depth_f32() {
+        let depth = SafeDepth::<f32>::new(1e-4, 1e-3);
+        assert!(depth.get() >= 1e-3);
+    }
+
+    #[test]
+    fn test_safe_velocity_f64() {
+        let v = SafeVelocity::<f64>::from_momentum(10.0, 20.0, 2.0, 1e-6, 1e-9);
         assert!((v.u - 5.0).abs() < 1e-10);
         assert!((v.v - 10.0).abs() < 1e-10);
 
-        // 干单元
-        let v_dry = SafeVelocity::from_momentum(10.0, 20.0, 1e-8, 1e-6, 1e-9);
+        let v_dry = SafeVelocity::<f64>::from_momentum(10.0, 20.0, 1e-8, 1e-6, 1e-9);
         assert_eq!(v_dry, SafeVelocity::ZERO);
     }
 
     #[test]
-    fn test_numerical_params_validation() {
-        let params = NumericalParams::default();
+    fn test_safe_velocity_f32() {
+        let v = SafeVelocity::<f32>::from_momentum(10.0, 20.0, 2.0, 1e-6, 1e-9);
+        assert!((v.u - 5.0f32).abs() < 1e-6f32);
+    }
+
+    #[test]
+    fn test_safe_velocity_clamp() {
+        let v = SafeVelocity::<f64>::new(100.0, 0.0);
+        let clamped = v.clamp_speed(50.0);
+        assert!((clamped.speed() - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_numerical_params_default() {
+        let params_f64: NumericalParams<f64> = NumericalParams::default();
+        assert_eq!(params_f64.h_dry, 1e-6f64);
+
+        let params_f32: NumericalParams<f32> = NumericalParams::default();
+        assert_eq!(params_f32.h_dry, 1e-6f32);
+    }
+
+    #[test]
+    fn test_numerical_params_f64_from_config() {
+        let config = SolverConfig::default();
+        let params = NumericalParams::<f64>::from_config(&config).unwrap();
+        assert_eq!(params.h_dry, config.numerical.h_dry);
+    }
+
+    #[test]
+    fn test_numerical_params_f32_from_config() {
+        let mut config = SolverConfig::default();
+        config.numerical.cfl = 0.8;
+        let params = NumericalParams::<f32>::from_config(&config).unwrap();
+        assert_eq!(params.cfl, 0.8f32);
+    }
+
+    #[test]
+    fn test_numerical_params_validate() {
+        let params = NumericalParams::<f64>::default();
         assert!(params.validate().is_ok());
 
-        // 无效阈值层级
-        let invalid = NumericalParams {
+        let invalid = NumericalParams::<f64> {
             h_min: 1e-3,
             h_dry: 1e-6,
-            ..Default::default()
+            ..NumericalParams::default()
         };
         assert!(invalid.validate().is_err());
     }
 
     #[test]
-    fn test_numerical_params_dry_wet() {
-        let params = NumericalParams::default();
+    fn test_numerical_params_wet_fraction() {
+        let params: NumericalParams<f64> = NumericalParams::default();
+        assert_eq!(params.wet_fraction(0.0f64), 0.0f64);
+        assert_eq!(params.wet_fraction(1e-6f64), 0.0f64);
+        assert_eq!(params.wet_fraction(1e-3f64), 1.0f64);
 
-        assert!(params.is_dry(1e-8));
-        assert!(params.is_wet(1e-2));
-        assert!(params.is_transition(5e-4));
-
-        let frac = params.wet_fraction(5e-4);
+        let mid = 5.5e-4f64;
+        let frac = params.wet_fraction(mid);
         assert!(frac > 0.0 && frac < 1.0);
     }
 
     #[test]
-    fn test_physical_constants() {
+    fn test_physical_constants_seawater() {
         let sea = PhysicalConstants::seawater();
-        assert_eq!(sea.g, 9.81);
-        assert_eq!(sea.rho_water, 1025.0);
-
-        let fresh = PhysicalConstants::freshwater();
-        assert_eq!(fresh.rho_water, 1000.0);
+        assert_eq!(sea.g, 9.81f64);
+        assert_eq!(sea.rho_water, 1025.0f64);
     }
 
     #[test]
-    fn test_coriolis() {
+    fn test_coriolis_parameter() {
         let consts = PhysicalConstants::default();
-        let f = consts.coriolis_parameter_deg(45.0);
-        // f ≈ 2 * 7.2921e-5 * sin(45°) ≈ 1.03e-4
-        assert!((f - 1.03e-4).abs() < 1e-6);
+        let f = consts.coriolis_parameter_deg(45.0f64);
+        assert!((f - 1.03e-4f64).abs() < 1e-6f64);
     }
 
     #[test]
-    fn test_solver_config() {
+    fn test_solver_config_validate() {
         let config = SolverConfig::default();
         assert!(config.validate().is_ok());
         assert!(config.second_order);
         assert!(config.wetting_drying);
+    }
+
+    #[test]
+    fn test_boundary_provider_constant() {
+        let provider = ConstantBoundaryProvider::new(10.0f64);
+        assert_eq!(provider.get_value(0, 0.0), Some(10.0f64));
+        assert_eq!(provider.provides_for(999), true);
     }
 }

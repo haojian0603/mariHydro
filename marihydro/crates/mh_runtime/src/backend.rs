@@ -19,6 +19,20 @@ pub enum MemoryLocation {
     Device(usize),
 }
 
+/// 二维向量 trait
+///
+/// 抽象不同后端的二维向量类型，确保几何运算的一致性
+pub trait Vector2D: Copy + Clone + Send + Sync + 'static {
+    /// 标量类型
+    type Scalar: RuntimeScalar;
+    
+    /// 获取 x 分量
+    fn x(&self) -> Self::Scalar;
+    
+    /// 获取 y 分量
+    fn y(&self) -> Self::Scalar;
+}
+
 /// 计算后端 Trait
 ///
 /// 抽象不同计算设备的操作，包括内存分配、BLAS 操作等。
@@ -27,11 +41,14 @@ pub enum MemoryLocation {
 /// 
 /// - `Scalar`: 标量类型（f32 或 f64）
 /// - `Buffer<T>`: 关联的缓冲区类型
+/// - `Vector2D`: 二维向量类型（新增）
 pub trait Backend: Clone + Send + Sync + 'static {
     /// 标量类型
     type Scalar: RuntimeScalar;
     /// 缓冲区类型
     type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T>;
+    /// 二维向量类型（新增）
+    type Vector2D: Vector2D<Scalar = Self::Scalar>;
 
     /// 后端名称
     fn name(&self) -> &'static str;
@@ -112,6 +129,25 @@ pub trait Backend: Clone + Send + Sync + 'static {
     
     /// 强制正性（水深等物理量）
     fn enforce_positivity(&self, x: &mut Self::Buffer<Self::Scalar>, min_val: Self::Scalar);
+
+    // =========================================================================
+    // 几何运算（新增）
+    // =========================================================================
+
+    /// 创建二维向量
+    fn vec2_new(x: Self::Scalar, y: Self::Scalar) -> Self::Vector2D;
+    
+    /// 向量点积
+    fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar;
+    
+    /// 向量长度
+    fn vec2_length(v: &Self::Vector2D) -> Self::Scalar;
+    
+    /// 向量减法
+    fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D;
+    
+    /// 向量缩放
+    fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D;
 }
 
 // =============================================================================
@@ -127,17 +163,39 @@ pub struct CpuBackend<S: RuntimeScalar> {
 impl<S: RuntimeScalar> CpuBackend<S> {
     /// 创建 CPU 后端
     pub fn new() -> Self {
-        Self { _marker: PhantomData }
+        Self {
+            _marker: PhantomData,
+        }
     }
 }
 
 // f32 后端实现
+impl Vector2D for [f32; 2] {
+    type Scalar = f32;
+    
+    #[inline]
+    fn x(&self) -> f32 {
+        self[0]
+    }
+    
+    #[inline]
+    fn y(&self) -> f32 {
+        self[1]
+    }
+}
+
 impl Backend for CpuBackend<f32> {
     type Scalar = f32;
     type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
+    type Vector2D = [f32; 2];  // 新增
 
-    fn name(&self) -> &'static str { "CPU-f32" }
-    fn memory_location(&self) -> MemoryLocation { MemoryLocation::Host }
+    fn name(&self) -> &'static str {
+        "CPU-f32"
+    }
+    
+    fn memory_location(&self) -> MemoryLocation {
+        MemoryLocation::Host
+    }
     
     fn alloc<T: Pod + Clone + Default + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
         vec![T::default(); len]
@@ -186,15 +244,61 @@ impl Backend for CpuBackend<f32> {
             }
         }
     }
+
+    // 新增几何方法实现
+    #[inline]
+    fn vec2_new(x: f32, y: f32) -> Self::Vector2D {
+        [x, y]
+    }
+
+    #[inline]
+    fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar {
+        a[0] * b[0] + a[1] * b[1]
+    }
+
+    #[inline]
+    fn vec2_length(v: &Self::Vector2D) -> Self::Scalar {
+        (v[0] * v[0] + v[1] * v[1]).sqrt()
+    }
+
+    #[inline]
+    fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
+        [a[0] - b[0], a[1] - b[1]]
+    }
+
+    #[inline]
+    fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
+        [v[0] * s, v[1] * s]
+    }
 }
 
 // f64 后端实现
+impl Vector2D for [f64; 2] {
+    type Scalar = f64;
+    
+    #[inline]
+    fn x(&self) -> f64 {
+        self[0]
+    }
+    
+    #[inline]
+    fn y(&self) -> f64 {
+        self[1]
+    }
+}
+
 impl Backend for CpuBackend<f64> {
     type Scalar = f64;
     type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
+    type Vector2D = [f64; 2];  // 新增
 
-    fn name(&self) -> &'static str { "CPU-f64" }
-    fn memory_location(&self) -> MemoryLocation { MemoryLocation::Host }
+    fn name(&self) -> &'static str {
+        "CPU-f64"
+    }
+    
+    fn memory_location(&self) -> MemoryLocation {
+        MemoryLocation::Host
+    }
     
     fn alloc<T: Pod + Clone + Default + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
         vec![T::default(); len]
@@ -243,6 +347,32 @@ impl Backend for CpuBackend<f64> {
             }
         }
     }
+
+    // 新增几何方法实现
+    #[inline]
+    fn vec2_new(x: f64, y: f64) -> Self::Vector2D {
+        [x, y]
+    }
+
+    #[inline]
+    fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar {
+        a[0] * b[0] + a[1] * b[1]
+    }
+
+    #[inline]
+    fn vec2_length(v: &Self::Vector2D) -> Self::Scalar {
+        (v[0] * v[0] + v[1] * v[1]).sqrt()
+    }
+
+    #[inline]
+    fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
+        [a[0] - b[0], a[1] - b[1]]
+    }
+
+    #[inline]
+    fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
+        [v[0] * s, v[1] * s]
+    }
 }
 
 #[cfg(test)]
@@ -282,5 +412,37 @@ mod tests {
         let mut x = vec![-1.0, 0.5, -0.5, 2.0];
         backend.enforce_positivity(&mut x, 0.0);
         assert_eq!(x, vec![0.0, 0.5, 0.0, 2.0]);
+    }
+
+    // 新增几何方法测试（使用关联函数语法）
+    #[test]
+    fn test_vec2_new_f32() {
+        let v = <CpuBackend<f32>>::vec2_new(1.0f32, 2.0f32);
+        assert_eq!(v, [1.0f32, 2.0f32]);
+    }
+
+    #[test]
+    fn test_vec2_operations_f64() {
+        let v1 = <CpuBackend<f64>>::vec2_new(3.0, 4.0);
+        let v2 = <CpuBackend<f64>>::vec2_new(1.0, 2.0);
+        
+        let dot = <CpuBackend<f64>>::vec2_dot(&v1, &v2);
+        assert_eq!(dot, 11.0); // 3*1 + 4*2
+        
+        let len = <CpuBackend<f64>>::vec2_length(&v1);
+        assert_eq!(len, 5.0);
+        
+        let sub = <CpuBackend<f64>>::vec2_sub(&v1, &v2);
+        assert_eq!(sub, [2.0, 2.0]);
+        
+        let scaled = <CpuBackend<f64>>::vec2_scale(&v1, 2.0);
+        assert_eq!(scaled, [6.0, 8.0]);
+    }
+
+    #[test]
+    fn test_vector2d_trait() {
+        let v = [3.0f64, 4.0f64];
+        assert_eq!(v.x(), 3.0);
+        assert_eq!(v.y(), 4.0);
     }
 }

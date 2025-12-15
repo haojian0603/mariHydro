@@ -40,8 +40,8 @@ pub mod scalar;
 pub mod backend;
 pub mod buffer;
 pub mod indices;
-pub mod metrics;  // 运行时指标
-pub mod numerics; // 新增：数值算法（KahanSum等）
+pub mod metrics;
+pub mod numerics; 
 pub mod tolerance;
 pub mod arena_ext;
 pub mod error;
@@ -49,12 +49,14 @@ pub mod error;
 /// 层级标识
 pub const LAYER: u8 = 2;
 
-// 重导出核心类型
+// 核心类型导出
 pub use scalar::RuntimeScalar;
-pub use backend::{Backend, CpuBackend, MemoryLocation};
+pub use backend::{Backend, CpuBackend, MemoryLocation, Vector2D};
 pub use buffer::DeviceBuffer;
-pub use indices::{CellIndex, FaceIndex, NodeIndex, EdgeIndex, BoundaryIndex, LayerIndex, VertexIndex, HalfEdgeIndex};
-pub use indices::INVALID_INDEX;
+pub use indices::{
+    CellIndex, FaceIndex, NodeIndex, EdgeIndex, BoundaryIndex, LayerIndex, VertexIndex,
+    HalfEdgeIndex, INVALID_INDEX
+};
 pub use tolerance::Tolerance;
 pub use arena_ext::{
     SafeArena, SafeIdx, SafeCellIndex, SafeFaceIndex, SafeNodeIndex, SafeBoundaryIndex,
@@ -73,7 +75,7 @@ pub mod prelude {
     //! 常用类型预导入
     pub use crate::{
         RuntimeScalar, Backend, CpuBackend, DeviceBuffer,
-        CellIndex, FaceIndex, NodeIndex, EdgeIndex,
+        CellIndex, FaceIndex, NodeIndex, EdgeIndex, VertexIndex, HalfEdgeIndex,
         Tolerance, RuntimeError,
     };
 }
