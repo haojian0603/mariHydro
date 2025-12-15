@@ -11,10 +11,10 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::engine::timestep::{TimeStepController, TimeStepControllerBuilder};
-use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver};
-use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
-use crate::state::ShallowWaterState;
-use crate::types::NumericalParams;
+use crate::schemes::{HllcSolver, HllcSolverF64, RiemannFlux, RiemannSolver};
+use crate::schemes::wetting_drying::{WetState, WettingDryingHandler, WettingDryingHandlerF64};
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::types::{NumericalParams, NumericalParamsF64};
 use crate::numerics::reconstruction::{MusclConfig, MusclReconstructor, Reconstructor};
 
 use glam::DVec2;
@@ -149,7 +149,7 @@ impl std::fmt::Display for TimeIntegrator {
 #[derive(Debug, Clone)]
 pub struct SolverConfig {
     /// 数值参数
-    pub params: NumericalParams,
+    pub params: NumericalParamsF64,
     /// 重力加速度 [m/s²]
     pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
     /// 是否启用静水重构
@@ -175,7 +175,7 @@ pub struct SolverConfig {
 impl Default for SolverConfig {
     fn default() -> Self {
         Self {
-            params: NumericalParams::default(),
+            params: NumericalParamsF64::default(),
             gravity: 9.81,
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
@@ -490,14 +490,14 @@ impl BedSlopeCorrection {
 #[derive(Debug, Clone)]
 pub struct HydrostaticReconstruction {
     /// 数值参数
-    params: NumericalParams,
+    params: NumericalParamsF64,
     /// 重力加速度
     g: f64, // ALLOW_F64: 物理常数
 }
 
 impl HydrostaticReconstruction {
     /// 创建静水重构处理器
-    pub fn new(params: &NumericalParams, g: f64) -> Self { // ALLOW_F64: 物理常数输入
+    pub fn new(params: &NumericalParamsF64, g: f64) -> Self { // ALLOW_F64: 物理常数输入
         Self {
             params: params.clone(),
             g,
@@ -577,6 +577,7 @@ impl HydrostaticReconstruction {
 // ============================================================
 
 /// 浅水方程求解器
+/// 浅水方程求解器 (Legacy, 使用 f64)
 ///
 /// 基于有限体积法的非结构化网格求解器。
 pub struct ShallowWaterSolver {
@@ -587,9 +588,9 @@ pub struct ShallowWaterSolver {
     /// 工作区
     workspace: SolverWorkspace,
     /// 黎曼求解器
-    riemann: HllcSolver,
+    riemann: HllcSolverF64,
     /// 干湿处理器
-    wetting_drying: WettingDryingHandler,
+    wetting_drying: WettingDryingHandlerF64,
     /// 静水重构
     hydrostatic: HydrostaticReconstruction,
     /// 时间步控制器
@@ -629,8 +630,8 @@ impl ShallowWaterSolver {
             mesh: mesh.clone(),
             config: config.clone(),
             workspace: SolverWorkspace::new(n_cells),
-            riemann: HllcSolver::new(&config.params, config.gravity),
-            wetting_drying: WettingDryingHandler::from_params(&config.params),
+            riemann: HllcSolverF64::new(&config.params, config.gravity),
+            wetting_drying: WettingDryingHandlerF64::from_params(&config.params),
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.gravity),
             timestep_ctrl,
             stats: SolverStats::default(),
@@ -643,7 +644,7 @@ impl ShallowWaterSolver {
     /// 执行一个时间步
     ///
     /// 返回使用的时间步长
-    pub fn step(&mut self, state: &mut ShallowWaterState, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数和返回
+    pub fn step(&mut self, state: &mut ShallowWaterStateF64, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数和返回
         // 1. 重置工作区
         self.workspace.reset();
 

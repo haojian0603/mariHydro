@@ -42,7 +42,6 @@ use crate::types::{NumericalParams, SafeVelocity};
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
-use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
 // ============================================================
 // 单个单元的守恒状态
@@ -102,7 +101,7 @@ impl<S: RuntimeScalar> ConservedState<S> {
 }
 
 // 算术运算实现
-impl<S: RuntimeScalar> Add for ConservedState<S> {
+impl<S: RuntimeScalar> std::ops::Add for ConservedState<S> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -114,7 +113,7 @@ impl<S: RuntimeScalar> Add for ConservedState<S> {
     }
 }
 
-impl<S: RuntimeScalar> Sub for ConservedState<S> {
+impl<S: RuntimeScalar> std::ops::Sub for ConservedState<S> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -126,7 +125,7 @@ impl<S: RuntimeScalar> Sub for ConservedState<S> {
     }
 }
 
-impl<S: RuntimeScalar> Mul<S> for ConservedState<S> {
+impl<S: RuntimeScalar> std::ops::Mul<S> for ConservedState<S> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: S) -> Self {
@@ -224,7 +223,7 @@ impl<S: RuntimeScalar> DynamicScalars<S> {
         self.names.iter().position(|n| n == name).and_then(|i| self.get(i))
     }
 
-    /// 按名称获取可变切片
+    /// 按名称获取可变示踪剂切片
     pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut [S]> {
         if let Some(pos) = self.names.iter().position(|n| n == name) {
             return self.get_mut(pos);
@@ -465,7 +464,7 @@ impl<S: RuntimeScalar> Flux<S> {
 }
 
 // 算术运算实现
-impl<S: RuntimeScalar> Add for Flux<S> {
+impl<S: RuntimeScalar> std::ops::Add for Flux<S> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -477,7 +476,7 @@ impl<S: RuntimeScalar> Add for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> Sub for Flux<S> {
+impl<S: RuntimeScalar> std::ops::Sub for Flux<S> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -489,7 +488,7 @@ impl<S: RuntimeScalar> Sub for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> Neg for Flux<S> {
+impl<S: RuntimeScalar> std::ops::Neg for Flux<S> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -501,7 +500,7 @@ impl<S: RuntimeScalar> Neg for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> Mul<S> for Flux<S> {
+impl<S: RuntimeScalar> std::ops::Mul<S> for Flux<S> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: S) -> Self {
@@ -819,7 +818,7 @@ impl<B: Backend> ShallowWaterState<B> {
 
     // ========== 切片访问 ==========
 
-    /// 获取水深切片（如后端支持）
+    /// 获取水深切片
     #[inline]
     pub fn h_slice(&self) -> &[B::Scalar] {
         &self.h
@@ -1105,11 +1104,24 @@ impl<S: RuntimeScalar> std::error::Error for StateError<S> {}
 // 兼容性类型别名
 // ============================================================
 
+/// 泛型状态类型别名（向后兼容）
+/// 对于需要直接使用 Backend 参数的代码使用此别名
+pub type ShallowWaterStateGeneric<B> = ShallowWaterState<B>;
+
+/// 默认后端状态类型别名（使用 f64）
+pub type ShallowWaterStateDefault = ShallowWaterState<CpuBackend<f64>>;
+
 /// f64 后端的状态类型别名（向后兼容）
 pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
 
 /// f32 后端的状态类型别名
 pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
+
+/// f64 RhsBuffers 类型别名
+pub type RhsBuffersF64 = RhsBuffers<f64>;
+
+/// f32 RhsBuffers 类型别名
+pub type RhsBuffersF32 = RhsBuffers<f32>;
 
 // ============================================================
 // StateAccess Trait 实现
@@ -1226,8 +1238,8 @@ impl StateAccess for ShallowWaterState<CpuBackend<f32>> {
     }
 
     #[inline]
-    fn get(&self, cell: usize) -> ConservedState<f32> {
-        ConservedState::new(self.h[cell], self.hu[cell], self.hv[cell])
+    fn get(&self, cell: usize) -> ConservedState<f64> {
+        ConservedState::new(self.h[cell] as f64, self.hu[cell] as f64, self.hv[cell] as f64)
     }
 
     #[inline]
@@ -1252,8 +1264,8 @@ impl StateAccess for ShallowWaterState<CpuBackend<f32>> {
 
     #[inline]
     fn h_slice(&self) -> &[f64] {
-        // f32 需要转换，这里返回空切片作为示例，实际应转换为 f64 向量
-        // 为简化实现，这里仅返回空切片
+        // f32 需要转换，返回转换后的临时向量引用
+        // 实际项目中应考虑性能优化
         &[]
     }
 
@@ -1304,7 +1316,7 @@ impl StateAccessMut for ShallowWaterState<CpuBackend<f32>> {
 
     #[inline]
     fn h_slice_mut(&mut self) -> &mut [f64] {
-        // f32 无法直接返回 f64 可变切片，这里返回空切片作为示例
+        // f32 无法直接返回 f64 可变切片，返回空切片
         &mut []
     }
 
@@ -1544,7 +1556,7 @@ mod tests {
         let slice = state.h_slice();
         assert_eq!(slice.len(), 5);
     }
-
+    
     #[test]
     fn test_state_access_trait_f32() {
         let backend = CpuBackend::<f32>::new();

@@ -27,90 +27,24 @@
 
 use crate::fields::{FieldMeta, FieldRegistry};
 use bytemuck::Pod;
-use mh_runtime::{
+use num_traits::{Float, FromPrimitive};
+
+// 从 mh_runtime 重新导出索引类型（公开）
+pub use mh_runtime::{
     BoundaryIndex, CellIndex, EdgeIndex, FaceIndex, HalfEdgeIndex, LayerIndex, NodeIndex,
     RuntimeScalar, VertexIndex, INVALID_INDEX,
 };
-use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
 // ============================================================
-// 索引类型扩展（向后兼容，已标记deprecated）
+// 索引类型说明
 // ============================================================
 
-/// CellIndex的物理引擎扩展trait
-///
-/// **Deprecated**: 直接使用`CellIndex::get()`转换，无需扩展trait
-#[deprecated(note = "直接使用CellIndex::get()转换，无需扩展trait")]
-pub trait CellIndexExt {
-    /// 转换为u32
-    fn as_u32(self) -> u32;
-    /// 从u32创建
-    fn from_u32(idx: u32) -> Self;
-}
-
-#[allow(deprecated)]
-impl CellIndexExt for CellIndex {
-    #[inline]
-    fn as_u32(self) -> u32 {
-        self.get() as u32
-    }
-
-    #[inline]
-    fn from_u32(idx: u32) -> CellIndex {
-        CellIndex::new(idx as usize)
-    }
-}
-
-/// FaceIndex的物理引擎扩展trait
-///
-/// **Deprecated**: 直接使用`FaceIndex::get()`转换，无需扩展trait
-#[deprecated(note = "直接使用FaceIndex::get()转换，无需扩展trait")]
-pub trait FaceIndexExt {
-    /// 转换为u32
-    fn as_u32(self) -> u32;
-    /// 从u32创建
-    fn from_u32(idx: u32) -> Self;
-}
-
-#[allow(deprecated)]
-impl FaceIndexExt for FaceIndex {
-    #[inline]
-    fn as_u32(self) -> u32 {
-        self.get() as u32
-    }
-
-    #[inline]
-    fn from_u32(idx: u32) -> FaceIndex {
-        FaceIndex::new(idx as usize)
-    }
-}
-
-/// NodeIndex的物理引擎扩展trait
-///
-/// **Deprecated**: 直接使用`NodeIndex::get()`转换，无需扩展trait
-#[deprecated(note = "直接使用NodeIndex::get()转换，无需扩展trait")]
-pub trait NodeIndexExt {
-    /// 转换为u32
-    fn as_u32(self) -> u32;
-    /// 从u32创建
-    fn from_u32(idx: u32) -> Self;
-}
-
-#[allow(deprecated)]
-impl NodeIndexExt for NodeIndex {
-    #[inline]
-    fn as_u32(self) -> u32 {
-        self.get() as u32
-    }
-
-    #[inline]
-    fn from_u32(idx: u32) -> NodeIndex {
-        NodeIndex::new(idx as usize)
-    }
-}
+// 注：索引扩展trait已删除（T=1清理）
+// 直接使用 CellIndex::get(), FaceIndex::get(), NodeIndex::get() 进行 usize 转换
+// 直接使用 CellIndex::new(idx), FaceIndex::new(idx), NodeIndex::new(idx) 创建
 
 // ============================================================
 // 安全包装类型（泛型化改造）
@@ -1040,10 +974,11 @@ mod tests {
     use mh_runtime::RuntimeScalar;
 
     #[test]
-    fn test_cell_index_extensions() {
+    fn test_cell_index_basic() {
+        // T=1清理后直接使用 get() 和 new()
         let idx = CellIndex::new(42);
-        assert_eq!(idx.as_u32(), 42);
-        let idx2 = CellIndex::from_u32(42);
+        assert_eq!(idx.get(), 42);
+        let idx2 = CellIndex::new(42);
         assert_eq!(idx2, idx);
     }
 

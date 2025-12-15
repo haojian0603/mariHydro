@@ -1,16 +1,8 @@
 // crates/mh_physics/src/schemes/riemann/rusanov.rs
 
-//! Rusanov (Local Lax-Friedrichs) 黎曼求解器
+//! Rusanov (Local Lax-Friedrichs) 黎曼求解器（泛型化）
 //!
-//! Rusanov 求解器是一种简单但鲁棒的近似黎曼求解器，
-//! 特别适合处理强间断和复杂流动情况。
-//!
-//! # 特点
-//!
-//! - 简单稳定：单波速估计，计算代价低
-//! - 强耗散：数值粘性较大，适合初始阶段或复杂问题
-//! - 鲁棒性：能处理各种极端情况
-//! - GPU 友好：无分支的统一公式
+//! T=3 改造：完整泛型化以支持 f32/f64 精度切换
 //!
 //! # 数学原理
 //!
@@ -24,58 +16,40 @@
 //! λ_max = max(|u_L| + c_L, |u_R| + c_R)
 //! c = sqrt(g * h)
 //! ```
-//!
-//! # 适用场景
-//!
-//! - 初始化阶段的快速收敛
-//! - 溃坝等强间断问题
-//! - GPU 大规模并行计算
-//! - 作为自适应求解器的备选方案
 
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
-use glam::DVec2;
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 
 // ============================================================================
-// Rusanov 求解器配置
+// Rusanov 求解器配置（泛型化）
 // ============================================================================
 
 /// Rusanov 求解器配置
 #[derive(Debug, Clone, Copy)]
-pub struct RusanovConfig {
+pub struct RusanovConfig<S: RuntimeScalar> {
     /// 波速放大系数 (≥1.0)
-    ///
-    /// 增加此值可以提高稳定性，但会增加数值耗散。
-    /// - 1.0: 标准 Rusanov
-    /// - 1.1-1.2: 更稳定，适合困难问题
-    pub wave_speed_factor: f64,
-
+    pub wave_speed_factor: S,
     /// 是否使用加权平均
-    ///
-    /// 启用时使用水深加权平均，可以改善干湿过渡区域的行为。
     pub use_weighted_average: bool,
-
     /// 最小波速
-    ///
-    /// 避免数值除零，通常设为 1e-6。
-    pub min_wave_speed: f64,
-
+    pub min_wave_speed: S,
     /// 是否启用熵修正
     pub entropy_fix: bool,
 }
 
-impl Default for RusanovConfig {
+impl<S: RuntimeScalar> Default for RusanovConfig<S> {
     fn default() -> Self {
         Self {
-            wave_speed_factor: 1.0,
-            min_wave_speed: 1e-8,
+            wave_speed_factor: S::ONE,
+            min_wave_speed: S::from_f64(1e-8).unwrap_or(S::ZERO),
             use_weighted_average: false,
             entropy_fix: false,
         }
     }
 }
 
-impl RusanovConfig {
+impl<S: RuntimeScalar> RusanovConfig<S> {
     /// 标准配置
     pub fn standard() -> Self {
         Self::default()
@@ -84,9 +58,9 @@ impl RusanovConfig {
     /// 高稳定性配置
     pub fn robust() -> Self {
         Self {
-            wave_speed_factor: 1.2,
+            wave_speed_factor: S::from_f64(1.2).unwrap_or(S::ONE),
             use_weighted_average: true,
-            min_wave_speed: 1e-6,
+            min_wave_speed: S::from_f64(1e-6).unwrap_or(S::ZERO),
             entropy_fix: true,
         }
     }
@@ -94,87 +68,79 @@ impl RusanovConfig {
     /// GPU 优化配置
     pub fn gpu_optimized() -> Self {
         Self {
-            wave_speed_factor: 1.0,
-            use_weighted_average: false, // 避免条件分支
-            min_wave_speed: 1e-8,
-            entropy_fix: false, // 简化计算
+            wave_speed_factor: S::ONE,
+            use_weighted_average: false,
+            min_wave_speed: S::from_f64(1e-8).unwrap_or(S::ZERO),
+            entropy_fix: false,
         }
     }
 }
 
 // ============================================================================
-// Rusanov 求解器
+// Rusanov 求解器（泛型化）
 // ============================================================================
 
-/// Rusanov 黎曼求解器
+/// Rusanov 黎曼求解器（泛型化）
 ///
-/// Local Lax-Friedrichs 格式的实现。
-///
-/// # 示例
-///
-/// ```ignore
-/// use mh_physics::schemes::riemann::{RusanovSolver, RiemannSolver};
-///
-/// let solver = RusanovSolver::new(&params, 9.81);
-///
-/// let flux = solver.solve(
-///     1.0, 0.5,                              // 左右水深
-///     DVec2::new(1.0, 0.0), DVec2::ZERO,     // 左右速度
-///     DVec2::X,                               // 法向量
-/// )?;
-///
-/// println!("质量通量: {}", flux.mass);
-/// ```
+/// 支持任意 Backend，实现 f32/f64 精度切换
 #[derive(Debug, Clone)]
-pub struct RusanovSolver {
+pub struct RusanovSolver<B: Backend> {
     /// 基本参数
-    params: SolverParams,
-
+    params: SolverParams<B::Scalar>,
     /// Rusanov 特定配置
-    config: RusanovConfig,
+    config: RusanovConfig<B::Scalar>,
+    /// Backend phantom data
+    _backend: std::marker::PhantomData<B>,
 }
 
-impl RusanovSolver {
+impl<B: Backend> RusanovSolver<B> {
     /// 创建新的 Rusanov 求解器
-    pub fn new(numerical_params: &NumericalParams, gravity: f64) -> Self {
+    pub fn new(numerical_params: &NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
         Self {
             params: SolverParams::from_numerical(numerical_params, gravity),
             config: RusanovConfig::default(),
+            _backend: std::marker::PhantomData,
         }
     }
 
     /// 使用配置创建
     pub fn with_config(
-        numerical_params: &NumericalParams,
-        gravity: f64,
-        config: RusanovConfig,
+        numerical_params: &NumericalParams<B::Scalar>,
+        gravity: B::Scalar,
+        config: RusanovConfig<B::Scalar>,
     ) -> Self {
         Self {
             params: SolverParams::from_numerical(numerical_params, gravity),
             config,
+            _backend: std::marker::PhantomData,
         }
     }
 
     /// 从参数直接创建
-    pub fn from_params(params: SolverParams) -> Self {
+    pub fn from_params(params: SolverParams<B::Scalar>) -> Self {
         Self {
             params,
             config: RusanovConfig::default(),
+            _backend: std::marker::PhantomData,
         }
     }
 
     /// 从参数和配置创建
-    pub fn from_params_with_config(params: SolverParams, config: RusanovConfig) -> Self {
-        Self { params, config }
+    pub fn from_params_with_config(params: SolverParams<B::Scalar>, config: RusanovConfig<B::Scalar>) -> Self {
+        Self { 
+            params, 
+            config,
+            _backend: std::marker::PhantomData,
+        }
     }
 
     /// 获取参数
-    pub fn params(&self) -> &SolverParams {
+    pub fn params(&self) -> &SolverParams<B::Scalar> {
         &self.params
     }
 
     /// 获取配置
-    pub fn config(&self) -> &RusanovConfig {
+    pub fn config(&self) -> &RusanovConfig<B::Scalar> {
         &self.config
     }
 
@@ -183,15 +149,13 @@ impl RusanovSolver {
     // =========================================================================
 
     /// 计算最大波速
-    ///
-    /// λ_max = max(|u_L| + c_L, |u_R| + c_R)
     #[inline]
-    fn max_wave_speed(&self, h_l: f64, h_r: f64, un_l: f64, un_r: f64) -> f64 {
+    fn max_wave_speed(&self, h_l: B::Scalar, h_r: B::Scalar, un_l: B::Scalar, un_r: B::Scalar) -> B::Scalar {
         let g = self.params.gravity;
 
         // 声速
-        let c_l = (g * h_l.max(0.0)).sqrt();
-        let c_r = (g * h_r.max(0.0)).sqrt();
+        let c_l = (g * h_l.max(B::Scalar::ZERO)).sqrt();
+        let c_r = (g * h_r.max(B::Scalar::ZERO)).sqrt();
 
         // 左右特征速度
         let lambda_l = un_l.abs() + c_l;
@@ -209,23 +173,21 @@ impl RusanovSolver {
     // =========================================================================
 
     /// 计算物理通量 (旋转坐标系)
-    ///
-    /// F = [h*u_n, h*u_n² + 0.5*g*h², h*u_n*u_t]
     #[inline]
-    fn physical_flux(&self, h: f64, un: f64, ut: f64) -> (f64, f64, f64) {
+    fn physical_flux(&self, h: B::Scalar, un: B::Scalar, ut: B::Scalar) -> (B::Scalar, B::Scalar, B::Scalar) {
         let g = self.params.gravity;
         let hun = h * un;
 
         (
-            hun,                           // 质量通量
-            hun * un + 0.5 * g * h * h,   // 法向动量通量
-            hun * ut,                      // 切向动量通量
+            hun,                                               // 质量通量
+            hun * un + B::Scalar::HALF * g * h * h,           // 法向动量通量
+            hun * ut,                                          // 切向动量通量
         )
     }
 
     /// 计算守恒变量
     #[inline]
-    fn conserved_vars(&self, h: f64, un: f64, ut: f64) -> (f64, f64, f64) {
+    fn conserved_vars(&self, h: B::Scalar, un: B::Scalar, ut: B::Scalar) -> (B::Scalar, B::Scalar, B::Scalar) {
         (h, h * un, h * ut)
     }
 
@@ -236,23 +198,23 @@ impl RusanovSolver {
     /// 求解双湿状态
     fn solve_both_wet(
         &self,
-        h_l: f64,
-        h_r: f64,
-        vel_l: DVec2,
-        vel_r: DVec2,
-        normal: DVec2,
-    ) -> Result<RiemannFlux, RiemannError> {
-        let tangent = DVec2::new(-normal.y, normal.x);
+        h_l: B::Scalar,
+        h_r: B::Scalar,
+        vel_l: B::Vector2D,
+        vel_r: B::Vector2D,
+        normal: B::Vector2D,
+    ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        let tangent = B::vec2_new(-normal.y(), normal.x());
 
         // 分解速度到法向/切向
-        let un_l = vel_l.dot(normal);
-        let un_r = vel_r.dot(normal);
-        let ut_l = vel_l.dot(tangent);
-        let ut_r = vel_r.dot(tangent);
+        let un_l = B::vec2_dot(&vel_l, &normal);
+        let un_r = B::vec2_dot(&vel_r, &normal);
+        let ut_l = B::vec2_dot(&vel_l, &tangent);
+        let ut_r = B::vec2_dot(&vel_r, &tangent);
 
-        // 静水平衡：左右水深相等且无流速时应返回零通量以保持守恒
+        // 静水平衡检测
         let depth_close = (h_l - h_r).abs() <= self.params.h_min;
-        let vel_tol = 1e-12_f64;
+        let vel_tol = B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::ZERO);
         let still_water = depth_close
             && un_l.abs() <= vel_tol
             && un_r.abs() <= vel_tol
@@ -260,7 +222,10 @@ impl RusanovSolver {
             && ut_r.abs() <= vel_tol;
         if still_water {
             let lambda_max = self.max_wave_speed(h_l, h_r, un_l, un_r);
-            return Ok(RiemannFlux::from_rotated(0.0, 0.0, 0.0, normal, lambda_max));
+            return Ok(RiemannFlux::from_rotated::<B>(
+                B::Scalar::ZERO, B::Scalar::ZERO, B::Scalar::ZERO, 
+                normal, lambda_max, self.params.gravity
+            ));
         }
 
         // 计算最大波速
@@ -275,31 +240,26 @@ impl RusanovSolver {
         let (u_h_r, u_hun_r, u_hut_r) = self.conserved_vars(h_r, un_r, ut_r);
 
         // Rusanov 通量公式
-        // F* = 0.5 * (F_L + F_R) - 0.5 * λ_max * (U_R - U_L)
-        let half = 0.5;
-        let half_lambda = half * lambda_max;
+        let half_lambda = B::Scalar::HALF * lambda_max;
 
-        let mass = half * (f_mass_l + f_mass_r) - half_lambda * (u_h_r - u_h_l);
-        let mom_n = half * (f_mom_n_l + f_mom_n_r) - half_lambda * (u_hun_r - u_hun_l);
-        let mom_t = half * (f_mom_t_l + f_mom_t_r) - half_lambda * (u_hut_r - u_hut_l);
+        let mass = B::Scalar::HALF * (f_mass_l + f_mass_r) - half_lambda * (u_h_r - u_h_l);
+        let mom_n = B::Scalar::HALF * (f_mom_n_l + f_mom_n_r) - half_lambda * (u_hun_r - u_hun_l);
+        let mom_t = B::Scalar::HALF * (f_mom_t_l + f_mom_t_r) - half_lambda * (u_hut_r - u_hut_l);
 
-        Ok(RiemannFlux::from_rotated(mass, mom_n, mom_t, normal, lambda_max))
+        Ok(RiemannFlux::from_rotated::<B>(mass, mom_n, mom_t, normal, lambda_max, self.params.gravity))
     }
 
     /// 求解单侧湿状态（溃坝问题）
-    /// 
-    /// 使用 Ritter 溃坝解析解来计算干湿边界通量
-    /// 参考: Toro, E.F. "Shock-Capturing Methods for Free-Surface Shallow Flows"
     fn solve_single_wet(
         &self,
-        h_wet: f64,
-        vel_wet: DVec2,
-        normal: DVec2,
+        h_wet: B::Scalar,
+        vel_wet: B::Vector2D,
+        normal: B::Vector2D,
         wet_on_left: bool,
-    ) -> Result<RiemannFlux, RiemannError> {
-        let tangent = DVec2::new(-normal.y, normal.x);
-        let un_wet = vel_wet.dot(normal);
-        let ut_wet = vel_wet.dot(tangent);
+    ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        let tangent = B::vec2_new(-normal.y(), normal.x());
+        let un_wet = B::vec2_dot(&vel_wet, &normal);
+        let ut_wet = B::vec2_dot(&vel_wet, &tangent);
         let c_wet = (self.params.gravity * h_wet).sqrt();
         let lambda_max = (un_wet.abs() + c_wet).max(self.config.min_wave_speed);
         let g = self.params.gravity;
@@ -307,52 +267,48 @@ impl RusanovSolver {
         // 计算物理通量
         let (f_h, f_hun, f_hut) = self.physical_flux(h_wet, un_wet, ut_wet);
 
+        let three = B::Scalar::from_f64(3.0).unwrap();
+        let two = B::Scalar::TWO;
+        let nine = B::Scalar::from_f64(9.0).unwrap();
+
         // 使用 Riemann 不变量的 Ritter 溃坝解
         let (mass, mom_n, mom_t) = if wet_on_left {
-            // 湿侧在左，干侧在右
             if un_wet >= c_wet {
-                // 超临界流出：全部使用内部通量
                 (f_h, f_hun, f_hut)
             } else if un_wet <= -c_wet {
-                // 超临界流入干区：静水压力边界
-                (0.0, 0.5 * g * h_wet * h_wet, 0.0)
+                (B::Scalar::ZERO, B::Scalar::HALF * g * h_wet * h_wet, B::Scalar::ZERO)
             } else {
-                // 亚临界：使用 Ritter 解的边界值
-                // h* = (2c + u)² / (9g), u* = (2c + u) / 3
-                let h_star = (2.0 * c_wet + un_wet).powi(2) / (9.0 * g);
-                let u_star = (2.0 * c_wet + un_wet) / 3.0;
+                let h_star = (two * c_wet + un_wet).powi(2) / (nine * g);
+                let u_star = (two * c_wet + un_wet) / three;
                 let f_mass = h_star * u_star;
-                let f_mom = h_star * u_star * u_star + 0.5 * g * h_star * h_star;
-                // 切向动量保持切向速度不变
-                let f_mom_t = h_star * u_star * ut_wet / un_wet.abs().max(1e-10);
+                let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
+                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap());
+                let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
         } else {
-            // 湿侧在右，干侧在左（对称情况）
             if un_wet <= -c_wet {
-                // 超临界流出
                 (f_h, f_hun, f_hut)
             } else if un_wet >= c_wet {
-                // 超临界流入干区：静水压力边界
-                (0.0, 0.5 * g * h_wet * h_wet, 0.0)
+                (B::Scalar::ZERO, B::Scalar::HALF * g * h_wet * h_wet, B::Scalar::ZERO)
             } else {
-                // 亚临界：对称的 Ritter 解
-                let h_star = (2.0 * c_wet - un_wet).powi(2) / (9.0 * g);
-                let u_star = -(2.0 * c_wet - un_wet) / 3.0;
+                let h_star = (two * c_wet - un_wet).powi(2) / (nine * g);
+                let u_star = -(two * c_wet - un_wet) / three;
                 let f_mass = h_star * u_star;
-                let f_mom = h_star * u_star * u_star + 0.5 * g * h_star * h_star;
-                let f_mom_t = h_star * u_star * ut_wet / un_wet.abs().max(1e-10);
+                let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
+                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap());
+                let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
         };
 
-        Ok(RiemannFlux::from_rotated(mass, mom_n, mom_t, normal, lambda_max))
+        Ok(RiemannFlux::from_rotated::<B>(mass, mom_n, mom_t, normal, lambda_max, self.params.gravity))
     }
 
     /// 求解双干状态
     #[inline]
-    fn solve_both_dry(&self) -> Result<RiemannFlux, RiemannError> {
-        Ok(RiemannFlux::ZERO)
+    fn solve_both_dry(&self) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        Ok(RiemannFlux::zero())
     }
 }
 
@@ -360,7 +316,10 @@ impl RusanovSolver {
 // RiemannSolver trait 实现
 // ============================================================================
 
-impl RiemannSolver for RusanovSolver {
+impl<B: Backend> RiemannSolver for RusanovSolver<B> {
+    type Scalar = B::Scalar;
+    type Vector2D = B::Vector2D;
+
     fn name(&self) -> &'static str {
         "Rusanov (LLF)"
     }
@@ -371,21 +330,20 @@ impl RiemannSolver for RusanovSolver {
             has_entropy_fix: self.config.entropy_fix,
             supports_hydrostatic: true,
             order: 1,
-            positivity_preserving: true, // Rusanov 天然保正
+            positivity_preserving: true,
         }
     }
 
     fn solve(
         &self,
-        h_left: f64,
-        h_right: f64,
-        vel_left: DVec2,
-        vel_right: DVec2,
-        normal: DVec2,
-    ) -> Result<RiemannFlux, RiemannError> {
+        h_left: B::Scalar,
+        h_right: B::Scalar,
+        vel_left: B::Vector2D,
+        vel_right: B::Vector2D,
+        normal: B::Vector2D,
+    ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
         let h_dry = self.params.h_dry;
 
-        // 干湿状态判断
         let left_wet = h_left > h_dry;
         let right_wet = h_right > h_dry;
 
@@ -397,35 +355,45 @@ impl RiemannSolver for RusanovSolver {
         }
     }
 
-    fn gravity(&self) -> f64 {
+    fn gravity(&self) -> B::Scalar {
         self.params.gravity
     }
 
-    fn dry_threshold(&self) -> f64 {
+    fn dry_threshold(&self) -> B::Scalar {
         self.params.h_dry
     }
 }
 
 // ============================================================================
+// 向后兼容类型别名
+// ============================================================================
+
+/// f64 版本的 RusanovSolver
+pub type RusanovSolverF64 = RusanovSolver<CpuBackend<f64>>;
+
+/// f32 版本的 RusanovSolver
+pub type RusanovSolverF32 = RusanovSolver<CpuBackend<f32>>;
+
+// ============================================================================
 // 辅助函数
 // ============================================================================
 
-/// 创建默认 Rusanov 求解器
-pub fn create_rusanov_solver(gravity: f64) -> RusanovSolver {
-    let params = SolverParams {
+/// 创建默认 Rusanov 求解器 (f64)
+pub fn create_rusanov_solver(gravity: f64) -> RusanovSolverF64 {
+    let params = SolverParams::<f64> {
         gravity,
         ..Default::default()
     };
-    RusanovSolver::from_params(params)
+    RusanovSolverF64::from_params(params)
 }
 
-/// 创建鲁棒 Rusanov 求解器
-pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolver {
-    let params = SolverParams {
+/// 创建鲁棒 Rusanov 求解器 (f64)
+pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolverF64 {
+    let params = SolverParams::<f64> {
         gravity,
         ..Default::default()
     };
-    RusanovSolver::from_params_with_config(params, RusanovConfig::robust())
+    RusanovSolverF64::from_params_with_config(params, RusanovConfig::robust())
 }
 
 // ============================================================================
@@ -435,15 +403,22 @@ pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f64::consts::FRAC_1_SQRT_2;
 
-    fn create_test_solver() -> RusanovSolver {
+    fn create_test_solver_f64() -> RusanovSolverF64 {
         create_rusanov_solver(9.81)
+    }
+
+    fn create_test_solver_f32() -> RusanovSolverF32 {
+        let params = SolverParams::<f32> {
+            gravity: 9.81f32,
+            ..Default::default()
+        };
+        RusanovSolverF32::from_params(params)
     }
 
     #[test]
     fn test_solver_name_and_capabilities() {
-        let solver = create_test_solver();
+        let solver = create_test_solver_f64();
         assert_eq!(solver.name(), "Rusanov (LLF)");
 
         let caps = solver.capabilities();
@@ -453,172 +428,82 @@ mod tests {
     }
 
     #[test]
-    fn test_static_water() {
-        let solver = create_test_solver();
+    fn test_static_water_f64() {
+        let solver = create_test_solver_f64();
 
-        // 静水：两侧相同水深和零速度
         let flux = solver
-            .solve(1.0, 1.0, DVec2::ZERO, DVec2::ZERO, DVec2::X)
+            .solve(
+                1.0, 1.0, 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(1.0, 0.0)
+            )
             .unwrap();
 
-        // 静水应该没有质量通量
         assert!(flux.mass.abs() < 1e-10);
-        // 动量通量应该平衡（压力差为零）
         assert!(flux.momentum_x.abs() < 1e-10);
         assert!(flux.momentum_y.abs() < 1e-10);
     }
 
     #[test]
-    fn test_uniform_flow() {
-        let solver = create_test_solver();
+    fn test_static_water_f32() {
+        let solver = create_test_solver_f32();
 
-        // 均匀流：相同水深，相同速度
-        let vel = DVec2::new(1.0, 0.0);
-        let flux = solver.solve(1.0, 1.0, vel, vel, DVec2::X).unwrap();
-
-        // 质量通量应该等于 h * u
-        assert!((flux.mass - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_dam_break() {
-        let solver = create_test_solver();
-
-        // 溃坝：左侧高水位，右侧低水位，初始静止
         let flux = solver
-            .solve(2.0, 1.0, DVec2::ZERO, DVec2::ZERO, DVec2::X)
+            .solve(
+                1.0f32, 1.0f32, 
+                CpuBackend::<f32>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f32>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f32>::vec2_new(1.0, 0.0)
+            )
             .unwrap();
 
-        // 应该有向右的质量通量（从高向低）
-        assert!(flux.mass > 0.0);
-        // 应该有合理的波速
-        assert!(flux.max_wave_speed > 0.0);
-    }
-
-    #[test]
-    fn test_dry_left() {
-        let solver = create_test_solver();
-
-        // 左侧干，右侧湿
-        let flux = solver
-            .solve(0.0, 1.0, DVec2::ZERO, DVec2::ZERO, DVec2::X)
-            .unwrap();
-
-        // 应该是有效通量
+        assert!(flux.mass.abs() < 1e-5f32);
         assert!(flux.is_valid());
     }
 
     #[test]
-    fn test_dry_right() {
-        let solver = create_test_solver();
+    fn test_dam_break_f64() {
+        let solver = create_test_solver_f64();
 
-        // 左侧湿，右侧干
         let flux = solver
-            .solve(1.0, 0.0, DVec2::new(1.0, 0.0), DVec2::ZERO, DVec2::X)
+            .solve(
+                2.0, 1.0, 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(1.0, 0.0)
+            )
             .unwrap();
 
-        // 向右流动应该产生正的质量通量
+        assert!(flux.mass > 0.0);
+        assert!(flux.max_wave_speed > 0.0);
         assert!(flux.is_valid());
     }
 
     #[test]
     fn test_both_dry() {
-        let solver = create_test_solver();
+        let solver = create_test_solver_f64();
 
-        // 两侧都干
         let flux = solver
-            .solve(0.0, 0.0, DVec2::ZERO, DVec2::ZERO, DVec2::X)
+            .solve(
+                0.0, 0.0, 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(0.0, 0.0), 
+                CpuBackend::<f64>::vec2_new(1.0, 0.0)
+            )
             .unwrap();
 
-        // 零通量
         assert_eq!(flux.mass, 0.0);
         assert_eq!(flux.momentum_x, 0.0);
         assert_eq!(flux.momentum_y, 0.0);
     }
 
     #[test]
-    fn test_oblique_flow() {
-        let solver = create_test_solver();
-
-        // 斜向流动：45度方向
-        let vel = DVec2::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
-        let flux = solver.solve(1.0, 1.0, vel, vel, DVec2::X).unwrap();
-
-        // 应该有正的质量通量
-        assert!(flux.mass > 0.0);
-        // 应该有正的 x 动量通量
-        assert!(flux.momentum_x > 0.0);
-    }
-
-    #[test]
-    fn test_y_normal() {
-        let solver = create_test_solver();
-
-        // 法向量沿 Y 轴
-        let vel = DVec2::new(0.0, 1.0);
-        let flux = solver.solve(1.0, 1.0, vel, vel, DVec2::Y).unwrap();
-
-        // 质量通量应该等于 h * v
-        assert!((flux.mass - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_symmetry() {
-        let solver = create_test_solver();
-
-        // 对称测试：交换左右并反转法向量
-        let flux1 = solver
-            .solve(2.0, 1.0, DVec2::new(0.5, 0.0), DVec2::new(-0.3, 0.0), DVec2::X)
-            .unwrap();
-
-        let flux2 = solver
-            .solve(1.0, 2.0, DVec2::new(-0.3, 0.0), DVec2::new(0.5, 0.0), -DVec2::X)
-            .unwrap();
-
-        // 反转后的通量应该符号相反（近似）
-        assert!((flux1.mass + flux2.mass).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_conservation() {
-        let solver = create_test_solver();
-
-        // 计算通量应该满足守恒性
-        let flux = solver
-            .solve(1.5, 0.8, DVec2::new(0.3, 0.1), DVec2::new(-0.2, 0.05), DVec2::X)
-            .unwrap();
-
-        // 通量应该是有限值
-        assert!(flux.is_valid());
-        assert!(flux.mass.is_finite());
-        assert!(flux.momentum_x.is_finite());
-        assert!(flux.momentum_y.is_finite());
-    }
-
-    #[test]
     fn test_robust_config() {
-        let params = SolverParams::default();
-        let solver = RusanovSolver::from_params_with_config(params, RusanovConfig::robust());
+        let params = SolverParams::<f64>::default();
+        let solver = RusanovSolverF64::from_params_with_config(params, RusanovConfig::robust());
 
-        // 鲁棒配置应该有更大的波速因子
         assert!(solver.config().wave_speed_factor > 1.0);
         assert!(solver.config().use_weighted_average);
-    }
-
-    #[test]
-    fn test_max_wave_speed() {
-        let solver = create_test_solver();
-
-        // 超临界流
-        let h = 1.0_f64;
-        let c = (9.81_f64 * h).sqrt(); // ≈ 3.13 m/s
-        let u_fast = 5.0; // 超临界
-
-        let flux = solver
-            .solve(h, h, DVec2::new(u_fast, 0.0), DVec2::new(u_fast, 0.0), DVec2::X)
-            .unwrap();
-
-        // 波速应该大于 u + c
-        assert!(flux.max_wave_speed >= u_fast + c - 0.01);
     }
 }

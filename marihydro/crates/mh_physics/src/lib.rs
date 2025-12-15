@@ -1,4 +1,4 @@
-// marihydro\crates\mh_physics\src/lib.rs
+// marihydro/crates/mh_physics/src/lib.rs
 
 //! 物理求解器模块
 //!
@@ -50,7 +50,6 @@ pub mod tracer;
 pub mod assimilation;
 pub mod traits;
 pub mod types;
-pub mod vertical;
 
 // 待迁移模块（占位）
 pub mod forcing;
@@ -64,10 +63,18 @@ pub mod fields;
 pub mod gpu;
 pub mod operators;
 
+// 重导出核心运行时符号
+pub use mh_runtime::{
+    Backend, CpuBackend, RuntimeScalar, DeviceBuffer, MemoryLocation
+};
+
+// 重导出索引类型（仅此一处，删除所有重复导入）
+pub use mh_runtime::{
+    CellIndex, FaceIndex, NodeIndex, BoundaryIndex,
+};
+
 // 重导出核心抽象
-// 注意：Scalar trait 应从 mh_runtime 导入
-pub use core::{Backend, CpuBackend, DefaultBackend, DeviceBuffer, D2, D3};
-pub use mh_runtime::RuntimeScalar as Scalar;
+pub use core::{DefaultBackend, D2, D3};
 
 // 重导出网格抽象
 pub use mesh::{MeshTopology, MeshKind, UnstructuredMeshAdapter};
@@ -88,9 +95,14 @@ pub use state::{
     ShallowWaterStateGeneric, ShallowWaterStateDefault,
 };
 pub use traits::{StateAccess, StateAccessExt, StateAccessMut, StateStatistics, StateView, StateViewMut};
+
+// 修复SolverStats路径
+pub use engine::SolverStats;
+
+// 重导出类型（从types模块导入，不重复导入索引）
 pub use types::{
-    BoundaryIndex, CellIndex, FaceIndex, LimiterType, NodeIndex, NumericalParams,
-    NumericalParamsBuilder, ParamsValidationError, PhysicalConstants, RiemannSolverType,
+    LimiterType, NumericalParams,
+    NumericalParamsF64, ParamsValidationError, PhysicalConstants, RiemannSolverType,
     SafeDepth, SafeVelocity, SolverConfig, TimeIntegration,
     BoundaryValueProvider, ConstantBoundaryProvider, ZeroBoundaryProvider,
 };

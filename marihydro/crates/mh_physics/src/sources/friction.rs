@@ -30,7 +30,7 @@ use super::traits::{
 };
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
+use crate::state::{ShallowWaterState, ShallowWaterStateF64, ShallowWaterStateGeneric};
 
 /// Manning 摩擦配置
 #[derive(Debug, Clone)]
@@ -143,7 +143,7 @@ impl SourceTerm for ManningFrictionConfig {
 
     fn compute_all(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         ctx: &SourceContext,
         _output_h: &mut [f64],
         output_hu: &mut [f64],
@@ -234,7 +234,7 @@ impl SourceTerm for ChezyFrictionConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {

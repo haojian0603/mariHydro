@@ -1,35 +1,43 @@
 // crates/mh_physics/src/schemes/riemann/traits.rs
 
-//! 黎曼求解器统一接口
+//! 黎曼求解器统一接口（泛型化）
+//!
+//! T=3 改造：将所有核心类型泛型化以支持 f32/f64 精度切换
 
-use glam::DVec2;
+use mh_runtime::{Backend, RuntimeScalar};
 
-use crate::types::NumericalParams;
-
-/// 黎曼求解结果通量
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RiemannFlux {
+/// 黎曼求解结果通量（泛型化）
+#[derive(Debug, Clone, Copy)]
+pub struct RiemannFlux<S: RuntimeScalar> {
     /// 质量通量 [m²/s]
-    pub mass: f64,
+    pub mass: S,
     /// x方向动量通量 [m³/s²]
-    pub momentum_x: f64,
+    pub momentum_x: S,
     /// y方向动量通量 [m³/s²]
-    pub momentum_y: f64,
+    pub momentum_y: S,
     /// 最大波速 [m/s]
-    pub max_wave_speed: f64,
+    pub max_wave_speed: S,
 }
 
-impl RiemannFlux {
+impl<S: RuntimeScalar> Default for RiemannFlux<S> {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl<S: RuntimeScalar> RiemannFlux<S> {
     /// 零通量
-    pub const ZERO: Self = Self {
-        mass: 0.0,
-        momentum_x: 0.0,
-        momentum_y: 0.0,
-        max_wave_speed: 0.0,
-    };
+    pub fn zero() -> Self {
+        Self {
+            mass: S::ZERO,
+            momentum_x: S::ZERO,
+            momentum_y: S::ZERO,
+            max_wave_speed: S::ZERO,
+        }
+    }
 
     /// 创建通量
-    pub fn new(mass: f64, momentum_x: f64, momentum_y: f64, max_wave_speed: f64) -> Self {
+    pub fn new(mass: S, momentum_x: S, momentum_y: S, max_wave_speed: S) -> Self {
         Self {
             mass,
             momentum_x,
@@ -38,39 +46,38 @@ impl RiemannFlux {
         }
     }
 
-    /// 动量向量
-    #[inline]
-    pub fn momentum(&self) -> DVec2 {
-        DVec2::new(self.momentum_x, self.momentum_y)
-    }
-
     /// 从旋转坐标系转换到全局坐标系
     ///
     /// # 参数
     /// - `mass`: 质量通量
     /// - `flux_n`: 法向动量通量
     /// - `flux_t`: 切向动量通量
-    /// - `normal`: 法向量
+    /// - `normal`: 法向量 (使用 Backend 的 Vector2D)
     /// - `max_wave_speed`: 最大波速
-    pub fn from_rotated(
-        mass: f64,
-        flux_n: f64,
-        flux_t: f64,
-        normal: DVec2,
-        max_wave_speed: f64,
+    /// - `_gravity`: 重力加速度（用于类型推断，某些实现可能需要）
+    pub fn from_rotated<B: Backend<Scalar = S>>(
+        mass: S,
+        flux_n: S,
+        flux_t: S,
+        normal: B::Vector2D,
+        max_wave_speed: S,
+        _gravity: S,
     ) -> Self {
-        let tangent = DVec2::new(-normal.y, normal.x);
-        let momentum = normal * flux_n + tangent * flux_t;
+        // 计算切向量
+        let tangent = B::vec2_new(-normal.y(), normal.x());
+        // 动量 = normal * flux_n + tangent * flux_t
+        let momentum_x = normal.x() * flux_n + tangent.x() * flux_t;
+        let momentum_y = normal.y() * flux_n + tangent.y() * flux_t;
         Self {
             mass,
-            momentum_x: momentum.x,
-            momentum_y: momentum.y,
+            momentum_x,
+            momentum_y,
             max_wave_speed,
         }
     }
 
     /// 缩放通量
-    pub fn scaled(self, factor: f64) -> Self {
+    pub fn scaled(self, factor: S) -> Self {
         Self {
             mass: self.mass * factor,
             momentum_x: self.momentum_x * factor,
@@ -85,7 +92,7 @@ impl RiemannFlux {
             && self.momentum_x.is_finite()
             && self.momentum_y.is_finite()
             && self.max_wave_speed.is_finite()
-            && self.max_wave_speed >= 0.0
+            && self.max_wave_speed >= S::ZERO
     }
 }
 
@@ -104,36 +111,36 @@ pub struct SolverCapabilities {
     pub positivity_preserving: bool,
 }
 
-/// 求解器参数
+/// 求解器参数（泛型化）
 #[derive(Debug, Clone, Copy)]
-pub struct SolverParams {
+pub struct SolverParams<S: RuntimeScalar> {
     /// 重力加速度 [m/s²]
-    pub gravity: f64,
+    pub gravity: S,
     /// 干湿阈值 [m]
-    pub h_dry: f64,
+    pub h_dry: S,
     /// 最小水深 [m]
-    pub h_min: f64,
+    pub h_min: S,
     /// 通量零阈值
-    pub flux_eps: f64,
+    pub flux_eps: S,
     /// 熵修正比例
-    pub entropy_ratio: f64,
+    pub entropy_ratio: S,
 }
 
-impl Default for SolverParams {
+impl<S: RuntimeScalar> Default for SolverParams<S> {
     fn default() -> Self {
         Self {
-            gravity: 9.81,
-            h_dry: 1e-6,
-            h_min: 1e-9,
-            flux_eps: 1e-14,
-            entropy_ratio: 0.1,
+            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
+            h_dry: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            h_min: S::from_f64(1e-9).unwrap_or(S::ZERO),
+            flux_eps: S::from_f64(1e-14).unwrap_or(S::ZERO),
+            entropy_ratio: S::from_f64(0.1).unwrap_or(S::ZERO),
         }
     }
 }
 
-impl SolverParams {
+impl<S: RuntimeScalar> SolverParams<S> {
     /// 从 NumericalParams 创建
-    pub fn from_numerical(params: &NumericalParams, gravity: f64) -> Self {
+    pub fn from_numerical(params: &crate::types::NumericalParams<S>, gravity: S) -> Self {
         Self {
             gravity,
             h_dry: params.h_dry,
@@ -145,13 +152,20 @@ impl SolverParams {
 
     /// 计算熵修正阈值
     #[inline]
-    pub fn entropy_threshold(&self, wave_speed_range: f64) -> f64 {
+    pub fn entropy_threshold(&self, wave_speed_range: S) -> S {
         (self.entropy_ratio * wave_speed_range.abs()).max(self.flux_eps)
     }
 }
 
-/// 黎曼求解器 trait
+/// 黎曼求解器 trait（泛型化，使用 Backend）
+///
+/// 实现此 trait 的求解器可以处理任意 Backend 的几何类型
 pub trait RiemannSolver: Send + Sync {
+    /// 求解器使用的标量类型
+    type Scalar: RuntimeScalar;
+    /// 求解器使用的二维向量类型
+    type Vector2D: Copy + Send + Sync;
+
     /// 求解器名称
     fn name(&self) -> &'static str;
 
@@ -171,18 +185,18 @@ pub trait RiemannSolver: Send + Sync {
     /// 界面数值通量
     fn solve(
         &self,
-        h_left: f64,
-        h_right: f64,
-        vel_left: DVec2,
-        vel_right: DVec2,
-        normal: DVec2,
-    ) -> Result<RiemannFlux, RiemannError>;
+        h_left: Self::Scalar,
+        h_right: Self::Scalar,
+        vel_left: Self::Vector2D,
+        vel_right: Self::Vector2D,
+        normal: Self::Vector2D,
+    ) -> Result<RiemannFlux<Self::Scalar>, RiemannError>;
 
     /// 重力加速度
-    fn gravity(&self) -> f64;
+    fn gravity(&self) -> Self::Scalar;
 
     /// 干湿阈值
-    fn dry_threshold(&self) -> f64;
+    fn dry_threshold(&self) -> Self::Scalar;
 }
 
 /// 黎曼求解器错误
@@ -205,13 +219,30 @@ impl std::fmt::Display for RiemannError {
 
 impl std::error::Error for RiemannError {}
 
+// ============================================================================
+// 向后兼容类型别名
+// ============================================================================
+
+/// f64 版本的 RiemannFlux（向后兼容）
+pub type RiemannFluxF64 = RiemannFlux<f64>;
+
+/// f32 版本的 RiemannFlux
+pub type RiemannFluxF32 = RiemannFlux<f32>;
+
+/// f64 版本的 SolverParams（向后兼容）
+pub type SolverParamsF64 = SolverParams<f64>;
+
+/// f32 版本的 SolverParams
+pub type SolverParamsF32 = SolverParams<f32>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[test]
-    fn test_riemann_flux_zero() {
-        let flux = RiemannFlux::ZERO;
+    fn test_riemann_flux_zero_f64() {
+        let flux = RiemannFlux::<f64>::zero();
         assert_eq!(flux.mass, 0.0);
         assert_eq!(flux.momentum_x, 0.0);
         assert_eq!(flux.momentum_y, 0.0);
@@ -219,26 +250,43 @@ mod tests {
     }
 
     #[test]
-    fn test_riemann_flux_from_rotated() {
-        // 沿 x 轴法向
-        let flux = RiemannFlux::from_rotated(1.0, 2.0, 3.0, DVec2::X, 5.0);
-        assert_eq!(flux.mass, 1.0);
-        assert_eq!(flux.momentum_x, 2.0);
-        assert_eq!(flux.momentum_y, 3.0);
-
-        // 沿 y 轴法向
-        let flux = RiemannFlux::from_rotated(1.0, 2.0, 3.0, DVec2::Y, 5.0);
-        assert_eq!(flux.mass, 1.0);
-        assert_eq!(flux.momentum_y, 2.0);
-        assert!((flux.momentum_x - (-3.0)).abs() < 1e-10);
+    fn test_riemann_flux_zero_f32() {
+        let flux = RiemannFlux::<f32>::zero();
+        assert_eq!(flux.mass, 0.0f32);
+        assert_eq!(flux.momentum_x, 0.0f32);
+        assert_eq!(flux.momentum_y, 0.0f32);
+        assert!(flux.is_valid());
     }
 
     #[test]
-    fn test_solver_params() {
-        let params = SolverParams::default();
+    fn test_riemann_flux_from_rotated_f64() {
+        // 沿 x 轴法向
+        let normal = CpuBackend::<f64>::vec2_new(1.0, 0.0);
+        let flux = RiemannFlux::from_rotated::<CpuBackend<f64>>(1.0, 2.0, 3.0, normal, 5.0, 9.81);
+        assert_eq!(flux.mass, 1.0);
+        assert!((flux.momentum_x - 2.0).abs() < 1e-10);
+        assert!((flux.momentum_y - 3.0).abs() < 1e-10);
+
+        // 沿 y 轴法向
+        let normal_y = CpuBackend::<f64>::vec2_new(0.0, 1.0);
+        let flux_y = RiemannFlux::from_rotated::<CpuBackend<f64>>(1.0, 2.0, 3.0, normal_y, 5.0, 9.81);
+        assert_eq!(flux_y.mass, 1.0);
+        assert!((flux_y.momentum_y - 2.0).abs() < 1e-10);
+        assert!((flux_y.momentum_x - (-3.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_solver_params_f64() {
+        let params = SolverParams::<f64>::default();
         assert_eq!(params.gravity, 9.81);
 
         let threshold = params.entropy_threshold(10.0);
         assert!(threshold > 0.0);
+    }
+
+    #[test]
+    fn test_solver_params_f32() {
+        let params = SolverParams::<f32>::default();
+        assert!((params.gravity - 9.81f32).abs() < 1e-5);
     }
 }

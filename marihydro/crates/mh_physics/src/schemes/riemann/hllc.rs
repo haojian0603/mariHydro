@@ -16,7 +16,7 @@
 use crate::schemes::riemann::traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
-use mh_runtime::{Backend, RuntimeScalar};
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 
 /// HLLC 求解器（Backend 泛型化）
 ///
@@ -245,6 +245,9 @@ impl<B: Backend> HllcSolver<B> {
 }
 
 impl<B: Backend> RiemannSolver for HllcSolver<B> {
+    type Scalar = B::Scalar;
+    type Vector2D = B::Vector2D;
+
     fn name(&self) -> &'static str {
         "HLLC"
     }
@@ -319,7 +322,7 @@ pub type HllcSolverF32 = HllcSolver<CpuBackend<f32>>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SolverParams;
+    use crate::builder::solver_builder::SolverParams;
     use mh_runtime::CpuBackend;
 
     fn create_solver<B: Backend>(gravity: B::Scalar) -> HllcSolver<B> {

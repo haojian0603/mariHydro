@@ -37,8 +37,8 @@ use crate::numerics::discretization::{
 use crate::numerics::linear_algebra::{
     JacobiPreconditioner, PcgSolver, Preconditioner, SolverConfig, SolverResult, SolverStatus,
 };
-use crate::schemes::riemann::{HllcSolver, RiemannSolver, SolverParams as RiemannParams};
-use crate::state::ShallowWaterState;
+use crate::schemes::riemann::{HllcSolverF64, RiemannSolver, SolverParams as RiemannParams};
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 use crate::types::PhysicalConstants;
 use glam::DVec2;
 use mh_foundation::AlignedVec;
@@ -174,7 +174,7 @@ pub struct SemiImplicitStrategy {
     /// 最新统计
     stats: SemiImplicitStats,
     /// Riemann 求解器（用于面通量计算）
-    riemann_solver: HllcSolver,
+    riemann_solver: HllcSolverF64,
 }
 
 impl SemiImplicitStrategy {
@@ -210,7 +210,7 @@ impl SemiImplicitStrategy {
             flux_eps: 1e-14,
             entropy_ratio: 0.1,
         };
-        let riemann_solver = HllcSolver::from_params(riemann_params);
+        let riemann_solver = HllcSolverF64::from_params(riemann_params);
 
         Self {
             config,
@@ -677,7 +677,7 @@ impl SemiImplicitStrategy {
             flux_eps: 1e-14,
             entropy_ratio: 0.1,
         };
-        self.riemann_solver = HllcSolver::from_params(riemann_params);
+        self.riemann_solver = HllcSolverF64::from_params(riemann_params);
     }
 }
 

@@ -47,7 +47,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     type Scalar: RuntimeScalar;
     /// 缓冲区类型
     type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T>;
-    /// 二维向量类型（新增）
+    /// 二维向量类型
     type Vector2D: Vector2D<Scalar = Self::Scalar>;
 
     /// 后端名称
@@ -131,7 +131,7 @@ pub trait Backend: Clone + Send + Sync + 'static {
     fn enforce_positivity(&self, x: &mut Self::Buffer<Self::Scalar>, min_val: Self::Scalar);
 
     // =========================================================================
-    // 几何运算（新增）
+    // 几何运算
     // =========================================================================
 
     /// 创建二维向量
@@ -187,7 +187,7 @@ impl Vector2D for [f32; 2] {
 impl Backend for CpuBackend<f32> {
     type Scalar = f32;
     type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
-    type Vector2D = [f32; 2];  // 新增
+    type Vector2D = [f32; 2];
 
     fn name(&self) -> &'static str {
         "CPU-f32"
@@ -245,7 +245,6 @@ impl Backend for CpuBackend<f32> {
         }
     }
 
-    // 新增几何方法实现
     #[inline]
     fn vec2_new(x: f32, y: f32) -> Self::Vector2D {
         [x, y]
@@ -290,7 +289,7 @@ impl Vector2D for [f64; 2] {
 impl Backend for CpuBackend<f64> {
     type Scalar = f64;
     type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
-    type Vector2D = [f64; 2];  // 新增
+    type Vector2D = [f64; 2];
 
     fn name(&self) -> &'static str {
         "CPU-f64"
@@ -348,7 +347,6 @@ impl Backend for CpuBackend<f64> {
         }
     }
 
-    // 新增几何方法实现
     #[inline]
     fn vec2_new(x: f64, y: f64) -> Self::Vector2D {
         [x, y]
@@ -414,7 +412,6 @@ mod tests {
         assert_eq!(x, vec![0.0, 0.5, 0.0, 2.0]);
     }
 
-    // 新增几何方法测试（使用关联函数语法）
     #[test]
     fn test_vec2_new_f32() {
         let v = <CpuBackend<f32>>::vec2_new(1.0f32, 2.0f32);
@@ -427,7 +424,7 @@ mod tests {
         let v2 = <CpuBackend<f64>>::vec2_new(1.0, 2.0);
         
         let dot = <CpuBackend<f64>>::vec2_dot(&v1, &v2);
-        assert_eq!(dot, 11.0); // 3*1 + 4*2
+        assert_eq!(dot, 11.0);
         
         let len = <CpuBackend<f64>>::vec2_length(&v1);
         assert_eq!(len, 5.0);

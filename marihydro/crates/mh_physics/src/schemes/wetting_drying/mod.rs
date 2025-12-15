@@ -34,7 +34,7 @@
 mod handler;
 pub mod transitions;
 
-pub use handler::{WetState, WettingDryingConfig, WettingDryingHandler};
+pub use handler::{WetState, WettingDryingConfig, WettingDryingHandler, WettingDryingHandlerF64, WettingDryingHandlerF32};
 
 // 过渡函数快捷导出
 pub use transitions::{

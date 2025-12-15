@@ -14,5 +14,5 @@ pub mod riemann;
 pub mod wetting_drying;
 
 // 重导出常用类型
-pub use riemann::{HllcSolver, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
-pub use wetting_drying::{WetState, WettingDryingConfig, WettingDryingHandler};
+pub use riemann::{HllcSolver, HllcSolverF64, HllcSolverF32, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
+pub use wetting_drying::{WetState, WettingDryingConfig, WettingDryingHandler, WettingDryingHandlerF64, WettingDryingHandlerF32};

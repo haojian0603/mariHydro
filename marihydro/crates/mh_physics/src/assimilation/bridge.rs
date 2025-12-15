@@ -1,7 +1,7 @@
 // crates/mh_physics/src/assimilation/bridge.rs
 
 use super::PhysicsAssimilable;
-use crate::state::ShallowWaterState;
+use crate::state::ShallowWaterStateF64;
 use crate::tracer::TracerType;
 
 /// 状态快照（与mh_agent::PhysicsSnapshot兼容）
@@ -19,7 +19,7 @@ pub struct StateSnapshot {
 
 /// 桥接适配器
 pub struct AssimilableBridge<'a> {
-    state: &'a mut ShallowWaterState,
+    state: &'a mut ShallowWaterStateF64,
     cell_areas: Vec<f64>,
     cell_centers: Vec<[f64; 2]>,
     time: f64,
@@ -27,7 +27,7 @@ pub struct AssimilableBridge<'a> {
 
 impl<'a> AssimilableBridge<'a> {
     pub fn new(
-        state: &'a mut ShallowWaterState,
+        state: &'a mut ShallowWaterStateF64,
         cell_areas: Vec<f64>,
         cell_centers: Vec<[f64; 2]>,
     ) -> Self {

@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "aligned-vec"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa90d7ce82d4be67b64039a3d588d38dbcc6736577de4a847025ce5b0c468d1"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -348,6 +354,9 @@ name = "glam"
 version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "hash32"
@@ -643,7 +652,9 @@ dependencies = [
 name = "mh_physics"
 version = "0.1.0"
 dependencies = [
+ "aligned-vec",
  "bytemuck",
+ "cfg-if",
  "glam",
  "log",
  "mh_config",
@@ -668,6 +679,7 @@ dependencies = [
  "bytemuck",
  "mh_foundation",
  "num-traits",
+ "rayon",
  "serde",
  "thiserror 2.0.17",
 ]

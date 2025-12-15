@@ -6,8 +6,8 @@
 
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
-use crate::types::NumericalParams;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64, ShallowWaterStateGeneric};
+use crate::types::{NumericalParams, NumericalParamsF64};
 use std::marker::PhantomData;
 
 /// 源项贡献
@@ -139,13 +139,13 @@ pub struct SourceContext<'a> {
     /// 时间步长 [s]
     pub dt: f64, // ALLOW_F64: 时间参数与模拟进度配合
     /// 数值参数
-    pub params: &'a NumericalParams,
+    pub params: &'a NumericalParamsF64,
 }
 
 impl<'a> SourceContext<'a> {
     /// 创建新的源项上下文
     // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn new(time: f64, dt: f64, params: &'a NumericalParams) -> Self {
+    pub fn new(time: f64, dt: f64, params: &'a NumericalParamsF64) -> Self {
         Self { time, dt, params }
     }
 
@@ -177,7 +177,7 @@ pub trait SourceTerm: Send + Sync {
     /// 计算单个单元的源项贡献
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution;
@@ -188,7 +188,7 @@ pub trait SourceTerm: Send + Sync {
     /// 子类可以覆盖以提供优化的批量计算。
     fn compute_all(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         ctx: &SourceContext,
         output_h: &mut [f64],
         output_hu: &mut [f64],
@@ -233,7 +233,7 @@ pub trait SourceTerm: Send + Sync {
     /// 用于半隐式方法的预测阶段。默认返回完整源项。
     fn compute_prediction(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -245,7 +245,7 @@ pub trait SourceTerm: Send + Sync {
     /// 用于半隐式方法的校正阶段。默认返回零贡献。
     fn compute_correction(
         &self,
-        _state: &ShallowWaterState,
+        _state: &ShallowWaterStateF64,
         _cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -274,7 +274,7 @@ pub trait SourceTerm: Send + Sync {
     ///
     /// 返回 None 表示无限制，Some(dt) 表示最大允许时间步长。
     // ALLOW_F64: 时间参数与模拟进度配合
-    fn stability_limit(&self, _state: &ShallowWaterState, _ctx: &SourceContext) -> Option<f64> {
+    fn stability_limit(&self, _state: &ShallowWaterStateF64, _ctx: &SourceContext) -> Option<f64> {
         None
     }
 }

@@ -30,7 +30,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 // ?????? f64 ??
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
@@ -207,7 +207,7 @@ impl MorphodynamicsSolver {
     /// - `tol`: 收敛容差
     pub fn step_semi_implicit<F>(
         &mut self,
-        state: &mut ShallowWaterState,
+        state: &mut ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         compute_transport: F,
         dt: f64,
@@ -215,7 +215,7 @@ impl MorphodynamicsSolver {
         tol: f64,
     ) -> usize
     where
-        F: Fn(&ShallowWaterState) -> (Vec<f64>, Vec<f64>),
+        F: Fn(&ShallowWaterStateF64) -> (Vec<f64>, Vec<f64>),
     {
         // 重置统计
         self.stats = MorphologyStats::default();

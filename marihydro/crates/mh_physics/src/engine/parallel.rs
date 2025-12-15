@@ -19,10 +19,10 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
-use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver};
-use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
-use crate::state::ShallowWaterState;
-use crate::types::NumericalParams;
+use crate::schemes::riemann::{HllcSolverF64, RiemannFlux, RiemannSolver};
+use crate::schemes::wetting_drying::{WetState, WettingDryingHandlerF64};
+use crate::state::ShallowWaterStateF64;
+use crate::types::NumericalParamsF64;
 
 use glam::DVec2;
 use rayon::prelude::*;
@@ -65,7 +65,7 @@ pub enum ParallelStrategy {
 #[derive(Debug, Clone)]
 pub struct ParallelFluxConfig {
     /// 数值参数
-    pub params: NumericalParams,
+    pub params: NumericalParamsF64,
     /// 重力加速度
     pub g: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小并行面数（低于此值使用串行）
@@ -79,7 +79,7 @@ pub struct ParallelFluxConfig {
 impl Default for ParallelFluxConfig {
     fn default() -> Self {
         Self {
-            params: NumericalParams::default(),
+            params: NumericalParamsF64::default(),
             g: 9.81,
             min_parallel_size: 1000,
             strategy: ParallelStrategy::Auto,
@@ -102,7 +102,7 @@ pub struct ParallelFluxConfigBuilder {
 }
 
 impl ParallelFluxConfigBuilder {
-    pub fn params(mut self, params: NumericalParams) -> Self {
+    pub fn params(mut self, params: NumericalParamsF64) -> Self {
         self.config.params = params;
         self
     }
@@ -190,9 +190,9 @@ impl FluxComputeMetrics {
 pub struct ParallelFluxCalculator {
     config: ParallelFluxConfig,
     /// 黎曼求解器
-    riemann: HllcSolver,
+    riemann: HllcSolverF64,
     /// 干湿处理器
-    wetting_drying: WettingDryingHandler,
+    wetting_drying: WettingDryingHandlerF64,
     /// 静水重构
     hydrostatic: HydrostaticReconstruction,
     /// 性能指标
@@ -206,8 +206,8 @@ impl ParallelFluxCalculator {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig) -> Self {
         Self {
-            riemann: HllcSolver::new(&config.params, config.g),
-            wetting_drying: WettingDryingHandler::from_params(&config.params),
+            riemann: HllcSolverF64::new(&config.params, config.g),
+            wetting_drying: WettingDryingHandlerF64::from_params(&config.params),
             hydrostatic: HydrostaticReconstruction::new(&config.params, config.g),
             metrics: FluxComputeMetrics::default(),
             face_colors: None,
@@ -316,7 +316,7 @@ impl ParallelFluxCalculator {
     /// 计算通量（自动选择策略）
     pub fn compute_fluxes(
         &mut self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -363,7 +363,7 @@ impl ParallelFluxCalculator {
     /// 串行计算
     fn compute_serial(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -412,7 +412,7 @@ impl ParallelFluxCalculator {
     /// 并行计算（先并行计算，后串行累加）
     fn compute_parallel(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -472,7 +472,7 @@ impl ParallelFluxCalculator {
     /// 因为它们不共享单元
     fn compute_colored(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -539,7 +539,7 @@ impl ParallelFluxCalculator {
     /// 计算单个面的通量
     fn compute_face(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         face_idx: usize,
     ) -> (RiemannFlux, BedSlopeCorrection, f64, usize, Option<usize>) {
@@ -658,7 +658,7 @@ impl ParallelFluxCalculatorBuilder {
         self
     }
 
-    pub fn params(mut self, params: NumericalParams) -> Self {
+    pub fn params(mut self, params: NumericalParamsF64) -> Self {
         self.config.params = params;
         self
     }

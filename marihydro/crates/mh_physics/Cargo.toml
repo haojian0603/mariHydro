@@ -1,4 +1,4 @@
-# marihydro\crates\mh_physics\Cargo.toml
+# marihydro/crates/mh_physics/Cargo.toml
 
 [package]
 name = "mh_physics"
@@ -12,16 +12,32 @@ mh_config = { path = "../mh_config" }
 mh_foundation = { path = "../mh_foundation" }
 mh_mesh = { path = "../mh_mesh" }
 mh_geo = { path = "../mh_geo" }
-ndarray = "0.16"
-rayon = "1.10"      #核心依赖
-glam = "0.29"
-serde = { version = "1.0", features = ["derive"] }
+
+cfg-if = "1.0"
+
+# 核心数值库
+ndarray = { version = "0.16", default-features = false }
+rayon = { version = "1.10", optional = true }
+glam = { version = "0.29", features = ["libm", "std"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"], default-features = false }
 serde_json = "1.0"
 serde_yaml = "0.9"
+
+# 其他
 log = "0.4"
 thiserror = "1.0"
 bytemuck = { version = "1.14", features = ["derive"] }
-num-traits = "0.2"
+num-traits = { version = "0.2", default-features = false }
+
+# 内存对齐向量
+aligned-vec = "0.5"
+
+[features]
+# 并行计算支持
+parallel = ["rayon"]
+default = ["parallel"]
 
 [dev-dependencies]
 mh_geo = { path = "../mh_geo" }
