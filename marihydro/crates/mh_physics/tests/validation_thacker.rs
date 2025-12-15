@@ -4,7 +4,7 @@
 //!
 //! 验证数值解收敛于物理真解
 
-use mh_foundation::KahanSum;
+use mh_runtime::KahanSum;
 use std::f64::consts::PI;
 use std::time::Instant;
 
@@ -15,6 +15,7 @@ struct ThackerSolution {
     /// 碗半径
     a: f64,
     /// 重力加速度
+    #[allow(dead_code)]
     g: f64,
     /// 角频率 ω = √(8gh0)/a
     omega: f64,

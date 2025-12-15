@@ -1,4 +1,4 @@
-// marihydro\crates\mh_geo\src\error.rs
+// crates/mh_geo/src/error.rs
 //! 地理空间处理错误类型
 //!
 //! 包含投影转换、坐标系统、几何计算相关的错误。
@@ -22,7 +22,7 @@ pub type GeoResult<T> = Result<T, GeoError>;
 #[derive(Error, Debug)]
 pub enum GeoError {
     /// 不支持的 EPSG 代码
-    #[error("不支持的 EPSG 代码: {code}")]
+    #[error("不支持的 EPSG 代码: {code}。支持的代码: {supported}")]
     UnsupportedEpsg {
         /// 请求的 EPSG 代码
         code: u32,
@@ -62,7 +62,7 @@ pub enum GeoError {
     },
 
     /// 投影转换失败
-    #[error("投影转换失败: {operation}")]
+    #[error("投影转换失败: {operation}。详情: {message}")]
     ProjectionFailed {
         /// 操作类型（如"正向投影"、"逆向投影"）
         operation: &'static str,
@@ -71,7 +71,7 @@ pub enum GeoError {
     },
 
     /// CRS 定义解析失败
-    #[error("CRS 定义解析失败: {definition}")]
+    #[error("CRS 定义解析失败: {definition}。原因: {reason}")]
     CrsParseFailed {
         /// 失败的定义字符串
         definition: String,
@@ -277,9 +277,10 @@ impl GeoError {
     /// ```
     /// # use mh_geo::error::{GeoError, GeoResult};
     /// fn validate_latitude(lat: f64) -> GeoResult<()> {
-    ///     mh_geo::ensure!((-90.0..=90.0).contains(&lat),
+    ///     GeoError::ensure(
+    ///         (-90.0..=90.0).contains(&lat),
     ///         GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0)
-    ///     );
+    ///     )?;
     ///     Ok(())
     /// }
     /// ```
@@ -573,9 +574,9 @@ mod tests {
         let mh_err: MhError = geo_err.into();
         
         match mh_err {
-            MhError::InvalidInput(msg) => {
-                assert!(msg.contains("99999"));
-                assert!(msg.contains("EPSG:4326"));
+            MhError::InvalidInput { message } => {
+                assert!(message.contains("99999"));
+                assert!(message.contains("EPSG:4326"));
             }
             _ => panic!("错误的MhError类型"),
         }
@@ -587,9 +588,9 @@ mod tests {
         let mh_err: MhError = geo_err.into();
         
         match mh_err {
-            MhError::InvalidInput(msg) => {
-                assert!(msg.contains("纬度"));
-                assert!(msg.contains("95.5"));
+            MhError::InvalidInput { message } => {
+                assert!(message.contains("纬度"));
+                assert!(message.contains("95.5"));
             }
             _ => panic!("错误的MhError类型"),
         }
@@ -601,9 +602,9 @@ mod tests {
         let mh_err: MhError = geo_err.into();
         
         match mh_err {
-            MhError::Internal(msg) => {
-                assert!(msg.contains("逆向投影"));
-                assert!(msg.contains("迭代发散"));
+            MhError::Internal { message } => {
+                assert!(message.contains("逆向投影"));
+                assert!(message.contains("迭代发散"));
             }
             _ => panic!("错误的MhError类型"),
         }
@@ -622,7 +623,7 @@ mod tests {
         for geo_err in variants {
             let mh_err: MhError = geo_err.into();
             match mh_err {
-                MhError::Internal(_) => {},
+                MhError::Internal { .. } => {},
                 _ => panic!("应转换为Internal类型"),
             }
         }
@@ -642,7 +643,7 @@ mod tests {
         for geo_err in variants {
             let mh_err: MhError = geo_err.into();
             match mh_err {
-                MhError::InvalidInput(_) => {},
+                MhError::InvalidInput { .. } => {},
                 _ => panic!("应转换为InvalidInput类型"),
             }
         }

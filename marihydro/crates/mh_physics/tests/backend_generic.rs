@@ -14,9 +14,9 @@ fn test_f32_f64_consistency() {
     let n = 1000;
     
     // 分配缓冲区
-    let mut x_f32 = backend_f32.alloc_init(n, 1.0f32);
+    let x_f32 = backend_f32.alloc_init(n, 1.0f32);
     let mut y_f32 = backend_f32.alloc_init(n, 2.0f32);
-    let mut x_f64 = backend_f64.alloc_init(n, 1.0f64);
+    let x_f64 = backend_f64.alloc_init(n, 1.0f64);
     let mut y_f64 = backend_f64.alloc_init(n, 2.0f64);
     
     // axpy: y = 0.5 * x + y
@@ -50,7 +50,7 @@ fn test_dot_precision() {
 fn test_reduce_operations() {
     let backend = CpuBackend::<f64>::default();
     
-    let mut data: Vec<f64> = (0..100).map(|i| i as f64).collect();
+    let data: Vec<f64> = (0..100).map(|i| i as f64).collect();
     
     let max = backend.reduce_max(&data);
     let min = backend.reduce_min(&data);

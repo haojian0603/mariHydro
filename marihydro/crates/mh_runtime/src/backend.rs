@@ -97,6 +97,9 @@ pub trait Backend: Clone + Send + Sync + 'static {
     /// 最大值
     fn reduce_max(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
     
+    /// 最小值
+    fn reduce_min(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
+    
     /// 求和
     fn reduce_sum(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
     
@@ -164,6 +167,10 @@ impl Backend for CpuBackend<f32> {
         x.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
     }
 
+    fn reduce_min(&self, x: &Vec<f32>) -> f32 {
+        x.iter().cloned().fold(f32::INFINITY, f32::min)
+    }
+
     fn reduce_sum(&self, x: &Vec<f32>) -> f32 {
         x.iter().sum()
     }
@@ -215,6 +222,10 @@ impl Backend for CpuBackend<f64> {
 
     fn reduce_max(&self, x: &Vec<f64>) -> f64 {
         x.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    fn reduce_min(&self, x: &Vec<f64>) -> f64 {
+        x.iter().cloned().fold(f64::INFINITY, f64::min)
     }
 
     fn reduce_sum(&self, x: &Vec<f64>) -> f64 {

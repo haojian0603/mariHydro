@@ -4,7 +4,7 @@
 //!
 //! 验证算法不破坏物理本质
 
-use mh_foundation::KahanSum;
+use mh_runtime::KahanSum;
 use mh_physics::forcing::timeseries::{ExtrapolationMode, TimeSeries};
 use mh_physics::state::ShallowWaterState;
 use std::f64::consts::PI;

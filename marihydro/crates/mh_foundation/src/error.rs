@@ -1,4 +1,4 @@
-// marihydro\crates\mh_foundation\src/error.rs
+// crates/mh_foundation/src/error.rs
 //! 基础错误类型
 //!
 //! 定义整个项目的基础错误类型，仅包含与基础设施相关的错误。
@@ -23,13 +23,14 @@
 //! 基础错误 ← 你在这里 (mh_foundation::MhError)
 //! ```
 //!
-//! 转换示例：
+//! # 转换示例
 //!
 //! ```
-//! # use mh_foundation::error::{MhError, MeshError};
-//! let mesh_err = MeshError::invalid_topology("non-manifold edge");
-//! let base_err: MhError = mesh_err.into();
-//! assert!(matches!(base_err, MhError::Internal { .. }));
+//! # use mh_foundation::error::MhError;
+//! // 高层错误（如网格错误）会转换为 MhError::Internal
+//! let mesh_error = MhError::invalid_input("非流形边检测到");
+//! let base_error: MhError = mesh_error; // 已经是基础错误
+//! assert!(matches!(base_error, MhError::InvalidInput { .. }));
 //! ```
 
 use std::{fmt, io, path::PathBuf, sync::PoisonError, sync::mpsc::SendError};
@@ -76,7 +77,7 @@ pub enum MhError {
     ///
     /// ```
     /// # use mh_foundation::error::MhError;
-    /// let err = MhError::io("无法打开配置文件");
+    /// let err = MhError::io("磁盘已满");
     /// assert!(err.to_string().contains("IO错误"));
     /// ```
     Io {
@@ -434,6 +435,7 @@ impl std::error::Error for MhError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as StdError;
 
     #[test]
     fn test_error_display() {
@@ -511,12 +513,14 @@ mod tests {
     fn test_poison_error_conversion() {
         use std::sync::Mutex;
         let lock = Mutex::new(0);
-        let _guard = lock.lock().unwrap();
-        // 故意 poison
-        std::panic::catch_unwind(|| {
+        
+        // 在闭包中持有锁并 panic，使锁被 poison
+        let _ = std::panic::catch_unwind(|| {
             let _g = lock.lock().unwrap();
             panic!("poison");
         });
+        
+        // 现在主线程尝试获取锁会得到 PoisonError
         let poison_err = lock.lock().unwrap_err();
         let mh_err: MhError = poison_err.into();
         assert!(matches!(mh_err, MhError::LockError { .. }));

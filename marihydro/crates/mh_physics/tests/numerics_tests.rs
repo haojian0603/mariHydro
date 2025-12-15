@@ -4,7 +4,7 @@
 //!
 //! 验证双精度极限精度和数值算法的数学正确性
 
-use mh_foundation::KahanSum;
+use mh_runtime::KahanSum;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, JacobiPreconditioner, SsorPreconditioner,
     Ilu0Preconditioner, SolverConfig, BiCgStabSolver, IterativeSolver,

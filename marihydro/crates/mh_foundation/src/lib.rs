@@ -14,7 +14,6 @@ pub mod error;
 pub mod index;
 pub mod memory;
 pub mod metrics;
-pub mod tolerance;
 pub mod validation;
 
 // 重导出核心类型（仅限基础层）

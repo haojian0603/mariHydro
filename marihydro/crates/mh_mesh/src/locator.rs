@@ -541,8 +541,13 @@ mod tests {
     fn test_cached_locator() {
         let mesh = create_test_mesh::<f64>();
         let cached = CachedLocator::new(&mesh);
-
+        
+        // 第一次查询：填充缓存（预期未命中）
         assert_eq!(cached.find_cell(0.5, 0.3), Some(0));
-        assert!(cached.hit_rate() > 0.0);
+        assert_eq!(cached.hit_rate(), 0.0);  // 确认第一次未命中
+        
+        // 第二次查询：同一单元格 → 缓存命中
+        assert_eq!(cached.find_cell(0.4, 0.3), Some(0));  // 同一单元格内另一个点
+        assert!(cached.hit_rate() > 0.0);  // 现在应该有命中
     }
 }

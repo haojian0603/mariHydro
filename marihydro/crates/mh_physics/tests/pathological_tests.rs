@@ -10,8 +10,8 @@
 //! - 多线程内存安全
 //!
 //! 所有测试必须满足：编译零警告、Miri无UB、覆盖率>95%。
-
-use mh_foundation::{memory::AlignedVec, KahanSum};
+use mh_runtime::KahanSum;
+use mh_foundation::{memory::AlignedVec};
 use mh_physics::{
     numerics::linear_algebra::{
         CsrMatrix, JacobiPreconditioner, PcgSolver, SolverConfig, SolverStatus,
@@ -542,7 +542,7 @@ fn test_catastrophic_cancellation_prevention() {
     kahan.add(2.0);
     kahan.add(3.0);
     assert!(
-        (kahan.value() - 6.0).abs() < 1e-14,
+        (kahan.value() - 6.0_f64).abs() < 1e-14_f64,
         "Kahan 基本求和错误: {}",
         kahan.value()
     );

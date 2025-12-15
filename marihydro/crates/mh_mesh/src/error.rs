@@ -76,7 +76,7 @@ impl From<MeshError> for RuntimeError {
             MeshError::QualityTooLow { metric, value, threshold, cell_id } => {
                 RuntimeError::validation(format!("网格质量过低 [单元 {}, {}={:.3}, 阈值={:.3}]", cell_id, metric, value, threshold))
             }
-            MeshError::ElementCountMismatch { required, provided, context } => {
+            MeshError::ElementCountMismatch { required, provided, context: _  } => {
                 RuntimeError::size_mismatch("mesh_elements", required, provided)
             }
             MeshError::Runtime(runtime_err) => runtime_err,

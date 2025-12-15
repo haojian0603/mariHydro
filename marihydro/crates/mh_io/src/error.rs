@@ -1,10 +1,13 @@
 // crates/mh_io/src/error.rs
-//! IO 错误类型
+//! IO 错误类型定义
+//!
+//! 提供 IO 模块的统一错误枚举，支持通过 thiserror 自动转换底层错误。
+//! 所有错误最终可转换为 MhError 以实现跨层错误传递。
 
 use thiserror::Error;
 use mh_foundation::MhError;
 
-/// IO 模块结果类型
+/// IO 模块结果类型别名
 pub type IoResult<T> = Result<T, IoError>;
 
 /// IO 错误枚举
@@ -64,7 +67,7 @@ pub enum IoError {
         message: String,
     },
 
-    /// 基础错误转换
+    /// 基础层错误转换
     #[error("基础层错误: {0}")]
     Foundation(#[from] MhError),
 }
@@ -101,6 +104,31 @@ impl From<IoError> for MhError {
                 MhError::invalid_input(format!("文件解析错误 [{file}:{line}]: {message}"))
             }
             IoError::Foundation(mh_err) => mh_err,
+        }
+    }
+}
+
+impl From<crate::pipeline::PipelineError> for IoError {
+    fn from(err: crate::pipeline::PipelineError) -> Self {
+        match err {
+            crate::pipeline::PipelineError::Io(e) => {
+                IoError::PipelineFailed {
+                    stage: "pipeline".to_string(),
+                    message: format!("IO 错误: {}", e),
+                }
+            }
+            crate::pipeline::PipelineError::Serialization(msg) => {
+                IoError::PipelineFailed {
+                    stage: "serialization".to_string(),
+                    message: format!("序列化失败: {}", msg),
+                }
+            }
+            crate::pipeline::PipelineError::Timeout(dur) => {
+                IoError::PipelineFailed {
+                    stage: "timeout".to_string(),
+                    message: format!("操作超时: {:?}", dur),
+                }
+            }
         }
     }
 }

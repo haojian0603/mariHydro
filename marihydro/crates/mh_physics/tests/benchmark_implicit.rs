@@ -15,7 +15,6 @@
 //! ```
 
 use mh_foundation::AlignedVec;
-use mh_runtime::RuntimeScalar as Scalar;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, ConjugateGradient, IterativeSolver, JacobiPreconditioner,
     IdentityPreconditioner, Preconditioner, SolverConfig, SolverResult,
