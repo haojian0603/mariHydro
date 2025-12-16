@@ -223,7 +223,7 @@ impl BoundaryManager {
     }
 
     /// 从数值参数创建
-    pub fn from_numerical_params(params: &crate::types::NumericalParams) -> Self {
+    pub fn from_numerical_params(params: &crate::types::NumericalParams<f64>) -> Self {
         Self::new(BoundaryParams::from_numerical_params(params))
     }
 
@@ -330,7 +330,7 @@ impl BoundaryManager {
     /// (质量通量, 动量通量向量)
     pub fn compute_flather_flux(
         &self,
-        interior: ConservedState,
+        interior: ConservedState<f64>,
         z_interior: f64, // ALLOW_F64: 与 BoundaryParams、ConservedState 和 DVec2 配合使用
         external: &ExternalForcing,
         normal: DVec2,
@@ -371,7 +371,7 @@ impl BoundaryManager {
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
-    pub fn compute_outflow_flux(&self, interior: ConservedState, normal: DVec2) -> (f64, DVec2) {
+    pub fn compute_outflow_flux(&self, interior: ConservedState<f64>, normal: DVec2) -> (f64, DVec2) {
         let h = interior.h.max(self.params.h_min);
         let u = interior.hu / h;
         let v = interior.hv / h;
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn test_outflow_flux() {
         let manager = BoundaryManager::default();
-        let interior = ConservedState::from_primitive(1.0, 1.0, 0.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
         let (mass, _) = manager.compute_outflow_flux(interior, DVec2::new(1.0, 0.0));
 
         assert!((mass - 1.0).abs() < 1e-10); // h * u * normal = 1 * 1 * 1

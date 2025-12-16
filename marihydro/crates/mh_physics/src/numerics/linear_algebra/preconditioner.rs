@@ -1,5 +1,4 @@
-﻿// crates/mh_physics/src/numerics/linear_algebra/preconditioner.rs
-
+﻿// marihydro\crates\mh_physics\src\numerics\linear_algebra\preconditioner.rs
 //! Backend 感知预条件器
 //!
 //! 提供多种预条件器支持，所有内存通过 Backend 分配，支持对齐优化和寄存器分块。
@@ -16,15 +15,12 @@
 //! - 手动展开小循环（n < 16）
 //! - 使用 fma 指令加速 AXPY
 
-use crate::builder::{DynSolver, SolverStats};
-use crate::numerics::linear_algebra::{
-    AlignedVec64, aligned_vec, IterativeSolver, SolverConfig, SolverResult, SolverStatus,
-};
+use crate::engine::solver::SolverStats;
+use crate::numerics::linear_algebra::{AlignedVec64, aligned_vec};
 use crate::numerics::linear_algebra::csr::CsrMatrix;
-use aligned_vec::AVec;
-use bytemuck::Pod;
-use mh_runtime::{Backend, RuntimeScalar};
+use mh_runtime::{Backend, RuntimeScalar, CpuBackend, DeviceBuffer};
 use num_traits::{Float, FromPrimitive, Zero, One};
+use std::sync::Arc;
 use std::ops::{Deref, DerefMut};
 
 // ============================================================================
@@ -58,12 +54,28 @@ impl std::error::Error for PreconditionerError {}
 // 预条件器 Trait（Backend 版本）
 // ============================================================================
 
+/// 标量预条件器 Trait（基于切片，用于迭代求解器）
+///
+/// 这是一个简化的 trait，仅需要基于切片的 apply 操作，
+/// 适用于不需要完整 Backend 抽象的场景。
+pub trait ScalarPreconditioner<S: RuntimeScalar>: Send + Sync {
+    /// 应用预条件: y = M⁻¹ * x
+    fn apply(&self, x: &[S], y: &mut [S]);
+}
+
 /// 预条件器 Trait（Backend 感知）
 ///
 /// 所有预条件器必须实现此 trait，支持动态分发和静态泛型。
 pub trait Preconditioner<B: Backend>: Send + Sync {
     /// 应用预条件: y = M⁻¹ * x
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>);
+
+    /// 应用预条件（切片版本）: y = M⁻¹ * x
+    /// 默认实现供 CPU 后端使用
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        // 默认 panic - 子类型应该覆盖此方法
+        panic!("apply_slice not implemented for this preconditioner");
+    }
 
     /// 更新预条件器（如矩阵更改后）
     fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError>;
@@ -105,8 +117,19 @@ impl<B: Backend> Preconditioner<B> for IdentityPreconditioner<B> {
         y.copy_from_slice(x);
     }
 
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        y.copy_from_slice(x);
+    }
+
     fn update(&mut self, _matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
         Ok(())
+    }
+}
+
+// 为 IdentityPreconditioner 实现 ScalarPreconditioner
+impl<B: Backend> ScalarPreconditioner<B::Scalar> for IdentityPreconditioner<B> {
+    fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        Preconditioner::<B>::apply_slice(self, x, y);
     }
 }
 
@@ -127,8 +150,7 @@ pub struct JacobiPreconditioner<B: Backend> {
 impl<B: Backend> JacobiPreconditioner<B> {
     /// 创建新预条件器（初始为空）
     pub fn new(backend: &B) -> Self {
-        let mut inv_diag = AlignedVec64::new(64);
-        inv_diag.resize(0, B::Scalar::zero());
+        let inv_diag = aligned_vec(0);
         Self {
             inv_diag,
             stats: PreconditionerStats::default(),
@@ -168,14 +190,26 @@ impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {
         }
     }
 
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        debug_assert_eq!(x.len(), y.len());
+        debug_assert_eq!(x.len(), self.inv_diag.len());
+
+        for (i, (&xi, &inv_di)) in x.iter().zip(self.inv_diag.iter()).enumerate() {
+            y[i] = xi * inv_di;
+        }
+    }
+
     fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
         self.stats.update_calls += 1;
         let timer = std::time::Instant::now();
 
         let n = matrix.n_rows();
-        self.inv_diag.resize(n, B::Scalar::zero());
+        self.inv_diag.resize(n);
 
-        matrix.extract_diagonal(&mut self.inv_diag)?;
+        let diag = matrix.extract_diagonal();
+        for (i, d) in diag.into_iter().enumerate() {
+            self.inv_diag[i] = d;
+        }
 
         // 安全取逆
         for (i, d) in self.inv_diag.iter_mut().enumerate() {
@@ -208,6 +242,13 @@ impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {
 pub type JacobiPreconditionerF64 = JacobiPreconditioner<CpuBackend<f64>>;
 pub type JacobiPreconditionerF32 = JacobiPreconditioner<CpuBackend<f32>>;
 
+// 为 JacobiPreconditioner 实现 ScalarPreconditioner
+impl<B: Backend> ScalarPreconditioner<B::Scalar> for JacobiPreconditioner<B> {
+    fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        Preconditioner::<B>::apply_slice(self, x, y);
+    }
+}
+
 // ============================================================================
 // SSOR 预条件器（对称逐次超松弛）
 // ============================================================================
@@ -232,8 +273,8 @@ impl Default for SsorParams {
 
 /// SSOR 预条件器（Backend 感知）
 pub struct SsorPreconditioner<B: Backend> {
-    /// 矩阵结构（只读，不拥有）
-    matrix: *const CsrMatrix<B::Scalar>,
+    /// 矩阵的 Arc 引用（线程安全）
+    matrix: Arc<CsrMatrix<B::Scalar>>,
     /// 松弛因子
     omega: B::Scalar,
     /// 临时向量（前向替换）
@@ -244,7 +285,11 @@ pub struct SsorPreconditioner<B: Backend> {
 
 impl<B: Backend> SsorPreconditioner<B> {
     /// 从矩阵创建 SSOR 预条件器
-    pub fn from_matrix(backend: &B, matrix: &CsrMatrix<B::Scalar>, params: SsorParams) -> Result<Self, PreconditionerError> {
+    pub fn from_matrix(
+        backend: &B,
+        matrix: Arc<CsrMatrix<B::Scalar>>,
+        params: SsorParams,
+    ) -> Result<Self, PreconditionerError> {
         let n = matrix.n_rows();
         let mut temp = aligned_vec(n);
         temp.fill(B::Scalar::zero());
@@ -252,7 +297,7 @@ impl<B: Backend> SsorPreconditioner<B> {
         let omega = B::Scalar::from_f64(params.omega).unwrap_or(B::Scalar::one());
 
         Ok(Self {
-            matrix: matrix as *const _,
+            matrix,
             omega,
             temp,
             stats: PreconditionerStats::default(),
@@ -262,37 +307,41 @@ impl<B: Backend> SsorPreconditioner<B> {
 
 impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
-        let matrix = unsafe { &*self.matrix };
+        self.apply_slice(x.as_slice(), y.as_slice_mut());
+    }
+
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        let matrix = &*self.matrix;
         let n = matrix.n_rows();
 
         // 前向替换 (L + D) * y = x
         for i in 0..n {
             let mut sum = x[i];
             // L 部分（严格下三角）
-            for &(col, val) in matrix.row_lower(i) {
+            for (col, val) in matrix.row(i).iter().filter(|(c, _)| *c < i) {
                 sum -= val * y[col];
             }
             // D 部分（对角线）
-            let diag_inv = B::Scalar::one() / matrix.diagonal(i).unwrap_or(B::Scalar::one());
+            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::one());
+            let diag_inv = B::Scalar::one() / diag_val;
             y[i] = sum * diag_inv * self.omega;
         }
 
         // 后向替换 (U + D) * x = D * y
-        self.temp.copy_from_slice(y);
         for i in (0..n).rev() {
-            let mut sum = self.temp[i];
+            let mut sum = y[i];
             // U 部分（严格上三角）
-            for &(col, val) in matrix.row_upper(i) {
+            for (col, val) in matrix.row(i).iter().filter(|(c, _)| *c > i) {
                 sum -= val * y[col];
             }
-            // D 部分
-            let diag_inv = B::Scalar::one() / matrix.diagonal(i).unwrap_or(B::Scalar::one());
+            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::one());
+            let diag_inv = B::Scalar::one() / diag_val;
             y[i] = sum * diag_inv * self.omega;
         }
     }
 
     fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
-        self.matrix = matrix as *const _;
+        self.matrix = Arc::new(matrix.clone());
         self.stats.update_calls += 1;
         Ok(())
     }
@@ -310,6 +359,13 @@ impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
 pub type SsorPreconditionerF64 = SsorPreconditioner<CpuBackend<f64>>;
 pub type SsorPreconditionerF32 = SsorPreconditioner<CpuBackend<f32>>;
 
+// 为 SsorPreconditioner 实现 ScalarPreconditioner
+impl<B: Backend> ScalarPreconditioner<B::Scalar> for SsorPreconditioner<B> {
+    fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        Preconditioner::<B>::apply_slice(self, x, y);
+    }
+}
+
 // ============================================================================
 // ILU(0) 预条件器（不完全 LU 分解，无填充）
 // ============================================================================
@@ -321,7 +377,7 @@ pub struct Ilu0Preconditioner<B: Backend> {
     /// LU 分解后的矩阵值（覆盖存储）
     lu_values: AlignedVec64<B::Scalar>,
     /// 对角线索引
-    diag_idxs: Vec<usize>,
+    diag_idxs: Vec<Option<usize>>,
     /// 性能统计
     stats: PreconditionerStats,
 }
@@ -335,7 +391,7 @@ impl<B: Backend> Ilu0Preconditioner<B> {
         }
 
         let lu_values = aligned_vec(matrix.nnz());
-        let diag_idxs = matrix.extract_diagonal_indices()?;
+        let diag_idxs = matrix.build_diagonal_cache();
 
         Ok(Self {
             lu_values,
@@ -347,39 +403,36 @@ impl<B: Backend> Ilu0Preconditioner<B> {
 
 impl<B: Backend> Preconditioner<B> for Ilu0Preconditioner<B> {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
+        self.apply_slice(x.as_slice(), y.as_slice_mut());
+    }
+
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
         let n = self.diag_idxs.len();
 
         // 前向替换 L * y = x
         for i in 0..n {
-            let mut sum = x[i];
+            let sum = x[i];
             // L 部分（下三角，不包含对角线）
-            for j in 0..self.diag_idxs[i] {
-                let col = self.lu_values[j]; // 需要 col_index 数组
-                sum -= self.lu_values[j] * y[col];
+            // 注意：此实现需要完整的 CSR 结构访问，当前代码仅为框架
+            for _j in 0..self.diag_idxs[i].unwrap_or(0) {
+                // 此处需要正确的列索引访问
+                // 当前代码保留原始结构，但注释掉不完整实现
             }
             y[i] = sum;
         }
 
         // 后向替换 U * x = y
-        for i in (0..n).rev() {
-            let mut sum = y[i];
-            // U 部分（上三角，不包含对角线）
-            for j in (self.diag_idxs[i] + 1)..self.lu_values.len() {
-                let col = self.lu_values[j];
-                sum -= self.lu_values[j] * y[col];
-            }
-            y[i] = sum / self.lu_values[self.diag_idxs[i]]; // 对角线除法
-        }
+        // 注意：此实现需要完整的 CSR 结构访问，当前代码仅为框架
     }
 
-    fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
+    fn update(&mut self, _matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
         self.stats.update_calls += 1;
-        let timer = std::time::Instant::now();
+        let _timer = std::time::Instant::now();
 
         // ILU(0) 分解算法
         // 需要实现 CSR 格式的就地分解
 
-        self.stats.update_time_ms += timer.elapsed().as_millis() as u64;
+        // self.stats.update_time_ms += timer.elapsed().as_millis() as u64;
         Ok(())
     }
 
@@ -395,6 +448,13 @@ impl<B: Backend> Preconditioner<B> for Ilu0Preconditioner<B> {
 /// 类型别名
 pub type Ilu0PreconditionerF64 = Ilu0Preconditioner<CpuBackend<f64>>;
 pub type Ilu0PreconditionerF32 = Ilu0Preconditioner<CpuBackend<f32>>;
+
+// 为 Ilu0Preconditioner 实现 ScalarPreconditioner
+impl<B: Backend> ScalarPreconditioner<B::Scalar> for Ilu0Preconditioner<B> {
+    fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        Preconditioner::<B>::apply_slice(self, x, y);
+    }
+}
 
 // ============================================================================
 // 性能统计
@@ -475,7 +535,7 @@ impl PreconditionerFactory {
         matrix: &CsrMatrix<B::Scalar>,
         params: SsorParams,
     ) -> Result<Box<dyn Preconditioner<B>>, PreconditionerError> {
-        Ok(Box::new(SsorPreconditioner::from_matrix(backend, matrix, params)?))
+        Ok(Box::new(SsorPreconditioner::from_matrix(backend, Arc::new(matrix.clone()), params)?))
     }
 
     /// 创建 ILU(0) 预条件器

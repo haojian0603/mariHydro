@@ -32,7 +32,9 @@
 //! ```
 
 use glam::DVec2;
+
 use mh_mesh::FrozenMesh;
+use num_traits::FromPrimitive;
 use mh_runtime::{Backend, RuntimeScalar};
 use std::sync::Arc;
 
@@ -136,9 +138,8 @@ impl PhysicsMesh {
         debug_assert!(idx < self.n_cells(), "CellIndex越界: {}", idx);
         let p = self.inner.cell_center[idx];
         B::vec2_new(
-            B::Scalar::from_config(p.x as f64)
-                .unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
-            B::Scalar::from_config(p.y as f64)
+            B::Scalar::from_f64(p.x as f64).unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
+            B::Scalar::from_f64(p.y as f64)
                 .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
         )
     }
@@ -237,9 +238,9 @@ impl PhysicsMesh {
         debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
         let p = self.inner.face_center[idx];
         B::vec2_new(
-            B::Scalar::from_config(p.x as f64)
+            B::Scalar::from_f64(p.x as f64)
                 .unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
-            B::Scalar::from_config(p.y as f64)
+            B::Scalar::from_f64(p.y as f64)
                 .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
         )
     }
@@ -259,9 +260,9 @@ impl PhysicsMesh {
         debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
         let n = self.inner.face_normal[idx];
         B::vec2_new(
-            B::Scalar::from_config(n.x as f64)
+            B::Scalar::from_f64(n.x as f64)
                 .unwrap_or_else(|| panic!("法向量x={}转换失败：超出目标类型范围", n.x)),
-            B::Scalar::from_config(n.y as f64)
+            B::Scalar::from_f64(n.y as f64)
                 .unwrap_or_else(|| panic!("法向量y={}转换失败：超出目标类型范围", n.y))
         )
     }
@@ -339,9 +340,9 @@ impl PhysicsMesh {
         let idx = face.get();
         let d = self.inner.face_delta_owner[idx];
         B::vec2_new(
-            B::Scalar::from_config(d.x as f64)
+            B::Scalar::from_f64(d.x as f64)
                 .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
-            B::Scalar::from_config(d.y as f64)
+            B::Scalar::from_f64(d.y as f64)
                 .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
         )
     }
@@ -352,9 +353,9 @@ impl PhysicsMesh {
         let idx = face.get();
         let d = self.inner.face_delta_neighbor[idx];
         B::vec2_new(
-            B::Scalar::from_config(d.x as f64)
+            B::Scalar::from_f64(d.x as f64)
                 .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
-            B::Scalar::from_config(d.y as f64)
+            B::Scalar::from_f64(d.y as f64)
                 .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
         )
     }
@@ -463,6 +464,7 @@ mod tests {
     use crate::types::CellIndex;
     use mh_geo::{Point2D, Point3D};
     use mh_mesh::FrozenMesh;
+    use mh_runtime::Vector2D;
     use mh_runtime::CpuBackend;
 
     #[test]

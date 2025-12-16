@@ -214,6 +214,14 @@ pub trait RuntimeScalar:
         self.abs() < epsilon
     }
 
+    /// 从 f64 配置值转换（用于 Layer 4 配置到 Layer 3 引擎的转换）
+    ///
+    /// 这是 `FromPrimitive::from_f64` 的便捷包装，提供更语义化的接口。
+    #[inline]
+    fn from_config(value: f64) -> Option<Self> {
+        Self::from_f64(value)
+    }
+
     /// 批量验证切片中所有值是否有限
     fn validate_slice(data: &[Self]) -> Result<(), (usize, Self)> {
         for (i, &v) in data.iter().enumerate() {

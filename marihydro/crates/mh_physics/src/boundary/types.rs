@@ -18,7 +18,7 @@
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
-use crate::types::NumericalParams;
+use crate::types::NumericalParamsF64;
 
 // ============================================================
 // 边界类型枚举
@@ -392,12 +392,12 @@ impl BoundaryParams {
     ///
     /// 使用默认重力加速度 (9.81 m/s²)。
     /// 如果需要自定义重力，请使用 `new` 方法。
-    pub fn from_numerical_params(params: &NumericalParams) -> Self {
+    pub fn from_numerical_params(params: &NumericalParamsF64) -> Self {
         Self::new(9.81, params.h_min)
     }
 
     /// 从数值参数和物理常数创建
-    pub fn from_params(numerical: &NumericalParams, physics: &crate::types::PhysicalConstants) -> Self {
+    pub fn from_params(numerical: &NumericalParamsF64, physics: &crate::types::PhysicalConstants) -> Self {
         Self::new(physics.g, numerical.h_min)
     }
 

@@ -18,13 +18,14 @@
 //! 对于大规模网格，需要实现真正的着色并行以避免累加瓶颈。
 
 use crate::adapter::PhysicsMesh;
-use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
-use crate::schemes::riemann::{HllcSolverF64, RiemannFlux, RiemannSolver};
+use crate::engine::solver::{BedSlopeCorrectionF64, HydrostaticFaceState, HydrostaticReconstructionF64};
+use crate::schemes::riemann::{HllcSolverF64, RiemannFluxF64, RiemannSolver, SolverParamsF64};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandlerF64};
 use crate::state::ShallowWaterStateF64;
 use crate::types::NumericalParamsF64;
 
 use glam::DVec2;
+use mh_runtime::FaceIndex;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -187,14 +188,14 @@ impl FluxComputeMetrics {
 /// 并行通量计算器
 ///
 /// 封装通量计算的并行执行逻辑。
-pub struct ParallelFluxCalculator<B: mh_runtime::Backend> {
+pub struct ParallelFluxCalculator {
     config: ParallelFluxConfig,
     /// 黎曼求解器
     riemann: HllcSolverF64,
     /// 干湿处理器
     wetting_drying: WettingDryingHandlerF64,
     /// 静水重构
-    hydrostatic: HydrostaticReconstruction<B>,
+    hydrostatic: HydrostaticReconstructionF64,
     /// 性能指标
     metrics: FluxComputeMetrics,
     /// 面着色（用于 Colored 策略）
@@ -202,13 +203,14 @@ pub struct ParallelFluxCalculator<B: mh_runtime::Backend> {
     face_colors: Option<Vec<Vec<usize>>>,
 }
 
-impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
+impl ParallelFluxCalculator {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig) -> Self {
+        let riemann_params = SolverParamsF64::from_numerical(&config.params, config.g);
         Self {
-            riemann: HllcSolverF64::new(&config.params, config.g),
+            riemann: HllcSolverF64::new(&riemann_params, config.g),
             wetting_drying: WettingDryingHandlerF64::from_params(&config.params),
-            hydrostatic: HydrostaticReconstruction::new(&config.params, config.g),
+            hydrostatic: HydrostaticReconstructionF64::new(&config.params, config.g),
             metrics: FluxComputeMetrics::default(),
             face_colors: None,
             config,
@@ -383,7 +385,7 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
 
         for face_idx in 0..n_faces {
             let (flux, bed_src, length, owner, neighbor) = 
-                self.compute_face(state, mesh, face_idx);
+                self.compute_face(state, mesh, FaceIndex(face_idx));
 
             max_speed = max_speed.max(flux.max_wave_speed);
 
@@ -428,7 +430,7 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
             .into_par_iter()
             .map(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) = 
-                    self.compute_face(state, mesh, face_idx);
+                    self.compute_face(state, mesh, FaceIndex(face_idx));
 
                 max_speed_atomic.fetch_max(flux.max_wave_speed.to_bits(), Ordering::Relaxed);
 
@@ -502,7 +504,7 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
                 .par_iter()
                 .map(|&face_idx| {
                     let (flux, bed_src, length, owner, neighbor) = 
-                        self.compute_face(state, mesh, face_idx);
+                        self.compute_face(state, mesh, FaceIndex(face_idx));
                     
                     max_speed_atomic.fetch_max(flux.max_wave_speed.to_bits(), Ordering::Relaxed);
                     
@@ -537,32 +539,36 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
     }
 
     /// 计算单个面的通量
+    #[allow(deprecated)]
     fn compute_face(
         &self,
         state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
-        face_idx: mh_runtime::FaceIndex,
-    ) -> (RiemannFlux, BedSlopeCorrection, f64, usize, Option<usize>) {
-        let normal = mesh.face_normal(face_idx);
+        face_idx: FaceIndex,
+    ) -> (RiemannFluxF64, BedSlopeCorrectionF64, f64, usize, Option<usize>) {
+        let normal = mesh.face_normal(face_idx.get());
         let length = mesh.face_length(face_idx);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
+        
+        let owner_idx = owner.get();
+        let neighbor_idx = neighbor.map(|c| c.get());
 
         // 左侧状态
-        let h_l = state.h[owner];
-        let z_l = state.z[owner];
+        let h_l = state.h[owner_idx];
+        let z_l = state.z[owner_idx];
         let (u_l, v_l) = self.config.params.safe_velocity_components(
-            state.hu[owner], state.hv[owner], h_l
+            state.hu[owner_idx], state.hv[owner_idx], h_l
         );
         let vel_l = DVec2::new(u_l, v_l);
 
         // 右侧状态
-        let (h_r, vel_r, z_r) = if let Some(neigh) = neighbor {
-            let h = state.h[neigh];
+        let (h_r, vel_r, z_r) = if let Some(neigh_idx) = neighbor_idx {
+            let h = state.h[neigh_idx];
             let (u, v) = self.config.params.safe_velocity_components(
-                state.hu[neigh], state.hv[neigh], h
+                state.hu[neigh_idx], state.hv[neigh_idx], h
             );
-            (h, DVec2::new(u, v), state.z[neigh])
+            (h, DVec2::new(u, v), state.z[neigh_idx])
         } else {
             let vn = vel_l.dot(normal);
             (h_l, vel_l - 2.0 * vn * normal, z_l)
@@ -570,20 +576,20 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
 
         // 静水重构
         let recon = if self.config.use_hydrostatic_reconstruction {
-            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
+            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, [vel_l.x, vel_l.y], [vel_r.x, vel_r.y])
         } else {
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
-                vel_left: vel_l,
-                vel_right: vel_r,
+                vel_left: [vel_l.x, vel_l.y],
+                vel_right: [vel_r.x, vel_r.y],
                 z_face: 0.5 * (z_l + z_r),
             }
         };
 
         // 干湿限制
-        let wet_l = self.wetting_drying.get_state(recon.h_left);
-        let wet_r = self.wetting_drying.get_state(recon.h_right);
+        let wet_l = WetState::from_depth(recon.h_left, self.config.params.h_dry, self.config.params.h_wet);
+        let wet_r = WetState::from_depth(recon.h_right, self.config.params.h_dry, self.config.params.h_wet);
         let flux_limiter = match (wet_l, wet_r) {
             (WetState::Dry, WetState::Dry) => 0.0,
             (WetState::Dry, _) | (_, WetState::Dry) => {
@@ -599,11 +605,14 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
         };
 
         // 黎曼通量
+        let vel_l_arr = [recon.vel_left[0], recon.vel_left[1]];
+        let vel_r_arr = [recon.vel_right[0], recon.vel_right[1]];
+        let normal_arr = [normal.x, normal.y];
         let flux = self.riemann.solve(
             recon.h_left, recon.h_right,
-            recon.vel_left, recon.vel_right,
-            normal,
-        ).unwrap_or(RiemannFlux::ZERO);
+            vel_l_arr, vel_r_arr,
+            normal_arr,
+        ).unwrap_or(RiemannFluxF64::zero());
 
         let limited_flux = if flux_limiter < 1.0 {
             flux.scaled(flux_limiter)
@@ -612,9 +621,9 @@ impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
         };
 
         // 床坡源项
-        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal, length);
+        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal_arr, length);
 
-        (limited_flux, bed_src, length, owner, neighbor)
+        (limited_flux, bed_src, length, owner_idx, neighbor_idx)
     }
 
     // =========================================================================

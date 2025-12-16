@@ -224,10 +224,10 @@ where
         Self {
             config,
             n_cells,
-            h: h.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
-            u: u.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
-            v: v.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
-            z: z.into_iter().map(|x| S::from_config(x).unwrap_or(S::ZERO)).collect(),
+            h: h.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
+            u: u.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
+            v: v.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
+            z: z.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
             time: S::ZERO,
             step_count: 0,
             tolerance: Tolerance::<S>::default(),
@@ -238,7 +238,7 @@ where
 
     /// 执行一个时间步（简化版本）
     fn step_internal(&mut self, dt: S) -> (S, S, S) {
-        let g = S::from_config(self.config.gravity).unwrap_or(S::ZERO);
+        let g = S::from_f64(self.config.gravity).unwrap_or(S::ZERO);
         let dt_actual = dt;
 
         // 简化的更新逻辑（实际求解器会使用完整的有限体积法）
@@ -250,7 +250,7 @@ where
                 // 计算波速
                 let c = (g * h).sqrt();
                 let vel = (self.u[i] * self.u[i] + self.v[i] * self.v[i]).sqrt();
-                let cfl = (vel + c) * dt / S::from_config(1.0).unwrap_or(S::ZERO); // 假设 dx = 1
+                let cfl = (vel + c) * dt / S::from_f64(1.0).unwrap_or(S::ZERO); // 假设 dx = 1
                 if cfl > max_cfl {
                     max_cfl = cfl;
                 }
@@ -269,7 +269,7 @@ where
     Tolerance<S>: Default,
 {
     fn step(&mut self, dt: f64) -> DynStepResult {
-        let dt_s = S::from_config(dt).unwrap_or(S::ZERO);
+        let dt_s = S::from_f64(dt).unwrap_or(S::ZERO);
         let (dt_actual, max_cfl, mass_error) = self.step_internal(dt_s);
         
         // 更新统计
@@ -278,16 +278,20 @@ where
         if self.step_count > 0 {
             self.stats.avg_step_time = self.stats.total_compute_time / self.step_count as f64;
         }
-        let cfl_f64 = max_cfl.to_f64();
+        let cfl_f64 = max_cfl.to_f64().unwrap_or(0.0);
         if cfl_f64 > self.stats.max_cfl_ever {
             self.stats.max_cfl_ever = cfl_f64;
         }
 
-        DynStepResult::success(dt_actual.to_f64(), cfl_f64, mass_error.to_f64())
+        DynStepResult::success(
+            dt_actual.to_f64().unwrap_or(0.0), 
+            cfl_f64, 
+            mass_error.to_f64().unwrap_or(0.0)
+        )
     }
 
     fn time(&self) -> f64 {
-        self.time.to_f64()
+        self.time.to_f64().unwrap_or(0.0)
     }
 
     fn step_count(&self) -> usize {
@@ -304,11 +308,11 @@ where
 
     fn export_state(&self) -> DynState {
         DynState {
-            h: self.h.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
-            u: self.u.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
-            v: self.v.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
-            z: self.z.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
-            time: self.time.to_f64(),
+            h: self.h.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
+            u: self.u.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
+            v: self.v.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
+            z: self.z.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
+            time: self.time.to_f64().unwrap_or(0.0),
             n_cells: self.n_cells,
         }
     }

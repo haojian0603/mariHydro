@@ -30,6 +30,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
+use crate::types::FaceIndex;
 use mh_runtime::RuntimeScalar as Scalar;
 use bytemuck::Pod;
 use mh_foundation::AlignedVec;
@@ -97,20 +98,20 @@ impl DiffusionCoefficientConfig {
     /// 转换为运行时精度（供算子使用）
     pub fn to_precision<S: Scalar>(&self) -> DiffusionCoefficient<S> {
         match *self {
-            Self::Constant(d) => DiffusionCoefficient::Constant(S::from_config(d).unwrap_or(S::ZERO)),
+            Self::Constant(d) => DiffusionCoefficient::Constant(S::from_f64(d).unwrap_or(S::ZERO)),
             Self::Variable(ref values) => DiffusionCoefficient::Variable(
-                values.iter().map(|&v| S::from_config(v).unwrap_or(S::ZERO)).collect()
+                values.iter().map(|&v| S::from_f64(v).unwrap_or(S::ZERO)).collect()
             ),
             Self::Anisotropic { longitudinal, transverse } => {
                 DiffusionCoefficient::Anisotropic {
-                    longitudinal: S::from_config(longitudinal).unwrap_or(S::ZERO),
-                    transverse: S::from_config(transverse).unwrap_or(S::ZERO),
+                    longitudinal: S::from_f64(longitudinal).unwrap_or(S::ZERO),
+                    transverse: S::from_f64(transverse).unwrap_or(S::ZERO),
                 }
             }
             Self::Turbulent { molecular, schmidt_number } => {
                 DiffusionCoefficient::Turbulent {
-                    molecular: S::from_config(molecular).unwrap_or(S::ZERO),
-                    schmidt_number: S::from_config(schmidt_number).unwrap_or(S::ZERO),
+                    molecular: S::from_f64(molecular).unwrap_or(S::ZERO),
+                    schmidt_number: S::from_f64(schmidt_number).unwrap_or(S::ZERO),
                 }
             }
         }
@@ -248,8 +249,8 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
     pub fn new(n_cells: usize, n_faces: usize, config: DiffusionConfig) -> Self {
         // 转换配置到运行时精度
         let coefficient = config.coefficient.to_precision();
-        let min_diffusivity = S::from_config(config.min_diffusivity).unwrap_or(S::ZERO);
-        let max_diffusivity = S::from_config(config.max_diffusivity).unwrap_or(S::ZERO);
+        let min_diffusivity = S::from_f64(config.min_diffusivity).unwrap_or(S::ZERO);
+        let max_diffusivity = S::from_f64(config.max_diffusivity).unwrap_or(S::ZERO);
         
         Self {
             config,
@@ -289,16 +290,17 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
         }
 
         for face_idx in 0..mesh.n_faces() {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let face = FaceIndex::new(face_idx);
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
 
-            let nu_t_o = eddy_viscosity.map(|nu| nu[owner]);
-            let d_owner = self.coefficient.effective_at(owner, nu_t_o);
+            let nu_t_o = eddy_viscosity.map(|nu| nu[owner.get()]);
+            let d_owner = self.coefficient.effective_at(owner.get(), nu_t_o);
 
             let d_face = if let Some(neigh) = neighbor {
                 // 内部面：调和平均
-                let nu_t_n = eddy_viscosity.map(|nu| nu[neigh]);
-                let d_neigh = self.coefficient.effective_at(neigh, nu_t_n);
+                let nu_t_n = eddy_viscosity.map(|nu| nu[neigh.get()]);
+                let d_neigh = self.coefficient.effective_at(neigh.get(), nu_t_n);
                 harmonic_mean(d_owner, d_neigh)
             } else {
                 // 边界面：使用内部值
@@ -333,17 +335,18 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
         }
 
         for face_idx in 0..mesh.n_faces() {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let face = FaceIndex::new(face_idx);
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
 
             let d = self.face_diffusivity[face_idx];
-            let length = S::from_config(mesh.face_length(face_idx) as f64).unwrap_or(S::ZERO);
+            let length = S::from_f64(mesh.face_length(face)).unwrap_or(S::ZERO);
 
             let flux = if let Some(neigh) = neighbor {
                 // 内部面：中心差分
-                let dist = S::from_config(mesh.face_dist_o2n(face_idx) as f64).unwrap_or(S::ZERO);
-                if dist > S::from_config(1e-14).unwrap_or(S::ZERO) {
-                    let grad_n = (concentration[neigh] - concentration[owner]) / dist;
+                let dist = S::from_f64(mesh.face_dist_o2n(face)).unwrap_or(S::ZERO);
+                if dist > S::from_f64(1e-14).unwrap_or(S::ZERO) {
+                    let grad_n = (concentration[neigh.get()] - concentration[owner.get()]) / dist;
                     -d * grad_n * length
                 } else {
                     S::ZERO
@@ -382,16 +385,17 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
 
         // 累加面通量到单元
         for face_idx in 0..mesh.n_faces() {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let face = FaceIndex::new(face_idx);
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
             let flux = self.face_flux[face_idx];
 
-            let area_o = S::from_config(mesh.cell_area_unchecked(owner) as f64).unwrap_or(S::ZERO);
-            self.cell_diffusion[owner] -= flux / area_o;
+            let area_o = S::from_f64(mesh.cell_area_unchecked(owner)).unwrap_or(S::ZERO);
+            self.cell_diffusion[owner.get()] -= flux / area_o;
 
             if let Some(neigh) = neighbor {
-                let area_n = S::from_config(mesh.cell_area_unchecked(neigh) as f64).unwrap_or(S::ZERO);
-                self.cell_diffusion[neigh] += flux / area_n;
+                let area_n = S::from_f64(mesh.cell_area_unchecked(neigh)).unwrap_or(S::ZERO);
+                self.cell_diffusion[neigh.get()] += flux / area_n;
             }
         }
 
@@ -452,32 +456,33 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
         velocity_y: &[S],
     ) -> &[S] {
         for face_idx in 0..mesh.n_faces() {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let face = FaceIndex::new(face_idx);
+            let owner = mesh.face_owner(face);
+            let neighbor = mesh.face_neighbor(face);
 
             let flux = if let Some(neigh) = neighbor {
                 let normal = mesh.face_normal(face_idx);
-                let normal_x = S::from_config(normal.x as f64).unwrap_or(S::ZERO);
-                let normal_y = S::from_config(normal.y as f64).unwrap_or(S::ZERO);
-                let length = S::from_config(mesh.face_length(face_idx) as f64).unwrap_or(S::ZERO);
-                let dist = S::from_config(mesh.face_dist_o2n(face_idx) as f64).unwrap_or(S::ZERO);
+                let normal_x = S::from_f64(normal.x).unwrap_or(S::ZERO);
+                let normal_y = S::from_f64(normal.y).unwrap_or(S::ZERO);
+                let length = S::from_f64(mesh.face_length(face)).unwrap_or(S::ZERO);
+                let dist = S::from_f64(mesh.face_dist_o2n(face)).unwrap_or(S::ZERO);
 
-                if dist < S::from_config(1e-14).unwrap_or(S::ZERO) {
+                if dist < S::from_f64(1e-14).unwrap_or(S::ZERO) {
                     S::ZERO
                 } else {
                     // 计算流向单位向量
-                    let u_o = velocity_x[owner];
-                    let v_o = velocity_y[owner];
-                    let u_n = velocity_x[neigh];
-                    let v_n = velocity_y[neigh];
+                    let u_o = velocity_x[owner.get()];
+                    let v_o = velocity_y[owner.get()];
+                    let u_n = velocity_x[neigh.get()];
+                    let v_n = velocity_y[neigh.get()];
 
-                    let half = S::from_config(0.5).unwrap_or(S::ZERO);
+                    let half = S::from_f64(0.5).unwrap_or(S::ZERO);
                     let u_avg = half * (u_o + u_n);
                     let v_avg = half * (v_o + v_n);
                     let speed = (u_avg * u_avg + v_avg * v_avg).sqrt();
 
                     // 有效扩散系数（投影到面法向）
-                    let d_eff = if speed > S::from_config(1e-8).unwrap_or(S::ZERO) {
+                    let d_eff = if speed > S::from_f64(1e-8).unwrap_or(S::ZERO) {
                         let e_x = u_avg / speed;
                         let e_y = v_avg / speed;
 
@@ -491,7 +496,7 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
                         (self.longitudinal * self.transverse).sqrt()
                     };
 
-                    let grad_n = (concentration[neigh] - concentration[owner]) / dist;
+                    let grad_n = (concentration[neigh.get()] - concentration[owner.get()]) / dist;
                     -d_eff * grad_n * length
                 }
             } else {
@@ -513,10 +518,10 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
 /// 计算调和平均
 #[inline]
 fn harmonic_mean<S: Scalar>(a: S, b: S) -> S {
-    if a.abs() < S::from_config(1e-14).unwrap_or(S::ZERO) || b.abs() < S::from_config(1e-14).unwrap_or(S::ZERO) {
+    if a.abs() < S::from_f64(1e-14).unwrap_or(S::ZERO) || b.abs() < S::from_f64(1e-14).unwrap_or(S::ZERO) {
         S::ZERO
     } else {
-        S::from_config(2.0).unwrap_or(S::ZERO) * a * b / (a + b)
+        S::from_f64(2.0).unwrap_or(S::ZERO) * a * b / (a + b)
     }
 }
 

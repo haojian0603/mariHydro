@@ -24,6 +24,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
+use mh_runtime::CellIndex;
 use super::topology::CellFaceTopology;
 
 /// 水深校正器
@@ -161,8 +162,8 @@ impl VelocityCorrector {
             let flux_y = eta_f * face.normal.y * face.length;
 
             // 累加到梯度
-            let area_o = mesh.cell_area_unchecked(owner);
-            let area_n = mesh.cell_area_unchecked(neighbor);
+            let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
+            let area_n = mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor));
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;
@@ -181,7 +182,7 @@ impl VelocityCorrector {
             let flux_x = eta_f * face.normal.x * face.length;
             let flux_y = eta_f * face.normal.y * face.length;
 
-            let area_o = mesh.cell_area_unchecked(owner);
+            let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;

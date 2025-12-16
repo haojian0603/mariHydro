@@ -67,19 +67,19 @@ impl<S: Scalar> TurbulenceModel<S> {
     /// Smagorinsky 常数的默认值
     #[inline]
     pub fn default_smagorinsky_constant() -> S {
-        S::from_config(0.15).unwrap_or(S::ZERO)
+        S::from_f64(0.15).unwrap_or(S::ZERO)
     }
 
     /// 最小涡粘性系数 [m²/s]
     #[inline]
     pub fn min_eddy_viscosity() -> S {
-        S::from_config(1e-6).unwrap_or(S::ZERO)
+        S::from_f64(1e-6).unwrap_or(S::ZERO)
     }
 
     /// 最大涡粘性系数 [m²/s]
     #[inline]
     pub fn max_eddy_viscosity() -> S {
-        S::from_config(1e3).unwrap_or(S::ZERO)
+        S::from_f64(1e3).unwrap_or(S::ZERO)
     }
 
     /// 创建禁用模式（推荐）
@@ -126,10 +126,10 @@ impl<S: Scalar> SmagorinskySolver<S> {
     pub fn new(n_cells: usize, model: TurbulenceModel<S>) -> Self {
         Self {
             model,
-            grid_scale: vec![S::from_config(10.0).unwrap_or(S::ZERO); n_cells], // 默认网格尺度
+            grid_scale: vec![S::from_f64(10.0).unwrap_or(S::ZERO); n_cells], // 默认网格尺度
             eddy_viscosity: vec![S::ZERO; n_cells],
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: S::from_config(1e-4).unwrap_or(S::ZERO),
+            h_min: S::from_f64(1e-4).unwrap_or(S::ZERO),
             _marker: PhantomData,
         }
     }
@@ -141,8 +141,8 @@ impl<S: Scalar> SmagorinskySolver<S> {
 
         // 计算网格尺度（使用单元面积的平方根）
         for i in 0..n_cells {
-            if let Some(area) = mesh.cell_area(i) {
-                solver.grid_scale[i] = S::from_config(area.sqrt()).unwrap_or(S::ZERO);
+            if let Some(area) = mesh.cell_area(mh_runtime::CellIndex(i)) {
+                solver.grid_scale[i] = S::from_f64(area.sqrt()).unwrap_or(S::ZERO);
             }
         }
 
@@ -152,8 +152,8 @@ impl<S: Scalar> SmagorinskySolver<S> {
     /// 设置网格尺度
     pub fn set_grid_scale(&mut self, i: usize, scale: S) {
         if i < self.grid_scale.len() {
-            self.grid_scale[i] = if scale < S::from_config(1e-3).unwrap_or(S::ZERO) {
-                S::from_config(1e-3).unwrap_or(S::ZERO)
+            self.grid_scale[i] = if scale < S::from_f64(1e-3).unwrap_or(S::ZERO) {
+                S::from_f64(1e-3).unwrap_or(S::ZERO)
             } else {
                 scale
             };
@@ -210,35 +210,36 @@ impl<S: Scalar> SmagorinskySolver<S> {
             let mut dv_dy = S::ZERO;
             let mut weight_sum = S::ZERO;
 
-            for face_id in mesh.cell_faces(i) {
+            for face_id in mesh.cell_faces(mh_runtime::CellIndex(i)) {
                 // 使用 face_neighbor 获取邻居
                 if let Some(neighbor) = mesh.face_neighbor(face_id) {
-                    if neighbor == i {
+                    let neigh_idx: usize = neighbor.into();
+                    if neigh_idx == i {
                         continue;
                     }
-                    let h_n = h[neighbor];
+                    let h_n = h[neigh_idx];
                     if h_n < self.h_min {
                         continue;
                     }
 
-                    let u_n = hu[neighbor] / h_n;
-                    let v_n = hv[neighbor] / h_n;
+                    let u_n = hu[neigh_idx] / h_n;
+                    let v_n = hv[neigh_idx] / h_n;
 
-                    let normal = mesh.face_normal(face_id);
+                    let normal = mesh.face_normal(face_id.into());
                     let dist = self.grid_scale[i];
 
-                    if dist > S::from_config(1e-10).unwrap_or(S::ZERO) {
+                    if dist > S::from_f64(1e-10).unwrap_or(S::ZERO) {
                         let weight = S::ONE / dist;
-                        du_dx = du_dx + (u_n - u) * S::from_config(normal.x).unwrap_or(S::ZERO) * weight;
-                        du_dy = du_dy + (u_n - u) * S::from_config(normal.y).unwrap_or(S::ZERO) * weight;
-                        dv_dx = dv_dx + (v_n - v) * S::from_config(normal.x).unwrap_or(S::ZERO) * weight;
-                        dv_dy = dv_dy + (v_n - v) * S::from_config(normal.y).unwrap_or(S::ZERO) * weight;
+                        du_dx = du_dx + (u_n - u) * S::from_f64(normal.x).unwrap_or(S::ZERO) * weight;
+                        du_dy = du_dy + (u_n - u) * S::from_f64(normal.y).unwrap_or(S::ZERO) * weight;
+                        dv_dx = dv_dx + (v_n - v) * S::from_f64(normal.x).unwrap_or(S::ZERO) * weight;
+                        dv_dy = dv_dy + (v_n - v) * S::from_f64(normal.y).unwrap_or(S::ZERO) * weight;
                         weight_sum = weight_sum + weight;
                     }
                 }
             }
 
-            if weight_sum > S::from_config(1e-10).unwrap_or(S::ZERO) {
+            if weight_sum > S::from_f64(1e-10).unwrap_or(S::ZERO) {
                 self.velocity_gradient[i] = VelocityGradient::new(
                     du_dx / weight_sum,
                     du_dy / weight_sum,
@@ -513,7 +514,10 @@ mod tests {
         let mut config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.1);
         config.velocity_gradient[0] = VelocityGradient::new(1.0, 0.0, 0.0, 1.0);
 
-        let mut state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new(10);
+        let mut state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new_with_backend(
+            CpuBackend::<f64>::new(),
+            10,
+        );
         // 设置测试状态
         for i in 0..10 {
             state.h[i] = 2.0;
@@ -533,7 +537,10 @@ mod tests {
     fn test_turbulence_dry_cell() {
         let config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.1);
 
-        let state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new(10);
+        let state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new_with_backend(
+            CpuBackend::<f64>::new(),
+            10,
+        );
         // h 默认为 0，是干单元
         let ctx = SourceContextGeneric::with_defaults(0.0, 1.0);
 

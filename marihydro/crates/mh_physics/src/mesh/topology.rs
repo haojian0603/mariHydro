@@ -129,7 +129,7 @@ impl MeshGeometry {
         if length > S::min_positive_value() {
             [-dy / length, dx / length]
         } else {
-            [S::from_config(0.0).unwrap_or(S::ZERO), S::from_config(0.0).unwrap_or(S::ZERO)]
+            [S::from_f64(0.0).unwrap_or(S::ZERO), S::from_f64(0.0).unwrap_or(S::ZERO)]
         }
     }
 }

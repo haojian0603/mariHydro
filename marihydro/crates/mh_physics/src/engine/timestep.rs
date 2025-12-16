@@ -23,9 +23,11 @@
 //! 从 legacy_src/physics/engine/timestep.rs 迁移。
 
 use crate::adapter::PhysicsMesh;
-use crate::state::ShallowWaterState;
-use crate::types::NumericalParams;
+use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric as ShallowWaterState};
+use crate::types::NumericalParamsF64;
+use mh_runtime::{Backend, CellIndex};
 use rayon::prelude::*;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// CFL 时间步计算器
@@ -33,7 +35,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 主要优化：预计算网格最小特征长度
 // ALLOW_F64: Layer 4 时间步长配置
 #[derive(Clone, Debug)]
-pub struct CflCalculator {
+pub struct CflCalculator<B: Backend<Scalar = f64>> {
     /// 重力加速度
     g: f64, // ALLOW_F64: Layer 4 配置参数
     /// CFL 数
@@ -46,11 +48,13 @@ pub struct CflCalculator {
     cached_dx_min: Option<f64>, // ALLOW_F64: Layer 4 配置参数
     /// 最小波速阈值（低于此值视为静止）
     min_wave_speed: f64, // ALLOW_F64: Layer 4 配置参数
+    /// 标记后端类型（占位以保持泛型签名）
+    marker: PhantomData<B>,
 }
 
-impl CflCalculator {
+impl<B: Backend<Scalar = f64>> CflCalculator<B> {
     /// 创建计算器
-    pub fn new(g: f64, params: &NumericalParams) -> Self { // ALLOW_F64: 时间步长配置/物理参数
+    pub fn new(g: f64, params: &NumericalParamsF64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         Self {
             g,
             cfl: params.cfl,
@@ -58,6 +62,7 @@ impl CflCalculator {
             dt_max: params.dt_max,
             cached_dx_min: None,
             min_wave_speed: params.min_wave_speed,
+            marker: PhantomData,
         }
     }
 
@@ -76,9 +81,9 @@ impl CflCalculator {
     /// 计算时间步长
     pub fn compute_dt(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        params: &NumericalParams,
+        params: &NumericalParamsF64,
     ) -> f64 {
         let n_cells = mesh.n_cells();
         if n_cells == 0 {
@@ -118,8 +123,8 @@ impl CflCalculator {
     /// 并行计算最大波速（使用原子操作）
     fn compute_max_wave_speed_parallel(
         &self,
-        state: &ShallowWaterState,
-        params: &NumericalParams,
+        state: &ShallowWaterState<B>,
+        params: &NumericalParamsF64,
     ) -> f64 {
         let n = state.h.len();
         if n == 0 {
@@ -159,8 +164,8 @@ impl CflCalculator {
         let min_dx = AtomicU64::new(f64::MAX.to_bits());
 
         (0..n).into_par_iter().for_each(|i| {
-            let area = mesh.cell_area(i).unwrap_or(0.0);
-            let perimeter = mesh.cell_perimeter(i).unwrap_or(0.0);
+            let area = mesh.cell_area(CellIndex(i)).unwrap_or(0.0);
+            let perimeter = mesh.cell_perimeter(CellIndex(i)).unwrap_or(0.0);
 
             if perimeter < 1e-14 {
                 return;
@@ -185,8 +190,8 @@ impl CflCalculator {
 /// - 自适应增长/收缩因子
 /// - 时间步长历史追踪
 // ALLOW_F64: Layer 4 时间步长配置
-pub struct TimeStepController {
-    calculator: CflCalculator,
+pub struct TimeStepController<B: Backend<Scalar = f64>> {
+    calculator: CflCalculator<B>,
     /// 当前时间步长
     current_dt: f64, // ALLOW_F64: Layer 4 配置参数
     /// 增长因子
@@ -201,11 +206,12 @@ pub struct TimeStepController {
     stable_growth_threshold: usize,
     /// 是否启用自适应增长
     adaptive_growth: bool,
+    marker: PhantomData<B>,
 }
 
-impl TimeStepController {
+impl<B: Backend<Scalar = f64>> TimeStepController<B> {
     /// 创建控制器
-    pub fn new(g: f64, params: &NumericalParams) -> Self { // ALLOW_F64: 时间步长配置/物理参数
+    pub fn new(g: f64, params: &NumericalParamsF64) -> Self {
         Self {
             calculator: CflCalculator::new(g, params),
             current_dt: params.dt_max,
@@ -215,6 +221,7 @@ impl TimeStepController {
             stable_steps: 0,
             stable_growth_threshold: 10,
             adaptive_growth: true,
+            marker: PhantomData,
         }
     }
 
@@ -231,9 +238,9 @@ impl TimeStepController {
     /// 更新时间步长
     pub fn update(
         &mut self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        params: &NumericalParams,
+        params: &NumericalParamsF64,
     ) -> f64 {
         let suggested = self.calculator.compute_dt(state, mesh, params);
 
@@ -259,7 +266,7 @@ impl TimeStepController {
     }
 
     /// 从已知最大波速更新时间步长
-    pub fn update_from_max_speed(&mut self, max_speed: f64) -> f64 { // ALLOW_F64: 时间步长配置/物理参数
+    pub fn update_from_max_speed(&mut self, max_speed: f64) -> f64 {
         let suggested = self.calculator.compute_from_max_speed(max_speed);
 
         let growth = if self.adaptive_growth {
@@ -453,7 +460,7 @@ pub struct TimeStepStats {
 
 /// 时间步长控制器构建器
 // ALLOW_F64: Layer 4 时间步长配置
-pub struct TimeStepControllerBuilder {
+pub struct TimeStepControllerBuilder<B: Backend<Scalar = f64>> {
     g: f64, // ALLOW_F64: Layer 4 配置参数
     cfl: f64, // ALLOW_F64: Layer 4 配置参数
     dt_min: f64, // ALLOW_F64: Layer 4 配置参数
@@ -461,9 +468,10 @@ pub struct TimeStepControllerBuilder {
     growth_factor: f64, // ALLOW_F64: Layer 4 配置参数
     shrink_factor: f64, // ALLOW_F64: Layer 4 配置参数
     adaptive_growth: bool,
+    marker: PhantomData<B>,
 }
 
-impl TimeStepControllerBuilder {
+impl<B: Backend<Scalar = f64>> TimeStepControllerBuilder<B> {
     /// 创建构建器
     pub fn new(g: f64) -> Self { // ALLOW_F64: 时间步长配置/物理参数
         Self {
@@ -474,6 +482,7 @@ impl TimeStepControllerBuilder {
             growth_factor: 1.1,
             shrink_factor: 0.5,
             adaptive_growth: true,
+            marker: PhantomData,
         }
     }
 
@@ -509,15 +518,15 @@ impl TimeStepControllerBuilder {
     }
 
     /// 构建控制器
-    pub fn build(self) -> TimeStepController {
-        let params = NumericalParams::builder()
-            .cfl(self.cfl)
-            .dt_min(self.dt_min)
-            .dt_max(self.dt_max)
-            .build()
-            .unwrap_or_default();
+    pub fn build(self) -> TimeStepController<B> {
+        let params = NumericalParamsF64 {
+            cfl: self.cfl,
+            dt_min: self.dt_min,
+            dt_max: self.dt_max,
+            ..Default::default()
+        };
 
-        let mut controller = TimeStepController::new(self.g, &params);
+        let mut controller = TimeStepController::<B>::new(self.g, &params);
         controller.growth_factor = self.growth_factor;
         controller.shrink_factor = self.shrink_factor;
         controller.adaptive_growth = self.adaptive_growth;
@@ -532,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_cfl_calculator_creation() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let calc = CflCalculator::new(9.81, &params);
         assert!(calc.cached_dx_min.is_none());
         assert!((calc.g - 9.81).abs() < 1e-10);
@@ -540,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_cfl_calculator_from_max_speed() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let mut calc = CflCalculator::new(9.81, &params);
         calc.cached_dx_min = Some(1.0);
 
@@ -551,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_cfl_calculator_static_water() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let calc = CflCalculator::new(9.81, &params);
 
         // 静水时，max_speed < min_wave_speed，返回dt_max
@@ -561,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_controller_creation() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let controller = TimeStepController::new(9.81, &params);
         assert!(controller.adaptive_growth);
         assert_eq!(controller.stable_steps, 0);
@@ -569,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_controller_adaptive_growth() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let mut controller = TimeStepController::new(9.81, &params);
 
         // 模拟稳定步
@@ -583,7 +592,7 @@ mod tests {
 
     #[test]
     fn test_controller_shrink() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let mut controller = TimeStepController::new(9.81, &params);
         controller.current_dt = 0.1;
 
@@ -594,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_controller_force_shrink() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let mut controller = TimeStepController::new(9.81, &params);
         controller.current_dt = 0.1;
 
@@ -615,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_stats() {
-        let params = NumericalParams::default();
+        let params = NumericalParamsF64::default();
         let mut controller = TimeStepController::new(9.81, &params);
         controller.stable_steps = 5;
 
@@ -626,9 +635,7 @@ mod tests {
 
     #[test]
     fn test_set_dt() {
-        let params = NumericalParams::default();
-        let mut controller = TimeStepController::new(9.81, &params);
-
+        let params = NumericalParamsF64::default();
         controller.set_dt(0.5);
         assert!((controller.current_dt() - 0.5).abs() < 1e-10);
         assert_eq!(controller.stable_steps, 0);

@@ -160,7 +160,7 @@ pub struct DynamicScalars<S> {
 
 impl<S> DynamicScalars<S>
 where
-    S: Float + Copy,
+    S: Float + Copy + RuntimeScalar,
 {
     /// 创建空集合
     pub fn new(len: usize) -> Self {
@@ -1292,7 +1292,7 @@ where
         debug_assert_eq!(flux_hv.len(), n);
 
         for i in 0..n {
-            let inv_area = Self::Scalar::one() / areas[i];
+            let inv_area = Self::Scalar::ONE / areas[i];
             let h_new = self.h[i] + dt * flux_h[i] * inv_area;
             let hu_new = self.hu[i] + dt * flux_hu[i] * inv_area;
             let hv_new = self.hv[i] + dt * flux_hv[i] * inv_area;

@@ -426,9 +426,9 @@ impl<S: Scalar> SourceContextGeneric<S> {
         Self {
             time,
             dt,
-            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
-            h_dry: S::from_config(1e-6).unwrap_or(S::ZERO),
-            h_wet: S::from_config(1e-4).unwrap_or(S::ZERO),
+            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
+            h_dry: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            h_wet: S::from_f64(1e-4).unwrap_or(S::ZERO),
         }
     }
     

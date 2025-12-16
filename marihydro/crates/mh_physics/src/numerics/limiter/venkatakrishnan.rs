@@ -46,7 +46,7 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
         Self {
             k,
             eps_squared,
-            tol: S::from_config(1e-12).unwrap_or(S::MIN_POSITIVE),
+            tol: S::from_f64(1e-12).unwrap_or(S::MIN_POSITIVE),
         }
     }
 
@@ -66,13 +66,13 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// 适合激波捕获的预设 (K=0.1)
     #[inline]
     pub fn for_shock_capturing(mesh_scale: S) -> Self {
-        Self::new(S::from_config(0.1).unwrap_or(S::ZERO), mesh_scale)
+        Self::new(S::from_f64(0.1).unwrap_or(S::ZERO), mesh_scale)
     }
 
     /// 适合干湿过渡的预设 (K=0.3，默认)
     #[inline]
     pub fn for_wetting_drying(mesh_scale: S) -> Self {
-        Self::new(S::from_config(0.3).unwrap_or(S::ZERO), mesh_scale)
+        Self::new(S::from_f64(0.3).unwrap_or(S::ZERO), mesh_scale)
     }
 
     /// 适合光滑流动的预设 (K=2.0)
@@ -84,7 +84,7 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// 最小限制的预设 (K=5.0)
     #[inline]
     pub fn minimal_limiting(mesh_scale: S) -> Self {
-        Self::new(S::from_config(5.0).unwrap_or(S::ZERO), mesh_scale)
+        Self::new(S::from_f64(5.0).unwrap_or(S::ZERO), mesh_scale)
     }
 
     /// 获取 K 参数

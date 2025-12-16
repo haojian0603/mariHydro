@@ -14,7 +14,7 @@
 use super::traits::{GradientMethodGeneric, ScalarGradientStorage, VectorGradientStorage};
 use super::green_gauss::GreenGaussGradient;
 use crate::adapter::PhysicsMesh;
-use crate::types::NumericalParams;
+use crate::types::NumericalParamsF64;
 
 use glam::DVec2;
 
@@ -74,7 +74,7 @@ impl LeastSquaresGradient {
     }
 
     /// 从数值参数创建
-    pub fn from_params(params: &NumericalParams) -> Self {
+    pub fn from_params(params: &NumericalParamsF64) -> Self {
         Self {
             config: LeastSquaresConfig {
                 det_min: params.det_min,
@@ -138,6 +138,7 @@ impl LeastSquaresGradient {
         field: &[f64],
         mesh: &PhysicsMesh,
     ) -> Option<DVec2> {
+        let cell_idx = mh_runtime::CellIndex(cell);
         let cell_center = mesh.cell_center(cell);
         let phi_c = field[cell];
 
@@ -149,12 +150,12 @@ impl LeastSquaresGradient {
         let mut neighbor_count = 0;
 
         // 收集邻居贡献
-        for face in mesh.cell_faces(cell) {
+        for face in mesh.cell_faces(cell_idx) {
             let owner = mesh.face_owner(face);
             let neighbor_opt = mesh.face_neighbor(face);
 
-            let is_owner = owner == cell;
-            let is_neighbor = neighbor_opt == Some(cell);
+            let is_owner = owner == cell_idx;
+            let is_neighbor = neighbor_opt == Some(cell_idx);
 
             if !is_owner && !is_neighbor {
                 continue;
@@ -163,11 +164,11 @@ impl LeastSquaresGradient {
             if let Some(neighbor) = neighbor_opt {
                 // 内部面：使用邻居单元
                 let other = if is_owner { neighbor } else { owner };
-                let other_center = mesh.cell_center(other);
+                let other_center = mesh.cell_center(other.into());
 
                 let dx = other_center.x - cell_center.x;
                 let dy = other_center.y - cell_center.y;
-                let dphi = field[other] - phi_c;
+                let dphi = field[other.0] - phi_c;
 
                 let dist_sq = dx * dx + dy * dy;
                 if dist_sq < 1e-20 {
@@ -184,8 +185,8 @@ impl LeastSquaresGradient {
                 neighbor_count += 1;
             } else if self.config.use_boundary_contributions {
                 // 边界面：使用镜像点策略
-                let face_center = mesh.face_center(face);
-                let normal = mesh.face_normal(face);
+                let face_center = mesh.face_center(face.into());
+                let normal = mesh.face_normal(face.into());
 
                 // 单元中心到面的距离
                 let to_face = face_center - cell_center;

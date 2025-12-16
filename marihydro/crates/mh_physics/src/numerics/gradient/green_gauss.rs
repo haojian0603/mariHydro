@@ -102,7 +102,8 @@ impl GreenGaussGradient {
         field: &[f64],
         mesh: &PhysicsMesh,
     ) -> DVec2 {
-        let area = mesh.cell_area_unchecked(cell);
+        let cell_idx = mh_runtime::CellIndex(cell);
+        let area = mesh.cell_area_unchecked(cell_idx);
         if area < 1e-14 {
             return DVec2::ZERO;
         }
@@ -112,18 +113,18 @@ impl GreenGaussGradient {
         let mut grad = DVec2::ZERO;
 
         // 仅遍历该单元关联的面，避免 O(N^2)
-        for face in mesh.cell_faces(cell) {
+        for face in mesh.cell_faces(cell_idx) {
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
 
-            let is_owner = owner == cell;
-            let is_neighbor = neighbor == Some(cell);
+            let is_owner = owner == cell_idx;
+            let is_neighbor = neighbor == Some(cell_idx);
 
             if !is_owner && !is_neighbor {
                 continue;
             }
 
-            let normal = mesh.face_normal(face);
+            let normal = mesh.face_normal(face.into());
             let length = mesh.face_length(face);
 
             // owner 侧法向指向外侧，neighbor 取相反号
@@ -134,13 +135,13 @@ impl GreenGaussGradient {
                 let other = if is_owner { neigh } else { owner };
 
                 match self.config.face_interpolation {
-                    FaceInterpolation::Arithmetic => 0.5 * (phi_c + field[other]),
+                    FaceInterpolation::Arithmetic => 0.5 * (phi_c + field[other.0]),
                     FaceInterpolation::DistanceWeighted => {
-                        let face_center = mesh.face_center(face);
-                        let other_center = mesh.cell_center(other);
+                        let face_center = mesh.face_center(face.into());
+                        let other_center = mesh.cell_center(other.into());
                         let d_self = (face_center - cell_center).length();
                         let d_other = (face_center - other_center).length();
-                        Self::distance_weighted_interpolate(phi_c, field[other], d_self, d_other)
+                        Self::distance_weighted_interpolate(phi_c, field[other.0], d_self, d_other)
                     }
                 }
             } else {
@@ -164,7 +165,8 @@ impl GreenGaussGradient {
         z_bed: &[f64],
         mesh: &PhysicsMesh,
     ) -> DVec2 {
-        let area = mesh.cell_area_unchecked(cell);
+        let cell_idx = mh_runtime::CellIndex(cell);
+        let area = mesh.cell_area_unchecked(cell_idx);
         if area < 1e-14 {
             return DVec2::ZERO;
         }
@@ -173,31 +175,31 @@ impl GreenGaussGradient {
         let eta_c = h[cell] + z_bed[cell];
         let mut grad = DVec2::ZERO;
 
-        for face in mesh.cell_faces(cell) {
+        for face in mesh.cell_faces(cell_idx) {
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
 
-            let is_owner = owner == cell;
-            let is_neighbor = neighbor == Some(cell);
+            let is_owner = owner == cell_idx;
+            let is_neighbor = neighbor == Some(cell_idx);
 
             if !is_owner && !is_neighbor {
                 continue;
             }
 
-            let normal = mesh.face_normal(face);
+            let normal = mesh.face_normal(face.into());
             let length = mesh.face_length(face);
             let sign = if is_owner { 1.0 } else { -1.0 };
             let ds = normal * length * sign;
 
             let eta_face = if let Some(neigh) = neighbor {
                 let other = if is_owner { neigh } else { owner };
-                let eta_other = h[other] + z_bed[other];
+                let eta_other = h[other.0] + z_bed[other.0];
 
                 match self.config.face_interpolation {
                     FaceInterpolation::Arithmetic => 0.5 * (eta_c + eta_other),
                     FaceInterpolation::DistanceWeighted => {
-                        let face_center = mesh.face_center(face);
-                        let other_center = mesh.cell_center(other);
+                        let face_center = mesh.face_center(face.into());
+                        let other_center = mesh.cell_center(other.into());
                         let d_self = (face_center - cell_center).length();
                         let d_other = (face_center - other_center).length();
                         Self::distance_weighted_interpolate(eta_c, eta_other, d_self, d_other)

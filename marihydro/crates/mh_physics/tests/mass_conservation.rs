@@ -311,7 +311,7 @@ fn create_rectangular_mesh(
 }
 
 /// 计算总质量 (h * area)
-fn compute_total_mass(state: &ShallowWaterState, mesh: &PhysicsMesh) -> f64 {
+fn compute_total_mass(state: &ShallowWaterState<B>, mesh: &PhysicsMesh) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(i) {
@@ -322,7 +322,7 @@ fn compute_total_mass(state: &ShallowWaterState, mesh: &PhysicsMesh) -> f64 {
 }
 
 /// 计算总动量
-fn compute_total_momentum(state: &ShallowWaterState, mesh: &PhysicsMesh) -> (f64, f64) {
+fn compute_total_momentum(state: &ShallowWaterState<B>, mesh: &PhysicsMesh) -> (f64, f64) {
     let mut total_hu = 0.0;
     let mut total_hv = 0.0;
     for i in 0..state.n_cells() {
@@ -335,7 +335,7 @@ fn compute_total_momentum(state: &ShallowWaterState, mesh: &PhysicsMesh) -> (f64
 }
 
 /// 计算总能量 (势能 + 动能)
-fn compute_total_energy(state: &ShallowWaterState, mesh: &PhysicsMesh, g: f64) -> f64 {
+fn compute_total_energy(state: &ShallowWaterState<B>, mesh: &PhysicsMesh, g: f64) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(i) {
@@ -356,7 +356,7 @@ fn compute_total_energy(state: &ShallowWaterState, mesh: &PhysicsMesh, g: f64) -
 }
 
 /// 检查状态有效性
-fn validate_state(state: &ShallowWaterState, step: usize) -> Result<(), String> {
+fn validate_state(state: &ShallowWaterState<B>, step: usize) -> Result<(), String> {
     for (i, &h) in state.h.iter().enumerate() {
         if h < 0.0 {
             return Err(format!("步骤 {} 单元 {} 负水深: {}", step, i, h));
@@ -394,7 +394,7 @@ struct SimulationResult {
 
 fn run_simulation(
     solver: &mut ShallowWaterSolver,
-    state: &mut ShallowWaterState,
+    state: &mut ShallowWaterState<B>,
     mesh: &PhysicsMesh,
     dt: f64,
     n_steps: usize,

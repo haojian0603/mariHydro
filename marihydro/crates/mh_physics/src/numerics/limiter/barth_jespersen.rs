@@ -65,7 +65,7 @@ impl<S: RuntimeScalar> BarthJespersenGeneric<S> {
     /// 创建新的 Barth-Jespersen 限制器
     pub fn new() -> Self {
         Self { 
-            eps: S::from_config(1e-12).unwrap_or(S::EPSILON), 
+            eps: S::from_f64(1e-12).unwrap_or(S::EPSILON), 
             h_dry: None,
             _marker: PhantomData,
         }
@@ -105,7 +105,7 @@ impl<S: RuntimeScalar> BarthJespersenGeneric<S> {
         if let Some(h_dry) = self.h_dry {
             if depth < h_dry {
                 // 干单元：更激进地限制梯度
-                let ratio = (depth / h_dry).clamp_range(S::ZERO, S::ONE);
+                let ratio = (depth / h_dry).clamp_value(S::ZERO, S::ONE);
                 return alpha * ratio;
             }
         }

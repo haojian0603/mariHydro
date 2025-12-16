@@ -19,7 +19,7 @@
 //! 其中 S 为淹没修正系数
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 use crate::types::PhysicalConstants;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
@@ -237,7 +237,7 @@ impl SourceTerm for WeirFlow {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {

@@ -24,7 +24,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -200,7 +200,7 @@ impl SourceTerm for InflowConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -341,7 +341,7 @@ impl SourceTerm for RainfallConfig {
 
     fn compute_cell(
         &self,
-        _state: &ShallowWaterState,
+        _state: &ShallowWaterStateF64,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -403,7 +403,7 @@ impl SourceTerm for EvaporationConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {

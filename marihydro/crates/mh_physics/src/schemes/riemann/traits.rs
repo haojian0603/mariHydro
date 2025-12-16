@@ -5,6 +5,7 @@
 //! T=3 改造：将所有核心类型泛型化以支持 f32/f64 精度切换
 
 use mh_runtime::{Backend, RuntimeScalar};
+use mh_runtime::Vector2D;
 
 /// 黎曼求解结果通量（泛型化）
 #[derive(Debug, Clone, Copy)]

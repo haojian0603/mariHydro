@@ -32,7 +32,7 @@ pub mod csr;
 pub mod preconditioner;
 pub mod solver;
 pub mod vector_ops;
-pub use crate::builder::dyn_solver::{SolverStats, DynSolver};
+// pub use crate::builder::dyn_solver::{SolverStats, DynSolver}; // 错误：路径不存在且 SolverStats 已定义
 
 pub use csr::{
     CsrBuilder, CsrMatrix, CsrPattern, CsrBuilderF64 as CsrBuilderLegacy,
@@ -47,6 +47,7 @@ pub use vector_ops::{
 pub use preconditioner::{
     // Trait
     Preconditioner,
+    ScalarPreconditioner,
     // 错误类型
     PreconditionerError,
     // 性能统计
@@ -68,38 +69,37 @@ pub use solver::{
     // 工作空间
     CgWorkspace, BiCgStabWorkspace,
     // 配置与结果
-    SolverConfig, SolverResult, SolverStatus, SolverStats,
+    SolverConfig, SolverResult, SolverStatus,
 };
 
 // 依赖导入（必须在此导入以避免循环）
-use aligned_vec::AVec;
+use mh_foundation::AlignedVec;
 use mh_runtime::RuntimeScalar;
 
-// =============================================================================
+// ============================================================================
 // 字节对齐工具
-// =============================================================================
+// ============================================================================
 
-/// 64 字节对齐的向量类型别名
-pub type AlignedVec64<T> = AVec<T, 64>;
+/// 64 字节对齐的向量类型别名 (使用 mh_foundation 的 AlignedVec)
+pub type AlignedVec64<T> = AlignedVec<T>;
 
 /// 创建对齐向量的工厂函数
 #[inline]
 pub fn aligned_vec<S: RuntimeScalar>(n: usize) -> AlignedVec64<S> {
-    // aligned-vec 0.5.0 不支持 zeroed，改用 resize
-    let mut vec = AVec::new(64);
-    vec.resize(n, S::zero());
-    vec
+    AlignedVec::zeros(n)
 }
 
 /// 从 slice 创建对齐向量
 #[inline]
-pub fn aligned_vec_from_slice<S: RuntimeScalar>(slice: &[S]) -> AlignedVec64<S> {
-    AVec::from_slice(slice)
+pub fn aligned_vec_from_slice<S: RuntimeScalar + Clone>(slice: &[S]) -> AlignedVec64<S> {
+    let mut vec = AlignedVec::zeros(slice.len());
+    vec.copy_from_slice(slice);
+    vec
 }
 
-// =============================================================================
+// ============================================================================
 // SIMD 能力检测（编译时）
-// =============================================================================
+// ============================================================================
 
 /// 运行时 SIMD 支持检测
 #[inline]
@@ -126,9 +126,9 @@ pub fn optimal_alignment() -> usize {
     }
 }
 
-// =============================================================================
+// ============================================================================
 // 性能剖析工具
-// =============================================================================
+// ============================================================================
 
 /// 计算内存带宽效率（GB/s）
 ///
@@ -149,7 +149,8 @@ mod tests {
         // 验证所有类型可访问
         let _builder: CsrBuilder<f64> = CsrBuilder::new(3, 3);
         let _precond: JacobiPreconditionerF64 = JacobiPreconditionerF64::new();
-        let _solver: ConjugateGradient<f64> = ConjugateGradient::new(1e-8, 100);
+        let config = SolverConfig::new(1e-8, 100); // 先创建 config
+        let _solver: ConjugateGradient<f64> = ConjugateGradient::new(config); // 再传入 config
     }
 
     #[test]

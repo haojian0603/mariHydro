@@ -146,19 +146,21 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     /// 重置通量累加区为零
     /// 
     /// # 实现细节
-    /// 使用Backend的fill方法，避免硬编码0.0，支持GPU后端。
+    /// 使用DeviceBuffer的fill方法，避免硬编码0.0，支持GPU后端。
     pub fn reset_fluxes(&mut self) {
+        use mh_runtime::DeviceBuffer;
         let zero = <B::Scalar as RuntimeScalar>::ZERO;
-        self.backend.fill(&mut self.flux_h, zero);
-        self.backend.fill(&mut self.flux_hu, zero);
-        self.backend.fill(&mut self.flux_hv, zero);
+        self.flux_h.fill(zero);
+        self.flux_hu.fill(zero);
+        self.flux_hv.fill(zero);
     }
     
     /// 重置源项累加区为零
     pub fn reset_sources(&mut self) {
+        use mh_runtime::DeviceBuffer;
         let zero = <B::Scalar as RuntimeScalar>::ZERO;
-        self.backend.fill(&mut self.source_hu, zero);
-        self.backend.fill(&mut self.source_hv, zero);
+        self.source_hu.fill(zero);
+        self.source_hv.fill(zero);
     }
     
     /// 重置所有工作区缓冲区
@@ -167,17 +169,18 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     /// O(n_cells + n_faces)时间复杂度，适用于每步计算。
     #[inline]
     pub fn reset(&mut self) {
+        use mh_runtime::DeviceBuffer;
         self.reset_fluxes();
         self.reset_sources();
         
         let zero = <B::Scalar as RuntimeScalar>::ZERO;
-        self.backend.fill(&mut self.vel_u, zero);
-        self.backend.fill(&mut self.vel_v, zero);
-        self.backend.fill(&mut self.eta, zero);
-        self.backend.fill(&mut self.face_flux_h, zero);
-        self.backend.fill(&mut self.face_flux_hu, zero);
-        self.backend.fill(&mut self.face_flux_hv, zero);
-        self.backend.fill(&mut self.face_wave_speed, zero);
+        self.vel_u.fill(zero);
+        self.vel_v.fill(zero);
+        self.eta.fill(zero);
+        self.face_flux_h.fill(zero);
+        self.face_flux_hu.fill(zero);
+        self.face_flux_hv.fill(zero);
+        self.face_wave_speed.fill(zero);
     }
     
     /// 获取单元数量

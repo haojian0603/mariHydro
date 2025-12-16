@@ -5,6 +5,7 @@
 use crate::adapter::PhysicsMesh;
 use crate::core::{Backend, CpuBackend};
 use super::topology::{MeshKind, MeshTopology};
+use mh_runtime::{CellIndex, FaceIndex};
 use std::sync::Arc;
 
 /// 非结构化网格适配器
@@ -32,20 +33,20 @@ impl UnstructuredMeshAdapter<CpuBackend<f64>> {
         // 构建单元面积缓冲区
         let mut cell_areas = vec![0.0; n_cells];
         for i in 0..n_cells {
-            cell_areas[i] = mesh.cell_area(i).unwrap_or(0.0);
+            cell_areas[i] = mesh.cell_area(mh_runtime::CellIndex(i)).unwrap_or(0.0);
         }
         
         // 构建面长度缓冲区
         let mut face_lengths = vec![0.0; n_faces];
         for i in 0..n_faces {
-            face_lengths[i] = mesh.face_length(i);
+            face_lengths[i] = mesh.face_length(FaceIndex(i));
         }
         
         // 构建边界和内部面索引列表
         let mut boundary_face_indices = Vec::new();
         let mut interior_face_indices = Vec::new();
         for i in 0..n_faces {
-            if mesh.face_neighbor(i).is_none() {
+            if mesh.face_neighbor(FaceIndex(i)).is_none() {
                 boundary_face_indices.push(i);
             } else {
                 interior_face_indices.push(i);
@@ -55,10 +56,10 @@ impl UnstructuredMeshAdapter<CpuBackend<f64>> {
         // 构建单元-面映射
         let mut cell_face_map = vec![Vec::new(); n_cells];
         for face in 0..n_faces {
-            let owner = mesh.face_owner(face);
-            cell_face_map[owner].push(face);
-            if let Some(neighbor) = mesh.face_neighbor(face) {
-                cell_face_map[neighbor].push(face);
+            let owner = mesh.face_owner(FaceIndex(face));
+            cell_face_map[owner.get()].push(face);
+            if let Some(neighbor) = mesh.face_neighbor(FaceIndex(face)) {
+                cell_face_map[neighbor.get()].push(face);
             }
         }
         
@@ -95,35 +96,38 @@ impl MeshTopology<CpuBackend<f64>> for UnstructuredMeshAdapter<CpuBackend<f64>> 
         self.mesh.n_nodes()
     }
     
+    #[allow(deprecated)]
     fn cell_center(&self, cell: usize) -> [f64; 2] {
         let c = self.mesh.cell_center(cell);
         [c.x, c.y]
     }
     
     fn cell_area(&self, cell: usize) -> f64 {
-        self.mesh.cell_area(cell).unwrap_or(0.0)
+        self.mesh.cell_area(CellIndex(cell)).unwrap_or(0.0)
     }
     
+    #[allow(deprecated)]
     fn face_normal(&self, face: usize) -> [f64; 2] {
         let n = self.mesh.face_normal(face);
         [n.x, n.y]
     }
     
     fn face_length(&self, face: usize) -> f64 {
-        self.mesh.face_length(face)
+        self.mesh.face_length(FaceIndex(face))
     }
     
+    #[allow(deprecated)]
     fn face_center(&self, face: usize) -> [f64; 2] {
         let c = self.mesh.face_center(face);
         [c.x, c.y]
     }
     
     fn face_owner(&self, face: usize) -> usize {
-        self.mesh.face_owner(face)
+        self.mesh.face_owner(FaceIndex(face)).get()
     }
     
     fn face_neighbor(&self, face: usize) -> Option<usize> {
-        self.mesh.face_neighbor(face)
+        self.mesh.face_neighbor(FaceIndex(face)).map(|c| c.get())
     }
     
     fn cell_faces(&self, cell: usize) -> &[usize] {

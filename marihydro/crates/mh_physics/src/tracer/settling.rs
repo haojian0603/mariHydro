@@ -2,7 +2,7 @@
 
 use crate::core::{Backend, DeviceBuffer};
 use mh_runtime::RuntimeScalar as Scalar;
-use num_traits::Float;
+use num_traits::{Float, ToPrimitive};
 
 /// 沉降求解器配置
 #[derive(Debug, Clone)]
@@ -22,11 +22,11 @@ pub struct SettlingConfig<S: Scalar> {
 impl<S: Scalar> Default for SettlingConfig<S> {
     fn default() -> Self {
         Self {
-            settling_velocity: S::from_config(0.001).unwrap_or(S::ZERO),
+            settling_velocity: S::from_f64(0.001).unwrap_or(S::ZERO),
             implicit: true,
-            tolerance: S::from_config(1e-6).unwrap_or(S::ZERO),
+            tolerance: S::from_f64(1e-6).unwrap_or(S::ZERO),
             max_iterations: 10,
-            min_depth: S::from_config(0.01).unwrap_or(S::ZERO),
+            min_depth: S::from_f64(0.01).unwrap_or(S::ZERO),
         }
     }
 }

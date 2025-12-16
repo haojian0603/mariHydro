@@ -17,7 +17,8 @@
 //! c = sqrt(g * h)
 //! ```
 use num_traits::Float;
-use num_traits::real::Real;
+use num_traits::FromPrimitive;
+use mh_runtime::Vector2D;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};

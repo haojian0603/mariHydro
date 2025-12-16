@@ -5,7 +5,7 @@
 pub mod explicit;
 pub mod semi_implicit;
 pub mod workspace;
-
+use num_traits::FromPrimitive;
 use crate::core::Backend;
 use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
@@ -33,8 +33,8 @@ pub struct StepResult<S: Scalar> {
 impl<S: Scalar> Default for StepResult<S> {
     fn default() -> Self {
         Self {
-            dt_used: S::from_config(0.0).unwrap_or(S::ZERO),
-            max_wave_speed: S::from_config(0.0).unwrap_or(S::ZERO),
+            dt_used: S::from_f64(0.0).unwrap_or(S::ZERO),
+            max_wave_speed: S::from_f64(0.0).unwrap_or(S::ZERO),
             dry_cells: 0,
             limited_cells: 0,
             converged: true,

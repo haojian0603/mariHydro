@@ -15,7 +15,10 @@
 //! 其他情况 → HLLC
 //! ```
 
+use mh_runtime::Vector2D;
+use num_traits::real::Real;
 use super::hllc::HllcSolver;
+use num_traits::FromPrimitive;
 use super::rusanov::RusanovSolver;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
@@ -276,8 +279,8 @@ impl<B: Backend> AdaptiveSolver<B> {
         vel_left: B::Vector2D,
         vel_right: B::Vector2D,
     ) -> (SolverChoice<B::Scalar>, AdaptiveReason) {
-        let h_max = h_left.max(h_right);
-        let h_min_val = h_left.min(h_right);
+        let h_max = num_traits::Float::max(h_left, h_right);
+        let h_min_val = num_traits::Float::min(h_left, h_right);
 
         // 1. 干湿检查
         if h_min_val < self.config.transition_depth {
@@ -285,7 +288,7 @@ impl<B: Backend> AdaptiveSolver<B> {
         }
 
         // 2. 水深跳跃检查
-        let depth_jump = (h_left - h_right).abs() / h_max;
+        let depth_jump = num_traits::Float::abs(h_left - h_right) / h_max;
         if depth_jump > self.config.depth_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(depth_jump, self.config.depth_jump_threshold);
@@ -293,7 +296,7 @@ impl<B: Backend> AdaptiveSolver<B> {
                     return (SolverChoice::Rusanov, AdaptiveReason::DepthJump);
                 }
                 return (
-                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    SolverChoice::Blended(Real::max(weight, self.config.min_hllc_weight)),
                     AdaptiveReason::DepthJump,
                 );
             }
@@ -302,15 +305,15 @@ impl<B: Backend> AdaptiveSolver<B> {
 
         // 3. Froude 数检查
         let g = self.params.gravity;
-        let c_avg = (g * h_max).sqrt();
+        let c_avg = num_traits::Float::sqrt(g * h_max);
         let vel_l_x = vel_left.x();
         let vel_l_y = vel_left.y();
         let vel_r_x = vel_right.x();
         let vel_r_y = vel_right.y();
         let vel_avg_x = (vel_l_x + vel_r_x) * B::Scalar::HALF;
         let vel_avg_y = (vel_l_y + vel_r_y) * B::Scalar::HALF;
-        let vel_avg_len = (vel_avg_x * vel_avg_x + vel_avg_y * vel_avg_y).sqrt();
-        let froude = vel_avg_len / c_avg.max(B::Scalar::from_f64(1e-10).unwrap());
+        let vel_avg_len = num_traits::Float::sqrt(vel_avg_x * vel_avg_x + vel_avg_y * vel_avg_y);
+        let froude = vel_avg_len / num_traits::Float::max(c_avg, B::Scalar::from_f64(1e-10).unwrap());
 
         if froude > self.config.froude_critical {
             if self.config.enable_blending {
@@ -319,7 +322,7 @@ impl<B: Backend> AdaptiveSolver<B> {
                     return (SolverChoice::Rusanov, AdaptiveReason::Supercritical);
                 }
                 return (
-                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    SolverChoice::Blended(num_traits::Float::max(weight, self.config.min_hllc_weight)),
                     AdaptiveReason::Supercritical,
                 );
             }
@@ -329,7 +332,7 @@ impl<B: Backend> AdaptiveSolver<B> {
         // 4. 速度跳跃检查
         let vel_diff_x = vel_l_x - vel_r_x;
         let vel_diff_y = vel_l_y - vel_r_y;
-        let vel_jump = (vel_diff_x * vel_diff_x + vel_diff_y * vel_diff_y).sqrt();
+        let vel_jump = num_traits::Float::sqrt(vel_diff_x * vel_diff_x + vel_diff_y * vel_diff_y);
         if vel_jump > self.config.velocity_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(vel_jump, self.config.velocity_jump_threshold);
@@ -337,7 +340,7 @@ impl<B: Backend> AdaptiveSolver<B> {
                     return (SolverChoice::Rusanov, AdaptiveReason::VelocityJump);
                 }
                 return (
-                    SolverChoice::Blended(weight.max(self.config.min_hllc_weight)),
+                    SolverChoice::Blended(num_traits::Float::max(weight, self.config.min_hllc_weight)),
                     AdaptiveReason::VelocityJump,
                 );
             }
@@ -381,7 +384,7 @@ impl<B: Backend> AdaptiveSolver<B> {
             mass: w * flux_hllc.mass + w_inv * flux_rusanov.mass,
             momentum_x: w * flux_hllc.momentum_x + w_inv * flux_rusanov.momentum_x,
             momentum_y: w * flux_hllc.momentum_y + w_inv * flux_rusanov.momentum_y,
-            max_wave_speed: flux_hllc.max_wave_speed.max(flux_rusanov.max_wave_speed),
+            max_wave_speed: num_traits::Float::max(flux_hllc.max_wave_speed, flux_rusanov.max_wave_speed),
         }
     }
 }

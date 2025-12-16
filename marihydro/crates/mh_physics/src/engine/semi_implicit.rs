@@ -37,11 +37,12 @@ use crate::numerics::discretization::{
 use crate::numerics::linear_algebra::{
     JacobiPreconditioner, PcgSolver, Preconditioner, SolverConfig, SolverResult, SolverStatus,
 };
-use crate::schemes::riemann::{HllcSolverF64, RiemannSolver, SolverParams as RiemannParams};
+use crate::schemes::riemann::{HllcSolverF64, RiemannSolver};
 use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 use crate::types::PhysicalConstants;
 use glam::DVec2;
 use mh_foundation::AlignedVec;
+use mh_runtime::{CpuBackend, CellIndex, FaceIndex};
 use serde::{Deserialize, Serialize};
 
 /// 半隐式配置
@@ -138,7 +139,7 @@ pub struct SemiImplicitStrategy {
     /// 线性求解器
     solver: PcgSolver<f64>,
     /// 预条件器
-    precond: JacobiPreconditioner<f64>,
+    precond: JacobiPreconditioner<CpuBackend<f64>>,
     /// 求解器工作区
     workspace: crate::numerics::linear_algebra::CgWorkspace<f64>,
     /// 水深校正器
@@ -194,7 +195,9 @@ impl SemiImplicitStrategy {
         let solver = PcgSolver::new(solver_config);
 
         // 初始化预条件器为单位矩阵
-        let precond = JacobiPreconditioner::from_diagonal(&vec![1.0; n_cells]);
+        let backend = CpuBackend::<f64>::new();
+        let precond = JacobiPreconditioner::from_diagonal(&backend, &vec![1.0; n_cells])
+            .expect("初始化 Jacobi 预条件器失败");
 
         // 初始化求解器工作区
         let workspace = crate::numerics::linear_algebra::CgWorkspace::new(n_cells);
@@ -203,14 +206,14 @@ impl SemiImplicitStrategy {
         let velocity_corrector = VelocityCorrector::new(&topo).with_h_min(config.h_dry);
 
         // 初始化 Riemann 求解器
-        let riemann_params = RiemannParams {
+        let riemann_params = crate::schemes::riemann::SolverParamsF64 {
             gravity: config.constants.g,
             h_dry: config.h_dry,
             h_min: config.h_min,
             flux_eps: 1e-14,
             entropy_ratio: 0.1,
         };
-        let riemann_solver = HllcSolverF64::from_params(riemann_params);
+        let riemann_solver = HllcSolverF64::new(&riemann_params, config.constants.g);
 
         Self {
             config,
@@ -260,7 +263,7 @@ impl SemiImplicitStrategy {
     /// # 返回
     ///
     /// 线性求解器是否收敛
-    pub fn step(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) -> bool { // ALLOW_F64: 时间步长参数
+    pub fn step(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterStateF64, dt: f64) -> bool { // ALLOW_F64: 时间步长参数
         // 重置统计
         self.stats = SemiImplicitStats::default();
 
@@ -332,12 +335,12 @@ impl SemiImplicitStrategy {
     }
 
     /// 执行半隐式时间推进（兼容旧接口）
-    pub fn advance(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: f64) { // ALLOW_F64: 时间步长参数
+    pub fn advance(&mut self, state: &mut ShallowWaterStateF64, mesh: &PhysicsMesh, dt: f64) { // ALLOW_F64: 时间步长参数
         let _ = self.step(mesh, state, dt);
     }
 
     /// 计算 CFL 数
-    fn compute_cfl(&self, state: &ShallowWaterState, mesh: &PhysicsMesh, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数
+    fn compute_cfl(&self, state: &ShallowWaterStateF64, mesh: &PhysicsMesh, dt: f64) -> f64 { // ALLOW_F64: 时间步长参数
         let g = self.config.constants.g;
         let h_dry = self.config.h_dry;
 
@@ -352,7 +355,7 @@ impl SemiImplicitStrategy {
                 let c = (g * h).sqrt();
                 let vel = (u * u + v * v).sqrt() + c;
                 // 使用 sqrt(面积) 作为特征尺寸
-                let dx = mesh.cell_area_unchecked(i).sqrt();
+                let dx = mesh.cell_area_unchecked(CellIndex(i)).sqrt();
                 if dx > 1e-14 {
                     vel * dt / dx
                 } else {
@@ -363,7 +366,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 从动量恢复速度场
-    fn extract_velocity(&mut self, state: &ShallowWaterState) {
+    fn extract_velocity(&mut self, state: &ShallowWaterStateF64) {
         let h_dry = self.config.h_dry;
         for i in 0..state.n_cells() {
             let h = state.h[i];
@@ -378,7 +381,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 计算预测步（对流+扩散）
-    fn compute_prediction_step(&mut self, mesh: &PhysicsMesh, state: &ShallowWaterState, dt: f64) { // ALLOW_F64: 时间步长参数
+    fn compute_prediction_step(&mut self, mesh: &PhysicsMesh, state: &ShallowWaterStateF64, dt: f64) { // ALLOW_F64: 时间步长参数
         // 清零通量累加器
         self.advection_flux_u.as_mut_slice().fill(0.0);
         self.advection_flux_v.as_mut_slice().fill(0.0);
@@ -401,9 +404,9 @@ impl SemiImplicitStrategy {
                 continue;
             }
 
-            let vel_o = DVec2::new(self.u_n[owner], self.v_n[owner]);
-            let vel_n = DVec2::new(self.u_n[neighbor], self.v_n[neighbor]);
-            let normal = DVec2::new(face.normal.x, face.normal.y);
+            let vel_o = [self.u_n[owner], self.v_n[owner]];
+            let vel_n = [self.u_n[neighbor], self.v_n[neighbor]];
+            let normal = [face.normal.x, face.normal.y];
 
             // 使用 Riemann 求解器计算面通量
             let flux = match self.riemann_solver.solve(h_o, h_n, vel_o, vel_n, normal) {
@@ -413,8 +416,8 @@ impl SemiImplicitStrategy {
 
             // 通量乘以面长度
             let face_length = face.length;
-            let cell_area_o = mesh.cell_area_unchecked(owner);
-            let cell_area_n = mesh.cell_area_unchecked(neighbor);
+            let cell_area_o = mesh.cell_area_unchecked(CellIndex(owner));
+            let cell_area_n = mesh.cell_area_unchecked(CellIndex(neighbor));
 
             // 动量通量累加（注意：flux.momentum 已是守恒形式 h*u*u + g*h²/2）
             // 对于 owner: 通量为正（流出）时减小动量
@@ -449,7 +452,7 @@ impl SemiImplicitStrategy {
                 self.v_star[i] = 0.0;
                 continue;
             }
-            let inv_area = 1.0 / mesh.cell_area_unchecked(i);
+            let inv_area = 1.0 / mesh.cell_area_unchecked(CellIndex(i));
             self.u_star[i] = self.u_n[i]
                 + dt * (self.advection_flux_u[i] + self.diffusion_flux_u[i]) * inv_area;
             self.v_star[i] = self.v_n[i]
@@ -458,7 +461,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 计算干湿掩码
-    fn compute_wet_mask(&self, state: &ShallowWaterState) -> Vec<bool> {
+    fn compute_wet_mask(&self, state: &ShallowWaterStateF64) -> Vec<bool> {
         (0..state.n_cells())
             .map(|i| state.h[i] > self.config.h_dry)
             .collect()
@@ -474,7 +477,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 速度校正（Green-Gauss 梯度）
-    fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterState, dt: f64) { // ALLOW_F64: 时间步长参数
+    fn velocity_correction(&mut self, mesh: &PhysicsMesh, state: &mut ShallowWaterStateF64, dt: f64) { // ALLOW_F64: 时间步长参数
         let g = self.config.constants.g;
         let theta = self.config.theta;
         let coeff = g * theta * dt;
@@ -506,7 +509,7 @@ impl SemiImplicitStrategy {
         let mut grad_y = 0.0;
 
         let cell_faces = self.topo.cell_faces(cell_idx);
-        let area = mesh.cell_area_unchecked(cell_idx);
+        let area = mesh.cell_area_unchecked(CellIndex(cell_idx));
 
         if area < 1e-14 {
             return (0.0, 0.0);
@@ -534,7 +537,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 水深校正
-    fn depth_correction(&self, state: &mut ShallowWaterState) {
+    fn depth_correction(&self, state: &mut ShallowWaterStateF64) {
         for i in 0..state.n_cells() {
             state.h[i] = (state.h[i] + self.eta_prime[i]).max(0.0);
         }
@@ -544,7 +547,7 @@ impl SemiImplicitStrategy {
     fn compute_divergence_rhs(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         dt: f64, // ALLOW_F64: 时间步长参数
     ) {
         self.rhs.as_mut_slice().fill(0.0);
@@ -572,8 +575,8 @@ impl SemiImplicitStrategy {
             let flux = h_f * (u_f * face.normal.x + v_f * face.normal.y) * face.length;
 
             // 累加到右端项
-            let area_o = mesh.cell_area_unchecked(owner);
-            let area_n = mesh.cell_area_unchecked(neighbor);
+            let area_o = mesh.cell_area_unchecked(CellIndex(owner));
+            let area_n = mesh.cell_area_unchecked(CellIndex(neighbor));
 
             self.rhs[owner] += flux / area_o;
             self.rhs[neighbor] -= flux / area_n;
@@ -605,7 +608,7 @@ impl SemiImplicitStrategy {
     }
 
     /// 计算速度校正统计
-    fn compute_velocity_correction_stats(&mut self, state: &ShallowWaterState) {
+    fn compute_velocity_correction_stats(&mut self, state: &ShallowWaterStateF64) {
         let mut max_correction: f64 = 0.0; // ALLOW_F64: 临时计算变量
         let h_dry = self.config.h_dry;
 
@@ -667,17 +670,19 @@ impl SemiImplicitStrategy {
         self.prev_wet_mask = vec![false; n_cells];
         self.cfl_history.clear();
 
-        self.precond = JacobiPreconditioner::from_diagonal(&vec![1.0; n_cells]);
+        let backend = CpuBackend::<f64>::new();
+        self.precond = JacobiPreconditioner::from_diagonal(&backend, &vec![1.0; n_cells])
+            .expect("初始化 Jacobi 预条件器失败");
 
         // 重新初始化 Riemann 求解器
-        let riemann_params = RiemannParams {
+        let riemann_params = crate::schemes::riemann::SolverParamsF64 {
             gravity: self.config.constants.g,
             h_dry: self.config.h_dry,
             h_min: self.config.h_min,
             flux_eps: 1e-14,
             entropy_ratio: 0.1,
         };
-        self.riemann_solver = HllcSolverF64::from_params(riemann_params);
+        self.riemann_solver = HllcSolverF64::new(&riemann_params, self.config.constants.g);
     }
 }
 

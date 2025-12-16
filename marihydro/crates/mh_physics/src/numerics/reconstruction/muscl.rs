@@ -181,8 +181,8 @@ impl MusclReconstructor {
         let mut max_val = cell_value;
         
         // 直接遍历邻居单元，复杂度 O(邻居数)
-        for neighbor_id in self.mesh.cell_neighbors(cell_id) {
-            let neighbor_value = values[neighbor_id];
+        for neighbor_id in self.mesh.cell_neighbors(mh_runtime::CellIndex(cell_id)) {
+            let neighbor_value = values[neighbor_id.0];
             min_val = min_val.min(neighbor_value);
             max_val = max_val.max(neighbor_value);
         }
@@ -202,8 +202,8 @@ impl MusclReconstructor {
         let mut max_distance = 0.0f64;
         
         // 直接遍历单元的面，复杂度 O(单元面数)
-        for face_id in self.mesh.cell_faces(cell_id) {
-            let face_center = self.mesh.face_center(face_id);
+        for face_id in self.mesh.cell_faces(mh_runtime::CellIndex(cell_id)) {
+            let face_center = self.mesh.face_center(face_id.into());
             let dx = face_center.x - cell_center.x;
             let dy = face_center.y - cell_center.y;
             
@@ -234,7 +234,7 @@ impl MusclReconstructor {
         let cell_center = self.mesh.cell_center(cell_id);
         
         // 收集面列表避免借用冲突
-        let faces: Vec<usize> = self.mesh.cell_faces(cell_id).collect();
+        let faces: Vec<usize> = self.mesh.cell_faces(mh_runtime::CellIndex(cell_id)).map(|f| f.into()).collect();
         
         for face_id in faces {
             let face_center = self.mesh.face_center(face_id);
@@ -258,8 +258,9 @@ impl MusclReconstructor {
     
     /// 重构面值（内部方法）
     fn reconstruct_at_face(&self, face_id: usize, values: &[f64]) -> ReconstructedState {
-        let left_cell = self.mesh.face_owner(face_id);
-        let right_cell = self.mesh.face_neighbor(face_id);
+        let fi = mh_runtime::FaceIndex(face_id);
+        let left_cell: usize = self.mesh.face_owner(fi).into();
+        let right_cell: Option<usize> = self.mesh.face_neighbor(fi).map(|c| c.into());
         let face_center = self.mesh.face_center(face_id);
         
         // 左侧重构
@@ -329,7 +330,7 @@ fn compute_mesh_scale(mesh: &PhysicsMesh) -> f64 {
     // 使用平均单元面积的平方根作为特征尺度
     // ALLOW_F64: PhysicsMesh 返回 f64 面积
     let total_area: f64 = (0..mesh.n_cells())
-        .filter_map(|i| mesh.cell_area(i))
+        .filter_map(|i| mesh.cell_area(mh_runtime::CellIndex(i)))
         .sum();
     // ALLOW_F64: PhysicsMesh 返回 f64 面积
     (total_area / mesh.n_cells() as f64).sqrt()

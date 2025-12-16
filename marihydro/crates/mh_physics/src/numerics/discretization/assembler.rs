@@ -30,7 +30,8 @@
 use super::topology::CellFaceTopology;
 use crate::adapter::PhysicsMesh;
 use crate::numerics::linear_algebra::{CsrBuilder, CsrMatrix, CsrPattern};
-use crate::state::ShallowWaterState;
+use crate::state::ShallowWaterStateF64;
+use mh_runtime::CellIndex;
 use serde::{Deserialize, Serialize};
 
 /// 组装器配置
@@ -137,7 +138,7 @@ impl PressureMatrixAssembler {
         &mut self,
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         dt: f64,
         g: f64,
     ) {
@@ -175,8 +176,8 @@ impl PressureMatrixAssembler {
 
             // 如果使用面积加权
             let (a_o, a_n) = if self.config.area_weighted {
-                let area_o = mesh.cell_area_unchecked(owner);
-                let area_n = mesh.cell_area_unchecked(neighbor);
+                let area_o = mesh.cell_area_unchecked(CellIndex(owner));
+                let area_n = mesh.cell_area_unchecked(CellIndex(neighbor));
                 (a_coef / area_o, a_coef / area_n)
             } else {
                 (a_coef, a_coef)
@@ -194,12 +195,12 @@ impl PressureMatrixAssembler {
             let dz = state.z[neighbor] - state.z[owner];
             let bed_slope_flux = g * h_f * dz * face.length / dist;
             let rhs_o = if self.config.area_weighted {
-                bed_slope_flux / mesh.cell_area_unchecked(owner)
+                bed_slope_flux / mesh.cell_area_unchecked(mh_runtime::CellIndex(owner))
             } else {
                 bed_slope_flux
             };
             let rhs_n = if self.config.area_weighted {
-                bed_slope_flux / mesh.cell_area_unchecked(neighbor)
+                bed_slope_flux / mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor))
             } else {
                 bed_slope_flux
             };
@@ -247,7 +248,7 @@ impl PressureMatrixAssembler {
         &mut self,
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         hu_star: &[f64],
         hv_star: &[f64],
         dt: f64,
@@ -272,8 +273,8 @@ impl PressureMatrixAssembler {
             let hv_f = 0.5 * (hv_star[owner] + hv_star[neighbor]);
             let flux = (face.normal.x * hu_f + face.normal.y * hv_f) * face.length;
 
-            let area_o = mesh.cell_area_unchecked(owner);
-            let area_n = mesh.cell_area_unchecked(neighbor);
+            let area_o = mesh.cell_area_unchecked(CellIndex(owner));
+            let area_n = mesh.cell_area_unchecked(CellIndex(neighbor));
 
             self.rhs[owner] -= flux / area_o / dt;
             self.rhs[neighbor] += flux / area_n / dt;
@@ -367,7 +368,7 @@ impl ImplicitMomentumAssembler {
     pub fn assemble_friction(
         &mut self,
         topo: &CellFaceTopology,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         manning_n: f64,
         dt: f64,
         g: f64,

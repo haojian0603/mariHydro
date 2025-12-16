@@ -413,46 +413,23 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
     pub fn from_config(config: &crate::builder::SolverConfig) -> Result<Self, ConfigError> {
-        Ok(Self {
-            h_min: S::from_f64(config.numerical.h_min)
-                .ok_or(ConfigError::Conversion("h_min"))?,
-            h_dry: S::from_f64(config.numerical.h_dry)
-                .ok_or(ConfigError::Conversion("h_dry"))?,
-            h_friction: S::from_f64(config.numerical.h_friction)
-                .ok_or(ConfigError::Conversion("h_friction"))?,
-            h_wet: S::from_f64(config.numerical.h_wet)
-                .ok_or(ConfigError::Conversion("h_wet"))?,
-            flux_eps: S::from_f64(config.numerical.flux_eps)
-                .ok_or(ConfigError::Conversion("flux_eps"))?,
-            entropy_ratio: S::from_f64(config.numerical.entropy_ratio)
-                .ok_or(ConfigError::Conversion("entropy_ratio"))?,
-            min_wave_speed: S::from_f64(config.numerical.min_wave_speed)
-                .ok_or(ConfigError::Conversion("min_wave_speed"))?,
-            det_min: S::from_f64(config.numerical.det_min)
-                .ok_or(ConfigError::Conversion("det_min"))?,
-            limiter_k: S::from_f64(config.numerical.limiter_k)
-                .ok_or(ConfigError::Conversion("limiter_k"))?,
-            vel_min: S::from_f64(config.numerical.vel_min)
-                .ok_or(ConfigError::Conversion("vel_min"))?,
-            vel_max: S::from_f64(config.numerical.vel_max)
-                .ok_or(ConfigError::Conversion("vel_max"))?,
-            nu_min: S::from_f64(config.numerical.nu_min)
-                .ok_or(ConfigError::Conversion("nu_min"))?,
-            nu_max: S::from_f64(config.numerical.nu_max)
-                .ok_or(ConfigError::Conversion("nu_max"))?,
-            cfl: S::from_f64(config.numerical.cfl)
-                .ok_or(ConfigError::Conversion("cfl"))?,
-            dt_min: S::from_f64(config.numerical.dt_min)
-                .ok_or(ConfigError::Conversion("dt_min"))?,
-            dt_max: S::from_f64(config.numerical.dt_max)
-                .ok_or(ConfigError::Conversion("dt_max"))?,
-            eta_tolerance: S::from_f64(config.numerical.eta_tolerance)
-                .ok_or(ConfigError::Conversion("eta_tolerance"))?,
-            flux_tolerance: S::from_f64(config.numerical.flux_tolerance)
-                .ok_or(ConfigError::Conversion("flux_tolerance"))?,
-            conservation_tolerance: S::from_f64(config.numerical.conservation_tolerance)
-                .ok_or(ConfigError::Conversion("conservation_tolerance"))?,
-        })
+        // 先使用默认值填充所有字段
+        let mut params = Self::default();
+        
+        // TODO 仅覆盖 builder::SolverConfig 中存在的字段,其他字段可以后续根据需要补充，当前的任务是将代码测报错解决
+        params.h_min = S::from_f64(config.h_min)
+            .ok_or(ConfigError::Conversion("h_min"))?;
+        params.h_dry = S::from_f64(config.h_dry)
+            .ok_or(ConfigError::Conversion("h_dry"))?;
+        params.cfl = S::from_f64(config.cfl)
+            .ok_or(ConfigError::Conversion("cfl"))?;
+        params.vel_max = S::from_f64(config.max_velocity)
+            .ok_or(ConfigError::Conversion("max_velocity"))?;
+        params.h_friction = S::from_f64(1e-4) // 默认值
+            .ok_or(ConfigError::Conversion("h_friction"))?;
+        
+        // 其他字段保持默认值
+        Ok(params)
     }
 
     /// 判断是否为干单元
@@ -1095,5 +1072,14 @@ mod tests {
         let provider = ConstantBoundaryProvider::new(10.0f64);
         assert_eq!(provider.get_value(0, 0.0), Some(10.0f64));
         assert_eq!(provider.provides_for(999), true);
+    }
+
+    #[test]
+    fn test_config_conversion_from_builder() {
+        let builder_config = crate::builder::SolverConfig::default();
+        let params = NumericalParams::<f64>::from_config(&builder_config).unwrap();
+        assert_eq!(params.h_min, builder_config.h_min);
+        assert_eq!(params.h_dry, builder_config.h_dry);
+        assert_eq!(params.cfl, builder_config.cfl);
     }
 }

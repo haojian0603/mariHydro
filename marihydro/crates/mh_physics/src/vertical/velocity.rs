@@ -7,7 +7,7 @@
 //! w(σ) = -∫[σ,-1] h × ∇·u dσ
 
 use super::sigma::SigmaCoordinate;
-use crate::state::ShallowWaterState;
+use crate::state::ShallowWaterStateF64;
 use mh_foundation::AlignedVec;
 
 /// 垂向速度计算器
@@ -43,7 +43,7 @@ impl VerticalVelocity {
     pub fn compute_from_divergence(
         &mut self,
         div_hu: &[f64],
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
     ) {
         let n_layers = self.sigma.n_layers();
 
@@ -81,7 +81,7 @@ impl VerticalVelocity {
         v_layers: &[&[f64]],
         du_dx: &[&[f64]],
         dv_dy: &[&[f64]],
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
     ) {
         let n_layers = self.sigma.n_layers();
 
@@ -147,9 +147,10 @@ impl VerticalVelocity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ShallowWaterStateF64;
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState {
-        let mut state = ShallowWaterState::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterStateF64 {
+        let mut state = ShallowWaterStateF64::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
         }

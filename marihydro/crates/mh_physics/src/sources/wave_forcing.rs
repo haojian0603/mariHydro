@@ -15,7 +15,7 @@
 //! ```
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
@@ -226,7 +226,7 @@ impl SourceTerm for WaveForcing {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {

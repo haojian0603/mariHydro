@@ -24,7 +24,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 
 /// 最大风速限制 [m/s]
 const MAX_WIND_SPEED: f64 = 100.0;
@@ -165,7 +165,7 @@ impl SourceTerm for WindStressConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -256,7 +256,7 @@ impl SourceTerm for PressureGradientConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {

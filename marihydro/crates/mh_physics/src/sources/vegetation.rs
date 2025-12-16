@@ -24,7 +24,7 @@
 //! - 淹没/露出植被
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
+use crate::state::{ShallowWaterState, ShallowWaterStateF64};
 
 /// 植被类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,7 +242,7 @@ impl SourceTerm for VegetationConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -327,7 +327,7 @@ impl VegetationImplicit {
     ///
     /// 返回 exp(-Δt * 0.5 * C_d * A_v * |u|)
     // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn compute_decay_factors(&mut self, state: &ShallowWaterState, dt: f64) {
+    pub fn compute_decay_factors(&mut self, state: &ShallowWaterStateF64, dt: f64) {
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {
@@ -355,7 +355,7 @@ impl VegetationImplicit {
     }
 
     /// 应用隐式衰减
-    pub fn apply_decay(&self, state: &mut ShallowWaterState) {
+    pub fn apply_decay(&self, state: &mut ShallowWaterStateF64) {
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {

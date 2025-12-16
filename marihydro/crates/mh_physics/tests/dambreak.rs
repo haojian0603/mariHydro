@@ -94,7 +94,7 @@ fn setup_dambreak_initial_condition(
 }
 
 /// 计算总质量
-fn compute_total_mass(state: &ShallowWaterState, mesh: &PhysicsMesh) -> f64 {
+fn compute_total_mass(state: &ShallowWaterState<B>, mesh: &PhysicsMesh) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(i) {
@@ -105,12 +105,12 @@ fn compute_total_mass(state: &ShallowWaterState, mesh: &PhysicsMesh) -> f64 {
 }
 
 /// 计算最大水深
-fn compute_max_depth(state: &ShallowWaterState) -> f64 {
+fn compute_max_depth(state: &ShallowWaterState<B>) -> f64 {
     state.h.iter().cloned().fold(0.0, f64::max)
 }
 
 /// 计算最大速度
-fn compute_max_velocity(state: &ShallowWaterState) -> f64 {
+fn compute_max_velocity(state: &ShallowWaterState<B>) -> f64 {
     let h_min = 1e-6;
     let mut max_vel: f64 = 0.0;
     for i in 0..state.n_cells() {
@@ -125,7 +125,7 @@ fn compute_max_velocity(state: &ShallowWaterState) -> f64 {
 }
 
 /// 验证状态有效性
-fn validate_state(state: &ShallowWaterState) -> Result<(), String> {
+fn validate_state(state: &ShallowWaterState<B>) -> Result<(), String> {
     for (i, &h) in state.h.iter().enumerate() {
         if h.is_nan() {
             return Err(format!("单元 {} 水深为 NaN", i));

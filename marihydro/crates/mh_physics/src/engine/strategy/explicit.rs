@@ -12,6 +12,7 @@ use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
+use num_traits::FromPrimitive;
 
 /// 显式时间积分策略
 /// 

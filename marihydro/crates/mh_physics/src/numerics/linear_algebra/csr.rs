@@ -47,7 +47,6 @@ use mh_runtime::RuntimeScalar;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
@@ -547,7 +546,7 @@ impl<S: RuntimeScalar> CsrMatrix<S> {
     /// - `cache`: `build_diagonal_cache` 返回的缓存
     #[inline]
     pub fn diagonal_value_cached(&self, row: usize, cache: &[Option<usize>]) -> Option<S> {
-        cache.get(row)?.map(|&idx| self.values[idx])
+        cache.get(row)?.map(|idx| self.values[idx])
     }
 
     /// 检查矩阵是否对称（在容差范围内）
@@ -842,6 +841,7 @@ impl<S: RuntimeScalar> From<CsrPattern> for CsrMatrix<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::FromPrimitive;
 
     /// 生产级测试宏：为 S = f32 和 f64 生成完全相同的测试
     macro_rules! csr_test_suite {
@@ -854,9 +854,9 @@ mod tests {
 
                     /// 默认精度容差：f32=1e-6, f64=1e-10
                     const EPS: S = if std::mem::size_of::<S>() == 4 {
-                        S::from_config(1e-6).unwrap()
+                        S::from_f64(1e-6).unwrap()
                     } else {
-                        S::from_config(1e-10).unwrap()
+                        S::from_f64(1e-10).unwrap()
                     };
 
                     #[test]
@@ -873,9 +873,9 @@ mod tests {
 
                     #[test]
                     fn test_diagonal_matrix() {
-                        let diag = vec![S::from_config(2.0).unwrap(),
-                                       S::from_config(3.0).unwrap(),
-                                       S::from_config(4.0).unwrap()];
+                        let diag = vec![S::from_f64(2.0).unwrap(),
+                                       S::from_f64(3.0).unwrap(),
+                                       S::from_f64(4.0).unwrap()];
                         let mat = CsrMatrix::<S>::diagonal(&diag);
 
                         assert!((mat.get(0, 0) - diag[0]).abs() < EPS);
@@ -888,22 +888,22 @@ mod tests {
                     fn test_builder_and_mul() {
                         // 构建三对角矩阵
                         let mut builder = CsrBuilder::<S>::new_square(4);
-                        builder.set(0, 0, S::from_config(2.0).unwrap());
-                        builder.set(0, 1, S::from_config(-1.0).unwrap());
-                        builder.add(0, 1, S::from_config(-0.5).unwrap()); // 测试累加
-                        builder.set(1, 0, S::from_config(-1.0).unwrap());
-                        builder.set(1, 1, S::from_config(2.0).unwrap());
-                        builder.set(1, 2, S::from_config(-1.0).unwrap());
-                        builder.set(2, 1, S::from_config(-1.0).unwrap());
-                        builder.set(2, 2, S::from_config(2.0).unwrap());
-                        builder.set(2, 3, S::from_config(-1.0).unwrap());
-                        builder.set(3, 3, S::from_config(1.0).unwrap());
+                        builder.set(0, 0, S::from_f64(2.0).unwrap());
+                        builder.set(0, 1, S::from_f64(-1.0).unwrap());
+                        builder.add(0, 1, S::from_f64(-0.5).unwrap()); // 测试累加
+                        builder.set(1, 0, S::from_f64(-1.0).unwrap());
+                        builder.set(1, 1, S::from_f64(2.0).unwrap());
+                        builder.set(1, 2, S::from_f64(-1.0).unwrap());
+                        builder.set(2, 1, S::from_f64(-1.0).unwrap());
+                        builder.set(2, 2, S::from_f64(2.0).unwrap());
+                        builder.set(2, 3, S::from_f64(-1.0).unwrap());
+                        builder.set(3, 3, S::from_f64(1.0).unwrap());
 
                         let mat = builder.build();
                         assert_eq!(mat.nnz(), 9);
 
-                        let x = vec![S::ONE, S::from_config(2.0).unwrap(),
-                                    S::from_config(3.0).unwrap(), S::from_config(4.0).unwrap()];
+                        let x = vec![S::ONE, S::from_f64(2.0).unwrap(),
+                                    S::from_f64(3.0).unwrap(), S::from_f64(4.0).unwrap()];
                         let mut y = vec![S::ZERO; 4];
                         mat.mul_vec(&x, &mut y);
 
@@ -912,10 +912,10 @@ mod tests {
                         // y[1] = -1*1 + 2*2 + -1*3 = 0
                         // y[2] = -1*2 + 2*3 + -1*4 = 0
                         // y[3] = 1*4 = 4
-                        assert!((y[0] - S::from_config(-1.0).unwrap()).abs() < EPS);
+                        assert!((y[0] - S::from_f64(-1.0).unwrap()).abs() < EPS);
                         assert!((y[1] - S::ZERO).abs() < EPS);
                         assert!((y[2] - S::ZERO).abs() < EPS);
-                        assert!((y[3] - S::from_config(4.0).unwrap()).abs() < EPS);
+                        assert!((y[3] - S::from_f64(4.0).unwrap()).abs() < EPS);
                     }
 
                     #[test]
@@ -923,7 +923,7 @@ mod tests {
                         let mut builder = CsrBuilder::<S>::new_square(2);
                         builder.set(0, 0, S::ONE);
                         builder.set(0, 1, S::ONE);
-                        builder.set(1, 1, S::from_config(2.0).unwrap());
+                        builder.set(1, 1, S::from_f64(2.0).unwrap());
 
                         let mat = builder.build();
                         let x = vec![S::ONE, S::ONE];
@@ -932,45 +932,45 @@ mod tests {
                         mat.mul_vec_add(S::ONE, &x, &mut y);
 
                         // y = [1,1] + 1 * [1*1+1*1, 1*2] = [3, 3]
-                        assert!((y[0] - S::from_config(3.0).unwrap()).abs() < EPS);
-                        assert!((y[1] - S::from_config(3.0).unwrap()).abs() < EPS);
+                        assert!((y[0] - S::from_f64(3.0).unwrap()).abs() < EPS);
+                        assert!((y[1] - S::from_f64(3.0).unwrap()).abs() < EPS);
                     }
 
                     #[test]
                     fn test_frobenius_norm() {
                         let mut builder = CsrBuilder::<S>::new_square(2);
-                        builder.set(0, 0, S::from_config(3.0).unwrap());
-                        builder.set(1, 1, S::from_config(4.0).unwrap());
+                        builder.set(0, 0, S::from_f64(3.0).unwrap());
+                        builder.set(1, 1, S::from_f64(4.0).unwrap());
 
                         let mat = builder.build();
                         // ||A||_F = sqrt(3² + 4²) = 5
                         let norm = mat.frobenius_norm();
-                        assert!((norm - S::from_config(5.0).unwrap()).abs() < EPS);
+                        assert!((norm - S::from_f64(5.0).unwrap()).abs() < EPS);
                     }
 
                     #[test]
                     fn test_symmetric_check() {
                         let mut builder = CsrBuilder::<S>::new_square(3);
                         builder.set(0, 0, S::ONE);
-                        builder.set(0, 1, S::from_config(0.5).unwrap());
-                        builder.set(1, 0, S::from_config(0.5).unwrap());
+                        builder.set(0, 1, S::from_f64(0.5).unwrap());
+                        builder.set(1, 0, S::from_f64(0.5).unwrap());
                         builder.set(1, 1, S::ONE);
                         builder.set(2, 2, S::ONE);
 
-                        let mat = builder.build();
-                        assert!(mat.is_symmetric(S::from_config(1e-12).unwrap()));
+                        let mut mat = builder.build();
+                        assert!(mat.is_symmetric(S::from_f64(1e-12).unwrap()));
 
                         // 修改为非对称
-                        mat.set(0, 1, S::from_config(0.6).unwrap());
-                        assert!(!mat.is_symmetric(S::from_config(1e-12).unwrap()));
+                        mat.set(0, 1, S::from_f64(0.6).unwrap());
+                        assert!(!mat.is_symmetric(S::from_f64(1e-12).unwrap()));
                     }
 
                     #[test]
                     fn test_diagonal_cache() {
                         let mut builder = CsrBuilder::<S>::new_square(3);
-                        builder.set(0, 0, S::from_config(1.0).unwrap());
-                        builder.set(1, 1, S::from_config(2.0).unwrap());
-                        builder.set(2, 2, S::from_config(3.0).unwrap());
+                        builder.set(0, 0, S::from_f64(1.0).unwrap());
+                        builder.set(1, 1, S::from_f64(2.0).unwrap());
+                        builder.set(2, 2, S::from_f64(3.0).unwrap());
                         let mat = builder.build();
 
                         let cache = mat.build_diagonal_cache();
@@ -979,9 +979,9 @@ mod tests {
                         assert!(cache[1].is_some());
                         assert!(cache[2].is_some());
 
-                        assert!((mat.diagonal_value_cached(0, &cache).unwrap() - S::from_config(1.0).unwrap()).abs() < EPS);
-                        assert!((mat.diagonal_value_cached(1, &cache).unwrap() - S::from_config(2.0).unwrap()).abs() < EPS);
-                        assert!((mat.diagonal_value_cached(2, &cache).unwrap() - S::from_config(3.0).unwrap()).abs() < EPS);
+                        assert!((mat.diagonal_value_cached(0, &cache).unwrap() - S::from_f64(1.0).unwrap()).abs() < EPS);
+                        assert!((mat.diagonal_value_cached(1, &cache).unwrap() - S::from_f64(2.0).unwrap()).abs() < EPS);
+                        assert!((mat.diagonal_value_cached(2, &cache).unwrap() - S::from_f64(3.0).unwrap()).abs() < EPS);
                     }
 
                     #[test]
@@ -989,15 +989,15 @@ mod tests {
                         // 构造条件数较大的矩阵
                         let mut builder = CsrBuilder::<S>::new_square(50);
                         for i in 0..50 {
-                            builder.set(i, i, S::from_config(1.0).unwrap());
+                            builder.set(i, i, S::from_f64(1.0).unwrap());
                             if i < 49 {
-                                builder.set(i, i+1, S::from_config(-0.9).unwrap());
-                                builder.set(i+1, i, S::from_config(-0.9).unwrap());
+                                builder.set(i, i+1, S::from_f64(-0.9).unwrap());
+                                builder.set(i+1, i, S::from_f64(-0.9).unwrap());
                             }
                         }
                         let mat = builder.build();
 
-                        let x: Vec<S> = (0..50).map(|i| S::from_config(i as f64 * 0.1).unwrap()).collect();
+                        let x: Vec<S> = (0..50).map(|i| S::from_f64(i as f64 * 0.1).unwrap()).collect();
                         let mut y_standard = vec![S::ZERO; 50];
                         let mut y_kahan = vec![S::ZERO; 50];
 
@@ -1012,19 +1012,19 @@ mod tests {
                             .sum();
 
                         // 误差总和应小于典型值
-                        assert!(diff < S::from_config(1e-3).unwrap());
+                        assert!(diff < S::from_f64(1e-3).unwrap());
                     }
 
                     #[test]
                     fn test_from_raw() {
                         let row_ptr = vec![0, 2, 4, 6];
                         let col_idx = vec![0, 1, 0, 1, 1, 2];
-                        let values = vec![S::from_config(4.0).unwrap(),
-                                         S::from_config(-1.0).unwrap(),
-                                         S::from_config(-1.0).unwrap(),
-                                         S::from_config(4.0).unwrap(),
-                                         S::from_config(-1.0).unwrap(),
-                                         S::from_config(4.0).unwrap()];
+                        let values = vec![S::from_f64(4.0).unwrap(),
+                                         S::from_f64(-1.0).unwrap(),
+                                         S::from_f64(-1.0).unwrap(),
+                                         S::from_f64(4.0).unwrap(),
+                                         S::from_f64(-1.0).unwrap(),
+                                         S::from_f64(4.0).unwrap()];
 
                         let mat = CsrMatrix::<S>::from_raw(3, 3, row_ptr, col_idx, values);
                         assert_eq!(mat.n_rows(), 3);
@@ -1035,13 +1035,13 @@ mod tests {
                     #[test]
                     fn test_clear_and_scale() {
                         let mut builder = CsrBuilder::<S>::new_square(2);
-                        builder.set(0, 0, S::from_config(1.0).unwrap());
-                        builder.set(1, 1, S::from_config(2.0).unwrap());
+                        builder.set(0, 0, S::from_f64(1.0).unwrap());
+                        builder.set(1, 1, S::from_f64(2.0).unwrap());
                         let mut mat = builder.build();
 
-                        mat.scale(S::from_config(2.0).unwrap());
-                        assert!((mat.get(0, 0) - S::from_config(2.0).unwrap()).abs() < EPS);
-                        assert!((mat.get(1, 1) - S::from_config(4.0).unwrap()).abs() < EPS);
+                        mat.scale(S::from_f64(2.0).unwrap());
+                        assert!((mat.get(0, 0) - S::from_f64(2.0).unwrap()).abs() < EPS);
+                        assert!((mat.get(1, 1) - S::from_f64(4.0).unwrap()).abs() < EPS);
 
                         mat.clear_values();
                         assert!(mat.get(0, 0).abs() < EPS);
@@ -1053,14 +1053,14 @@ mod tests {
                     fn test_parallel_correctness() {
                         let mut builder = CsrBuilder::<S>::new_square(100);
                         for i in 0..100 {
-                            builder.set(i, i, S::from_config(2.0).unwrap());
+                            builder.set(i, i, S::from_f64(2.0).unwrap());
                             if i < 99 {
-                                builder.set(i, i+1, S::from_config(-1.0).unwrap());
+                                builder.set(i, i+1, S::from_f64(-1.0).unwrap());
                             }
                         }
                         let mat = builder.build();
 
-                        let x: Vec<S> = (0..100).map(|i| S::from_config(i as f64).unwrap()).collect();
+                        let x: Vec<S> = (0..100).map(|i| S::from_f64(i as f64).unwrap()).collect();
                         let mut y_serial = vec![S::ZERO; 100];
                         let mut y_parallel = vec![S::ZERO; 100];
 

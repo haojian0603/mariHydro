@@ -123,7 +123,7 @@ impl<B: Backend> ForwardEuler<B> {
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
+impl<B: Backend<Scalar = f64>> TimeIntegrator<B> for ForwardEuler<B> {
     fn name(&self) -> &'static str {
         "ForwardEuler"
     }
@@ -157,7 +157,7 @@ impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
         let max_wave_speed = rhs_computer.compute_rhs(state, time, &mut self.rhs)?;
 
         // U^{n+1} = U^n + dt * L(U^n)
-        state.add_scaled_rhs(&self.rhs, B::Scalar::from_config(dt).unwrap_or(B::Scalar::ZERO));
+        state.add_scaled_rhs(&self.rhs, dt);
         state.enforce_positivity();
 
         Ok(max_wave_speed)
@@ -176,18 +176,18 @@ pub struct SspRk2<B: Backend> {
     rhs_2: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend> SspRk2<B> {
+impl<B: Backend<Scalar = f64> + Default> SspRk2<B> {
     /// 创建 SSP-RK2 积分器
     pub fn new(n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
-            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
+            rhs_2: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
         }
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for SspRk2<B> {
+impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk2<B> {
     fn name(&self) -> &'static str {
         "SSP-RK2"
     }
@@ -224,20 +224,18 @@ impl<B: Backend> TimeIntegrator<B> for SspRk2<B> {
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
 
         self.state_1.copy_from(state);
-        let dt_scalar = B::Scalar::from_config(dt).unwrap_or(B::Scalar::ZERO);
-        self.state_1.add_scaled_rhs(&self.rhs_1, dt_scalar);
+        self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 
         // Stage 2: U^{n+1} = 0.5 * U^n + 0.5 * (U^(1) + dt * L(U^(1)))
         self.rhs_2.reset();
         let max_wave_speed_2 = rhs_computer.compute_rhs(&self.state_1, time + dt, &mut self.rhs_2)?;
 
-        self.state_1.add_scaled_rhs(&self.rhs_2, dt_scalar);
+        self.state_1.add_scaled_rhs(&self.rhs_2, dt);
         self.state_1.enforce_positivity();
 
         // 线性组合：U^{n+1} = 0.5 * U^n + 0.5 * U^(1)
-        let half = B::Scalar::from_f64(0.5).unwrap();
-        state.axpy(half, half, &self.state_1);
+        state.axpy(0.5, 0.5, &self.state_1);
         state.enforce_positivity();
 
         Ok(max_wave_speed_1.max(max_wave_speed_2))
@@ -260,20 +258,20 @@ pub struct SspRk3<B: Backend> {
     rhs_3: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend> SspRk3<B> {
+impl<B: Backend<Scalar = f64> + Default> SspRk3<B> {
     /// 创建 SSP-RK3 积分器
     pub fn new(n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
             state_2: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
-            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_3: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
+            rhs_2: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
+            rhs_3: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
         }
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
+impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk3<B> {
     fn name(&self) -> &'static str {
         "SSP-RK3"
     }
@@ -314,8 +312,7 @@ impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
         max_wave_speed = max_wave_speed.max(rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?);
 
         self.state_1.copy_from(state);
-        let dt_scalar = B::Scalar::from_config(dt).unwrap_or(B::Scalar::ZERO);
-        self.state_1.add_scaled_rhs(&self.rhs_1, dt_scalar);
+        self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 
         // Stage 2: U^(2) = 3/4 * U^n + 1/4 * (U^(1) + dt * L(U^(1)))
@@ -324,12 +321,10 @@ impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
             rhs_computer.compute_rhs(&self.state_1, time + dt, &mut self.rhs_2)?,
         );
 
-        self.state_1.add_scaled_rhs(&self.rhs_2, dt_scalar);
+        self.state_1.add_scaled_rhs(&self.rhs_2, dt);
         self.state_1.enforce_positivity();
 
-        let three_quarters = B::Scalar::from_f64(0.75).unwrap();
-        let one_quarter = B::Scalar::from_f64(0.25).unwrap();
-        self.state_2.linear_combine(three_quarters, state, one_quarter, &self.state_1);
+        self.state_2.linear_combine(0.75, state, 0.25, &self.state_1);
         self.state_2.enforce_positivity();
 
         // Stage 3: U^{n+1} = 1/3 * U^n + 2/3 * (U^(2) + dt * L(U^(2)))
@@ -338,12 +333,10 @@ impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
             rhs_computer.compute_rhs(&self.state_2, time + 0.5 * dt, &mut self.rhs_3)?,
         );
 
-        self.state_2.add_scaled_rhs(&self.rhs_3, dt_scalar);
+        self.state_2.add_scaled_rhs(&self.rhs_3, dt);
         self.state_2.enforce_positivity();
 
-        let one_third = B::Scalar::from_f64(1.0 / 3.0).unwrap();
-        let two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap();
-        state.axpy(one_third, two_thirds, &self.state_2);
+        state.axpy(1.0 / 3.0, 2.0 / 3.0, &self.state_2);
         state.enforce_positivity();
 
         Ok(max_wave_speed)
@@ -373,7 +366,7 @@ impl std::fmt::Display for TimeIntegratorKind {
 }
 
 /// 创建时间积分器（返回具体类型）
-pub fn create_integrator<B: Backend>(
+pub fn create_integrator<B: Backend<Scalar = f64> + Default>(
     kind: TimeIntegratorKind,
     n_cells: usize,
     n_tracers: usize,
@@ -391,7 +384,7 @@ pub struct TimeIntegratorEnum<B: Backend> {
     rk3: Option<SspRk3<B>>,
 }
 
-impl<B: Backend> TimeIntegratorEnum<B> {
+impl<B: Backend<Scalar = f64> + Default> TimeIntegratorEnum<B> {
     /// 创建新的时间积分器
     pub fn new(kind: TimeIntegratorKind, n_cells: usize, n_tracers: usize) -> Self {
         match kind {

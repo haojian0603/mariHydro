@@ -29,9 +29,8 @@
 //! solver.step(&mut state, &mesh, &qb_x, &qb_y, dt);
 //! ```
 
-use crate::adapter::PhysicsMesh;
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
-// ?????? f64 ??
+use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
+use crate::state::ShallowWaterStateF64;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
@@ -172,7 +171,7 @@ impl MorphodynamicsSolver {
     /// - `dt`: 时间步长 [s]
     pub fn step(
         &mut self,
-        state: &mut ShallowWaterState,
+        state: &mut ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         qb_x: &[f64],
         qb_y: &[f64],
@@ -284,7 +283,7 @@ impl MorphodynamicsSolver {
     pub fn compute_jacobian_diagonal(
         &self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         qb_x: &[f64],
         qb_y: &[f64],
     ) -> Vec<f64> {
@@ -315,7 +314,7 @@ impl MorphodynamicsSolver {
     pub fn compute_divergence(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         qb_x: &[f64],
         qb_y: &[f64],
     ) -> &[f64] {
@@ -327,7 +326,7 @@ impl MorphodynamicsSolver {
     fn compute_divergence_upwind(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         qb_x: &[f64],
         qb_y: &[f64],
     ) {
@@ -338,11 +337,15 @@ impl MorphodynamicsSolver {
         self.flux_divergence.as_mut_slice().fill(0.0);
 
         for face_idx in 0..mesh.n_faces() {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let fi = FaceIndex::new(face_idx);
+            let owner_ci = mesh.face_owner(fi);
+            let neighbor_ci = mesh.face_neighbor(fi);
+
+            let owner: usize = owner_ci.get();
+            let neighbor = neighbor_ci.map(|c| c.get());
 
             let normal = mesh.face_normal(face_idx);
-            let length = mesh.face_length(face_idx);
+            let length = mesh.face_length(fi);
 
             // Owner 的法向通量
             let q_n_owner = qb_x[owner] * normal.x + qb_y[owner] * normal.y;
@@ -364,12 +367,13 @@ impl MorphodynamicsSolver {
             let flux = q_n * length * factor;
 
             // 累加到通量散度
-            let area_o = mesh.cell_area_unchecked(owner);
+            let area_o = mesh.cell_area_unchecked(owner_ci);
             self.flux_divergence[owner] += flux / area_o;
 
-            if let Some(neigh) = neighbor {
+            if let Some(neigh) = neighbor_ci {
+                let neigh_idx: usize = neigh.get();
                 let area_n = mesh.cell_area_unchecked(neigh);
-                self.flux_divergence[neigh] -= flux / area_n;
+                self.flux_divergence[neigh_idx] -= flux / area_n;
             }
         }
 
@@ -380,7 +384,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 强耦合更新河床和水深
-    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh, dt: f64) {
+    fn update_bed_coupled(&mut self, state: &mut ShallowWaterStateF64, mesh: &PhysicsMesh, dt: f64) {
         let max_dz = self.config.max_dz_rate * dt;
 
         for i in 0..state.n_cells() {
@@ -420,7 +424,7 @@ impl MorphodynamicsSolver {
             }
 
             // 更新统计
-            let area = mesh.cell_area_unchecked(i);
+            let area = mesh.cell_area_unchecked(CellIndex::new(i));
             if dz < 0.0 {
                 self.stats.max_erosion = self.stats.max_erosion.max(-dz);
                 self.stats.total_erosion += -dz * area;
@@ -434,20 +438,24 @@ impl MorphodynamicsSolver {
     /// 应用崩塌处理
     ///
     /// 当相邻单元间坡度超过安息角时，进行泥沙重分布
-    fn apply_avalanche(&mut self, state: &mut ShallowWaterState, mesh: &PhysicsMesh) {
+    fn apply_avalanche(&mut self, state: &mut ShallowWaterStateF64, mesh: &PhysicsMesh) {
         let mut total_faces = 0;
 
         for iter in 0..self.config.max_avalanche_iter {
             let mut changed = false;
 
             for face_idx in mesh.interior_faces() {
-                let owner = mesh.face_owner(face_idx);
+                let fi = FaceIndex::new(face_idx);
+                let owner_ci = mesh.face_owner(fi);
                 // SAFETY: interior_faces() guarantees neighbor exists
-                let neigh = mesh
-                    .face_neighbor(face_idx)
+                let neigh_ci = mesh
+                    .face_neighbor(fi)
                     .expect("interior face must have neighbor");
 
-                let dist = mesh.face_dist_o2n(face_idx);
+                let owner = owner_ci.get();
+                let neigh = neigh_ci.get();
+
+                let dist = mesh.face_dist_o2n(fi);
                 if dist < 1e-10 {
                     continue;
                 }
@@ -469,8 +477,8 @@ impl MorphodynamicsSolver {
                     let correction = (dz - target_dz) * self.config.avalanche_relaxation;
 
                     // 质量守恒的重分布
-                    let area_owner = mesh.cell_area_unchecked(owner);
-                    let area_neigh = mesh.cell_area_unchecked(neigh);
+                    let area_owner = mesh.cell_area_unchecked(owner_ci);
+                    let area_neigh = mesh.cell_area_unchecked(neigh_ci);
                     let total_area = area_owner + area_neigh;
 
                     // 按面积加权分配
@@ -502,7 +510,7 @@ impl MorphodynamicsSolver {
     /// 应用崩塌处理（带绝对收敛准则）
     fn apply_avalanche_with_convergence(
         &mut self,
-        state: &mut ShallowWaterState,
+        state: &mut ShallowWaterStateF64,
         mesh: &PhysicsMesh,
         tol: f64,
     ) {
@@ -512,12 +520,16 @@ impl MorphodynamicsSolver {
             let mut max_correction = 0.0_f64;
 
             for face_idx in mesh.interior_faces() {
-                let owner = mesh.face_owner(face_idx);
-                let neigh = mesh
-                    .face_neighbor(face_idx)
+                let fi = FaceIndex::new(face_idx);
+                let owner_ci = mesh.face_owner(fi);
+                let neigh_ci = mesh
+                    .face_neighbor(fi)
                     .expect("interior face must have neighbor");
 
-                let dist = mesh.face_dist_o2n(face_idx);
+                let owner = owner_ci.get();
+                let neigh = neigh_ci.get();
+
+                let dist = mesh.face_dist_o2n(fi);
                 if dist < 1e-10 {
                     continue;
                 }
@@ -537,8 +549,8 @@ impl MorphodynamicsSolver {
                     let target_dz = max_slope * dist * dz.signum();
                     let correction = (dz - target_dz) * self.config.avalanche_relaxation;
 
-                    let area_owner = mesh.cell_area_unchecked(owner);
-                    let area_neigh = mesh.cell_area_unchecked(neigh);
+                    let area_owner = mesh.cell_area_unchecked(owner_ci);
+                    let area_neigh = mesh.cell_area_unchecked(neigh_ci);
                     let total_area = area_owner + area_neigh;
 
                     let dz_owner = correction * area_neigh / total_area;

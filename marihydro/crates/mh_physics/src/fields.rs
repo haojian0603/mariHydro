@@ -63,6 +63,12 @@ pub enum FieldLocation {
     Node,
 }
 
+impl Default for FieldLocation {
+    fn default() -> Self {
+        FieldLocation::Cell
+    }
+}
+
 /// 注册错误类型
 ///
 /// 字段注册失败的具体原因。
@@ -423,7 +429,7 @@ impl FieldRegistry {
     /// - `Ok(())`: 所有必需字段都存在
     /// - `Err(missing_fields)`: 返回缺失的字段名列表
     #[inline]
-    pub fn validate_required(&self, required_fields: &[&str]) -> Result<(), Vec<&str>> {
+    pub fn validate_required<'a>(&self, required_fields: &[&'a str]) -> Result<(), Vec<&'a str>> {
         let missing: Vec<_> = required_fields
             .iter()
             .filter(|&&name| !self.contains(name))

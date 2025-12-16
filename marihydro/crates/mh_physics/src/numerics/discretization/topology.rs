@@ -96,10 +96,10 @@ impl CellFaceTopology {
         // 统计每个单元的面数
         let mut cell_face_count = vec![0usize; n_cells];
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(face_idx);
-            cell_face_count[owner] += 1;
-            if let Some(neigh) = mesh.face_neighbor(face_idx) {
-                cell_face_count[neigh] += 1;
+            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
+            cell_face_count[owner.0] += 1;
+            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
+                cell_face_count[neigh.0] += 1;
             }
         }
 
@@ -118,13 +118,13 @@ impl CellFaceTopology {
         current_pos.pop(); // 移除最后一个
 
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(face_idx);
-            cell_face_idx[current_pos[owner]] = face_idx;
-            current_pos[owner] += 1;
+            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
+            cell_face_idx[current_pos[owner.0]] = face_idx;
+            current_pos[owner.0] += 1;
 
-            if let Some(neigh) = mesh.face_neighbor(face_idx) {
-                cell_face_idx[current_pos[neigh]] = face_idx;
-                current_pos[neigh] += 1;
+            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
+                cell_face_idx[current_pos[neigh.0]] = face_idx;
+                current_pos[neigh.0] += 1;
             }
         }
 
@@ -134,11 +134,12 @@ impl CellFaceTopology {
         let mut boundary_faces = Vec::new();
 
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(face_idx);
-            let neighbor = mesh.face_neighbor(face_idx);
+            let fi = mh_runtime::FaceIndex(face_idx);
+            let owner = mesh.face_owner(fi);
+            let neighbor = mesh.face_neighbor(fi);
             let normal = mesh.face_normal(face_idx);
-            let length = mesh.face_length(face_idx);
-            let dist_o2n = mesh.face_dist_o2n(face_idx);
+            let length = mesh.face_length(fi);
+            let dist_o2n = mesh.face_dist_o2n(fi);
 
             let is_boundary = neighbor.is_none();
             let (dist_o2f, dist_n2f) = if is_boundary {
@@ -150,8 +151,8 @@ impl CellFaceTopology {
 
             face_info.push(FaceInfo {
                 face_idx,
-                owner,
-                neighbor,
+                owner: owner.into(),
+                neighbor: neighbor.map(|n| n.into()),
                 normal,
                 length,
                 dist_o2n,

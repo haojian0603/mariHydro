@@ -29,7 +29,7 @@
 //! 使用 `estimate_stable_dt()` 或 `apply_diffusion_auto_substeps()` 自动处理。
 
 use rayon::prelude::*;
-
+use mh_runtime::{FaceIndex, CellIndex};
 use crate::adapter::PhysicsMesh;
 
 /// 扩散边界条件类型
@@ -170,7 +170,7 @@ impl<'a> DiffusionSolver<'a> {
         let mut min_sq = f64::MAX;
 
         for face in 0..n_faces {
-            if let Some(dist) = mesh.face_distance(face) {
+            if let Some(dist) = mesh.face_distance(FaceIndex(face)) {
                 if dist > 1e-14 {
                     min_sq = min_sq.min(dist * dist);
                 }
@@ -215,34 +215,34 @@ impl<'a> DiffusionSolver<'a> {
 
         // 内部面
         for face in 0..n_faces {
-            let owner = self.mesh.face_owner(face);
-            let neighbor_opt = self.mesh.face_neighbor(face);
+            let owner = self.mesh.face_owner(FaceIndex(face));
+            let neighbor_opt = self.mesh.face_neighbor(FaceIndex(face));
 
             if let Some(neighbor) = neighbor_opt {
                 // 内部面
-                let dist = self.mesh.face_distance(face).unwrap_or(1e-14);
+                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14);
                 if dist < 1e-14 {
                     continue;
                 }
 
-                let length = self.mesh.face_length(face);
-                let phi_o = field[owner];
-                let phi_n = field[neighbor];
+                let length = self.mesh.face_length(FaceIndex(face));
+                let phi_o = field[owner.get()];
+                let phi_n = field[neighbor.get()];
 
                 // F = -ν * (φ_n - φ_o) / d * L
                 let flux = -nu * (phi_n - phi_o) / dist * length;
 
-                flux_sum[owner] += flux;
-                flux_sum[neighbor] -= flux;
+                flux_sum[owner.get()] += flux;
+                flux_sum[neighbor.get()] -= flux;
             } else {
                 // 边界面
                 let bc = self.get_boundary_condition(face);
-                let dist = self.mesh.face_distance(face).unwrap_or(1e-14).max(1e-14);
-                let length = self.mesh.face_length(face);
-                let phi_cell = field[owner];
+                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14).max(1e-14);
+                let length = self.mesh.face_length(FaceIndex(face));
+                let phi_cell = field[owner.get()];
 
                 let flux = bc.compute_flux(phi_cell, nu, dist, length);
-                flux_sum[owner] += flux;
+                flux_sum[owner.get()] += flux;
             }
         }
 
@@ -262,7 +262,7 @@ impl<'a> DiffusionSolver<'a> {
     /// 没有对应条件，则返回默认的零通量边界条件。
     fn get_boundary_condition(&self, face: usize) -> DiffusionBC {
         // 获取面的边界 ID（边界条件索引）
-        if let Some(boundary_id) = self.mesh.face_boundary_id(face) {
+        if let Some(boundary_id) = self.mesh.face_boundary_id(FaceIndex(face)) {
             // 根据边界 ID 查找对应的边界条件
             self.config
                 .boundary_conditions
@@ -304,7 +304,7 @@ impl<'a> DiffusionSolver<'a> {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, phi_out)| {
-                let area = self.mesh.cell_area(i).unwrap_or(1.0);
+                let area = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0);
                 if area > 1e-14 {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
                 } else {
@@ -434,32 +434,32 @@ impl<'a> VariableDiffusionSolver<'a> {
         let mut flux_sum = vec![0.0; n_cells];
 
         for face in 0..n_faces {
-            let owner = self.mesh.face_owner(face);
-            let neighbor_opt = self.mesh.face_neighbor(face);
+            let owner = self.mesh.face_owner(FaceIndex(face));
+            let neighbor_opt = self.mesh.face_neighbor(FaceIndex(face));
 
             if let Some(neighbor) = neighbor_opt {
-                let dist = self.mesh.face_distance(face).unwrap_or(1e-14);
+                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14);
                 if dist < 1e-14 {
                     continue;
                 }
 
-                let length = self.mesh.face_length(face);
+                let length = self.mesh.face_length(FaceIndex(face));
 
                 // 调和平均扩散系数 (保证正定性)
-                let nu_o = nu[owner];
-                let nu_n = nu[neighbor];
+                let nu_o = nu[owner.get()];
+                let nu_n = nu[neighbor.get()];
                 let nu_face = if nu_o + nu_n > 1e-14 {
                     2.0 * nu_o * nu_n / (nu_o + nu_n)
                 } else {
                     0.0
                 };
 
-                let phi_o = field[owner];
-                let phi_n = field[neighbor];
+                let phi_o = field[owner.get()];
+                let phi_n = field[neighbor.get()];
                 let flux = -nu_face * (phi_n - phi_o) / dist * length;
 
-                flux_sum[owner] += flux;
-                flux_sum[neighbor] -= flux;
+                flux_sum[owner.get()] += flux;
+                flux_sum[neighbor.get()] -= flux;
             }
         }
 
@@ -467,7 +467,7 @@ impl<'a> VariableDiffusionSolver<'a> {
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, phi_out)| {
-                let area = self.mesh.cell_area(i).unwrap_or(1.0);
+                let area = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0);
                 if area > 1e-14 {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
                 } else {

@@ -1,5 +1,4 @@
 // crates/mh_physics/src/numerics/linear_algebra/solver.rs
-
 //! 迭代线性求解器
 //!
 //! 提供用于求解稀疏线性系统 Ax = b 的迭代方法：
@@ -31,7 +30,7 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use super::preconditioner::Preconditioner;
+use super::preconditioner::{Preconditioner, ScalarPreconditioner};
 use super::vector_ops::{axpy, copy, dot, norm2};
 use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
@@ -272,7 +271,7 @@ pub trait IterativeSolver<S: RuntimeScalar> {
     /// # 返回
     ///
     /// 求解结果
-    fn solve<P: Preconditioner<S>>(
+    fn solve<P: ScalarPreconditioner<S>>(
         &mut self,
         matrix: &CsrMatrix<S>,
         b: &[S],
@@ -319,8 +318,11 @@ impl<S: RuntimeScalar> ConjugateGradient<S> {
     }
 }
 
-impl<S: RuntimeScalar> IterativeSolver<S> for ConjugateGradient<S> {
-    fn solve<P: Preconditioner<S>>(
+impl<S> IterativeSolver<S> for ConjugateGradient<S>
+where
+    S: RuntimeScalar,
+{
+    fn solve<P: ScalarPreconditioner<S>>(
         &mut self,
         matrix: &CsrMatrix<S>,
         b: &[S],
@@ -329,9 +331,9 @@ impl<S: RuntimeScalar> IterativeSolver<S> for ConjugateGradient<S> {
     ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -383,7 +385,9 @@ impl<S: RuntimeScalar> IterativeSolver<S> for ConjugateGradient<S> {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("CG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
+                if let Some(res_val) = res_norm.to_f64() {
+                    log::trace!("CG iter {}: residual = {:.6e}", iter + 1, res_val);
+                }
             }
 
             // 检查收敛
@@ -468,7 +472,7 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     /// - `x`: 解向量
     /// - `precond`: 预条件器
     /// - `ws`: 外部工作区
-    pub fn solve_with_workspace<P: Preconditioner<S>>(
+    pub fn solve_with_workspace<P: ScalarPreconditioner<S>>(
         &self,
         matrix: &CsrMatrix<S>,
         b: &[S],
@@ -478,9 +482,9 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     ) -> SolverResult<S> {
         let n = b.len();
         ws.resize(n);
-        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut ws.r);
@@ -547,7 +551,9 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             let res_norm = norm2(&ws.r);
 
             if self.config.verbose {
-                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
+                if let Some(res_val) = res_norm.to_f64() {
+                    log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_val);
+                }
             }
 
             // 检查收敛
@@ -593,8 +599,11 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     }
 }
 
-impl<S: RuntimeScalar> IterativeSolver<S> for PcgSolver<S> {
-    fn solve<P: Preconditioner<S>>(
+impl<S> IterativeSolver<S> for PcgSolver<S>
+where
+    S: RuntimeScalar,
+{
+    fn solve<P: ScalarPreconditioner<S>>(
         &mut self,
         matrix: &CsrMatrix<S>,
         b: &[S],
@@ -603,9 +612,9 @@ impl<S: RuntimeScalar> IterativeSolver<S> for PcgSolver<S> {
     ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -660,7 +669,9 @@ impl<S: RuntimeScalar> IterativeSolver<S> for PcgSolver<S> {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
+                if let Some(res_val) = res_norm.to_f64() {
+                    log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_val);
+                }
             }
 
             // 检查收敛
@@ -749,8 +760,11 @@ impl<S: RuntimeScalar> BiCgStabSolver<S> {
     }
 }
 
-impl<S: RuntimeScalar> IterativeSolver<S> for BiCgStabSolver<S> {
-    fn solve<P: Preconditioner<S>>(
+impl<S> IterativeSolver<S> for BiCgStabSolver<S>
+where
+    S: RuntimeScalar,
+{
+    fn solve<P: ScalarPreconditioner<S>>(
         &mut self,
         matrix: &CsrMatrix<S>,
         b: &[S],
@@ -759,10 +773,10 @@ impl<S: RuntimeScalar> IterativeSolver<S> for BiCgStabSolver<S> {
     ) -> SolverResult<S> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_config(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_config(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_config(1e-30).unwrap_or(S::MIN_POSITIVE);
-        let div_factor = S::from_config(1e6).unwrap_or(S::MAX);
+        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
+        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let div_factor = S::from_f64(1e6).unwrap_or(S::MAX);
 
         // r = b - A*x
         matrix.mul_vec(x, &mut self.r);
@@ -915,7 +929,9 @@ impl<S: RuntimeScalar> IterativeSolver<S> for BiCgStabSolver<S> {
             let rel_res = res_norm / initial_norm;
 
             if self.config.verbose {
-                log::trace!("BiCGStab iter {}: residual = {:.6e}", iter + 1, res_norm.to_f64());
+                if let Some(res_val) = res_norm.to_f64() {
+                    log::trace!("BiCGStab iter {}: residual = {:.6e}", iter + 1, res_val);
+                }
             }
 
             // 检查收敛

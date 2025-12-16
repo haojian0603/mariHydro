@@ -79,14 +79,14 @@ pub struct SedimentConfigGeneric<S: Scalar> {
 impl<S: Scalar> Default for SedimentConfigGeneric<S> {
     fn default() -> Self {
         Self {
-            tau_critical: S::from_config(0.1).unwrap_or(S::ZERO),
-            erosion_rate: S::from_config(1e-4).unwrap_or(S::ZERO),
-            settling_velocity: S::from_config(0.001).unwrap_or(S::ZERO),
-            sediment_density: S::from_config(2650.0).unwrap_or(S::ZERO),
-            water_density: S::from_config(998.2).unwrap_or(S::ZERO),
-            porosity: S::from_config(0.4).unwrap_or(S::ZERO),
-            conservation_tolerance: S::from_config(1e-10).unwrap_or(S::ZERO),
-            min_depth: S::from_config(1e-4).unwrap_or(S::ZERO),
+            tau_critical: S::from_f64(0.1).unwrap_or(S::ZERO),
+            erosion_rate: S::from_f64(1e-4).unwrap_or(S::ZERO),
+            settling_velocity: S::from_f64(0.001).unwrap_or(S::ZERO),
+            sediment_density: S::from_f64(2650.0).unwrap_or(S::ZERO),
+            water_density: S::from_f64(998.2).unwrap_or(S::ZERO),
+            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
+            conservation_tolerance: S::from_f64(1e-10).unwrap_or(S::ZERO),
+            min_depth: S::from_f64(1e-4).unwrap_or(S::ZERO),
         }
     }
 }
@@ -275,7 +275,7 @@ impl SedimentManagerGeneric<CpuBackend<f64>> {
         manning_n: &[f64],
     ) {
         let n_cells = self.state.n_cells;
-        let g = self.config.water_density.to_f64() * 9.81;  // ρg
+        let g = self.config.water_density * 9.81;  // ρg
         let h_min = self.config.min_depth;
         
         for i in 0..n_cells {

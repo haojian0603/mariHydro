@@ -50,6 +50,7 @@ pub mod tracer;
 pub mod assimilation;
 pub mod traits;
 pub mod types;
+pub mod vertical;
 
 // 待迁移模块（占位）
 pub mod forcing;
@@ -92,7 +93,7 @@ pub use schemes::{
 };
 pub use state::{
     ConservedState, Flux, GradientState, RhsBuffers, ShallowWaterState, StateError,
-    ShallowWaterStateGeneric, ShallowWaterStateDefault,
+    ShallowWaterStateGeneric, ShallowWaterStateDefault, ShallowWaterStateF64, ShallowWaterStateF32,
 };
 pub use traits::{StateAccess, StateAccessExt, StateAccessMut, StateStatistics, StateView, StateViewMut};
 

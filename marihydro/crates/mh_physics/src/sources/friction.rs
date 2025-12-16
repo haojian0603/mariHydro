@@ -110,7 +110,7 @@ impl SourceTerm for ManningFrictionConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState,
+        state: &ShallowWaterStateF64,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -290,7 +290,7 @@ impl FrictionCalculator {
 
     /// 从数值参数创建
     // ALLOW_F64: 物理参数
-    pub fn from_params(g: f64, params: &crate::types::NumericalParams) -> Self {
+    pub fn from_params(g: f64, params: &crate::types::NumericalParams<f64>) -> Self {
         Self::new(g, params.h_dry, params.h_dry)
     }
 
@@ -394,20 +394,20 @@ impl<S: Scalar> ManningFrictionConfigGeneric<S> {
     /// 创建均匀 Manning 系数配置
     pub fn uniform(n_cells: usize, manning_n: S) -> Self {
         Self {
-            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
+            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
             manning_n: vec![manning_n; n_cells],
-            min_depth: S::from_config(1e-6).unwrap_or(S::ZERO),
-            max_cf: S::from_config(100.0).unwrap_or(S::ZERO),
+            min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            max_cf: S::from_f64(100.0).unwrap_or(S::ZERO),
         }
     }
 
     /// 从 Manning 系数数组创建
     pub fn from_array(manning_n: Vec<S>) -> Self {
         Self {
-            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
+            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
             manning_n,
-            min_depth: S::from_config(1e-6).unwrap_or(S::ZERO),
-            max_cf: S::from_config(100.0).unwrap_or(S::ZERO),
+            min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            max_cf: S::from_f64(100.0).unwrap_or(S::ZERO),
         }
     }
 }
@@ -525,7 +525,7 @@ pub struct ChezyFrictionConfigGeneric<S: Scalar> {
 impl<S: Scalar> ChezyFrictionConfigGeneric<S> {
     /// 创建均匀 Chezy 系数配置
     pub fn uniform(n_cells: usize, chezy_c: S) -> Self {
-        Self { gravity: S::from_config(9.81).unwrap_or(S::ZERO), chezy_c: vec![chezy_c; n_cells], min_depth: S::from_config(1e-6).unwrap_or(S::ZERO) }
+        Self { gravity: S::from_f64(9.81).unwrap_or(S::ZERO), chezy_c: vec![chezy_c; n_cells], min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO) }
     }
 }
 
@@ -611,9 +611,10 @@ impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionGeneric<CpuBackend<f64>
 mod tests {
     use super::*;
     use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState {
-        let mut state = ShallowWaterState::new(n_cells);
+        let mut state = ShallowWaterState::new_with_backend(CpuBackend::<f64>::new(), n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

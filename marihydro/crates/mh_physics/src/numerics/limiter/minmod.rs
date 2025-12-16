@@ -49,7 +49,7 @@ pub struct MinmodGeneric<S: RuntimeScalar> {
 
 impl<S: RuntimeScalar> Default for MinmodGeneric<S> {
     fn default() -> Self {
-        Self { eps: S::from_config(1e-12).unwrap_or(S::MIN_POSITIVE) }
+        Self { eps: S::from_f64(1e-12).unwrap_or(S::MIN_POSITIVE) }
     }
 }
 

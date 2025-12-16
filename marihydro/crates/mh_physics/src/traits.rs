@@ -26,7 +26,7 @@ use crate::state::ConservedState;
 use crate::types::{NumericalParams, SafeVelocity};
 use mh_runtime::RuntimeScalar;
 use num_traits::Float;
-
+use num_traits::FromPrimitive;
 /// 泛型版本的 ConservedState
 pub type ConservedStateGeneric<S> = ConservedState<S>;
 /// 泛型版本的 NumericalParams
@@ -301,11 +301,16 @@ pub trait StateAccessExt: StateAccess {
 
     /// 获取平均水深
     fn mean_depth(&self) -> Self::Scalar {
-        if self.n_cells() == 0 {
+        let slice = self.h_slice();
+        if slice.is_empty() {
             return Self::Scalar::ZERO;
         }
-        let sum: Self::Scalar = self.h_slice().iter().sum();
-        sum / Self::Scalar::from_usize(self.n_cells()).unwrap_or(Self::Scalar::ONE)
+        let mut sum = Self::Scalar::ZERO;
+        for &h in slice {
+            sum = sum + h;
+        }
+        let n = Self::Scalar::from_usize(slice.len()).unwrap_or(Self::Scalar::ONE);
+        sum / n
     }
 
     /// 检查是否包含 NaN 或 Inf

@@ -16,7 +16,8 @@
 use crate::schemes::riemann::traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar, Vector2D};
+use num_traits::{Float, FromPrimitive};
 
 /// HLLC 求解器（Backend 泛型化）
 ///
@@ -54,18 +55,18 @@ impl<B: Backend> HllcSolver<B> {
         c_l: B::Scalar,
         c_r: B::Scalar,
     ) -> (B::Scalar, B::Scalar) {
-        let sqrt_h_l = h_l.sqrt();
-        let sqrt_h_r = h_r.sqrt();
+        let sqrt_h_l = Float::sqrt(h_l);
+        let sqrt_h_r = Float::sqrt(h_r);
         let sum = sqrt_h_l + sqrt_h_r + self.params.flux_eps;
 
         // Roe 平均
         let h_roe = (h_l + h_r) * B::Scalar::HALF;
         let u_roe = (sqrt_h_l * un_l + sqrt_h_r * un_r) / sum;
-        let c_roe = (self.gravity * h_roe).sqrt();
+        let c_roe = Float::sqrt(self.gravity * h_roe);
 
         (
-            (un_l - c_l).min(u_roe - c_roe),
-            (un_r + c_r).max(u_roe + c_roe),
+            Float::min(un_l - c_l, u_roe - c_roe),
+            Float::max(un_r + c_r, u_roe + c_roe),
         )
     }
 
@@ -74,14 +75,14 @@ impl<B: Backend> HllcSolver<B> {
     /// 修正接近零的特征速度，避免音速跨越导致的数值振荡。
     #[inline]
     fn entropy_fix(&self, s_star: B::Scalar, s_l: B::Scalar, s_r: B::Scalar) -> B::Scalar {
-        let threshold = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
-        if s_star.abs() < threshold {
+        let threshold = FromPrimitive::from_f64(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+        if Float::abs(s_star) < threshold {
             return B::Scalar::ZERO;
         }
 
-        let eps = self.params.entropy_threshold((s_r - s_l).abs());
-        if s_star.abs() < eps {
-            s_star.signum() * eps
+        let eps = self.params.entropy_threshold(Float::abs(s_r - s_l));
+        if Float::abs(s_star) < eps {
+            Float::signum(s_star) * eps
         } else {
             s_star
         }
@@ -118,39 +119,39 @@ impl<B: Backend> HllcSolver<B> {
         let q_l = h_l * (s_l - un_l);
         let q_r = h_r * (s_r - un_r);
         let denom = q_l - q_r;
-        let threshold = self.params.entropy_threshold((s_r - s_l).abs());
+        let threshold = self.params.entropy_threshold(Float::abs(s_r - s_l));
 
-        let s_star = if denom.abs() < threshold {
+        let s_star = if Float::abs(denom) < threshold {
             (un_l + un_r) * B::Scalar::HALF
         } else {
             let numer = h_l * un_l * (s_l - un_l)
                 - h_r * un_r * (s_r - un_r)
                 + B::Scalar::HALF * self.gravity * (h_r * h_r - h_l * h_l);
             let s = numer / denom;
-            if !s.is_finite() {
+            if !Float::is_finite(s) {
                 return Err(RiemannError::Numerical {
                     message: "Invalid s_star calculation".to_string(),
                 });
             }
-            self.entropy_fix(s.clamp(s_l, s_r), s_l, s_r)
+            self.entropy_fix(s.clamp_value(s_l, s_r), s_l, s_r)
         };
 
         // 根据星区域速度选择左右状态
         let (h_star, ut_star) = if s_star >= B::Scalar::ZERO {
             let denom_l = s_l - s_star;
-            if denom_l.abs() < threshold {
+            if Float::abs(denom_l) < threshold {
                 (h_l, ut_l)
             } else {
                 let h_s = h_l * (s_l - un_l) / denom_l;
-                (h_s.max(B::Scalar::ZERO), ut_l)
+                (Float::max(h_s, B::Scalar::ZERO), ut_l)
             }
         } else {
             let denom_r = s_r - s_star;
-            if denom_r.abs() < threshold {
+            if Float::abs(denom_r) < threshold {
                 (h_r, ut_r)
             } else {
                 let h_s = h_r * (s_r - un_r) / denom_r;
-                (h_s.max(B::Scalar::ZERO), ut_r)
+                (Float::max(h_s, B::Scalar::ZERO), ut_r)
             }
         };
 
@@ -173,7 +174,7 @@ impl<B: Backend> HllcSolver<B> {
         let tangent = B::vec2_new(-normal.y(), normal.x());
         let un_r = B::vec2_dot(&vel_r, &normal);
         let ut_r = B::vec2_dot(&vel_r, &tangent);
-        let c_r = (self.gravity * h_r).sqrt();
+        let c_r = Float::sqrt(self.gravity * h_r);
 
         let s_front = un_r - B::Scalar::TWO * c_r;
         if s_front >= B::Scalar::ZERO {
@@ -181,8 +182,9 @@ impl<B: Backend> HllcSolver<B> {
         }
 
         // 干床状态计算
-        let factor = (B::Scalar::TWO * c_r + un_r) / B::Scalar::from_f64(3.0).unwrap();
-        let h_star = factor.powi(2) / self.gravity;
+        let three: B::Scalar = FromPrimitive::from_f64(3.0).unwrap();
+        let factor = (B::Scalar::TWO * c_r + un_r) / three;
+        let h_star = Float::powi(factor, 2) / self.gravity;
 
         if h_star < self.params.h_dry {
             return Ok(RiemannFlux::zero());
@@ -191,9 +193,9 @@ impl<B: Backend> HllcSolver<B> {
         let u_star = factor;
 
         let (mass, mom_n, mom_t) = self.physical_flux(h_star, u_star, ut_r);
-        let max_speed = (un_r + c_r).abs().max(s_front.abs());
+        let max_speed = Float::max(Float::abs(un_r + c_r), Float::abs(s_front));
 
-        Ok(RiemannFlux::from_rotated(
+        Ok(RiemannFlux::from_rotated::<B>(
             mass,
             mom_n,
             mom_t,
@@ -214,15 +216,16 @@ impl<B: Backend> HllcSolver<B> {
         let tangent = B::vec2_new(-normal.y(), normal.x());
         let un_l = B::vec2_dot(&vel_l, &normal);
         let ut_l = B::vec2_dot(&vel_l, &tangent);
-        let c_l = (self.gravity * h_l).sqrt();
+        let c_l = Float::sqrt(self.gravity * h_l);
 
         let s_front = un_l + B::Scalar::TWO * c_l;
         if s_front <= B::Scalar::ZERO {
             return Ok(RiemannFlux::zero());
         }
 
-        let factor = (un_l + B::Scalar::TWO * c_l) / B::Scalar::from_f64(3.0).unwrap();
-        let h_star = factor.powi(2) / self.gravity;
+        let three: B::Scalar = FromPrimitive::from_f64(3.0).unwrap();
+        let factor = (un_l + B::Scalar::TWO * c_l) / three;
+        let h_star = Float::powi(factor, 2) / self.gravity;
 
         if h_star < self.params.h_dry {
             return Ok(RiemannFlux::zero());
@@ -231,9 +234,9 @@ impl<B: Backend> HllcSolver<B> {
         let u_star = factor;
 
         let (mass, mom_n, mom_t) = self.physical_flux(h_star, u_star, ut_l);
-        let max_speed = (un_l - c_l).abs().max(s_front.abs());
+        let max_speed = Float::max(Float::abs(un_l - c_l), Float::abs(s_front));
 
-        Ok(RiemannFlux::from_rotated(
+        Ok(RiemannFlux::from_rotated::<B>(
             mass,
             mom_n,
             mom_t,
@@ -283,16 +286,16 @@ impl<B: Backend> RiemannSolver for HllcSolver<B> {
                 let un_r = B::vec2_dot(&vel_right, &normal);
                 let ut_l = B::vec2_dot(&vel_left, &tangent);
                 let ut_r = B::vec2_dot(&vel_right, &tangent);
-                let c_l = (self.gravity * h_left).sqrt();
-                let c_r = (self.gravity * h_right).sqrt();
+                let c_l = Float::sqrt(self.gravity * h_left);
+                let c_r = Float::sqrt(self.gravity * h_right);
 
                 let (s_l, s_r) = self.einfeldt_speeds(h_left, h_right, un_l, un_r, c_l, c_r);
                 let (mass, mom_n, mom_t) = self.hllc_star_flux(
                     h_left, h_right, un_l, un_r, ut_l, ut_r, s_l, s_r,
                 )?;
-                let max_speed = s_l.abs().max(s_r.abs());
+                let max_speed = Float::max(Float::abs(s_l), Float::abs(s_r));
 
-                Ok(RiemannFlux::from_rotated(
+                Ok(RiemannFlux::from_rotated::<B>(
                     mass,
                     mom_n,
                     mom_t,
@@ -322,7 +325,7 @@ pub type HllcSolverF32 = HllcSolver<CpuBackend<f32>>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::solver_builder::SolverParams;
+    use crate::schemes::riemann::SolverParams;
     use mh_runtime::CpuBackend;
 
     fn create_solver<B: Backend>(gravity: B::Scalar) -> HllcSolver<B> {

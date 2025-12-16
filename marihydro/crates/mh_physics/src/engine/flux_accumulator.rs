@@ -12,6 +12,7 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::schemes::RiemannFlux;
+use mh_runtime::FaceIndex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 单线程通量累加器
@@ -82,24 +83,25 @@ impl FluxAccumulator {
     /// - `mesh`: 物理网格
     #[inline]
     // ALLOW_F64: 与 PhysicsMesh 配合
-    pub fn accumulate_flux(&mut self, face_idx: usize, flux: &RiemannFlux, length: f64, mesh: &PhysicsMesh) {
-        let owner = mesh.face_owner(face_idx);
-        let neighbor = mesh.face_neighbor(face_idx);
+    pub fn accumulate_flux(&mut self, face_idx: usize, flux: &RiemannFlux<f64>, length: f64, mesh: &PhysicsMesh) {
+        let face = FaceIndex::new(face_idx);
+        let owner = mesh.face_owner(face);
+        let neighbor = mesh.face_neighbor(face);
 
         let flux_h = flux.mass * length;
         let flux_hu = flux.momentum_x * length;
         let flux_hv = flux.momentum_y * length;
 
         // 所有者单元（通量流出为负）
-        self.delta_h[owner] -= flux_h;
-        self.delta_hu[owner] -= flux_hu;
-        self.delta_hv[owner] -= flux_hv;
+        self.delta_h[owner.get()] -= flux_h;
+        self.delta_hu[owner.get()] -= flux_hu;
+        self.delta_hv[owner.get()] -= flux_hv;
 
         // 邻居单元（通量流入为正）
         if let Some(neigh) = neighbor {
-            self.delta_h[neigh] += flux_h;
-            self.delta_hu[neigh] += flux_hu;
-            self.delta_hv[neigh] += flux_hv;
+            self.delta_h[neigh.get()] += flux_h;
+            self.delta_hu[neigh.get()] += flux_hu;
+            self.delta_hv[neigh.get()] += flux_hv;
         }
     }
 

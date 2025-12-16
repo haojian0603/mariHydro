@@ -31,6 +31,7 @@
 //! ```
 
 use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::Float;
 
 // ============================================================================
 // 单元干湿状态枚举
@@ -107,16 +108,14 @@ pub struct WettingDryingConfig<S: RuntimeScalar> {
     pub momentum_decay: S,
 }
 
-impl<S: RuntimeScalar> Default for WettingDryingConfig<S>
-where
-    S: From<f64>,
-{
+impl<S: RuntimeScalar> Default for WettingDryingConfig<S> {
     /// 默认配置，使用标准物理默认值
     fn default() -> Self {
+        use num_traits::FromPrimitive;
         Self {
-            h_dry: S::from(1e-4),
-            h_wet: S::from(1e-3),
-            h_min: S::from(1e-6),
+            h_dry: S::from_f64(1e-4).unwrap_or(S::ZERO),
+            h_wet: S::from_f64(1e-3).unwrap_or(S::ZERO),
+            h_min: S::from_f64(1e-6).unwrap_or(S::ZERO),
             fix_negative_depth: true,
             momentum_decay: S::ZERO,
         }
@@ -206,6 +205,12 @@ impl<B: Backend> WettingDryingHandler<B> {
     #[inline]
     pub fn is_wet(&self, h: B::Scalar) -> bool {
         h >= self.config.h_wet
+    }
+
+    /// 获取水深对应的干湿状态
+    #[inline]
+    pub fn get_state(&self, h: B::Scalar) -> WetState {
+        WetState::from_depth(h, self.config.h_dry, self.config.h_wet)
     }
 
     /// 计算干湿过渡权重（线性插值）
