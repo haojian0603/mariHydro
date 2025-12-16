@@ -72,7 +72,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     
     /// 推荐的 CFL 数
     fn recommended_cfl(&self) -> B::Scalar {
-        <B::Scalar as Scalar>::from_config(0.5).unwrap_or(B::Scalar::ZERO)
+        B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ZERO)
     }
 }
 

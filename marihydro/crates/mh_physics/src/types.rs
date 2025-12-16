@@ -286,8 +286,7 @@ impl<S: RuntimeScalar> Mul<S> for SafeVelocity<S> {
 
 impl<S: RuntimeScalar> fmt::Display for SafeVelocity<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({:.4}, {:.4})", self.u, self.v)
-        .with_args(|formatter| write!(formatter, " m/s")) // 添加单位
+        write!(f, "({:.4}, {:.4}) m/s", self.u, self.v) // 添加单位
     }
 }
 

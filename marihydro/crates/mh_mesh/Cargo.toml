@@ -6,6 +6,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num-traits = "0.2"
 mh_runtime = { path = "../mh_runtime" }
 mh_foundation = { path = "../mh_foundation" }
 mh_geo = { path = "../mh_geo" }
@@ -23,4 +24,3 @@ parallel = ["rayon"]
 [dependencies.rayon]
 version = "1.10"
 optional = true
-

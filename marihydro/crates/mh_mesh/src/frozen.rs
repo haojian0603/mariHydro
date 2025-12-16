@@ -33,8 +33,9 @@
 //!
 //! // 计算统计信息
 //! let stats = mesh.statistics();
-//! println!("网格面积: {:.2}", stats.total_area.to_f64());
+//! println!("网格面积: {:.2}", stats.total_area.to_f64().unwrap());
 //! ```
+
 
 use crate::locator::MeshLocator;
 use crate::spatial_index::MeshSpatialIndex;
@@ -588,7 +589,7 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 
         for cell in 0..self.n_cells {
             let center = self.cell_center(cell);
-            let area = self.cell_area(cell).to_f64();
+            let area = self.cell_area(cell).to_f64().unwrap();
             sum_x += center.x * area;
             sum_y += center.y * area;
             total_area += area;
@@ -629,18 +630,18 @@ impl<S: RuntimeScalar> std::fmt::Display for MeshStatistics<S> {
             self.n_faces, self.n_interior_faces, self.n_boundary_faces
         )?;
         writeln!(f, "节点数: {}", self.n_nodes)?;
-        writeln!(f, "总面积: {:.2}", self.total_area.to_f64())?;
+        writeln!(f, "总面积: {:.2}", self.total_area.to_f64().unwrap())?;
         writeln!(
             f,
             "单元面积范围: [{:.2}, {:.2}]",
-            self.min_cell_area.to_f64(),
-            self.max_cell_area.to_f64()
+            self.min_cell_area.to_f64().unwrap(),
+            self.max_cell_area.to_f64().unwrap()
         )?;
         writeln!(
             f,
             "边长范围: [{:.2}, {:.2}]",
-            self.min_edge_length.to_f64(),
-            self.max_edge_length.to_f64()
+            self.min_edge_length.to_f64().unwrap(),
+            self.max_edge_length.to_f64().unwrap()
         )
     }
 }
@@ -677,7 +678,7 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
 
     #[inline]
     fn cell_area(&self, cell: usize) -> f64 {
-        self.cell_area[cell].to_f64()
+        self.cell_area[cell].to_f64().unwrap()
     }
 
     #[inline]
@@ -687,7 +688,7 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
 
     #[inline]
     fn face_length(&self, face: usize) -> f64 {
-        self.face_length[face].to_f64()
+        self.face_length[face].to_f64().unwrap()
     }
 
     #[inline]
@@ -702,7 +703,7 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
 
     #[inline]
     fn cell_bed_elevation(&self, cell: usize) -> f64 {
-        self.cell_z_bed[cell].to_f64()
+        self.cell_z_bed[cell].to_f64().unwrap()
     }
 
     #[inline]
@@ -758,29 +759,29 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
 
     /// 所有单元面积（运行时转换为 f64 的 Vec）
     fn all_cell_areas(&self) -> Vec<f64> {
-        self.cell_area.iter().map(|s| (*s).to_f64()).collect()
+        self.cell_area.iter().map(|s| (*s).to_f64().unwrap()).collect()
     }
 
     /// 所有单元底床高程（运行时转换为 f64 的 Vec）
     fn all_cell_bed_elevations(&self) -> Vec<f64> {
-        self.cell_z_bed.iter().map(|s| (*s).to_f64()).collect()
+        self.cell_z_bed.iter().map(|s| (*s).to_f64().unwrap()).collect()
     }
 
     #[inline]
     fn face_z_left(&self, face: usize) -> f64 {
-        self.face_z_left[face].to_f64()
+        self.face_z_left[face].to_f64().unwrap()
     }
 
     #[inline]
     fn face_z_right(&self, face: usize) -> f64 {
-        self.face_z_right[face].to_f64()
+        self.face_z_right[face].to_f64().unwrap()
     }
 }
 
 impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
     #[inline]
     fn face_o2n_distance(&self, face: usize) -> f64 {
-        self.face_dist_o2n[face].to_f64()
+        self.face_dist_o2n[face].to_f64().unwrap()
     }
 
     #[inline]
@@ -795,12 +796,12 @@ impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
 
     #[inline]
     fn min_cell_size(&self) -> f64 {
-        self.min_cell_size.to_f64()
+        self.min_cell_size.to_f64().unwrap()
     }
 
     #[inline]
     fn max_cell_size(&self) -> f64 {
-        self.max_cell_size.to_f64()
+        self.max_cell_size.to_f64().unwrap()
     }
 }
 
@@ -973,6 +974,7 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 mod tests {
     use super::*;
     use mh_runtime::RuntimeScalar;
+    use num_traits::ToPrimitive;
 
     #[test]
     fn test_empty_frozen_mesh() {
@@ -1011,7 +1013,7 @@ mod tests {
         let mesh: FrozenMesh<f32> = FrozenMesh::empty_with_cells(3);
         let stats = mesh.statistics();
         assert_eq!(stats.n_cells, 3);
-        assert_eq!(stats.total_area.to_f64(), 3.0);
+        assert_eq!(stats.total_area.to_f64().unwrap(), 3.0);
     }
 
     #[test]

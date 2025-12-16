@@ -187,14 +187,14 @@ impl FluxComputeMetrics {
 /// 并行通量计算器
 ///
 /// 封装通量计算的并行执行逻辑。
-pub struct ParallelFluxCalculator {
+pub struct ParallelFluxCalculator<B: mh_runtime::Backend> {
     config: ParallelFluxConfig,
     /// 黎曼求解器
     riemann: HllcSolverF64,
     /// 干湿处理器
     wetting_drying: WettingDryingHandlerF64,
     /// 静水重构
-    hydrostatic: HydrostaticReconstruction,
+    hydrostatic: HydrostaticReconstruction<B>,
     /// 性能指标
     metrics: FluxComputeMetrics,
     /// 面着色（用于 Colored 策略）
@@ -202,7 +202,7 @@ pub struct ParallelFluxCalculator {
     face_colors: Option<Vec<Vec<usize>>>,
 }
 
-impl ParallelFluxCalculator {
+impl<B: mh_runtime::Backend> ParallelFluxCalculator<B> {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig) -> Self {
         Self {
@@ -242,13 +242,13 @@ impl ParallelFluxCalculator {
         // 构建单元到面的映射
         let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(face_idx);
-            cell_to_faces.entry(owner).or_default().push(face_idx);
-            if let Some(neigh) = mesh.face_neighbor(face_idx) {
-                cell_to_faces.entry(neigh).or_default().push(face_idx);
+            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
+            cell_to_faces.entry(owner.into()).or_default().push(face_idx);
+            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
+                cell_to_faces.entry(neigh.into()).or_default().push(face_idx);
             }
         }
-
+        
         // 构建面的邻接表
         let mut face_neighbors: Vec<HashSet<usize>> = vec![HashSet::new(); n_faces];
         for faces in cell_to_faces.values() {
@@ -541,7 +541,7 @@ impl ParallelFluxCalculator {
         &self,
         state: &ShallowWaterStateF64,
         mesh: &PhysicsMesh,
-        face_idx: usize,
+        face_idx: mh_runtime::FaceIndex,
     ) -> (RiemannFlux, BedSlopeCorrection, f64, usize, Option<usize>) {
         let normal = mesh.face_normal(face_idx);
         let length = mesh.face_length(face_idx);

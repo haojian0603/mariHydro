@@ -57,8 +57,8 @@ impl<B: Backend> ExplicitStrategy<B> {
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
             backend,
-            gravity: <B::Scalar as Scalar>::from_config(config.gravity).unwrap_or(B::Scalar::ZERO),
-            h_dry: <B::Scalar as Scalar>::from_config(config.h_dry).unwrap_or(B::Scalar::ZERO),
+            gravity: B::Scalar::from_f64(config.gravity).unwrap_or(B::Scalar::ZERO),
+            h_dry: B::Scalar::from_f64(config.h_dry).unwrap_or(B::Scalar::ZERO),
             config,
         }
     }

@@ -16,7 +16,8 @@
 //! λ_max = max(|u_L| + c_L, |u_R| + c_R)
 //! c = sqrt(g * h)
 //! ```
-
+use num_traits::Float;
+use num_traits::real::Real;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};

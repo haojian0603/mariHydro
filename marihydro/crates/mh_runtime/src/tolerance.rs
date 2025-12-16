@@ -86,14 +86,14 @@ impl<S: RuntimeScalar> Tolerance<S> {
         convergence: f64,
     ) -> Option<Self> {
         Some(Self {
-            epsilon: S::from_config(epsilon)?,
-            h_min: S::from_config(h_min)?,
-            h_dry: S::from_config(h_dry)?,
-            velocity_cap: S::from_config(velocity_cap)?,
-            safe_div: S::from_config(safe_div)?,
-            convergence: S::from_config(convergence)?,
-            gradient_eps: S::from_config(1e-12)?,
-            min_area: S::from_config(1e-12)?,
+            epsilon: S::from_f64(epsilon)?,
+            h_min: S::from_f64(h_min)?,
+            h_dry: S::from_f64(h_dry)?,
+            velocity_cap: S::from_f64(velocity_cap)?,
+            safe_div: S::from_f64(safe_div)?,
+            convergence: S::from_f64(convergence)?,
+            gradient_eps: S::from_f64(1e-12)?,
+            min_area: S::from_f64(1e-12)?,
         })
     }
 }

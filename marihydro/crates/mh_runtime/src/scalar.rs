@@ -96,15 +96,6 @@ pub trait RuntimeScalar:
     /// 最小值
     const MIN: Self;
 
-    /// 从配置层 f64 转换
-    ///
-    /// 配置层（SolverConfig）全部使用 f64，
-    /// 通过此方法转换到运行时标量类型。
-    fn from_config(v: f64) -> Option<Self>;
-
-    /// 转换回 f64（用于输出和配置层交互）
-    fn to_f64(self) -> f64;
-
     /// 安全除法
     ///
     /// 当除数绝对值小于 MIN_POSITIVE 时返回 fallback
@@ -143,12 +134,6 @@ pub trait RuntimeScalar:
         } else {
             self
         }
-    }
-    
-    /// 限制在范围内（别名，与旧 API 兼容）
-    #[inline]
-    fn clamp_range(self, min: Self, max: Self) -> Self {
-        self.clamp_value(min, max)
     }
 
     /// 安全平方根（负数返回 0）
@@ -253,16 +238,6 @@ impl RuntimeScalar for f32 {
     const MIN_POSITIVE: f32 = f32::MIN_POSITIVE;
     const MAX: f32 = f32::MAX;
     const MIN: f32 = f32::MIN;
-
-    #[inline]
-    fn from_config(v: f64) -> Option<Self> {
-        FromPrimitive::from_f64(v)
-    }
-
-    #[inline]
-    fn to_f64(self) -> f64 {
-        self as f64
-    }
 }
 
 // =============================================================================
@@ -278,16 +253,6 @@ impl RuntimeScalar for f64 {
     const MIN_POSITIVE: f64 = f64::MIN_POSITIVE;
     const MAX: f64 = f64::MAX;
     const MIN: f64 = f64::MIN;
-
-    #[inline]
-    fn from_config(v: f64) -> Option<Self> {
-        Some(v)
-    }
-
-    #[inline]
-    fn to_f64(self) -> f64 {
-        self
-    }
 }
 
 #[cfg(test)]
@@ -313,8 +278,8 @@ mod tests {
     #[test]
     fn test_from_config() {
         let v = 9.81f64;
-        assert_eq!(f32::from_config(v), Some(9.81f32));
-        assert_eq!(f64::from_config(v), Some(9.81f64));
+        assert_eq!(f32::from_f64(v), Some(9.81f32));
+        assert_eq!(f64::from_f64(v), Some(9.81f64));
     }
 
     #[test]

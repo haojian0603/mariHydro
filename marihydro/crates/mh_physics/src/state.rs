@@ -2,46 +2,35 @@
 
 //! 浅水方程状态管理
 //!
-//! 本模块提供浅水方程求解所需的状态管理，包括：
-//! - `ShallowWaterState<B>`: 守恒变量状态 (h, hu, hv)，基于 Backend 泛型
-//! - `DynamicScalars`: 动态标量场（示踪剂等）
-//! - `GradientState`: 梯度状态 (grad_h, grad_hu, grad_hv)
-//! - `Flux`: 数值通量
-//! - `RhsBuffers`: 右端项缓冲区
-//!
-//! # 布局设计
-//!
-//! 采用 SoA (Structure of Arrays) 布局以优化缓存性能：
-//! ```text
-//! h:  [h_0,  h_1,  h_2,  ...]
-//! hu: [hu_0, hu_1, hu_2, ...]
-//! hv: [hv_0, hv_1, hv_2, ...]
-//! z:  [z_0,  z_1,  z_2,  ...]
-//! ```
+//! 本模块提供浅水方程求解所需的状态管理，基于 Backend 泛型设计。
+//! 支持 f32/f64 精度切换和 GPU 后端扩展，采用 SoA 布局优化缓存性能。
 //!
 //! # 类型参数
 //!
-//! - `B: Backend`: 计算后端，支持 `CpuBackend<f32>` 和 `CpuBackend<f64>`
+//! - `B: Backend`: 计算后端，提供存储和计算能力
 //!
-//! # 示例
+//! # 使用示例
 //!
 //! ```rust
 //! use mh_physics::state::ShallowWaterState;
 //! use mh_runtime::CpuBackend;
 //!
-//! // 创建 f64 精度的状态
-//! let state_f64 = ShallowWaterState::<CpuBackend<f64>>::new(100);
+//! // f64 高精度模式
+//! let backend_f64 = CpuBackend::<f64>::new();
+//! let state_f64 = ShallowWaterState::new_with_backend(backend_f64, 100);
 //!
-//! // 创建 f32 精度的状态
-//! let state_f32 = ShallowWaterState::<CpuBackend<f32>>::new(100);
+//! // f32 高性能模式
+//! let backend_f32 = CpuBackend::<f32>::new();
+//! let state_f32 = ShallowWaterState::new_with_backend(backend_f32, 100);
 //! ```
 
 use crate::fields::{FieldMeta, FieldRegistry};
 use crate::traits::{StateAccess, StateAccessMut};
 use crate::types::{NumericalParams, SafeVelocity};
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
-use num_traits::Float;
+use mh_runtime::{Backend, CpuBackend};
+use num_traits::{Float, Zero};
 use serde::{Deserialize, Serialize};
+use mh_runtime::RuntimeScalar;
 
 // ============================================================
 // 单个单元的守恒状态
@@ -54,7 +43,7 @@ use serde::{Deserialize, Serialize};
 /// - `hu`: x方向动量
 /// - `hv`: y方向动量
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct ConservedState<S: RuntimeScalar> {
+pub struct ConservedState<S:RuntimeScalar> {
     /// 水深 [m]
     pub h: S,
     /// x 方向动量 [m²/s]
@@ -63,7 +52,10 @@ pub struct ConservedState<S: RuntimeScalar> {
     pub hv: S,
 }
 
-impl<S: RuntimeScalar> ConservedState<S> {
+impl<S> ConservedState<S>
+where
+    S: RuntimeScalar,
+{
     /// 创建新的守恒状态
     #[inline]
     pub const fn new(h: S, hu: S, hv: S) -> Self {
@@ -71,11 +63,13 @@ impl<S: RuntimeScalar> ConservedState<S> {
     }
 
     /// 零状态
-    pub const ZERO: Self = Self {
-        h: S::ZERO,
-        hu: S::ZERO,
-        hv: S::ZERO,
-    };
+    pub fn zero() -> Self {
+        Self {
+            h: S::ZERO,
+            hu: S::ZERO,
+            hv: S::ZERO,
+        }
+    }
 
     /// 从原始变量创建
     #[inline]
@@ -101,7 +95,10 @@ impl<S: RuntimeScalar> ConservedState<S> {
 }
 
 // 算术运算实现
-impl<S: RuntimeScalar> std::ops::Add for ConservedState<S> {
+impl<S> std::ops::Add for ConservedState<S>
+where
+    S: RuntimeScalar,
+{
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -113,7 +110,10 @@ impl<S: RuntimeScalar> std::ops::Add for ConservedState<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::ops::Sub for ConservedState<S> {
+impl<S> std::ops::Sub for ConservedState<S>
+where
+    S: RuntimeScalar,
+{
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -125,7 +125,10 @@ impl<S: RuntimeScalar> std::ops::Sub for ConservedState<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::ops::Mul<S> for ConservedState<S> {
+impl<S> std::ops::Mul<S> for ConservedState<S>
+where
+    S: RuntimeScalar,
+{
     type Output = Self;
     #[inline]
     fn mul(self, rhs: S) -> Self {
@@ -143,7 +146,7 @@ impl<S: RuntimeScalar> std::ops::Mul<S> for ConservedState<S> {
 
 /// 动态标量场集合，按名称管理示踪剂等扩展字段
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DynamicScalars<S: RuntimeScalar> {
+pub struct DynamicScalars<S> {
     /// 单元数量
     #[serde(default)]
     len: usize,
@@ -155,7 +158,10 @@ pub struct DynamicScalars<S: RuntimeScalar> {
     data: Vec<Vec<S>>,
 }
 
-impl<S: RuntimeScalar> DynamicScalars<S> {
+impl<S> DynamicScalars<S>
+where
+    S: Float + Copy,
+{
     /// 创建空集合
     pub fn new(len: usize) -> Self {
         Self {
@@ -220,7 +226,10 @@ impl<S: RuntimeScalar> DynamicScalars<S> {
 
     /// 按名称获取只读切片
     pub fn get_by_name(&self, name: &str) -> Option<&[S]> {
-        self.names.iter().position(|n| n == name).and_then(|i| self.get(i))
+        self.names
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| self.get(i))
     }
 
     /// 按名称获取可变示踪剂切片
@@ -300,11 +309,7 @@ impl<S: RuntimeScalar> DynamicScalars<S> {
             .zip(state_a.data.iter())
             .zip(state_b.data.iter())
         {
-            for ((d, a_val), b_val) in dst
-                .iter_mut()
-                .zip(sa.iter())
-                .zip(sb.iter())
-            {
+            for ((d, a_val), b_val) in dst.iter_mut().zip(sa.iter()).zip(sb.iter()) {
                 *d = a * *a_val + b * *b_val;
             }
         }
@@ -333,7 +338,7 @@ impl<S: RuntimeScalar> DynamicScalars<S> {
 
 /// 梯度状态 (用于二阶重构)
 #[derive(Debug, Clone)]
-pub struct GradientState<S: RuntimeScalar> {
+pub struct GradientState<S> {
     /// 水深梯度 x 分量
     pub grad_h_x: Vec<S>,
     /// 水深梯度 y 分量
@@ -348,7 +353,10 @@ pub struct GradientState<S: RuntimeScalar> {
     pub grad_hv_y: Vec<S>,
 }
 
-impl<S: RuntimeScalar> GradientState<S> {
+impl<S> GradientState<S>
+where
+    S: RuntimeScalar,
+{
     /// 创建新的梯度状态
     pub fn new(n_cells: usize) -> Self {
         Self {
@@ -417,7 +425,7 @@ impl<S: RuntimeScalar> GradientState<S> {
 
 /// 数值通量
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Flux<S: RuntimeScalar> {
+pub struct Flux<S> {
     /// 质量通量 [m²/s]
     pub mass: S,
     /// x 动量通量 [m³/s²]
@@ -426,7 +434,10 @@ pub struct Flux<S: RuntimeScalar> {
     pub mom_y: S,
 }
 
-impl<S: RuntimeScalar> Flux<S> {
+impl<S> Flux<S>
+where
+    S: RuntimeScalar
+{
     /// 创建新通量
     #[inline]
     pub const fn new(mass: S, mom_x: S, mom_y: S) -> Self {
@@ -434,11 +445,13 @@ impl<S: RuntimeScalar> Flux<S> {
     }
 
     /// 零通量
-    pub const ZERO: Self = Self {
-        mass: S::ZERO,
-        mom_x: S::ZERO,
-        mom_y: S::ZERO,
-    };
+    pub fn zero() -> Self {
+        Self {
+            mass: S::ZERO,
+            mom_x: S::ZERO,
+            mom_y: S::ZERO,
+        }
+    }
 
     /// 缩放通量
     #[inline]
@@ -464,7 +477,10 @@ impl<S: RuntimeScalar> Flux<S> {
 }
 
 // 算术运算实现
-impl<S: RuntimeScalar> std::ops::Add for Flux<S> {
+impl<S> std::ops::Add for Flux<S>
+where
+    S: std::ops::Add<Output = S>,
+{
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -476,7 +492,10 @@ impl<S: RuntimeScalar> std::ops::Add for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::ops::Sub for Flux<S> {
+impl<S> std::ops::Sub for Flux<S>
+where
+    S: std::ops::Sub<Output = S>,
+{
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -488,7 +507,10 @@ impl<S: RuntimeScalar> std::ops::Sub for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::ops::Neg for Flux<S> {
+impl<S> std::ops::Neg for Flux<S>
+where
+    S: std::ops::Neg<Output = S>,
+{
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -500,7 +522,10 @@ impl<S: RuntimeScalar> std::ops::Neg for Flux<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::ops::Mul<S> for Flux<S> {
+impl<S> std::ops::Mul<S> for Flux<S>
+where
+    S: RuntimeScalar,
+{
     type Output = Self;
     #[inline]
     fn mul(self, rhs: S) -> Self {
@@ -514,7 +539,7 @@ impl<S: RuntimeScalar> std::ops::Mul<S> for Flux<S> {
 
 /// 右端项缓冲区 (用于时间积分)
 #[derive(Debug, Clone)]
-pub struct RhsBuffers<S: RuntimeScalar> {
+pub struct RhsBuffers<S:RuntimeScalar> {
     /// 水深变化率 [m/s]
     pub dh_dt: Vec<S>,
     /// x 动量变化率 [m²/s²]
@@ -525,7 +550,10 @@ pub struct RhsBuffers<S: RuntimeScalar> {
     pub tracer_rhs: DynamicScalars<S>,
 }
 
-impl<S: RuntimeScalar> RhsBuffers<S> {
+impl<S> RhsBuffers<S>
+where
+    S: RuntimeScalar,
+{
     /// 创建新的 RHS 缓冲区
     pub fn new(n_cells: usize) -> Self {
         Self {
@@ -593,10 +621,10 @@ impl<S: RuntimeScalar> RhsBuffers<S> {
 }
 
 // ============================================================
-// 浅水方程状态 (SoA 布局)
+// 浅水方程状态 (SoA 布局, Backend泛型)
 // ============================================================
 
-/// 浅水方程守恒状态（SoA 布局）
+/// 浅水方程守恒状态（SoA 布局，Backend泛型）
 ///
 /// 使用 Backend 泛型存储整个网格的状态变量，采用 SoA 布局优化缓存访问。
 /// 支持 f32/f64 精度切换和 GPU 后端扩展。
@@ -635,7 +663,7 @@ impl<B: Backend> ShallowWaterState<B> {
     pub fn new_with_backend(backend: B, n_cells: usize) -> Self {
         let tracers = DynamicScalars::new(n_cells);
         let field_registry = FieldRegistry::shallow_water();
-        
+
         Self {
             n_cells,
             h: backend.alloc(n_cells),
@@ -661,16 +689,16 @@ impl<B: Backend> ShallowWaterState<B> {
     pub fn cold_start(backend: B, initial_eta: B::Scalar, z_bed: &[B::Scalar]) -> Self {
         let n_cells = z_bed.len();
         let mut state = Self::new_with_backend(backend, n_cells);
-        
+
         // 计算水深 h = max(0, eta - z)
         for (i, &z) in z_bed.iter().enumerate() {
-            let h = (initial_eta - z).max(B::Scalar::ZERO);
+            let h = (initial_eta - z).max(B::Scalar::zero());
             state.h[i] = h;
-            state.hu[i] = B::Scalar::ZERO;
-            state.hv[i] = B::Scalar::ZERO;
+            state.hu[i] = B::Scalar::zero();
+            state.hv[i] = B::Scalar::zero();
             state.z[i] = z;
         }
-        
+
         state
     }
 
@@ -679,7 +707,7 @@ impl<B: Backend> ShallowWaterState<B> {
         let backend = self.backend.clone();
         let mut tracers = DynamicScalars::new(self.n_cells);
         tracers.match_layout(&self.tracers);
-        
+
         Self {
             n_cells: self.n_cells,
             h: backend.alloc(self.n_cells),
@@ -709,10 +737,8 @@ impl<B: Backend> ShallowWaterState<B> {
         let name = name.into();
         let idx = self.tracers.register(name.clone());
         if !self.field_registry.contains(&name) {
-            self.field_registry.register(
-                FieldMeta::cell_scalar(name.clone(), unit.into())
-                    .with_desc("示踪剂标量")
-            );
+            self.field_registry
+                .register(FieldMeta::cell_scalar(name.clone(), unit.into()).with_desc("示踪剂标量"));
         }
         idx
     }
@@ -763,7 +789,11 @@ impl<B: Backend> ShallowWaterState<B> {
 
     /// 获取原始变量 (h, u, v)
     #[inline]
-    pub fn primitive(&self, idx: usize, params: &NumericalParams<B::Scalar>) -> (B::Scalar, B::Scalar, B::Scalar) {
+    pub fn primitive(
+        &self,
+        idx: usize,
+        params: &NumericalParams<B::Scalar>,
+    ) -> (B::Scalar, B::Scalar, B::Scalar) {
         let h = self.h[idx];
         let vel = params.safe_velocity(self.hu[idx], self.hv[idx], h);
         (h, vel.u, vel.v)
@@ -809,7 +839,7 @@ impl<B: Backend> ShallowWaterState<B> {
 
     /// 重置为零
     pub fn reset(&mut self) {
-        let zero = B::Scalar::ZERO;
+        let zero = B::Scalar::zero();
         self.h.fill(zero);
         self.hu.fill(zero);
         self.hv.fill(zero);
@@ -870,22 +900,27 @@ impl<B: Backend> ShallowWaterState<B> {
 
     /// 计算总质量
     pub fn total_mass(&self, cell_areas: &[B::Scalar]) -> B::Scalar {
-        self.h.iter()
+        self.h
+            .iter()
             .zip(cell_areas.iter())
             .map(|(h, a)| *h * *a)
-            .fold(B::Scalar::ZERO, |acc, x| acc + x)
+            .fold(B::Scalar::zero(), |acc, x| acc + x)
     }
 
     /// 计算总动量
     pub fn total_momentum(&self, cell_areas: &[B::Scalar]) -> (B::Scalar, B::Scalar) {
-        let hux: B::Scalar = self.hu.iter()
+        let hux: B::Scalar = self
+            .hu
+            .iter()
             .zip(cell_areas.iter())
             .map(|(hu, a)| *hu * *a)
-            .fold(B::Scalar::ZERO, |acc, x| acc + x);
-        let hvx: B::Scalar = self.hv.iter()
+            .fold(B::Scalar::zero(), |acc, x| acc + x);
+        let hvx: B::Scalar = self
+            .hv
+            .iter()
             .zip(cell_areas.iter())
             .map(|(hv, a)| *hv * *a)
-            .fold(B::Scalar::ZERO, |acc, x| acc + x);
+            .fold(B::Scalar::zero(), |acc, x| acc + x);
         (hux, hvx)
     }
 
@@ -894,20 +929,20 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 从另一个状态复制数据
     pub fn copy_from(&mut self, other: &Self) {
         debug_assert_eq!(self.n_cells(), other.n_cells());
-        
+
         // 复制主变量
         let h_slice = self.h_slice_mut();
         h_slice.copy_from_slice(other.h_slice());
-        
+
         let hu_slice = self.hu_slice_mut();
         hu_slice.copy_from_slice(other.hu_slice());
-        
+
         let hv_slice = self.hv_slice_mut();
         hv_slice.copy_from_slice(other.hv_slice());
-        
+
         let z_slice = self.z_slice_mut();
         z_slice.copy_from_slice(other.z_slice());
-        
+
         // 复制示踪剂
         self.tracers.copy_from(&other.tracers);
     }
@@ -932,7 +967,8 @@ impl<B: Backend> ShallowWaterState<B> {
             self.hu[i] = a * state_a.hu[i] + b * state_b.hu[i];
             self.hv[i] = a * state_a.hv[i] + b * state_b.hv[i];
         }
-        self.tracers.linear_combine(a, &state_a.tracers, b, &state_b.tracers);
+        self.tracers
+            .linear_combine(a, &state_a.tracers, b, &state_b.tracers);
     }
 
     /// 自线性组合: self = a * self + b * other
@@ -950,15 +986,15 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 强制正性约束
     pub fn enforce_positivity(&mut self) {
         for h in self.h.iter_mut() {
-            if *h < B::Scalar::ZERO {
-                *h = B::Scalar::ZERO;
+            if *h < B::Scalar::zero() {
+                *h = B::Scalar::zero();
             }
         }
 
         for tracer in self.tracers.iter_mut() {
             for v in tracer.iter_mut() {
-                if *v < B::Scalar::ZERO {
-                    *v = B::Scalar::ZERO;
+                if *v < B::Scalar::zero() {
+                    *v = B::Scalar::zero();
                 }
             }
         }
@@ -967,7 +1003,11 @@ impl<B: Backend> ShallowWaterState<B> {
     // ========== 验证 ==========
 
     /// 验证状态有效性
-    pub fn validate(&self, time: B::Scalar, params: &NumericalParams<B::Scalar>) -> Result<(), StateError<B::Scalar>> {
+    pub fn validate(
+        &self,
+        time: B::Scalar,
+        params: &NumericalParams<B::Scalar>,
+    ) -> Result<(), StateError<B::Scalar>> {
         for idx in 0..self.n_cells {
             // 检查 NaN/Inf
             if !self.h[idx].is_finite() {
@@ -993,7 +1033,7 @@ impl<B: Backend> ShallowWaterState<B> {
             }
 
             // 检查负水深
-            if self.h[idx] < B::Scalar::ZERO {
+            if self.h[idx] < B::Scalar::zero() {
                 return Err(StateError::NegativeDepth {
                     cell: idx,
                     value: self.h[idx],
@@ -1025,7 +1065,7 @@ impl<B: Backend> ShallowWaterState<B> {
 
 /// 状态错误
 #[derive(Debug, Clone)]
-pub enum StateError<S: RuntimeScalar> {
+pub enum StateError<S> {
     /// 无效值 (NaN/Inf)
     InvalidValue {
         field: &'static str,
@@ -1053,7 +1093,10 @@ pub enum StateError<S: RuntimeScalar> {
     },
 }
 
-impl<S: RuntimeScalar> std::fmt::Display for StateError<S> {
+impl<S> std::fmt::Display for StateError<S>
+where
+    S: std::fmt::Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidValue {
@@ -1098,20 +1141,19 @@ impl<S: RuntimeScalar> std::fmt::Display for StateError<S> {
     }
 }
 
-impl<S: RuntimeScalar> std::error::Error for StateError<S> {}
+impl<S> std::error::Error for StateError<S> where S: std::fmt::Debug + std::fmt::Display {}
 
 // ============================================================
 // 兼容性类型别名
 // ============================================================
 
 /// 泛型状态类型别名（向后兼容）
-/// 对于需要直接使用 Backend 参数的代码使用此别名
 pub type ShallowWaterStateGeneric<B> = ShallowWaterState<B>;
 
 /// 默认后端状态类型别名（使用 f64）
 pub type ShallowWaterStateDefault = ShallowWaterState<CpuBackend<f64>>;
 
-/// f64 后端的状态类型别名（向后兼容）
+/// f64 后端的状态类型别名
 pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
 
 /// f32 后端的状态类型别名
@@ -1124,215 +1166,177 @@ pub type RhsBuffersF64 = RhsBuffers<f64>;
 pub type RhsBuffersF32 = RhsBuffers<f32>;
 
 // ============================================================
-// StateAccess Trait 实现
+// StateAccess Trait 实现（泛型版本）
 // ============================================================
 
-// 为 CpuBackend<f64> 实现 StateAccess trait
-impl StateAccess for ShallowWaterState<CpuBackend<f64>> {
+// 为所有 Backend 实现 StateAccess trait
+impl<B> StateAccess for ShallowWaterState<B>
+where
+    B: Backend,
+{
+    type Scalar = B::Scalar;
+
     #[inline]
     fn n_cells(&self) -> usize {
         self.n_cells
     }
 
     #[inline]
-    fn get(&self, cell: usize) -> ConservedState<f64> {
+    fn get(&self, cell: usize) -> ConservedState<Self::Scalar> {
         ConservedState::new(self.h[cell], self.hu[cell], self.hv[cell])
     }
 
     #[inline]
-    fn h(&self, cell: usize) -> f64 {
+    fn h(&self, cell: usize) -> Self::Scalar {
         self.h[cell]
     }
 
     #[inline]
-    fn hu(&self, cell: usize) -> f64 {
+    fn hu(&self, cell: usize) -> Self::Scalar {
         self.hu[cell]
     }
 
     #[inline]
-    fn hv(&self, cell: usize) -> f64 {
+    fn hv(&self, cell: usize) -> Self::Scalar {
         self.hv[cell]
     }
 
     #[inline]
-    fn z(&self, cell: usize) -> f64 {
+    fn z(&self, cell: usize) -> Self::Scalar {
         self.z[cell]
     }
 
     #[inline]
-    fn h_slice(&self) -> &[f64] {
-        &self.h
+    fn h_slice(&self) -> &[Self::Scalar] {
+        self.h_slice()
     }
 
     #[inline]
-    fn hu_slice(&self) -> &[f64] {
-        &self.hu
+    fn hu_slice(&self) -> &[Self::Scalar] {
+        self.hu_slice()
     }
 
     #[inline]
-    fn hv_slice(&self) -> &[f64] {
-        &self.hv
+    fn hv_slice(&self) -> &[Self::Scalar] {
+        self.hv_slice()
     }
 
     #[inline]
-    fn z_slice(&self) -> &[f64] {
-        &self.z
+    fn z_slice(&self) -> &[Self::Scalar] {
+        self.z_slice()
     }
 }
 
-// 为 CpuBackend<f64> 实现 StateAccessMut trait
-impl StateAccessMut for ShallowWaterState<CpuBackend<f64>> {
+// 为所有 Backend 实现 StateAccessMut trait
+impl<B> StateAccessMut for ShallowWaterState<B>
+where
+    B: Backend,
+{
     #[inline]
-    fn set(&mut self, cell: usize, state: ConservedState<f64>) {
-        self.h[cell] = state.h;
-        self.hu[cell] = state.hu;
-        self.hv[cell] = state.hv;
+    fn set(&mut self, cell: usize, state: ConservedState<Self::Scalar>) {
+        self.set_state(cell, state);
     }
 
     #[inline]
-    fn set_h(&mut self, cell: usize, value: f64) {
+    fn set_h(&mut self, cell: usize, value: Self::Scalar) {
         self.h[cell] = value;
     }
 
     #[inline]
-    fn set_hu(&mut self, cell: usize, value: f64) {
+    fn set_hu(&mut self, cell: usize, value: Self::Scalar) {
         self.hu[cell] = value;
     }
 
     #[inline]
-    fn set_hv(&mut self, cell: usize, value: f64) {
+    fn set_hv(&mut self, cell: usize, value: Self::Scalar) {
         self.hv[cell] = value;
     }
 
     #[inline]
-    fn set_z(&mut self, cell: usize, value: f64) {
+    fn set_z(&mut self, cell: usize, value: Self::Scalar) {
         self.z[cell] = value;
     }
 
     #[inline]
-    fn h_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.h
+    fn h_slice_mut(&mut self) -> &mut [Self::Scalar] {
+        self.h_slice_mut()
     }
 
     #[inline]
-    fn hu_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.hu
+    fn hu_slice_mut(&mut self) -> &mut [Self::Scalar] {
+        self.hu_slice_mut()
     }
 
     #[inline]
-    fn hv_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.hv
+    fn hv_slice_mut(&mut self) -> &mut [Self::Scalar] {
+        self.hv_slice_mut()
     }
 
     #[inline]
-    fn z_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.z
-    }
-}
-
-// 为 CpuBackend<f32> 实现 StateAccess trait
-impl StateAccess for ShallowWaterState<CpuBackend<f32>> {
-    #[inline]
-    fn n_cells(&self) -> usize {
-        self.n_cells
+    fn z_slice_mut(&mut self) -> &mut [Self::Scalar] {
+        self.z_slice_mut()
     }
 
-    #[inline]
-    fn get(&self, cell: usize) -> ConservedState<f64> {
-        ConservedState::new(self.h[cell] as f64, self.hu[cell] as f64, self.hv[cell] as f64)
+    fn apply_flux_update(
+        &mut self,
+        dt: Self::Scalar,
+        areas: &[Self::Scalar],
+        flux_h: &[Self::Scalar],
+        flux_hu: &[Self::Scalar],
+        flux_hv: &[Self::Scalar],
+    ) {
+        let n = self.n_cells();
+        debug_assert_eq!(areas.len(), n);
+        debug_assert_eq!(flux_h.len(), n);
+        debug_assert_eq!(flux_hu.len(), n);
+        debug_assert_eq!(flux_hv.len(), n);
+
+        for i in 0..n {
+            let inv_area = Self::Scalar::one() / areas[i];
+            let h_new = self.h[i] + dt * flux_h[i] * inv_area;
+            let hu_new = self.hu[i] + dt * flux_hu[i] * inv_area;
+            let hv_new = self.hv[i] + dt * flux_hv[i] * inv_area;
+            self.h[i] = h_new;
+            self.hu[i] = hu_new;
+            self.hv[i] = hv_new;
+        }
     }
 
-    #[inline]
-    fn h(&self, cell: usize) -> f64 {
-        self.h[cell] as f64
+    fn apply_source_update(
+        &mut self,
+        dt: Self::Scalar,
+        source_h: &[Self::Scalar],
+        source_hu: &[Self::Scalar],
+        source_hv: &[Self::Scalar],
+    ) {
+        let n = self.n_cells();
+        for i in 0..n {
+            self.h[i] = self.h[i] + dt * source_h[i];
+            self.hu[i] = self.hu[i] + dt * source_hu[i];
+            self.hv[i] = self.hv[i] + dt * source_hv[i];
+        }
     }
 
-    #[inline]
-    fn hu(&self, cell: usize) -> f64 {
-        self.hu[cell] as f64
+    fn enforce_non_negative_depth(&mut self, h_min: Self::Scalar) {
+        let h = self.h_slice_mut();
+        for value in h.iter_mut() {
+            if *value < h_min {
+                *value = Self::Scalar::zero();
+            }
+        }
     }
 
-    #[inline]
-    fn hv(&self, cell: usize) -> f64 {
-        self.hv[cell] as f64
-    }
-
-    #[inline]
-    fn z(&self, cell: usize) -> f64 {
-        self.z[cell] as f64
-    }
-
-    #[inline]
-    fn h_slice(&self) -> &[f64] {
-        // f32 需要转换，返回转换后的临时向量引用
-        // 实际项目中应考虑性能优化
-        &[]
-    }
-
-    #[inline]
-    fn hu_slice(&self) -> &[f64] {
-        &[]
-    }
-
-    #[inline]
-    fn hv_slice(&self) -> &[f64] {
-        &[]
-    }
-
-    #[inline]
-    fn z_slice(&self) -> &[f64] {
-        &[]
-    }
-}
-
-// 为 CpuBackend<f32> 实现 StateAccessMut trait
-impl StateAccessMut for ShallowWaterState<CpuBackend<f32>> {
-    #[inline]
-    fn set(&mut self, cell: usize, state: ConservedState<f64>) {
-        self.h[cell] = state.h as f32;
-        self.hu[cell] = state.hu as f32;
-        self.hv[cell] = state.hv as f32;
-    }
-
-    #[inline]
-    fn set_h(&mut self, cell: usize, value: f64) {
-        self.h[cell] = value as f32;
-    }
-
-    #[inline]
-    fn set_hu(&mut self, cell: usize, value: f64) {
-        self.hu[cell] = value as f32;
-    }
-
-    #[inline]
-    fn set_hv(&mut self, cell: usize, value: f64) {
-        self.hv[cell] = value as f32;
-    }
-
-    #[inline]
-    fn set_z(&mut self, cell: usize, value: f64) {
-        self.z[cell] = value as f32;
-    }
-
-    #[inline]
-    fn h_slice_mut(&mut self) -> &mut [f64] {
-        // f32 无法直接返回 f64 可变切片，返回空切片
-        &mut []
-    }
-
-    #[inline]
-    fn hu_slice_mut(&mut self) -> &mut [f64] {
-        &mut []
-    }
-
-    #[inline]
-    fn hv_slice_mut(&mut self) -> &mut [f64] {
-        &mut []
-    }
-
-    #[inline]
-    fn z_slice_mut(&mut self) -> &mut [f64] {
-        &mut []
+    fn copy_from<S2: StateAccess<Scalar = Self::Scalar>>(&mut self, other: &S2) -> Result<(), &'static str> {
+        if self.n_cells() != other.n_cells() {
+            return Err("单元数量不匹配");
+        }
+        for i in 0..self.n_cells() {
+            self.set_h(i, other.h(i));
+            self.set_hu(i, other.hu(i));
+            self.set_hv(i, other.hv(i));
+            self.set_z(i, other.z(i));
+        }
+        Ok(())
     }
 }
 
@@ -1344,7 +1348,6 @@ impl StateAccessMut for ShallowWaterState<CpuBackend<f32>> {
 mod tests {
     use super::*;
     use crate::types::NumericalParams;
-    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_state_creation_f64() {
@@ -1364,12 +1367,12 @@ mod tests {
     fn test_conserved_state_operations() {
         let state1 = ConservedState::new(1.0f64, 2.0, 3.0);
         let state2 = ConservedState::new(0.5f64, 1.0, 1.5);
-        
+
         let sum = state1 + state2;
         assert_eq!(sum.h, 1.5);
         assert_eq!(sum.hu, 3.0);
         assert_eq!(sum.hv, 4.5);
-        
+
         let scaled = state1 * 2.0;
         assert_eq!(scaled.h, 2.0);
         assert_eq!(scaled.hu, 4.0);
@@ -1380,16 +1383,16 @@ mod tests {
         let mut scalars = DynamicScalars::<f64>::new(10);
         assert_eq!(scalars.len(), 10);
         assert_eq!(scalars.count(), 0);
-        
+
         let idx = scalars.register("temperature");
         assert_eq!(idx, 0);
         assert_eq!(scalars.count(), 1);
-        
+
         if let Some(slice) = scalars.get_mut(0) {
             slice[0] = 25.0;
             slice[1] = 26.0;
         }
-        
+
         if let Some(slice) = scalars.get(0) {
             assert_eq!(slice[0], 25.0);
             assert_eq!(slice[1], 26.0);
@@ -1401,7 +1404,7 @@ mod tests {
         let grad = GradientState::<f64>::new(5);
         assert_eq!(grad.grad_h_x.len(), 5);
         assert_eq!(grad.grad_h_y.len(), 5);
-        
+
         let (gx, gy) = grad.get_h(0);
         assert_eq!(gx, 0.0);
         assert_eq!(gy, 0.0);
@@ -1411,12 +1414,12 @@ mod tests {
     fn test_flux_operations() {
         let f1 = Flux::new(1.0f64, 2.0, 3.0);
         let f2 = Flux::new(0.5f64, 1.0, 1.5);
-        
+
         let sum = f1 + f2;
         assert_eq!(sum.mass, 1.5);
         assert_eq!(sum.mom_x, 3.0);
         assert_eq!(sum.mom_y, 4.5);
-        
+
         let scaled = f1 * 2.0;
         assert_eq!(scaled.mass, 2.0);
     }
@@ -1434,7 +1437,7 @@ mod tests {
         let backend = CpuBackend::<f64>::new();
         let z_bed = vec![-10.0, -5.0, 0.0, 5.0];
         let state = ShallowWaterState::cold_start(backend, 0.0, &z_bed);
-        
+
         assert_eq!(state.h[0], 10.0);
         assert_eq!(state.h[1], 5.0);
         assert_eq!(state.h[2], 0.0);
@@ -1447,17 +1450,17 @@ mod tests {
         let mut result = ShallowWaterState::new_with_backend(backend.clone(), 2);
         let state_a = ShallowWaterState::new_with_backend(backend.clone(), 2);
         let state_b = ShallowWaterState::new_with_backend(backend, 2);
-        
+
         // 设置测试数据
         result.h[0] = 1.0;
         result.h[1] = 2.0;
-        
+
         state_b.h[0] = 3.0;
         state_b.h[1] = 4.0;
-        
+
         // 执行线性组合: result = 0.5 * state_a + 0.5 * state_b
         result.linear_combine(0.5, &state_a, 0.5, &state_b);
-        
+
         assert_eq!(result.h[0], 2.0);
         assert_eq!(result.h[1], 3.0);
     }
@@ -1467,12 +1470,12 @@ mod tests {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::new_with_backend(backend.clone(), 2);
         let other = ShallowWaterState::cold_start(backend, 10.0, &[0.0, 5.0]);
-        
+
         state.h[0] = 1.0;
         state.h[1] = 2.0;
-        
+
         state.axpy(0.5, 0.5, &other);
-        
+
         assert_eq!(state.h[0], 5.5); // 0.5 * 1.0 + 0.5 * 10.0
         assert_eq!(state.h[1], 3.5); // 0.5 * 2.0 + 0.5 * 5.0
     }
@@ -1482,20 +1485,20 @@ mod tests {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::new_with_backend(backend, 2);
         let params = NumericalParams::<f64>::default();
-        
-        state.h[0] = 1.0;
-        state.hu[0] = 0.1;
-        state.hv[0] = 0.0;
-        state.z[0] = 0.0;
-        
-        state.h[1] = -0.1; // 负水深
-        state.hu[1] = 0.0;
-        state.hv[1] = 0.0;
-        state.z[1] = 0.0;
-        
+
+        state.set_h(0, 1.0);
+        state.set_hu(0, 0.1);
+        state.set_hv(0, 0.0);
+        state.set_z(0, 0.0);
+
+        state.set_h(1, -0.1); // 负水深
+        state.set_hu(1, 0.0);
+        state.set_hv(1, 0.0);
+        state.set_z(1, 0.0);
+
         let result = state.validate(0.0, &params);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             StateError::NegativeDepth { cell, .. } => {
                 assert_eq!(cell, 1);
@@ -1509,60 +1512,26 @@ mod tests {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::new_with_backend(backend, 3);
         let areas = vec![1.0, 2.0, 3.0];
-        
-        state.h[0] = 1.0;
-        state.h[1] = 2.0;
-        state.h[2] = 3.0;
-        
+
+        state.set_h(0, 1.0);
+        state.set_h(1, 2.0);
+        state.set_h(2, 3.0);
+
         let mass = state.total_mass(&areas);
         assert_eq!(mass, 14.0); // 1*1 + 2*2 + 3*3
     }
 
     #[test]
-    fn test_velocity_calculation() {
-        let backend_f64 = CpuBackend::<f64>::new();
-        let params_f64 = NumericalParams::<f64>::default();
-        
-        let mut state_f64 = ShallowWaterState::new_with_backend(backend_f64, 1);
-        state_f64.h[0] = 2.0;
-        state_f64.hu[0] = 4.0;
-        state_f64.hv[0] = 6.0;
-        
-        let vel_f64 = state_f64.velocity(0, &params_f64);
-        assert!((vel_f64.u - 2.0).abs() < 1e-10);
-        assert!((vel_f64.v - 3.0).abs() < 1e-10);
-        
-        let backend_f32 = CpuBackend::<f32>::new();
-        let params_f32 = NumericalParams::<f32>::default();
-        
-        let mut state_f32 = ShallowWaterState::new_with_backend(backend_f32, 1);
-        state_f32.h[0] = 2.0f32;
-        state_f32.hu[0] = 4.0f32;
-        state_f32.hv[0] = 6.0f32;
-        
-        let vel_f32 = state_f32.velocity(0, &params_f32);
-        assert!((vel_f32.u - 2.0f32).abs() < 1e-6f32);
-        assert!((vel_f32.v - 3.0f32).abs() < 1e-6f32);
-    }
-
-    #[test]
-    fn test_state_access_trait_f64() {
+    fn test_state_access_trait() {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::new_with_backend(backend, 5);
-        
+
         state.set_h(0, 1.5);
         assert_eq!(state.h(0), 1.5);
-        
+        assert_eq!(state.n_cells(), 5);
+
         let slice = state.h_slice();
         assert_eq!(slice.len(), 5);
-    }
-    
-    #[test]
-    fn test_state_access_trait_f32() {
-        let backend = CpuBackend::<f32>::new();
-        let mut state = ShallowWaterState::new_with_backend(backend, 5);
-        
-        state.set_h(0, 1.5);
-        assert_eq!(state.h(0), 1.5);
+        assert_eq!(slice[0], 1.5);
     }
 }

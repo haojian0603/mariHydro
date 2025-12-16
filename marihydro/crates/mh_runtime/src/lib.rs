@@ -65,7 +65,7 @@ pub use arena_ext::{
     same_slot, is_newer,
 };
 pub use metrics::{MetricsCollector, MetricsSnapshot, Timer};
-pub use numerics::KahanSum;  // 新增
+pub use numerics::KahanSum;
 pub use error::RuntimeError;
 /// SafeIndex 是 SafeIdx 的别名（向后兼容）
 pub type SafeIndex<Tag> = arena_ext::SafeIdx<Tag>;

@@ -90,7 +90,7 @@ impl GhostMomentumMode {
 /// use glam::DVec2;
 ///
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
-/// let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
+/// let interior = ConservedState<S>::from_primitive(1.0, 0.5, 0.0);
 /// let normal = DVec2::new(1.0, 0.0);
 /// let z_bed = 0.0; // 底床高程
 ///

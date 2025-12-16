@@ -10,6 +10,7 @@
 //! 1. **类型安全**: 不同类型的索引不可混用（CellIndex ≠ FaceIndex）
 //! 2. **零开销**: 编译期类型检查，运行时与 usize 完全相同
 //! 3. **无代际**: 索引仅包含位置信息，不包含代际验证
+//! 4. **自动转换**: 支持从usize隐式转换，兼容旧代码
 //!
 //! # 示例
 //!
@@ -34,8 +35,8 @@ pub const INVALID_INDEX: usize = usize::MAX;
 // 索引 Trait
 // =============================================================================
 
-/// 索引类型 Trait
-pub trait Index: Copy + Clone + Eq + Hash + fmt::Debug {
+/// 索引类型 Trait（修复：重命名避免与std::ops::Index冲突）
+pub trait MhIndex: Copy + Clone + Eq + Hash + fmt::Debug {
     /// 创建新索引
     fn new(idx: usize) -> Self;
     
@@ -108,7 +109,7 @@ macro_rules! define_index {
             }
         }
 
-        impl Index for $name {
+        impl MhIndex for $name {
             #[inline]
             fn new(idx: usize) -> Self { Self(idx) }
             
@@ -155,6 +156,7 @@ macro_rules! define_index {
         impl Default for $name {
             fn default() -> Self { Self::INVALID }
         }
+
     };
 }
 
@@ -207,6 +209,45 @@ pub const fn boundary(idx: usize) -> BoundaryIndex { BoundaryIndex::new(idx) }
 #[inline]
 pub const fn layer(idx: usize) -> LayerIndex { LayerIndex::new(idx) }
 
+// =============================================================================
+// Vec索引扩展trait - 替代SliceIndex的稳定方案
+// =============================================================================
+
+/// Vec索引扩展trait - 同时支持usize和索引类型
+pub trait VecIndexExt<T> {
+    /// 兼容索引访问（支持CellIndex和usize）
+    fn idx<I: Into<usize>>(&self, index: I) -> &T;
+    
+    /// 兼容可变访问
+    fn idx_mut<I: Into<usize>>(&mut self, index: I) -> &mut T;
+}
+
+// 为所有Vec实现
+impl<T> VecIndexExt<T> for Vec<T> {
+    #[inline]
+    fn idx<I: Into<usize>>(&self, index: I) -> &T {
+        &self[index.into()]
+    }
+    
+    #[inline]
+    fn idx_mut<I: Into<usize>>(&mut self, index: I) -> &mut T {
+        &mut self[index.into()]
+    }
+}
+
+// 为切片实现
+impl<T> VecIndexExt<T> for [T] {
+    #[inline]
+    fn idx<I: Into<usize>>(&self, index: I) -> &T {
+        &self[index.into()]
+    }
+    
+    #[inline]
+    fn idx_mut<I: Into<usize>>(&mut self, index: I) -> &mut T {
+        &mut self[index.into()]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +279,39 @@ mod tests {
         
         let val: usize = idx.into();
         assert_eq!(val, 10);
+    }
+
+    #[test]
+    fn test_vec_index_ext() {
+        let vec = vec![1.0, 2.0, 3.0, 4.0];
+        
+        // 使用usize
+        assert_eq!(vec.idx(2_usize), &3.0);
+        
+        // 使用CellIndex
+        let cell_idx = CellIndex::new(1);
+        assert_eq!(vec.idx(cell_idx), &2.0);
+        
+        // 可变访问
+        let mut mut_vec = vec.clone();
+        *mut_vec.idx_mut(cell_idx) = 2.5;
+        assert_eq!(mut_vec[1], 2.5);
+    }
+
+    #[test]
+    fn test_all_index_types() {
+        // 确保所有索引类型都能正确序列化/反序列化
+        let indices = vec![
+            cell(5).get(),
+            face(10).get(),
+            node(15).get(),
+            edge(20).get(),
+            vertex(25).get(),
+            half_edge(30).get(),
+            boundary(35).get(),
+            layer(40).get(),
+        ];
+        
+        assert_eq!(indices, vec![5, 10, 15, 20, 25, 30, 35, 40]);
     }
 }

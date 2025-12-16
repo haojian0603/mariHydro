@@ -32,31 +32,17 @@ pub mod csr;
 pub mod preconditioner;
 pub mod solver;
 pub mod vector_ops;
-
-
 pub use crate::builder::dyn_solver::{SolverStats, DynSolver};
-
-// =============================================================================
-// 核心数据结构导出
-// =============================================================================
 
 pub use csr::{
     CsrBuilder, CsrMatrix, CsrPattern, CsrBuilderF64 as CsrBuilderLegacy,
 };
-
-// =============================================================================
-// BLAS 操作导出
-// =============================================================================
 
 pub use vector_ops::{
     axpy, axpy_inplace, copy, copy_bounded, dot, fill, norm2, norm_inf,
     linear_combination, add, sub, hadamard, hadamard_div,
     relative_residual, add_scaled, scale, xpay,
 };
-
-// =============================================================================
-// 预条件器（Backend 感知）
-// =============================================================================
 
 pub use preconditioner::{
     // Trait
@@ -73,10 +59,7 @@ pub use preconditioner::{
     Ilu0PreconditionerF64, Ilu0PreconditionerF32,
 };
 
-// =============================================================================
 // 迭代求解器
-// =============================================================================
-
 pub use solver::{
     // Trait
     IterativeSolver,
@@ -88,10 +71,7 @@ pub use solver::{
     SolverConfig, SolverResult, SolverStatus, SolverStats,
 };
 
-// =============================================================================
 // 依赖导入（必须在此导入以避免循环）
-// =============================================================================
-
 use aligned_vec::AVec;
 use mh_runtime::RuntimeScalar;
 
@@ -100,30 +80,18 @@ use mh_runtime::RuntimeScalar;
 // =============================================================================
 
 /// 64 字节对齐的向量类型别名
-///
-/// 确保所有内存分配满足 AVX-512 的 64 字节对齐要求，
-/// 提升向量化性能和缓存命中率。
 pub type AlignedVec64<T> = AVec<T, 64>;
 
 /// 创建对齐向量的工厂函数
-///
-/// # 参数
-/// - `n`: 向量长度
-///
-/// # 返回
-/// 零初始化的对齐向量
 #[inline]
 pub fn aligned_vec<S: RuntimeScalar>(n: usize) -> AlignedVec64<S> {
-    AVec::zeroed(n)
+    // aligned-vec 0.5.0 不支持 zeroed，改用 resize
+    let mut vec = AVec::new(64);
+    vec.resize(n, S::zero());
+    vec
 }
 
 /// 从 slice 创建对齐向量
-///
-/// # 参数
-/// - `slice`: 数据源
-///
-/// # 返回
-/// 复制数据的对齐向量
 #[inline]
 pub fn aligned_vec_from_slice<S: RuntimeScalar>(slice: &[S]) -> AlignedVec64<S> {
     AVec::from_slice(slice)
@@ -134,8 +102,6 @@ pub fn aligned_vec_from_slice<S: RuntimeScalar>(slice: &[S]) -> AlignedVec64<S> 
 // =============================================================================
 
 /// 运行时 SIMD 支持检测
-///
-/// 返回 `true` 如果当前CPU支持 AVX2 或 AVX-512
 #[inline]
 pub fn has_simd_support() -> bool {
     // 编译时检测（最高效）
@@ -151,11 +117,6 @@ pub fn has_simd_support() -> bool {
 }
 
 /// 获取最优对齐字节数
-///
-/// 根据SIMD支持情况返回推荐对齐：
-/// - AVX-512: 64 字节
-/// - AVX2: 32 字节
-/// - 其他: 32 字节（通用）
 #[inline]
 pub fn optimal_alignment() -> usize {
     if has_simd_support() {
@@ -178,9 +139,6 @@ pub fn memory_bandwidth(bytes: usize, nanoseconds: u64) -> f64 {
     (bytes as f64 / 1e9) / seconds
 }
 
-// =============================================================================
-// 单元测试（模块级验证）
-// =============================================================================
 
 #[cfg(test)]
 mod tests {

@@ -22,9 +22,9 @@
 //! DynSolver trait <── Box<dyn DynSolver>
 //! ```
 
-mod dyn_solver;
-mod config;
-mod solver_builder;
+pub mod dyn_solver;
+pub mod config;
+pub mod solver_builder;
 
 pub use dyn_solver::{DynSolver, DynState, DynStepResult};
 pub use config::SolverConfig;

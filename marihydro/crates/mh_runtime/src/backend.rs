@@ -6,7 +6,8 @@
 
 use bytemuck::Pod;
 use std::marker::PhantomData;
-
+use std::ops::{Deref, DerefMut};
+use num_traits::FromPrimitive;
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
 
@@ -41,12 +42,12 @@ pub trait Vector2D: Copy + Clone + Send + Sync + 'static {
 /// 
 /// - `Scalar`: 标量类型（f32 或 f64）
 /// - `Buffer<T>`: 关联的缓冲区类型
-/// - `Vector2D`: 二维向量类型（新增）
+/// - `Vector2D`: 二维向量类型
 pub trait Backend: Clone + Send + Sync + 'static {
     /// 标量类型
     type Scalar: RuntimeScalar;
     /// 缓冲区类型
-    type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T>;
+    type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T> + Deref<Target = [T]> + DerefMut;
     /// 二维向量类型
     type Vector2D: Vector2D<Scalar = Self::Scalar>;
 
@@ -68,11 +69,11 @@ pub trait Backend: Clone + Send + Sync + 'static {
         buf.fill(value);
         buf
     }
-    
+
     /// 从配置 f64 转换到标量类型
     #[inline]
     fn scalar_from_f64(&self, v: f64) -> Self::Scalar {
-        Self::Scalar::from_config(v).unwrap_or(Self::Scalar::ZERO)
+        Self::Scalar::from_f64(v).unwrap_or(Self::Scalar::ZERO)
     }
 
     /// 同步操作（GPU 后端需要）

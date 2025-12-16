@@ -7,7 +7,7 @@
 use super::config::{ConfigError, SolverConfig};
 use super::dyn_solver::{DynSolver, DynState, DynStepResult, SolverStats};
 use mh_config::Precision;
-use mh_runtime::{RuntimeScalar as Scalar, Tolerance};
+use mh_runtime::{RuntimeScalar, Tolerance};
 use std::time::Instant;
 
 /// 构建错误
@@ -195,7 +195,7 @@ impl SolverBuilder {
 ///
 /// 这是一个简化的求解器实现，展示了泛型精度系统的工作方式。
 /// 实际的 ShallowWaterSolver 会更复杂，包含完整的数值格式。
-struct SimpleSolver<S: Scalar> {
+struct SimpleSolver<S: RuntimeScalar> {
     config: SolverConfig,
     n_cells: usize,
     h: Vec<S>,
@@ -209,7 +209,7 @@ struct SimpleSolver<S: Scalar> {
     start_time: Instant,
 }
 
-impl<S: Scalar + Default> SimpleSolver<S>
+impl<S: RuntimeScalar + Default> SimpleSolver<S>
 where
     Tolerance<S>: Default,
 {
@@ -264,7 +264,7 @@ where
     }
 }
 
-impl<S: Scalar + Default> DynSolver for SimpleSolver<S>
+impl<S: RuntimeScalar + Default> DynSolver for SimpleSolver<S>
 where
     Tolerance<S>: Default,
 {
@@ -304,10 +304,10 @@ where
 
     fn export_state(&self) -> DynState {
         DynState {
-            h: self.h.iter().map(|x| Scalar::to_f64(*x)).collect(),
-            u: self.u.iter().map(|x| Scalar::to_f64(*x)).collect(),
-            v: self.v.iter().map(|x| Scalar::to_f64(*x)).collect(),
-            z: self.z.iter().map(|x| Scalar::to_f64(*x)).collect(),
+            h: self.h.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
+            u: self.u.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
+            v: self.v.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
+            z: self.z.iter().map(|x| RuntimeScalar::to_f64(*x)).collect(),
             time: self.time.to_f64(),
             n_cells: self.n_cells,
         }
