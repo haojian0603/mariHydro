@@ -8,6 +8,7 @@ python E:\Documents\mariHydro\codelog.py E:\Documents\mariHydro\marihydro\crates
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 
 class CodeCollector:
@@ -156,62 +157,75 @@ class CodeCollector:
         for ext, count in sorted(ext_stats.items()):
             print(f"   - {ext}: {count}")
 
-    def build_file_tree(self):
-        """构建文件树结构（即使文件夹内没有文件也记录文件夹名称，按遍历顺序）"""
-        tree_lines = ["文件树：", "=" * 50, ""]
-
+    def build_file_tree(self) -> str:
+        """构建 ASCII 风格的文件树结构"""
         if not self.collected_files:
-            tree_lines.append(".")
-            tree_lines.extend(["", "=" * 50, ""])
-            return "\n".join(tree_lines)
+            return "文件树：\n" + "=" * 50 + "\n.\n\n" + "=" * 50 + "\n"
 
-        # 按目录深度优先顺序构建树
-        current_dir = None
-        dir_stack = []
-        
+        # 构建树结构
+        tree = {}
         for file_path in self.collected_files:
             try:
                 rel_path = file_path.relative_to(self.root_path)
             except ValueError:
                 rel_path = Path(file_path.name)
-
-            file_dir = rel_path.parent
             
-            # 处理目录层级变化
-            if file_dir != current_dir:
-                # 找到共同祖先
-                common_prefix = Path(".")
-                for i, (a, b) in enumerate(zip(file_dir.parts, current_dir.parts if current_dir else ())):
-                    if a == b:
-                        common_prefix = common_prefix / a
-                    else:
-                        break
-                
-                # 计算需要回溯的层数
-                if current_dir:
-                    backtrack = len(current_dir.parts) - len(common_prefix.parts)
-                    dir_stack = dir_stack[:-backtrack] if backtrack < len(dir_stack) else []
-                else:
-                    dir_stack = []
-                
-                # 添加新的目录层级
-                new_parts = file_dir.parts[len(common_prefix.parts):]
-                for i, part in enumerate(new_parts):
-                    is_last = (i == len(new_parts) - 1) and (file_path == self.collected_files[-1] or file_path.relative_to(self.root_path).parent == Path(file_dir))
-                    indent = "│   " * len(dir_stack)
-                    tree_lines.append(f"{indent}├── {part}\\")
-                    dir_stack.append(part)
-                
-                current_dir = file_dir
+            current = tree
+            parts = rel_path.parts
+            
+            # 逐级构建目录树
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
             
             # 添加文件
-            indent = "│   " * len(dir_stack)
-            is_last_file = file_path == self.collected_files[-1] or (file_path.relative_to(self.root_path).parent != self.collected_files[self.collected_files.index(file_path) + 1].relative_to(self.root_path).parent)
-            file_prefix = "└── " if is_last_file else "├── "
-            tree_lines.append(f"{indent}{file_prefix}{rel_path.name}")
+            file_part = parts[-1]
+            if '' not in current:
+                current[''] = []
+            current[''].append(file_part)
 
-        tree_lines.extend(["", "=" * 50, ""])
-        return "\n".join(tree_lines)
+        # 渲染 ASCII 树
+        lines = ["文件树：", "=" * 50, ""]
+        
+        # 添加根目录名称
+        root_name = self.root_path.name or "."
+        lines.append(root_name + "/")
+        
+        def render_tree(node: Dict, prefix: str = "", is_last_root: bool = True):
+            """递归渲染树节点"""
+            # 获取所有条目（目录和文件列表）
+            items = []
+            files = node.get('', [])
+            
+            # 添加子目录
+            for dirname, subnode in node.items():
+                if dirname != '':
+                    items.append(('dir', dirname, subnode))
+            
+            # 添加文件
+            for filename in sorted(files):
+                items.append(('file', filename, None))
+            
+            # 渲染每个条目
+            count = len(items)
+            for i, (item_type, name, subnode) in enumerate(items):
+                is_last = (i == count - 1)
+                
+                if item_type == 'dir':
+                    # 渲染目录
+                    lines.append(f"{prefix}+-- {name}/")
+                    # 准备下一级前缀
+                    next_prefix = prefix + ("    " if is_last else "|   ")
+                    render_tree(subnode, next_prefix, is_last)
+                else:
+                    # 渲染文件
+                    connector = "\\-- " if is_last else "+-- "
+                    lines.append(f"{prefix}{connector}{name}")
+        
+        render_tree(tree)
+        lines.extend(["", "=" * 50, ""])
+        return "\n".join(lines)
 
     def _get_code_block_lang(self, file_path: Path) -> str:
         """根据文件扩展名获取代码块语言标识"""
@@ -266,7 +280,7 @@ class CodeCollector:
         print(f"📂 输出文件: {output_path}")
         return output_path
 
-    def _write_files(self, f, file_list: list[Path]):
+    def _write_files(self, f, file_list: List[Path]):
         """写入文件列表到输出文件"""
         for file_path in file_list:
             try:
@@ -290,6 +304,7 @@ class CodeCollector:
 
                 f.write("\n```\n\n")
 
+                # 显示进度
                 print(f"  ✓ 已记录: {display_path}")
 
             except UnicodeDecodeError:
@@ -336,7 +351,7 @@ def main():
             ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg", ".webp",
             ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac",
             # 文档和压缩包
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".pdf", ".doc", ".docx", ".ppt", ".pptx",
             ".zip", ".tar", ".gz", ".rar", ".7z", ".bz2", ".xz",
             # 数据库和锁文件
             ".sqlite", ".db", ".lock",

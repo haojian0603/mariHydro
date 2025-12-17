@@ -1,0 +1,8 @@
+行数统计： 
+tokei --exclude tests --exclude benches --exclude examples
+
+
+错误统计，主要是错错误数量、错误名称和分类：
+Get-Content check_output.txt | Select-String -Pattern "^error\[E" | ForEach-Object { $_.Line -replace '^(error\[E\d+\]):.*', '$1' } | Group-Object | Sort-Object Count -Descending
+
+
