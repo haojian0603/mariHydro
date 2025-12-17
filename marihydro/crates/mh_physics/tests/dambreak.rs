@@ -10,8 +10,9 @@ use mh_mesh::halfedge::HalfEdgeMesh;
 use mh_mesh::io::GmshLoader;
 use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::{SolverConfig, ShallowWaterSolver};
-use mh_physics::state::ShallowWaterState;
+use mh_physics::state::ShallowWaterStateF64;
 use mh_physics::types::NumericalParams;
+use mh_runtime::{CpuBackend, CellIndex};
 
 /// 从 Gmsh 文件加载网格并转换为 PhysicsMesh
 fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
@@ -68,9 +69,9 @@ fn setup_dambreak_initial_condition(
     h_left: f64,
     h_right: f64,
     dam_x: f64,
-) -> ShallowWaterState {
+) -> ShallowWaterStateF64 {
     let n_cells = mesh.n_cells();
-    let mut state = ShallowWaterState::new(n_cells);
+    let mut state = ShallowWaterStateF64::new(n_cells);
     
     // 设置底床高程（平底）
     for i in 0..n_cells {
@@ -94,10 +95,10 @@ fn setup_dambreak_initial_condition(
 }
 
 /// 计算总质量
-fn compute_total_mass(state: &ShallowWaterState<B>, mesh: &PhysicsMesh) -> f64 {
+fn compute_total_mass(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
-        if let Some(area) = mesh.cell_area(i) {
+        if let Some(area) = mesh.cell_area(CellIndex::new(i)) {
             total += state.h[i] * area;
         }
     }
@@ -105,12 +106,12 @@ fn compute_total_mass(state: &ShallowWaterState<B>, mesh: &PhysicsMesh) -> f64 {
 }
 
 /// 计算最大水深
-fn compute_max_depth(state: &ShallowWaterState<B>) -> f64 {
+fn compute_max_depth(state: &ShallowWaterStateF64) -> f64 {
     state.h.iter().cloned().fold(0.0, f64::max)
 }
 
 /// 计算最大速度
-fn compute_max_velocity(state: &ShallowWaterState<B>) -> f64 {
+fn compute_max_velocity(state: &ShallowWaterStateF64) -> f64 {
     let h_min = 1e-6;
     let mut max_vel: f64 = 0.0;
     for i in 0..state.n_cells() {
@@ -125,7 +126,7 @@ fn compute_max_velocity(state: &ShallowWaterState<B>) -> f64 {
 }
 
 /// 验证状态有效性
-fn validate_state(state: &ShallowWaterState<B>) -> Result<(), String> {
+fn validate_state(state: &ShallowWaterStateF64) -> Result<(), String> {
     for (i, &h) in state.h.iter().enumerate() {
         if h.is_nan() {
             return Err(format!("单元 {} 水深为 NaN", i));
@@ -192,7 +193,7 @@ fn run_dambreak_simulation(
         .use_hydrostatic_reconstruction(true)
         .build();
     
-    let mut solver = ShallowWaterSolver::new(Arc::new(mesh.clone()), config);
+    let mut solver = ShallowWaterSolver::new(Arc::new(mesh.clone()), config, CpuBackend::<f64>::new());
     
     // 模拟
     let mut time = 0.0;

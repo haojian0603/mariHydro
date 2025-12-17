@@ -10,7 +10,7 @@
 //! - 多线程内存安全
 //!
 //! 所有测试必须满足：编译零警告、Miri无UB、覆盖率>95%。
-use mh_runtime::KahanSum;
+use mh_runtime::{KahanSum, CpuBackend};
 use mh_foundation::{memory::AlignedVec};
 use mh_physics::{
     numerics::linear_algebra::{
@@ -19,6 +19,7 @@ use mh_physics::{
         IterativeSolver,
     },
     state::ShallowWaterState,
+    ShallowWaterStateF64,
     engine::{ShallowWaterSolver, SolverConfig as EngineConfig},
     PhysicsMesh,
     types::NumericalParams,
@@ -164,7 +165,7 @@ fn test_zero_rhs_instant_convergence() {
     };
 
     let mut solver = PcgSolver::new(config.clone());
-    let precond = JacobiPreconditioner::from_matrix(&matrix);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x_zero, &precond);
 
     // 零初始猜测 + 零RHS = 0次迭代收敛
@@ -183,7 +184,8 @@ fn test_zero_rhs_instant_convergence() {
     // 测试2：非零初始猜测需要迭代，但最终应收敛到零解
     let mut x_nonzero = vec![1.0; 50];
     let mut solver2 = PcgSolver::new(config);
-    let result2 = solver2.solve(&matrix, &b, &mut x_nonzero, &precond);
+    let precond2 = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let result2 = solver2.solve(&matrix, &b, &mut x_nonzero, &precond2);
     
     assert_eq!(
         result2.status,
@@ -217,7 +219,7 @@ fn test_ill_conditioned_matrix_stability() {
     };
 
     let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::from_matrix(&matrix);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 必须收敛或明确报告失败
@@ -248,7 +250,7 @@ fn test_ill_conditioned_matrix_stability() {
 #[test]
 fn test_nan_propagation_blocking() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let mut state = ShallowWaterState::new(10);
+    let mut state = ShallowWaterStateF64::new(10);
 
     // 注入NaN到关键守恒量
     state.h[5] = f64::NAN;
@@ -256,7 +258,8 @@ fn test_nan_propagation_blocking() {
     state.hv[5] = 0.5;
 
     let config = EngineConfig::default();
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
     // 必须捕获panic或优雅降级
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -293,12 +296,12 @@ fn test_nan_propagation_blocking() {
 #[test]
 fn test_negative_depth_recovery() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let mut state = ShallowWaterState::new(5);
+    let mut state = ShallowWaterStateF64::new(5);
 
     // 注入非法负水深
-    state.h = AlignedVec::from_vec(vec![1.0, -0.5, 2.0, -1e-5, 0.0]);
-    state.hu = AlignedVec::from_vec(vec![1.0, 1.0, 2.0, 1.0, 0.0]);
-    state.hv = AlignedVec::from_vec(vec![0.5, 0.5, 1.0, 0.5, 0.0]);
+    state.h = vec![1.0, -0.5, 2.0, -1e-5, 0.0];
+    state.hu = vec![1.0, 1.0, 2.0, 1.0, 0.0];
+    state.hv = vec![0.5, 0.5, 1.0, 0.5, 0.0];
 
     let config = EngineConfig {
         params: NumericalParams {
@@ -308,7 +311,8 @@ fn test_negative_depth_recovery() {
         ..Default::default()
     };
 
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
     
     // 执行一步模拟，求解器应内部处理负水深
     solver.step(&mut state, 0.001);
@@ -328,7 +332,7 @@ fn test_negative_depth_recovery() {
 #[test]
 fn test_velocity_clamping_extreme() {
     let mesh = Arc::new(PhysicsMesh::empty(1));
-    let mut state = ShallowWaterState::new(1);
+    let mut state = ShallowWaterStateF64::new(1);
 
     // 极小水深 + 有限动量 = 极大速度
     state.h[0] = 1e-10;
@@ -342,7 +346,8 @@ fn test_velocity_clamping_extreme() {
         ..Default::default()
     };
 
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
     solver.step(&mut state, 0.001);
 
     // 获取速度
@@ -370,7 +375,7 @@ fn test_near_zero_depth_velocity() {
     let hu = 1.0;
     let hv = 0.5;
 
-    let (u, v) = params.safe_velocity_components(hu, hv, h_tiny);
+    let (u, v): (f64, f64) = params.safe_velocity_components(hu, hv, h_tiny);
 
     assert!(u.is_finite(), "速度 u 应为有限值");
     assert!(v.is_finite(), "速度 v 应为有限值");
@@ -386,7 +391,7 @@ fn test_near_zero_depth_velocity() {
 #[test]
 fn test_wet_dry_oscillation_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(100));
-    let mut state = ShallowWaterState::new(100);
+    let mut state = ShallowWaterStateF64::new(100);
 
     // 初始化干湿交替模式
     for i in 0..100 {
@@ -396,7 +401,8 @@ fn test_wet_dry_oscillation_stability() {
     }
 
     let config = EngineConfig::default();
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
     // 运行100步模拟（减少以加快测试）
     let initial_mass: f64 = state.h.iter().sum();
@@ -433,12 +439,12 @@ fn test_concurrent_state_read() {
     use std::thread;
     use std::sync::Arc;
     
-    let state = Arc::new(ShallowWaterState::new(10));
+    let state = Arc::new(ShallowWaterStateF64::new(10));
     let params = Arc::new(NumericalParams::default());
     
     let handles: Vec<_> = (0..3)
         .map(|_| {
-            let state = Arc::clone(&state);
+            let state: Arc<ShallowWaterStateF64> = Arc::clone(&state);
             let params = Arc::clone(&params);
             thread::spawn(move || {
                 for i in 0..10 {
@@ -478,7 +484,7 @@ fn test_solver_on_singular_matrix() {
     };
 
     let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::from_matrix(&matrix);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 奇异矩阵可能不收敛，但不应panic
@@ -555,7 +561,7 @@ fn test_catastrophic_cancellation_prevention() {
 #[test]
 fn test_boundary_extreme_values() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let mut state = ShallowWaterState::new(10);
+    let mut state = ShallowWaterStateF64::new(10);
 
     // 注入边界值：极大水深、极小水深交替
     for i in 0..10 {
@@ -564,7 +570,8 @@ fn test_boundary_extreme_values() {
     }
 
     let config = EngineConfig::default();
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
     // 一步模拟
     solver.step(&mut state, 0.1);
@@ -587,10 +594,10 @@ fn test_boundary_extreme_values() {
 #[test]
 fn test_long_term_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let mut state = ShallowWaterState::new(5);
+    let mut state = ShallowWaterStateF64::new(5);
 
     // 初始静水
-    state.h = AlignedVec::from_vec(vec![10.0, 10.0, 10.0, 10.0, 10.0]);
+    state.h = vec![10.0, 10.0, 10.0, 10.0, 10.0];
     state.hu.fill(0.0);
     state.hv.fill(0.0);
 
@@ -599,7 +606,8 @@ fn test_long_term_stability() {
         ..Default::default()
     };
 
-    let mut solver = ShallowWaterSolver::new(mesh, config);
+    let backend = CpuBackend::<f64>::new();
+    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
     // 记录初始质量
     let initial_mass: f64 = state.h.iter().sum();
@@ -680,7 +688,7 @@ fn test_parallel_solver_consistency() {
             let mut x = vec![0.0; 100];
             let config = SolverConfig::default();
             let mut solver = PcgSolver::new(config);
-            let precond = JacobiPreconditioner::from_matrix(&matrix);
+            let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
             let result = solver.solve(&matrix, &b, &mut x, &precond);
             (result, x)
         })
@@ -714,7 +722,7 @@ fn test_no_memory_leak_in_solver() {
 
         let config = SolverConfig::default();
         let mut solver = PcgSolver::new(config);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
         let _ = solver.solve(&matrix, &b, &mut x, &precond);
     }
 

@@ -1,14 +1,14 @@
 // crates/mh_runtime/src/buffer.rs
 
 //! DeviceBuffer - 设备缓冲区抽象
-//!
+//! 
 //! 提供统一的缓冲区接口，支持 CPU 向量和未来的 GPU 缓冲区。
 
 use bytemuck::Pod;
 use std::ops::{Index, IndexMut};
 
 /// 设备缓冲区 Trait
-///
+/// 
 /// 抽象不同计算设备上的内存缓冲区，提供统一的访问接口。
 /// CPU 实现使用 `Vec<T>`，GPU 实现可使用 CUDA/Metal 缓冲区。
 pub trait DeviceBuffer<T: Pod + Clone + Send + Sync>:
@@ -68,10 +68,6 @@ pub trait DeviceBuffer<T: Pod + Clone + Send + Sync>:
         }
     }
 }
-
-// =============================================================================
-// Vec<T> 实现
-// =============================================================================
 
 impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for Vec<T> {
     #[inline]

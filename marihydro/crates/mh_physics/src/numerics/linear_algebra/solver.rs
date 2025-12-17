@@ -978,6 +978,7 @@ mod tests {
     use crate::numerics::linear_algebra::preconditioner::{
         IdentityPreconditioner, JacobiPreconditioner,
     };
+    use crate::core::CpuBackend;
 
     fn create_spd_matrix(n: usize) -> CsrMatrix<f64> {
         // 创建三对角对称正定矩阵
@@ -1002,7 +1003,8 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = ConjugateGradient::<f64>::new(config);
-        let precond = IdentityPreconditioner::new();
+        let backend = CpuBackend::<f64>::new();
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
@@ -1018,7 +1020,7 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = PcgSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
@@ -1035,13 +1037,14 @@ mod tests {
         let mut x_cg = vec![0.0; 50];
         let config = SolverConfig::new(1e-10, 200);
         let mut cg_solver = ConjugateGradient::<f64>::new(config.clone());
-        let ident = IdentityPreconditioner::new();
+        let backend = CpuBackend::<f64>::new();
+        let ident: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
         let cg_result = cg_solver.solve(&matrix, &b, &mut x_cg, &ident);
 
         // PCG
         let mut x_pcg = vec![0.0; 50];
         let mut pcg_solver = PcgSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
         let pcg_result = pcg_solver.solve(&matrix, &b, &mut x_pcg, &precond);
 
         // PCG 应该更快收敛
@@ -1058,7 +1061,7 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = BiCgStabSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
@@ -1078,7 +1081,8 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = PcgSolver::<f64>::new(config);
-        let precond = IdentityPreconditioner::new();
+        let backend = CpuBackend::<f64>::new();
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 

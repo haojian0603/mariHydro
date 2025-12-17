@@ -4,11 +4,11 @@
 //!
 //! 验证双精度极限精度和数值算法的数学正确性
 
-use mh_runtime::KahanSum;
+use mh_runtime::{KahanSum, CpuBackend};
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, JacobiPreconditioner, SsorPreconditioner,
     Ilu0Preconditioner, SolverConfig, BiCgStabSolver, IterativeSolver,
-    Preconditioner,
+    Preconditioner, SsorParams,
 };
 use std::time::Instant;
 
@@ -113,7 +113,7 @@ fn test_bicgstab_shadow_residual_fixed() {
     let start = Instant::now();
 
     // 创建求解器
-    let precond = JacobiPreconditioner::from_matrix(&matrix);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let config = SolverConfig::new(1e-10, 100);
     let mut solver = BiCgStabSolver::new(config);
 
@@ -176,7 +176,12 @@ fn test_ssor_preconditioner_mathematical() {
     let start = Instant::now();
 
     // 创建SSOR预条件器，ω=1.2
-    let precond = SsorPreconditioner::from_matrix(&matrix, 1.2);
+    let backend = CpuBackend::<f64>::new();
+    let precond = SsorPreconditioner::<CpuBackend<f64>>::from_matrix(
+        &backend,
+        std::sync::Arc::new(matrix.clone()),
+        SsorParams { omega: 1.2, min_diagonal: 1e-12 },
+    ).unwrap();
 
     // 随机残差向量
     let mut r = vec![0.0; n];
@@ -320,7 +325,7 @@ fn test_ilu0_pivot_regularization() {
     let start = Instant::now();
 
     // 创建ILU(0)预条件器
-    let precond = Ilu0Preconditioner::new(&matrix);
+    let precond = Ilu0Preconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
 
     // 测试预条件效果
     let r = vec![1.0; n];

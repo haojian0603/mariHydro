@@ -1,28 +1,9 @@
 ﻿// crates/mh_physics/src/state.rs
 
 //! 浅水方程状态管理
-//!
+//! 
 //! 本模块提供浅水方程求解所需的状态管理，基于 Backend 泛型设计。
 //! 支持 f32/f64 精度切换和 GPU 后端扩展，采用 SoA 布局优化缓存性能。
-//!
-//! # 类型参数
-//!
-//! - `B: Backend`: 计算后端，提供存储和计算能力
-//!
-//! # 使用示例
-//!
-//! ```rust
-//! use mh_physics::state::ShallowWaterState;
-//! use mh_runtime::CpuBackend;
-//!
-//! // f64 高精度模式
-//! let backend_f64 = CpuBackend::<f64>::new();
-//! let state_f64 = ShallowWaterState::new_with_backend(backend_f64, 100);
-//!
-//! // f32 高性能模式
-//! let backend_f32 = CpuBackend::<f32>::new();
-//! let state_f32 = ShallowWaterState::new_with_backend(backend_f32, 100);
-//! ```
 
 use crate::fields::{FieldMeta, FieldRegistry};
 use crate::traits::{StateAccess, StateAccessMut};
@@ -32,23 +13,16 @@ use num_traits::{Float, Zero};
 use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
 
-// ============================================================
-// 单个单元的守恒状态
-// ============================================================
-
 /// 单个单元的守恒状态
-///
-/// 包含浅水方程的三个守恒变量：
-/// - `h`: 水深
-/// - `hu`: x方向动量
-/// - `hv`: y方向动量
+/// 
+/// 包含浅水方程的三个守恒变量，使用泛型支持不同精度。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct ConservedState<S:RuntimeScalar> {
+pub struct ConservedState<S: RuntimeScalar> {
     /// 水深 [m]
     pub h: S,
     /// x 方向动量 [m²/s]
     pub hu: S,
-    /// y 方向动量 [m²/s]
+    /// y 方向动量 [m²/s]  
     pub hv: S,
 }
 
@@ -140,17 +114,13 @@ where
     }
 }
 
-// ============================================================
-// 动态标量场（示踪剂等）
-// ============================================================
-
 /// 动态标量场集合，按名称管理示踪剂等扩展字段
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DynamicScalars<S> {
     /// 单元数量
     #[serde(default)]
     len: usize,
-    /// 字段名称列表（顺序即存储顺序）
+    /// 字段名称列表
     #[serde(default)]
     names: Vec<String>,
     /// 数据存储
@@ -171,7 +141,7 @@ where
         }
     }
 
-    /// 创建指定数量的匿名示踪剂字段（名称为 tracer_i）
+    /// 创建指定数量的匿名示踪剂字段
     pub fn with_count(len: usize, count: usize) -> Self {
         let mut scalars = Self::new(len);
         for i in 0..count {
@@ -202,7 +172,6 @@ where
     pub fn register(&mut self, name: impl Into<String>) -> usize {
         let name = name.into();
         if let Some(pos) = self.names.iter().position(|n| n == &name) {
-            // 确保长度一致
             self.data[pos].resize(self.len, S::ZERO);
             return pos;
         }
@@ -247,7 +216,7 @@ where
         }
     }
 
-    /// 调整单元长度并保持已有数据（新增部分填零）
+    /// 调整单元长度并保持已有数据
     pub fn resize_len(&mut self, len: usize) {
         self.len = len;
         for field in &mut self.data {
@@ -255,7 +224,7 @@ where
         }
     }
 
-    /// 按另一个集合的布局对齐（名称、数量、长度），但不复制数据
+    /// 按另一个集合的布局对齐
     pub fn match_layout(&mut self, other: &Self) {
         if self.len != other.len || self.names != other.names {
             self.len = other.len;
@@ -288,7 +257,7 @@ where
         }
     }
 
-    /// 设置字段数量，多余的截断，不足的以 tracer_i 填充
+    /// 设置字段数量
     pub fn set_count(&mut self, count: usize) {
         self.names.truncate(count);
         self.data.truncate(count);
@@ -331,10 +300,6 @@ where
         self.data.iter_mut()
     }
 }
-
-// ============================================================
-// 梯度状态
-// ============================================================
 
 /// 梯度状态 (用于二阶重构)
 #[derive(Debug, Clone)]
@@ -418,10 +383,6 @@ where
         self.grad_hv_y[cell] = grad_y;
     }
 }
-
-// ============================================================
-// 数值通量
-// ============================================================
 
 /// 数值通量
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -533,10 +494,6 @@ where
     }
 }
 
-// ============================================================
-// 右端项缓冲区
-// ============================================================
-
 /// 右端项缓冲区 (用于时间积分)
 #[derive(Debug, Clone)]
 pub struct RhsBuffers<S:RuntimeScalar> {
@@ -620,24 +577,14 @@ where
     }
 }
 
-// ============================================================
-// 浅水方程状态 (SoA 布局, Backend泛型)
-// ============================================================
-
 /// 浅水方程守恒状态（SoA 布局，Backend泛型）
-///
+/// 
 /// 使用 Backend 泛型存储整个网格的状态变量，采用 SoA 布局优化缓存访问。
 /// 支持 f32/f64 精度切换和 GPU 后端扩展。
-///
+/// 
 /// # 类型参数
-///
+/// 
 /// - `B: Backend`: 计算后端，提供存储和计算能力
-///
-/// # 设计原则
-///
-/// 1. **泛型存储**: 所有字段使用 `B::Buffer<S>` 存储
-/// 2. **零拷贝**: 通过 Backend 直接操作底层缓冲区
-/// 3. **类型安全**: 使用索引类型防止越界
 #[derive(Debug, Clone)]
 pub struct ShallowWaterState<B: Backend> {
     /// 单元数量
@@ -674,6 +621,39 @@ impl<B: Backend> ShallowWaterState<B> {
             field_registry,
             backend,
         }
+    }
+
+    /// 从数据切片创建状态
+    /// 
+    /// 提供类型安全的方式来构造不可变状态，推荐用于测试和初始化。
+    /// 自动验证所有输入切片的长度一致性。
+    /// 
+    /// # Panics
+    /// 
+    /// 如果任意输入切片的长度与 `h` 的长度不一致时 panic。
+    pub fn from_data(
+        backend: B,
+        h: impl Into<Vec<B::Scalar>>,
+        hu: impl Into<Vec<B::Scalar>>,
+        hv: impl Into<Vec<B::Scalar>>,
+        z: impl Into<Vec<B::Scalar>>,
+    ) -> Self {
+        let h_vec = h.into();
+        let n_cells = h_vec.len();
+        let hu_vec = hu.into();
+        let hv_vec = hv.into();
+        let z_vec = z.into();
+        
+        debug_assert_eq!(hu_vec.len(), n_cells, "hu length mismatch");
+        debug_assert_eq!(hv_vec.len(), n_cells, "hv length mismatch");
+        debug_assert_eq!(z_vec.len(), n_cells, "z length mismatch");
+
+        let mut state = Self::new_with_backend(backend, n_cells);
+        state.h.copy_from_slice(&h_vec);
+        state.hu.copy_from_slice(&hu_vec);
+        state.hv.copy_from_slice(&hv_vec);
+        state.z.copy_from_slice(&z_vec);
+        state
     }
 
     /// 创建带标量的状态
@@ -779,8 +759,6 @@ impl<B: Backend> ShallowWaterState<B> {
         self.tracers.get_mut_by_name(name)
     }
 
-    // ========== 状态访问 ==========
-
     /// 获取单元的守恒状态
     #[inline]
     pub fn get(&self, idx: usize) -> ConservedState<B::Scalar> {
@@ -810,8 +788,6 @@ impl<B: Backend> ShallowWaterState<B> {
     pub fn water_level(&self, idx: usize) -> B::Scalar {
         self.h[idx] + self.z[idx]
     }
-
-    // ========== 状态修改 ==========
 
     /// 设置守恒变量
     #[inline]
@@ -845,8 +821,6 @@ impl<B: Backend> ShallowWaterState<B> {
         self.hv.fill(zero);
         self.tracers.clear_all();
     }
-
-    // ========== 切片访问 ==========
 
     /// 获取水深切片
     #[inline]
@@ -896,8 +870,6 @@ impl<B: Backend> ShallowWaterState<B> {
         &mut self.z
     }
 
-    // ========== 积分计算 ==========
-
     /// 计算总质量
     pub fn total_mass(&self, cell_areas: &[B::Scalar]) -> B::Scalar {
         self.h
@@ -923,8 +895,6 @@ impl<B: Backend> ShallowWaterState<B> {
             .fold(B::Scalar::zero(), |acc, x| acc + x);
         (hux, hvx)
     }
-
-    // ========== 时间积分支持 ==========
 
     /// 从另一个状态复制数据
     pub fn copy_from(&mut self, other: &Self) {
@@ -1000,8 +970,6 @@ impl<B: Backend> ShallowWaterState<B> {
         }
     }
 
-    // ========== 验证 ==========
-
     /// 验证状态有效性
     pub fn validate(
         &self,
@@ -1059,11 +1027,7 @@ impl<B: Backend> ShallowWaterState<B> {
     }
 }
 
-// ============================================================
-// 错误类型
-// ============================================================
-
-/// 状态错误
+/// 状态错误类型
 #[derive(Debug, Clone)]
 pub enum StateError<S> {
     /// 无效值 (NaN/Inf)
@@ -1143,10 +1107,6 @@ where
 
 impl<S> std::error::Error for StateError<S> where S: std::fmt::Debug + std::fmt::Display {}
 
-// ============================================================
-// 兼容性类型别名
-// ============================================================
-
 /// 泛型状态类型别名（向后兼容）
 pub type ShallowWaterStateGeneric<B> = ShallowWaterState<B>;
 
@@ -1159,17 +1119,31 @@ pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
 /// f32 后端的状态类型别名
 pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
 
+/// 为 f64 状态提供便捷构造方法
+impl ShallowWaterStateF64 {
+    /// 创建新的 f64 状态（便捷方法）
+    pub fn new(n_cells: usize) -> Self {
+        let backend = CpuBackend::<f64>::new();
+        Self::new_with_backend(backend, n_cells)
+    }
+}
+
+/// 为 f32 状态提供便捷构造方法
+impl ShallowWaterStateF32 {
+    /// 创建新的 f32 状态（便捷方法）
+    pub fn new(n_cells: usize) -> Self {
+        let backend = CpuBackend::<f32>::new();
+        Self::new_with_backend(backend, n_cells)
+    }
+}
+
 /// f64 RhsBuffers 类型别名
 pub type RhsBuffersF64 = RhsBuffers<f64>;
 
 /// f32 RhsBuffers 类型别名
 pub type RhsBuffersF32 = RhsBuffers<f32>;
 
-// ============================================================
 // StateAccess Trait 实现（泛型版本）
-// ============================================================
-
-// 为所有 Backend 实现 StateAccess trait
 impl<B> StateAccess for ShallowWaterState<B>
 where
     B: Backend,
@@ -1227,7 +1201,7 @@ where
     }
 }
 
-// 为所有 Backend 实现 StateAccessMut trait
+// StateAccessMut trait 实现
 impl<B> StateAccessMut for ShallowWaterState<B>
 where
     B: Backend,
@@ -1326,7 +1300,10 @@ where
         }
     }
 
-    fn copy_from<S2: StateAccess<Scalar = Self::Scalar>>(&mut self, other: &S2) -> Result<(), &'static str> {
+    fn copy_from<S2: StateAccess<Scalar = Self::Scalar>>(
+        &mut self,
+        other: &S2,
+    ) -> Result<(), &'static str> {
         if self.n_cells() != other.n_cells() {
             return Err("单元数量不匹配");
         }
@@ -1339,10 +1316,6 @@ where
         Ok(())
     }
 }
-
-// ============================================================
-// 单元测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -1445,22 +1418,48 @@ mod tests {
     }
 
     #[test]
+    fn test_state_from_data() {
+        let backend = CpuBackend::<f64>::new();
+        let state = ShallowWaterState::from_data(
+            backend,
+            vec![1.0, 2.0, 3.0],
+            vec![0.1, 0.2, 0.3],
+            vec![0.0, 0.0, 0.0],
+            vec![-1.0, -2.0, -3.0],
+        );
+
+        assert_eq!(state.n_cells(), 3);
+        assert_eq!(state.h[0], 1.0);
+        assert_eq!(state.h[2], 3.0);
+        assert_eq!(state.hu[1], 0.2);
+        assert_eq!(state.z[0], -1.0);
+    }
+
+    #[test]
     fn test_state_linear_combine() {
         let backend = CpuBackend::<f64>::new();
-        let mut result = ShallowWaterState::new_with_backend(backend.clone(), 2);
-        let state_a = ShallowWaterState::new_with_backend(backend.clone(), 2);
-        let state_b = ShallowWaterState::new_with_backend(backend, 2);
-
-        // 设置测试数据
-        result.h[0] = 1.0;
-        result.h[1] = 2.0;
-
-        state_b.h[0] = 3.0;
-        state_b.h[1] = 4.0;
+        
+        // 使用 from_data 构造不可变输入状态，确保类型安全
+        let state_a = ShallowWaterState::from_data(
+            backend.clone(),
+            vec![1.0, 2.0],  
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+        );
+        let state_b = ShallowWaterState::from_data(
+            backend.clone(),
+            vec![3.0, 4.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+        );
+        let mut result = ShallowWaterState::new_with_backend(backend, 2);
 
         // 执行线性组合: result = 0.5 * state_a + 0.5 * state_b
         result.linear_combine(0.5, &state_a, 0.5, &state_b);
 
+        // 验证结果: (1.0+3.0)/2 = 2.0, (2.0+4.0)/2 = 3.0
         assert_eq!(result.h[0], 2.0);
         assert_eq!(result.h[1], 3.0);
     }

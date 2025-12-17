@@ -288,8 +288,8 @@ mod tests {
     use super::*;
 
     #[allow(dead_code)]
-    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterState {
-        let mut state = ShallowWaterState::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterStateF64 {
+        let mut state = ShallowWaterStateF64::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = z;

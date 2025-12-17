@@ -51,6 +51,7 @@
 use crate::state::{RhsBuffers, ShallowWaterState};
 use crate::Backend;
 use mh_foundation::error::MhResult;
+use num_traits::FromPrimitive;
 
 /// RHS 计算器 trait (泛型版本)
 ///
@@ -123,7 +124,7 @@ impl<B: Backend> ForwardEuler<B> {
     }
 }
 
-impl<B: Backend<Scalar = f64>> TimeIntegrator<B> for ForwardEuler<B> {
+impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
     fn name(&self) -> &'static str {
         "ForwardEuler"
     }
@@ -156,8 +157,11 @@ impl<B: Backend<Scalar = f64>> TimeIntegrator<B> for ForwardEuler<B> {
         self.rhs.reset();
         let max_wave_speed = rhs_computer.compute_rhs(state, time, &mut self.rhs)?;
 
+        // 将 f64 转换为 B::Scalar
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
+
         // U^{n+1} = U^n + dt * L(U^n)
-        state.add_scaled_rhs(&self.rhs, dt);
+        state.add_scaled_rhs(&self.rhs, dt_scalar);
         state.enforce_positivity();
 
         Ok(max_wave_speed)
@@ -176,18 +180,18 @@ pub struct SspRk2<B: Backend> {
     rhs_2: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend<Scalar = f64> + Default> SspRk2<B> {
+impl<B: Backend + Default> SspRk2<B> {
     /// 创建 SSP-RK2 积分器
     pub fn new(n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
-            rhs_1: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
         }
     }
 }
 
-impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk2<B> {
+impl<B: Backend + Default> TimeIntegrator<B> for SspRk2<B> {
     fn name(&self) -> &'static str {
         "SSP-RK2"
     }
@@ -219,23 +223,27 @@ impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk2<B> {
         dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
+        // 将 f64 转换为 B::Scalar
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
+        let half = B::Scalar::from_f64(0.5).unwrap();
+
         // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
 
         self.state_1.copy_from(state);
-        self.state_1.add_scaled_rhs(&self.rhs_1, dt);
+        self.state_1.add_scaled_rhs(&self.rhs_1, dt_scalar);
         self.state_1.enforce_positivity();
 
         // Stage 2: U^{n+1} = 0.5 * U^n + 0.5 * (U^(1) + dt * L(U^(1)))
         self.rhs_2.reset();
         let max_wave_speed_2 = rhs_computer.compute_rhs(&self.state_1, time + dt, &mut self.rhs_2)?;
 
-        self.state_1.add_scaled_rhs(&self.rhs_2, dt);
+        self.state_1.add_scaled_rhs(&self.rhs_2, dt_scalar);
         self.state_1.enforce_positivity();
 
         // 线性组合：U^{n+1} = 0.5 * U^n + 0.5 * U^(1)
-        state.axpy(0.5, 0.5, &self.state_1);
+        state.axpy(half, half, &self.state_1);
         state.enforce_positivity();
 
         Ok(max_wave_speed_1.max(max_wave_speed_2))
@@ -258,20 +266,20 @@ pub struct SspRk3<B: Backend> {
     rhs_3: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend<Scalar = f64> + Default> SspRk3<B> {
+impl<B: Backend + Default> SspRk3<B> {
     /// 创建 SSP-RK3 积分器
     pub fn new(n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
             state_2: ShallowWaterState::<B>::new_with_backend(B::default(), n_cells),
-            rhs_1: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
-            rhs_3: RhsBuffers::<f64>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_3: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
         }
     }
 }
 
-impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk3<B> {
+impl<B: Backend + Default> TimeIntegrator<B> for SspRk3<B> {
     fn name(&self) -> &'static str {
         "SSP-RK3"
     }
@@ -307,12 +315,19 @@ impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk3<B> {
     ) -> MhResult<f64> {
         let mut max_wave_speed = 0.0f64;
 
+        // 将 f64 转换为 B::Scalar
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
+        let coef_075 = B::Scalar::from_f64(0.75).unwrap();
+        let coef_025 = B::Scalar::from_f64(0.25).unwrap();
+        let coef_one_third = B::Scalar::from_f64(1.0 / 3.0).unwrap();
+        let coef_two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap();
+
         // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();
         max_wave_speed = max_wave_speed.max(rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?);
 
         self.state_1.copy_from(state);
-        self.state_1.add_scaled_rhs(&self.rhs_1, dt);
+        self.state_1.add_scaled_rhs(&self.rhs_1, dt_scalar);
         self.state_1.enforce_positivity();
 
         // Stage 2: U^(2) = 3/4 * U^n + 1/4 * (U^(1) + dt * L(U^(1)))
@@ -321,10 +336,10 @@ impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk3<B> {
             rhs_computer.compute_rhs(&self.state_1, time + dt, &mut self.rhs_2)?,
         );
 
-        self.state_1.add_scaled_rhs(&self.rhs_2, dt);
+        self.state_1.add_scaled_rhs(&self.rhs_2, dt_scalar);
         self.state_1.enforce_positivity();
 
-        self.state_2.linear_combine(0.75, state, 0.25, &self.state_1);
+        self.state_2.linear_combine(coef_075, state, coef_025, &self.state_1);
         self.state_2.enforce_positivity();
 
         // Stage 3: U^{n+1} = 1/3 * U^n + 2/3 * (U^(2) + dt * L(U^(2)))
@@ -333,10 +348,10 @@ impl<B: Backend<Scalar = f64> + Default> TimeIntegrator<B> for SspRk3<B> {
             rhs_computer.compute_rhs(&self.state_2, time + 0.5 * dt, &mut self.rhs_3)?,
         );
 
-        self.state_2.add_scaled_rhs(&self.rhs_3, dt);
+        self.state_2.add_scaled_rhs(&self.rhs_3, dt_scalar);
         self.state_2.enforce_positivity();
 
-        state.axpy(1.0 / 3.0, 2.0 / 3.0, &self.state_2);
+        state.axpy(coef_one_third, coef_two_thirds, &self.state_2);
         state.enforce_positivity();
 
         Ok(max_wave_speed)
@@ -366,7 +381,7 @@ impl std::fmt::Display for TimeIntegratorKind {
 }
 
 /// 创建时间积分器（返回具体类型）
-pub fn create_integrator<B: Backend<Scalar = f64> + Default>(
+pub fn create_integrator<B: Backend + Default>(
     kind: TimeIntegratorKind,
     n_cells: usize,
     n_tracers: usize,
@@ -384,7 +399,7 @@ pub struct TimeIntegratorEnum<B: Backend> {
     rk3: Option<SspRk3<B>>,
 }
 
-impl<B: Backend<Scalar = f64> + Default> TimeIntegratorEnum<B> {
+impl<B: Backend + Default> TimeIntegratorEnum<B> {
     /// 创建新的时间积分器
     pub fn new(kind: TimeIntegratorKind, n_cells: usize, n_tracers: usize) -> Self {
         match kind {
@@ -497,6 +512,7 @@ impl<B: Backend<Scalar = f64> + Default> TimeIntegratorEnum<B> {
 mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
+    use num_traits::FromPrimitive;
 
     /// 简单 ODE: du/dt = -u, 精确解 u(t) = u0 * exp(-t)
     struct ExponentialDecayRhs;
@@ -518,7 +534,7 @@ mod tests {
     #[test]
     fn test_forward_euler_basic() {
         let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), 10);
-        state.h.fill(B::Scalar::ONE);
+        state.h.fill(1.0_f64);
         
         let mut integrator = ForwardEuler::<CpuBackend<f64>>::new(10, 0);
         let mut rhs = ExponentialDecayRhs;
@@ -542,7 +558,7 @@ mod tests {
     #[test]
     fn test_ssp_rk2_basic() {
         let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), 10);
-        state.h.fill(B::Scalar::ONE);
+        state.h.fill(1.0_f64);
         
         let mut integrator = SspRk2::<CpuBackend<f64>>::new(10, 0);
         let mut rhs = ExponentialDecayRhs;
@@ -575,7 +591,7 @@ mod tests {
 
         for &dt in &dts {
             let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), n);
-            state.h[0] = B::Scalar::ONE;
+            state.h[0] = 1.0_f64;
 
             let mut integrator = SspRk3::<CpuBackend<f64>>::new(n, 0);
             let mut rhs = ExponentialDecayRhs;

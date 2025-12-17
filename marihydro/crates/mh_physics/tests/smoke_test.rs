@@ -190,6 +190,7 @@ fn test_vector_ops() {
 #[test]
 fn test_pcg_solver_simple() {
     use mh_physics::numerics::{CsrBuilder, IterativeSolver, JacobiPreconditioner, PcgSolver, SolverConfig};
+    use mh_runtime::CpuBackend;
 
     // 简单对称正定矩阵
     let mut builder = CsrBuilder::<f64>::new_square(3);
@@ -207,7 +208,7 @@ fn test_pcg_solver_simple() {
 
     let config = SolverConfig::new(1e-10, 100);
     let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::from_matrix(&mat);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&mat).unwrap();
 
     let result = solver.solve(&mat, &b, &mut x, &precond);
 
@@ -261,7 +262,7 @@ fn test_semi_implicit_config() {
 fn test_types_compile() {
     use mh_physics::types::{ConstantBoundaryProvider, NumericalParams};
 
-    let params = NumericalParams::default();
+    let params: NumericalParams<f64> = NumericalParams::default();
     assert!(params.h_min > 0.0);
 
     let provider = ConstantBoundaryProvider::new(1.5);

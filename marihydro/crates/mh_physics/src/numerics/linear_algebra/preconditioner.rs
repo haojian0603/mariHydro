@@ -178,6 +178,33 @@ impl<B: Backend> JacobiPreconditioner<B> {
             stats: PreconditionerStats::default(),
         })
     }
+
+    /// 从 CSR 矩阵创建 Jacobi 预条件器
+    /// 
+    /// 提取矩阵对角线元素并取逆
+    pub fn from_matrix(matrix: &CsrMatrix<B::Scalar>) -> Result<Self, PreconditionerError> {
+        let n = matrix.n_rows();
+        if n == 0 {
+            return Err(PreconditionerError::EmptyMatrix);
+        }
+
+        // 提取对角线元素
+        let mut inv_diag = aligned_vec(n);
+        for i in 0..n {
+            let d = matrix.get(i, i);
+            if d.is_zero() {
+                return Err(PreconditionerError::NumericalError(
+                    format!("对角线元素 {} 为零", i)
+                ));
+            }
+            inv_diag[i] = B::Scalar::one() / d;
+        }
+
+        Ok(Self {
+            inv_diag,
+            stats: PreconditionerStats::default(),
+        })
+    }
 }
 
 impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {

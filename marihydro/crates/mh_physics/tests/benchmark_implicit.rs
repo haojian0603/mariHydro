@@ -17,8 +17,9 @@
 use mh_foundation::AlignedVec;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, ConjugateGradient, IterativeSolver, JacobiPreconditioner,
-    IdentityPreconditioner, Preconditioner, SolverConfig, SolverResult,
+    IdentityPreconditioner, Preconditioner, ScalarPreconditioner, SolverConfig, SolverResult,
 };
+use mh_runtime::CpuBackend;
 use std::time::{Duration, Instant};
 
 // ============================================================
@@ -158,7 +159,7 @@ fn generate_rhs(size: usize, seed: u64) -> AlignedVec<f64> {
 // ============================================================
 
 /// 运行单个基准测试
-fn run_benchmark<P: Preconditioner<f64>>(
+fn run_benchmark<P: Preconditioner<CpuBackend<f64>> + ScalarPreconditioner<f64>>(
     matrix: &CsrMatrix<f64>,
     rhs: &[f64],
     preconditioner: &P,
@@ -204,7 +205,7 @@ fn test_solver_convergence_small() {
     
     let config = SolverConfig::new(1e-10, 1000);
     
-    let precond = JacobiPreconditioner::from_matrix(&matrix);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let (elapsed, result, _x) = run_benchmark(&matrix, &rhs, &precond, &config);
     
     println!("Small problem ({}x{} = {} cells):", n, n, n * n);
@@ -226,11 +227,12 @@ fn test_preconditioner_comparison() {
     let config = SolverConfig::new(1e-10, 1000);
     
     // 无预条件器
-    let no_precond = IdentityPreconditioner;
+    let backend = CpuBackend::<f64>::new();
+    let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new(&backend);
     let (time_no, result_no, _) = run_benchmark(&matrix, &rhs, &no_precond, &config);
     
     // Jacobi 预条件器
-    let jacobi = JacobiPreconditioner::from_matrix(&matrix);
+    let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
     let (time_jacobi, result_jacobi, _) = run_benchmark(&matrix, &rhs, &jacobi, &config);
     
     println!("Preconditioner comparison ({}x{}):", n, n);
@@ -270,7 +272,7 @@ fn benchmark_scaling() {
         let assembly_time = start_asm.elapsed();
         
         let rhs = generate_rhs(size, 42);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
         
         // 求解
         let (solve_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config);
@@ -316,7 +318,7 @@ fn benchmark_iteration_count() {
     for &n in &sizes {
         let matrix = generate_laplacian_5pt(n);
         let rhs = generate_rhs(n * n, 42);
-        let precond = JacobiPreconditioner::from_matrix(&matrix);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
         
         let (_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config);
         

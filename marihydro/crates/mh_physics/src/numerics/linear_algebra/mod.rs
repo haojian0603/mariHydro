@@ -52,6 +52,8 @@ pub use preconditioner::{
     PreconditionerError,
     // 性能统计
     PreconditionerStats, PreconditionerStatsSnapshot,
+    // 参数结构体
+    SsorParams,
     // 预条件器实现
     IdentityPreconditioner, JacobiPreconditioner, SsorPreconditioner, Ilu0Preconditioner,
     // 类型别名（Backend 特化）
@@ -143,12 +145,14 @@ pub fn memory_bandwidth(bytes: usize, nanoseconds: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_module_exports() {
         // 验证所有类型可访问
         let _builder: CsrBuilder<f64> = CsrBuilder::new(3, 3);
-        let _precond: JacobiPreconditionerF64 = JacobiPreconditionerF64::new();
+        let backend = CpuBackend::<f64>::new();
+        let _precond: JacobiPreconditionerF64 = JacobiPreconditionerF64::new(&backend);
         let config = SolverConfig::new(1e-8, 100); // 先创建 config
         let _solver: ConjugateGradient<f64> = ConjugateGradient::new(config); // 再传入 config
     }

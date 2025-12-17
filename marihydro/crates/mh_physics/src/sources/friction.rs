@@ -613,8 +613,8 @@ mod tests {
     use crate::types::NumericalParams;
     use mh_runtime::CpuBackend;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState {
-        let mut state = ShallowWaterState::new_with_backend(CpuBackend::<f64>::new(), n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterStateF64 {
+        let mut state = ShallowWaterStateF64::new_with_backend(CpuBackend::<f64>::new(), n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

@@ -837,11 +837,11 @@ impl<S: RuntimeScalar> From<CsrPattern> for CsrMatrix<S> {
 // =============================================================================
 // 测试套件（泛型覆盖 f32/f64）
 // =============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use num_traits::FromPrimitive;
+    use std::sync::LazyLock;
 
     /// 生产级测试宏：为 S = f32 和 f64 生成完全相同的测试
     macro_rules! csr_test_suite {
@@ -853,11 +853,13 @@ mod tests {
                     type S = $scalar;
 
                     /// 默认精度容差：f32=1e-6, f64=1e-10
-                    const EPS: S = if std::mem::size_of::<S>() == 4 {
-                        S::from_f64(1e-6).unwrap()
-                    } else {
-                        S::from_f64(1e-10).unwrap()
-                    };
+                    static EPS: LazyLock<S> = LazyLock::new(|| {
+                        if std::mem::size_of::<S>() == 4 {
+                            S::from_f64(1e-6).unwrap()
+                        } else {
+                            S::from_f64(1e-10).unwrap()
+                        }
+                    });
 
                     #[test]
                     fn test_identity_matrix() {
@@ -867,7 +869,7 @@ mod tests {
                         assert_eq!(mat.nnz(), 5);
 
                         for i in 0..5 {
-                            assert!((mat.get(i, i) - S::ONE).abs() < EPS);
+                            assert!((mat.get(i, i) - S::ONE).abs() < *EPS);
                         }
                     }
 
@@ -878,10 +880,10 @@ mod tests {
                                        S::from_f64(4.0).unwrap()];
                         let mat = CsrMatrix::<S>::diagonal(&diag);
 
-                        assert!((mat.get(0, 0) - diag[0]).abs() < EPS);
-                        assert!((mat.get(1, 1) - diag[1]).abs() < EPS);
-                        assert!((mat.get(2, 2) - diag[2]).abs() < EPS);
-                        assert!(mat.get(0, 1).abs() < EPS);
+                        assert!((mat.get(0, 0) - diag[0]).abs() < *EPS);
+                        assert!((mat.get(1, 1) - diag[1]).abs() < *EPS);
+                        assert!((mat.get(2, 2) - diag[2]).abs() < *EPS);
+                        assert!(mat.get(0, 1).abs() < *EPS);
                     }
 
                     #[test]
@@ -912,10 +914,10 @@ mod tests {
                         // y[1] = -1*1 + 2*2 + -1*3 = 0
                         // y[2] = -1*2 + 2*3 + -1*4 = 0
                         // y[3] = 1*4 = 4
-                        assert!((y[0] - S::from_f64(-1.0).unwrap()).abs() < EPS);
-                        assert!((y[1] - S::ZERO).abs() < EPS);
-                        assert!((y[2] - S::ZERO).abs() < EPS);
-                        assert!((y[3] - S::from_f64(4.0).unwrap()).abs() < EPS);
+                        assert!((y[0] - S::from_f64(-1.0).unwrap()).abs() < *EPS);
+                        assert!((y[1] - S::ZERO).abs() < *EPS);
+                        assert!((y[2] - S::ZERO).abs() < *EPS);
+                        assert!((y[3] - S::from_f64(4.0).unwrap()).abs() < *EPS);
                     }
 
                     #[test]
@@ -932,8 +934,8 @@ mod tests {
                         mat.mul_vec_add(S::ONE, &x, &mut y);
 
                         // y = [1,1] + 1 * [1*1+1*1, 1*2] = [3, 3]
-                        assert!((y[0] - S::from_f64(3.0).unwrap()).abs() < EPS);
-                        assert!((y[1] - S::from_f64(3.0).unwrap()).abs() < EPS);
+                        assert!((y[0] - S::from_f64(3.0).unwrap()).abs() < *EPS);
+                        assert!((y[1] - S::from_f64(3.0).unwrap()).abs() < *EPS);
                     }
 
                     #[test]
@@ -945,7 +947,7 @@ mod tests {
                         let mat = builder.build();
                         // ||A||_F = sqrt(3² + 4²) = 5
                         let norm = mat.frobenius_norm();
-                        assert!((norm - S::from_f64(5.0).unwrap()).abs() < EPS);
+                        assert!((norm - S::from_f64(5.0).unwrap()).abs() < *EPS);
                     }
 
                     #[test]
@@ -979,9 +981,9 @@ mod tests {
                         assert!(cache[1].is_some());
                         assert!(cache[2].is_some());
 
-                        assert!((mat.diagonal_value_cached(0, &cache).unwrap() - S::from_f64(1.0).unwrap()).abs() < EPS);
-                        assert!((mat.diagonal_value_cached(1, &cache).unwrap() - S::from_f64(2.0).unwrap()).abs() < EPS);
-                        assert!((mat.diagonal_value_cached(2, &cache).unwrap() - S::from_f64(3.0).unwrap()).abs() < EPS);
+                        assert!((mat.diagonal_value_cached(0, &cache).unwrap() - S::from_f64(1.0).unwrap()).abs() < *EPS);
+                        assert!((mat.diagonal_value_cached(1, &cache).unwrap() - S::from_f64(2.0).unwrap()).abs() < *EPS);
+                        assert!((mat.diagonal_value_cached(2, &cache).unwrap() - S::from_f64(3.0).unwrap()).abs() < *EPS);
                     }
 
                     #[test]
@@ -1040,12 +1042,12 @@ mod tests {
                         let mut mat = builder.build();
 
                         mat.scale(S::from_f64(2.0).unwrap());
-                        assert!((mat.get(0, 0) - S::from_f64(2.0).unwrap()).abs() < EPS);
-                        assert!((mat.get(1, 1) - S::from_f64(4.0).unwrap()).abs() < EPS);
+                        assert!((mat.get(0, 0) - S::from_f64(2.0).unwrap()).abs() < *EPS);
+                        assert!((mat.get(1, 1) - S::from_f64(4.0).unwrap()).abs() < *EPS);
 
                         mat.clear_values();
-                        assert!(mat.get(0, 0).abs() < EPS);
-                        assert!(mat.get(1, 1).abs() < EPS);
+                        assert!(mat.get(0, 0).abs() < *EPS);
+                        assert!(mat.get(1, 1).abs() < *EPS);
                     }
 
                     #[cfg(feature = "parallel")]
@@ -1069,7 +1071,7 @@ mod tests {
 
                         // 并行结果必须等于串行结果
                         for (a, b) in y_serial.iter().zip(y_parallel.iter()) {
-                            assert!((a - b).abs() < EPS, "并行结果与串行不一致");
+                            assert!((a - b).abs() < *EPS, "并行结果与串行不一致");
                         }
                     }
                 }

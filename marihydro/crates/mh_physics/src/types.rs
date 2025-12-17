@@ -404,6 +404,57 @@ impl<S> NumericalParams<S>
 where
     S: RuntimeScalar + PartialOrd + FromPrimitive,
 {
+    /// 从NumericalParamsF64转换到泛型参数
+    ///
+    /// # 参数
+    /// - `params_f64`: f64类型的数值参数
+    ///
+    /// # 返回
+    /// - `Ok(Self)`: 转换成功
+    /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
+    pub fn from_f64_params(params_f64: &NumericalParamsF64) -> Result<Self, ConfigError> {
+        Ok(Self {
+            h_min: S::from_f64(params_f64.h_min)
+                .ok_or(ConfigError::Conversion("h_min"))?,
+            h_dry: S::from_f64(params_f64.h_dry)
+                .ok_or(ConfigError::Conversion("h_dry"))?,
+            h_friction: S::from_f64(params_f64.h_friction)
+                .ok_or(ConfigError::Conversion("h_friction"))?,
+            h_wet: S::from_f64(params_f64.h_wet)
+                .ok_or(ConfigError::Conversion("h_wet"))?,
+            flux_eps: S::from_f64(params_f64.flux_eps)
+                .ok_or(ConfigError::Conversion("flux_eps"))?,
+            entropy_ratio: S::from_f64(params_f64.entropy_ratio)
+                .ok_or(ConfigError::Conversion("entropy_ratio"))?,
+            min_wave_speed: S::from_f64(params_f64.min_wave_speed)
+                .ok_or(ConfigError::Conversion("min_wave_speed"))?,
+            det_min: S::from_f64(params_f64.det_min)
+                .ok_or(ConfigError::Conversion("det_min"))?,
+            limiter_k: S::from_f64(params_f64.limiter_k)
+                .ok_or(ConfigError::Conversion("limiter_k"))?,
+            vel_min: S::from_f64(params_f64.vel_min)
+                .ok_or(ConfigError::Conversion("vel_min"))?,
+            vel_max: S::from_f64(params_f64.vel_max)
+                .ok_or(ConfigError::Conversion("vel_max"))?,
+            nu_min: S::from_f64(params_f64.nu_min)
+                .ok_or(ConfigError::Conversion("nu_min"))?,
+            nu_max: S::from_f64(params_f64.nu_max)
+                .ok_or(ConfigError::Conversion("nu_max"))?,
+            cfl: S::from_f64(params_f64.cfl)
+                .ok_or(ConfigError::Conversion("cfl"))?,
+            dt_min: S::from_f64(params_f64.dt_min)
+                .ok_or(ConfigError::Conversion("dt_min"))?,
+            dt_max: S::from_f64(params_f64.dt_max)
+                .ok_or(ConfigError::Conversion("dt_max"))?,
+            eta_tolerance: S::from_f64(params_f64.eta_tolerance)
+                .ok_or(ConfigError::Conversion("eta_tolerance"))?,
+            flux_tolerance: S::from_f64(params_f64.flux_tolerance)
+                .ok_or(ConfigError::Conversion("flux_tolerance"))?,
+            conservation_tolerance: S::from_f64(params_f64.conservation_tolerance)
+                .ok_or(ConfigError::Conversion("conservation_tolerance"))?,
+        })
+    }
+
     /// 从SolverConfig（Layer 4全f64配置）转换到泛型参数
     ///
     /// # 参数
@@ -1007,15 +1058,15 @@ mod tests {
 
     #[test]
     fn test_numerical_params_f64_from_config() {
-        let config = SolverConfig::default();
+        let config = crate::builder::SolverConfig::default();
         let params = NumericalParams::<f64>::from_config(&config).unwrap();
-        assert_eq!(params.h_dry, config.numerical.h_dry);
+        assert_eq!(params.h_dry, config.h_dry);
     }
 
     #[test]
     fn test_numerical_params_f32_from_config() {
-        let mut config = SolverConfig::default();
-        config.numerical.cfl = 0.8;
+        let mut config = crate::builder::SolverConfig::default();
+        config.cfl = 0.8;
         let params = NumericalParams::<f32>::from_config(&config).unwrap();
         assert_eq!(params.cfl, 0.8f32);
     }
