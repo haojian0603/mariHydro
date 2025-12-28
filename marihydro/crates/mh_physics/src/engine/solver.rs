@@ -19,26 +19,33 @@
 //! # 使用示例
 //!
 //! ```rust
-//! use mh_physics::engine::solver::{ShallowWaterSolver, SolverConfig};
-//! use mh_runtime::{CpuBackend, Precision};
+//! use mh_physics::engine::solver::{ShallowWaterSolver};
+//! use mh_physics::config_bridge::{Layer3Config, ConfigBridge};
+//! use mh_config::SolverConfig;
+//! use mh_runtime::{CpuBackend};
+//!
+//! // 从 Layer 4 配置转换
+//! let layer4_config = SolverConfig::default();
+//! let layer3_config: Layer3Config<f64> = ConfigBridge::convert(&layer4_config).unwrap();
 //!
 //! // f64高精度模式
 //! let backend_f64 = CpuBackend::<f64>::new();
-//! let solver_f64 = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend_f64);
+//! let solver_f64 = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, layer3_config, backend_f64);
 //!
 //! // f32高性能模式
 //! let backend_f32 = CpuBackend::<f32>::new();
-//! let solver_f32 = ShallowWaterSolver::<CpuBackend<f32>>::new(mesh, config, backend_f32);
+//! let solver_f32 = ShallowWaterSolver::<CpuBackend<f32>>::new(mesh, layer3_config, backend_f32);
 //! ```
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
-use crate::engine::timestep::{TimeStepController, TimeStepControllerBuilder};
+use crate::engine::timestep::TimeStepController;
 use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver, SolverParams};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::numerics::{MusclConfig, MusclReconstructor};
 use crate::numerics::reconstruction::Reconstructor;
 use crate::state::ShallowWaterStateGeneric as ShallowWaterState;
-use crate::types::{NumericalParams, NumericalParamsF64};
+use crate::types::{NumericalParams};
+use crate::config_bridge::Layer3Config;
 
 use mh_runtime::{Backend, CpuBackend, DeviceBuffer, RuntimeScalar, Vector2D};
 use num_traits::{Float, FromPrimitive, ToPrimitive};
@@ -47,273 +54,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // ============================================================
-// 求解器配置（Layer 4配置层）
+// 求解器统计（保持不变）
 // ============================================================
 
-/// 数值格式类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NumericalScheme {
-    /// 一阶精度
-    FirstOrder,
-    /// 二阶 MUSCL
-    #[default]
-    SecondOrderMuscl,
-    /// 二阶 WENO
-    SecondOrderWeno,
-}
-
-impl std::fmt::Display for NumericalScheme {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FirstOrder => write!(f, "First Order"),
-            Self::SecondOrderMuscl => write!(f, "MUSCL"),
-            Self::SecondOrderWeno => write!(f, "WENO"),
-        }
-    }
-}
-
-/// 回退策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FallbackStrategy {
-    /// 不回退，失败时报错
-    NoFallback,
-    /// 回退到一阶格式
-    #[default]
-    FallbackToFirstOrder,
-    /// 回退到较小时间步
-    ReduceTimestep,
-    /// 综合策略：先减小时间步，再降低格式精度
-    Progressive,
-}
-
-impl std::fmt::Display for FallbackStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoFallback => write!(f, "无回退"),
-            Self::FallbackToFirstOrder => write!(f, "回退一阶"),
-            Self::ReduceTimestep => write!(f, "减小时间步"),
-            Self::Progressive => write!(f, "渐进回退"),
-        }
-    }
-}
-
-/// 稳定性检查选项
-#[derive(Debug, Clone, Copy)]
-pub struct StabilityOptions {
-    pub check_nan: bool,
-    pub check_negative_depth: bool,
-    pub check_extreme_velocity: bool,
-    pub velocity_limit: f64,
-    pub depth_limit: f64,
-}
-
-impl Default for StabilityOptions {
-    fn default() -> Self {
-        Self {
-            check_nan: true,
-            check_negative_depth: true,
-            check_extreme_velocity: true,
-            velocity_limit: 100.0,
-            depth_limit: 1000.0,
-        }
-    }
-}
-
-impl StabilityOptions {
-    pub fn strict() -> Self {
-        Self {
-            check_nan: true,
-            check_negative_depth: true,
-            check_extreme_velocity: true,
-            velocity_limit: 50.0,
-            depth_limit: 500.0,
-        }
-    }
-
-    pub fn relaxed() -> Self {
-        Self {
-            check_nan: true,
-            check_negative_depth: true,
-            check_extreme_velocity: false,
-            velocity_limit: 200.0,
-            depth_limit: 2000.0,
-        }
-    }
-}
-
-/// 时间积分器类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TimeIntegrator {
-    #[default]
-    Explicit,
-    SemiImplicit,
-}
-
-impl std::fmt::Display for TimeIntegrator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Explicit => write!(f, "显式"),
-            Self::SemiImplicit => write!(f, "半隐式"),
-        }
-    }
-}
-
-/// 求解器配置（Layer 4，保持f64）
-#[derive(Debug, Clone)]
-pub struct SolverConfig {
-    /// 数值参数（f64配置）
-    pub params: NumericalParamsF64,
-    /// 重力加速度 [m/s²]
-    pub gravity: f64,
-    /// 是否启用静水重构
-    pub use_hydrostatic_reconstruction: bool,
-    /// 并行化阈值（面数）
-    pub parallel_threshold: usize,
-    /// 是否启用隐式摩擦（预留）
-    pub implicit_friction: bool,
-    /// 数值格式
-    pub scheme: NumericalScheme,
-    /// 回退策略
-    pub fallback: FallbackStrategy,
-    /// 稳定性检查选项
-    pub stability: StabilityOptions,
-    /// 最大回退次数
-    pub max_fallback_attempts: u32,
-    /// 时间步减小因子（回退时使用）
-    pub timestep_reduction_factor: f64,
-    /// 时间积分器类型
-    pub integrator: TimeIntegrator,
-}
-
-impl Default for SolverConfig {
-    fn default() -> Self {
-        Self {
-            params: NumericalParamsF64::default(),
-            gravity: 9.81,
-            use_hydrostatic_reconstruction: true,
-            parallel_threshold: 1000,
-            implicit_friction: true,
-            scheme: NumericalScheme::default(),
-            fallback: FallbackStrategy::default(),
-            stability: StabilityOptions::default(),
-            max_fallback_attempts: 3,
-            timestep_reduction_factor: 0.5,
-            integrator: TimeIntegrator::default(),
-        }
-    }
-}
-
-impl SolverConfig {
-    /// 创建构建器
-    pub fn builder() -> SolverConfigBuilder {
-        SolverConfigBuilder::default()
-    }
-
-    /// 快速配置：性能优先
-    pub fn performance() -> Self {
-        Self {
-            scheme: NumericalScheme::FirstOrder,
-            stability: StabilityOptions::relaxed(),
-            parallel_threshold: 500,
-            ..Default::default()
-        }
-    }
-
-    /// 快速配置：精度优先
-    pub fn accuracy() -> Self {
-        Self {
-            scheme: NumericalScheme::SecondOrderMuscl,
-            stability: StabilityOptions::strict(),
-            fallback: FallbackStrategy::Progressive,
-            ..Default::default()
-        }
-    }
-
-    /// 快速配置：稳健模式
-    pub fn robust() -> Self {
-        Self {
-            scheme: NumericalScheme::FirstOrder,
-            fallback: FallbackStrategy::Progressive,
-            stability: StabilityOptions::strict(),
-            max_fallback_attempts: 5,
-            timestep_reduction_factor: 0.25,
-            ..Default::default()
-        }
-    }
-}
-
-/// 配置构建器
-#[derive(Default)]
-pub struct SolverConfigBuilder {
-    config: SolverConfig,
-}
-
-impl SolverConfigBuilder {
-    pub fn params(mut self, params: NumericalParamsF64) -> Self {
-        self.config.params = params;
-        self
-    }
-
-    pub fn gravity(mut self, g: f64) -> Self {
-        self.config.gravity = g;
-        self
-    }
-
-    pub fn use_hydrostatic_reconstruction(mut self, enable: bool) -> Self {
-        self.config.use_hydrostatic_reconstruction = enable;
-        self
-    }
-
-    pub fn parallel_threshold(mut self, threshold: usize) -> Self {
-        self.config.parallel_threshold = threshold;
-        self
-    }
-
-    pub fn implicit_friction(mut self, enable: bool) -> Self {
-        self.config.implicit_friction = enable;
-        self
-    }
-
-    /// 设置数值格式
-    pub fn scheme(mut self, scheme: NumericalScheme) -> Self {
-        self.config.scheme = scheme;
-        self
-    }
-
-    /// 设置回退策略
-    pub fn fallback(mut self, fallback: FallbackStrategy) -> Self {
-        self.config.fallback = fallback;
-        self
-    }
-
-    /// 设置稳定性选项
-    pub fn stability(mut self, stability: StabilityOptions) -> Self {
-        self.config.stability = stability;
-        self
-    }
-
-    /// 设置最大回退次数
-    pub fn max_fallback_attempts(mut self, attempts: u32) -> Self {
-        self.config.max_fallback_attempts = attempts;
-        self
-    }
-
-    /// 设置时间步减小因子
-    pub fn timestep_reduction_factor(mut self, factor: f64) -> Self {
-        self.config.timestep_reduction_factor = factor.clamp(0.1, 0.9);
-        self
-    }
-
-    pub fn build(self) -> SolverConfig {
-        self.config
-    }
-}
-
-// ============================================================
-// 求解器统计
-// ============================================================
-
-/// 求解器步进统计
 #[derive(Debug, Clone, Default)]
 pub struct SolverStats {
     /// 最大波速 [m/s]
@@ -347,11 +90,19 @@ pub enum StabilityStatus {
 }
 
 impl std::fmt::Display for StabilityStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    // fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    //     match self {
+    //         Self::Stable => write!(f, "稳定"),
+    //         Self::Marginal => write!(f, "临界"),
+    //         Self::NeedsFallback => write!(f, "需回退"),
+    //         Self::Unstable => write!(f, "不稳定"),
+    //     }
+    // }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result{
         match self {
-            Self::Stable => write!(f, "稳定"),
             Self::Marginal => write!(f, "临界"),
-            Self::NeedsFallback => write!(f, "需回退"),
+            Self::Stable => write!(f, "稳定"),
+            Self::NeedsFallback => write!(f, "需要回退"),
             Self::Unstable => write!(f, "不稳定"),
         }
     }
@@ -501,14 +252,8 @@ impl<B: Backend> BedSlopeCorrection<B> {
     }
 }
 
-/// BedSlopeCorrection 的 f64 版本类型别名
+/// 类型别名
 pub type BedSlopeCorrectionF64 = BedSlopeCorrection<CpuBackend<f64>>;
-
-/// HydrostaticFaceState 的 f64 版本类型别名
-pub type HydrostaticFaceStateF64 = HydrostaticFaceState<CpuBackend<f64>>;
-
-/// HydrostaticReconstruction 的 f64 版本类型别名
-pub type HydrostaticReconstructionF64 = HydrostaticReconstruction<CpuBackend<f64>>;
 
 /// 静水重构处理器（Backend泛型化）
 #[derive(Debug, Clone)]
@@ -529,8 +274,6 @@ impl<B: Backend> HydrostaticReconstruction<B> {
     }
 
     /// 简单静水重构
-    ///
-    /// 对面两侧的水深进行修正，确保静水平衡
     #[inline]
     pub fn reconstruct_face_simple(
         &self,
@@ -541,14 +284,12 @@ impl<B: Backend> HydrostaticReconstruction<B> {
         vel_l: B::Vector2D,
         vel_r: B::Vector2D,
     ) -> HydrostaticFaceState<B> {
-        // 面处高程取最大值（保守处理）
-        let z_face = z_l.max(z_r);
-
-        // 修正后的水深 = max(0, η - z_face)，其中 η = h + z 是水位
+        let z_face = if z_l > z_r { z_l } else { z_r };
         let eta_l = h_l + z_l;
         let eta_r = h_r + z_r;
-        let h_left = (eta_l - z_face).max(B::Scalar::ZERO);
-        let h_right = (eta_r - z_face).max(B::Scalar::ZERO);
+        let zero = B::Scalar::ZERO;
+        let h_left = if eta_l - z_face > zero { eta_l - z_face } else { zero };
+        let h_right = if eta_r - z_face > zero { eta_r - z_face } else { zero };
 
         HydrostaticFaceState {
             h_left,
@@ -560,14 +301,6 @@ impl<B: Backend> HydrostaticReconstruction<B> {
     }
 
     /// 计算床坡源项
-    ///
-    /// 基于 Audusse (2004) 方法进行静水重构床坡修正
-    ///
-    /// # 参数
-    /// - `h_l`, `h_r`: 原始左右水深
-    /// - `z_l`, `z_r`: 左右床面高程
-    /// - `normal`: 面法向量
-    /// - `length`: 面长度
     #[inline]
     pub fn bed_slope_correction(
         &self,
@@ -579,23 +312,16 @@ impl<B: Backend> HydrostaticReconstruction<B> {
         length: B::Scalar,
     ) -> BedSlopeCorrection<B> {
         let half = B::Scalar::from_f64(0.5).unwrap();
-        
-        // 面处高程取最大值
-        let z_face = z_l.max(z_r);
-        
-        // 修正后的水深
+        let z_face = if z_l > z_r { z_l } else { z_r };
         let eta_l = h_l + z_l;
         let eta_r = h_r + z_r;
-        let h_l_star = (eta_l - z_face).max(B::Scalar::ZERO);
-        let h_r_star = (eta_r - z_face).max(B::Scalar::ZERO);
+        let zero = B::Scalar::ZERO;
+        let h_l_star = if eta_l - z_face > zero { eta_l - z_face } else { zero };
+        let h_r_star = if eta_r - z_face > zero { eta_r - z_face } else { zero };
         
-        // 左侧单元的压力补偿: 0.5 * g * (h_L² - h_L*²) * L
         let pressure_diff_l = half * self.g * (h_l * h_l - h_l_star * h_l_star) * length;
-        
-        // 右侧单元的压力补偿: 0.5 * g * (h_R² - h_R*²) * L
         let pressure_diff_r = half * self.g * (h_r * h_r - h_r_star * h_r_star) * length;
 
-        // 左侧源项沿负法向，右侧源项沿正法向
         BedSlopeCorrection {
             source_left_x: -pressure_diff_l * normal.x(),
             source_left_y: -pressure_diff_l * normal.y(),
@@ -606,81 +332,53 @@ impl<B: Backend> HydrostaticReconstruction<B> {
 }
 
 // ============================================================
-// 主求解器（Backend泛型化 - 核心改造）
+// 主求解器（Backend泛型化 - 最终版本）
 // ============================================================
 
-/// 浅水方程求解器（Backend泛型化）
-///
-/// 基于有限体积法的非结构化网格求解器。
-/// 支持泛型精度的 Backend（如 CpuBackend<f64>）。
 pub struct ShallowWaterSolver<B: Backend> {
-    /// 网格
     mesh: Arc<PhysicsMesh>,
-    /// 配置（Layer 4，保持 f64）
-    config: SolverConfig,
-    /// 转换后的数值参数（B::Scalar 类型）
+    config: Layer3Config<B::Scalar>,
     params: NumericalParams<B::Scalar>,
-    /// 重力加速度（B::Scalar 类型）
     gravity: B::Scalar,
-    /// Backend实例（计算策略层）
     backend: B,
-    /// 工作区（Backend泛型）
     workspace: SolverWorkspaceGeneric<B>,
-    /// 黎曼求解器（Backend泛型）
     riemann: HllcSolver<B>,
-    /// 干湿处理器（Backend泛型）
     wetting_drying: WettingDryingHandler<B>,
-    /// 静水重构（Backend泛型）
     hydrostatic: HydrostaticReconstruction<B>,
-    /// 时间步控制器
     timestep_ctrl: TimeStepController<B>,
-    /// 统计信息
     stats: SolverStats,
-    /// 水位重构器（用于 well-balanced 方法）
     muscl_eta: MusclReconstructor,
-    /// u 速度重构器
     muscl_u: MusclReconstructor,
-    /// v 速度重构器
     muscl_v: MusclReconstructor,
 }
 
 impl<B: Backend> ShallowWaterSolver<B> {
-    /// 创建求解器
-    ///
-    /// # 参数
-    /// - `mesh`: 物理网格（数据层）
-    /// - `config`: 求解器配置（Layer 4，f64）
-    /// - `backend`: 计算后端（策略层，决定精度）
-    pub fn new(mesh: Arc<PhysicsMesh>, config: SolverConfig, backend: B) -> Self {
+    pub fn new(
+        mesh: Arc<PhysicsMesh>, 
+        config: Layer3Config<B::Scalar>, 
+        backend: B
+    ) -> Self {
         let n_cells = mesh.n_cells();
+        let gravity = config.gravity;
+        let params = config.params.clone();
 
-        // 转换 f64 配置参数到 B::Scalar 类型
-        let gravity_b: B::Scalar = B::Scalar::from_f64(config.gravity).unwrap();
-        let params_b = NumericalParams::<B::Scalar>::from_f64_params(&config.params)
-            .expect("无法将配置参数转换到 B::Scalar 类型");
-
-        // 创建时间步控制器
-        let timestep_ctrl = TimeStepControllerBuilder::<B>::new(config.gravity)
-            .with_cfl(config.params.cfl)
-            .with_dt_limits(config.params.dt_min, config.params.dt_max)
-            .build();
+        // 时间步控制器（已泛型化，接收 B::Scalar 参数）
+        let timestep_ctrl = TimeStepController::<B>::new(gravity, &params);
 
         // 根据配置选择重构器模式
-        let muscl_config = if matches!(config.scheme, NumericalScheme::FirstOrder) {
-            MusclConfig::first_order()
-        } else {
-            MusclConfig::default()
+        let muscl_config = match config.scheme {
+            NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno => {
+                MusclConfig::default()
+            }
+            NumericalScheme::FirstOrder => MusclConfig::first_order(),
         };
 
-        // 创建工作区（Backend分配）
         let workspace = SolverWorkspaceGeneric::new(&backend, n_cells);
-
-        let solver_params = SolverParams::<B::Scalar>::from_numerical(&params_b, gravity_b);
-
-        // 创建Backend泛型组件
-        let riemann = HllcSolver::<B>::new(&solver_params, gravity_b);
-        let wetting_drying = WettingDryingHandler::<B>::from_params(&params_b);
-        let hydrostatic = HydrostaticReconstruction::<B>::new(&params_b, gravity_b);
+        let solver_params = SolverParams::<B::Scalar>::from_numerical(&params, gravity);
+        
+        let riemann = HllcSolver::<B>::new(&solver_params, gravity);
+        let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
+        let hydrostatic = HydrostaticReconstruction::<B>::new(&params, gravity);
         let muscl_eta = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
         let muscl_u = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
         let muscl_v = MusclReconstructor::new(muscl_config, mesh.clone());
@@ -688,8 +386,8 @@ impl<B: Backend> ShallowWaterSolver<B> {
         Self {
             mesh,
             config,
-            params: params_b,
-            gravity: gravity_b,
+            params,
+            gravity,
             backend,
             workspace,
             riemann,
@@ -703,64 +401,44 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
-    /// 执行一个时间步
-    ///
-    /// 返回使用的时间步长
     pub fn step(&mut self, state: &mut ShallowWaterState<B>, dt: B::Scalar) -> B::Scalar {
-        // 1. 重置工作区
         self.workspace.reset();
-
-        // 2. 预计算速度并准备二阶重构
         self.prepare_reconstruction(state);
-
-        // 3. 计算通量
-        let max_wave_speed = if self.mesh.n_faces() >= self.config.parallel_threshold {
+        let max_wave_speed = if self.mesh.n_faces() >= self.config.parallel_threshold as usize {
             self.compute_fluxes_parallel(state)
         } else {
             self.compute_fluxes_serial(state)
         };
-
-        // 4. 更新状态
         self.update_state(state, dt);
-
-        // 5. 强制正性
         let (dry_cells, _) = self.enforce_positivity(state, dt);
-
-        // 6. 更新统计
-        self.stats.max_wave_speed = max_wave_speed;
+        self.stats.max_wave_speed = max_wave_speed.to_f64().unwrap_or(0.0);
         self.stats.dry_cells = dry_cells;
         self.stats.dt = dt.to_f64().unwrap_or(0.0);
-
         dt
     }
 
-    /// 计算自适应时间步长
+    /// ✅ 修复类型不匹配：直接传递泛型参数
     pub fn compute_dt(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
-        let dt_f64 = self.timestep_ctrl.update(state, &self.mesh, &self.config.params);
-        B::Scalar::from_f64(dt_f64).unwrap_or(B::Scalar::ZERO)
+        self.timestep_ctrl.update(state, &self.mesh, &self.params)
     }
 
-    /// 是否使用二阶格式
     #[inline]
     fn use_second_order(&self) -> bool {
         matches!(self.config.scheme, NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno)
     }
 
-    /// 根据配置同步重构器开关并计算梯度
     fn prepare_reconstruction(&mut self, state: &ShallowWaterState<B>) {
         let n = state.n_cells();
         if self.workspace.vel_u.len() != n {
             self.workspace.resize(n);
         }
 
-        // 预计算安全速度和水位
         for i in self.mesh.cells() {
             let (u, v) = self.params.safe_velocity_components(
                 state.hu[i], state.hv[i], state.h[i]
             );
             self.workspace.vel_u[i] = u;
             self.workspace.vel_v[i] = v;
-            // 计算水位 η = h + z（用于 well-balanced 重构）
             self.workspace.eta[i] = state.h[i] + state.z[i];
         }
 
@@ -772,15 +450,12 @@ impl<B: Backend> ShallowWaterSolver<B> {
             return;
         }
 
-        // 二阶模式：使用默认配置
         let cfg = MusclConfig::default();
         self.muscl_eta.set_config(cfg.clone());
         self.muscl_u.set_config(cfg.clone());
         self.muscl_v.set_config(cfg);
 
-        // 对水位 η 而非水深 h 计算梯度，保证 C-property
-        // 注意：MusclReconstructor 目前使用 f64，因此只有当 B::Scalar == f64 时才能直接使用
-        // 此处将 B::Scalar 转换为 f64 供梯度计算
+        // 注意：MusclReconstructor 使用 f64，需要转换
         let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
         let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
         let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
@@ -788,10 +463,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
         self.muscl_u.compute_gradients(&vel_u_f64);
         self.muscl_v.compute_gradients(&vel_v_f64);
     }
-
-    // =========================================================================
-    // 通量计算（串行）
-    // =========================================================================
 
     fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let mut max_wave_speed = 0.0_f64;
@@ -802,7 +473,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
 
             max_wave_speed = max_wave_speed.max(flux.max_wave_speed.to_f64().unwrap_or(0.0));
 
-            // 累加到 owner
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
             let fhv = flux.momentum_y * length;
@@ -814,7 +484,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
             self.workspace.source_hu[owner_idx] += bed_src.source_left_x;
             self.workspace.source_hv[owner_idx] += bed_src.source_left_y;
 
-            // 累加到 neighbor（如果存在）
             if let Some(neigh) = neighbor {
                 let neigh_idx = neigh.get();
                 self.workspace.flux_h[neigh_idx] += fh;
@@ -828,25 +497,15 @@ impl<B: Backend> ShallowWaterSolver<B> {
         max_wave_speed
     }
 
-    // =========================================================================
-    // 通量计算（并行）
-    // =========================================================================
-
-    /// 使用"收集后累加"策略计算通量
-    ///
-    /// 当前实现是伪并行：累加阶段串行，未来需实现着色并行
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let max_speed_atomic = AtomicU64::new(0u64);
 
-        // 阶段1: 并行计算所有面的通量
         let face_results: Vec<_> = self.mesh.interior_faces()
             .into_par_iter()
             .map(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) = 
                     self.compute_face_flux(state, FaceIndex::new(face_idx));
 
-                // 更新最大波速（原子操作）
-                // 将 B::Scalar 转换为 f64，然后使用 to_bits 进行原子比较
                 let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
                 let bits = speed_f64.to_bits();
                 max_speed_atomic.fetch_max(bits, Ordering::Relaxed);
@@ -855,7 +514,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
             })
             .collect();
 
-        // 阶段2: 串行累加到单元（TODO: 着色并行）
         for (flux, bed_src, length, owner, neighbor) in face_results {
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
@@ -878,31 +536,22 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 从原子值恢复标量 (B::Scalar = f64)
         let bits = max_speed_atomic.load(Ordering::Relaxed);
         f64::from_bits(bits)
     }
-
-    // =========================================================================
-    // 单面通量计算（核心方法，Backend几何化）
-    // =========================================================================
 
     fn compute_face_flux(
         &self,
         state: &ShallowWaterState<B>,
         face_idx: FaceIndex,
     ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
-        // 使用Backend几何接口
         let normal = self.mesh.face_normal_generic::<B>(face_idx);
         let length_f64 = self.mesh.face_length(face_idx);
         let length = B::Scalar::from_f64(length_f64).unwrap();
         let owner = self.mesh.face_owner(face_idx);
         let neighbor = self.mesh.face_neighbor(face_idx);
 
-        // 重构后的左/右状态
         let (h_l, vel_l, z_l, h_r, vel_r, z_r) = if self.use_second_order() {
-            // 重构水位 η 而非水深 h
-            // 注意：MusclReconstructor 使用 f64，需要转换
             let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
             let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
             let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
@@ -932,7 +581,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
                     z_neigh,
                 )
             } else {
-                // 边界：右侧使用反射条件
                 let z_owner = state.z[owner.get()];
                 let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
                 let h_left_f64 = (eta_rec.left - z_owner_f64).max(0.0_f64);
@@ -955,7 +603,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 )
             }
         } else {
-            // 一阶：使用单元中心值
             let h_l = state.h[owner.get()];
             let z_l = state.z[owner.get()];
             let (u_l, v_l) = self.params.safe_velocity_components(
@@ -977,7 +624,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
                     state.z[neigh.get()],
                 )
             } else {
-                // 边界反射
                 let vn = B::vec2_dot(&vel_l, &normal);
                 let two = B::Scalar::from_f64(2.0).unwrap();
                 let normal_2x = B::vec2_scale(&normal, two);
@@ -993,21 +639,20 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         };
 
-        // 静水重构
         let recon = if self.config.use_hydrostatic_reconstruction {
             self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
         } else {
             let half = B::Scalar::from_f64(0.5).unwrap();
+            let z_face = (z_l + z_r) * half;
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
                 vel_left: vel_l,
                 vel_right: vel_r,
-                z_face: (z_l + z_r) * half,
+                z_face,
             }
         };
 
-        // 干湿界面通量限制
         let wet_l = self.wetting_drying.get_state(recon.h_left);
         let wet_r = self.wetting_drying.get_state(recon.h_right);
         let flux_limiter: B::Scalar = match (wet_l, wet_r) {
@@ -1017,12 +662,13 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 let h_min = recon.h_left.min(recon.h_right);
                 let fraction = (h_min - self.params.h_dry) 
                     / (self.params.h_wet - self.params.h_dry);
-                fraction.max(B::Scalar::ZERO).min(B::Scalar::ONE)
+                let one = B::Scalar::ONE;
+                let zero = B::Scalar::ZERO;
+                if fraction > one { one } else if fraction < zero { zero } else { fraction }
             }
             _ => B::Scalar::ONE,
         };
 
-        // 求解黎曼问题
         let flux = self.riemann.solve(
             recon.h_left,
             recon.h_right,
@@ -1031,10 +677,8 @@ impl<B: Backend> ShallowWaterSolver<B> {
             normal,
         ).unwrap_or_else(|_| RiemannFlux::zero());
 
-        // 应用干湿限制
         let limited_flux = flux.scaled(flux_limiter);
 
-        // 床坡源项（基于静水重构的水深差异）
         let bed_src = self.compute_hydrostatic_bed_slope(
             h_l, h_r, recon.h_left, recon.h_right, normal, length,
         );
@@ -1042,9 +686,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (limited_flux, bed_src, length, owner, neighbor)
     }
 
-    /// 计算静水重构后的床坡源项
-    ///
-    /// 基于 Audusse (2004) 方法，使用 Backend 几何计算
     #[inline]
     fn compute_hydrostatic_bed_slope(
         &self,
@@ -1058,13 +699,9 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let half = B::Scalar::from_f64(0.5).unwrap();
         let g = self.hydrostatic.g;
         
-        // 左侧单元的压力补偿: 0.5 * g * (h_L² - h_L*²) * L
         let pressure_diff_l = half * g * (h_l * h_l - h_l_star * h_l_star) * length;
-        
-        // 右侧单元的压力补偿: 0.5 * g * (h_R² - h_R*²) * L
         let pressure_diff_r = half * g * (h_r * h_r - h_r_star * h_r_star) * length;
 
-        // 左侧源项沿负法向，右侧源项沿正法向
         BedSlopeCorrection {
             source_left_x: -pressure_diff_l * normal.x(),
             source_left_y: -pressure_diff_l * normal.y(),
@@ -1073,11 +710,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
-    /// 更新状态
     fn update_state(&self, state: &mut ShallowWaterState<B>, dt: B::Scalar) {
-        use mh_runtime::CellIndex;
-        let _n = state.n_cells();
-
         for i in self.mesh.cells() {
             let area_f64 = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0_f64);
             let inv_area = B::Scalar::from_f64(1.0 / area_f64).unwrap();
@@ -1090,7 +723,6 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
-    /// 强制正性约束
     fn enforce_positivity(&mut self, state: &mut ShallowWaterState<B>, _dt: B::Scalar) -> (usize, usize) {
         let h_min = self.params.h_min;
         let h_dry = self.params.h_dry;
@@ -1099,13 +731,11 @@ impl<B: Backend> ShallowWaterSolver<B> {
 
         for i in self.mesh.cells() {
             if state.h[i] < h_min {
-                // 负水深修正
                 state.h[i] = B::Scalar::ZERO;
                 state.hu[i] = B::Scalar::ZERO;
                 state.hv[i] = B::Scalar::ZERO;
                 dry_count += 1;
             } else if state.h[i] < h_dry {
-                // 干湿过渡区动量衰减
                 let factor = self.wetting_drying.wet_fraction_smooth(state.h[i]);
                 state.hu[i] = state.hu[i] * factor;
                 state.hv[i] = state.hv[i] * factor;
@@ -1117,136 +747,97 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (dry_count, limited_count)
     }
 
-    // =========================================================================
     // 访问器
-    // =========================================================================
-
-    /// 获取网格引用
-    pub fn mesh(&self) -> &PhysicsMesh {
-        &self.mesh
-    }
-
-    /// 获取配置引用
-    pub fn config(&self) -> &SolverConfig {
-        &self.config
-    }
-
-    /// 获取Backend引用
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    /// 获取统计信息
-    pub fn stats(&self) -> &SolverStats {
-        &self.stats
-    }
-
-    /// 获取最大波速
-    pub fn max_wave_speed(&self) -> f64 {
-        self.stats.max_wave_speed
-    }
-
-    /// 获取干单元数量
-    pub fn dry_cell_count(&self) -> usize {
-        self.stats.dry_cells
-    }
+    pub fn mesh(&self) -> &PhysicsMesh { &self.mesh }
+    pub fn backend(&self) -> &B { &self.backend }
+    pub fn stats(&self) -> &SolverStats { &self.stats }
+    pub fn max_wave_speed(&self) -> f64 { self.stats.max_wave_speed }
+    pub fn dry_cell_count(&self) -> usize { self.stats.dry_cells }
 }
 
 // ============================================================
-// 求解器构建器（Backend感知）
+// 辅助类型定义（引擎层内部使用）
 // ============================================================
 
-/// 求解器构建器
-///
-/// 提供链式API配置求解器，最终构建时需要指定Backend类型
-#[derive(Debug, Default)]
-pub struct SolverBuilder {
-    /// 网格（必须）
-    mesh: Option<Arc<PhysicsMesh>>,
-    /// 配置（可选，有默认值）
-    config: SolverConfig,
+/// 数值格式类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NumericalScheme {
+    #[default]
+    FirstOrder,
+    SecondOrderMuscl,
+    SecondOrderWeno,
 }
 
-impl SolverBuilder {
-    /// 创建新的构建器
-    pub fn new() -> Self {
-        Self {
-            mesh: None,
-            config: SolverConfig::default(),
-        }
-    }
-
-    /// 设置网格（必须）
-    pub fn mesh(mut self, mesh: Arc<PhysicsMesh>) -> Self {
-        self.mesh = Some(mesh);
-        self
-    }
-
-    /// 设置配置
-    pub fn config(mut self, config: SolverConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    /// 设置数值参数
-    pub fn params(mut self, params: NumericalParamsF64) -> Self {
-        self.config.params = params;
-        self
-    }
-
-    /// 设置重力加速度
-    pub fn gravity(mut self, g: f64) -> Self {
-        self.config.gravity = g;
-        self
-    }
-
-    /// 设置是否使用静水重构
-    pub fn use_hydrostatic_reconstruction(mut self, enable: bool) -> Self {
-        self.config.use_hydrostatic_reconstruction = enable;
-        self
-    }
-
-    /// 设置并行化阈值
-    pub fn parallel_threshold(mut self, threshold: usize) -> Self {
-        self.config.parallel_threshold = threshold;
-        self
-    }
-
-    /// 构建求解器
-    ///
-    /// # 参数
-    /// - `backend`: 计算后端实例（决定精度）
-    ///
-    /// # 返回
-    /// - `Ok(solver)`: 构建成功
-    /// - `Err(e)`: 缺少必要配置（如网格）
-    pub fn build<B: Backend>(self, backend: B) -> Result<ShallowWaterSolver<B>, BuildError> {
-        let mesh = self.mesh.ok_or(BuildError::MissingMesh)?;
-        Ok(ShallowWaterSolver::<B>::new(mesh, self.config, backend))
-    }
-}
-
-/// 构建错误类型
-#[derive(Debug, Clone)]
-pub enum BuildError {
-    /// 缺少网格
-    MissingMesh,
-}
-
-impl std::fmt::Display for BuildError {
+impl std::fmt::Display for NumericalScheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BuildError::MissingMesh => write!(f, "网格未设置（必须调用 .mesh()）"),
+            Self::FirstOrder => write!(f, "First Order"),
+            Self::SecondOrderMuscl => write!(f, "MUSCL"),
+            Self::SecondOrderWeno => write!(f, "WENO"),
         }
     }
 }
 
-impl std::error::Error for BuildError {}
+/// 回退策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FallbackStrategy {
+    #[default]
+    NoFallback,
+    FallbackToFirstOrder,
+    ReduceTimestep,
+    Progressive,
+}
 
-// 为了向后兼容，提供默认Backend的构建方法
-impl SolverBuilder {
-    /// 使用默认f64 Backend构建（向后兼容）
-    pub fn build_f64(self) -> Result<ShallowWaterSolver<CpuBackend<f64>>, BuildError> {
-        self.build(CpuBackend::<f64>::new())
+impl std::fmt::Display for FallbackStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoFallback => write!(f, "无回退"),
+            Self::FallbackToFirstOrder => write!(f, "回退一阶"),
+            Self::ReduceTimestep => write!(f, "减小时间步"),
+            Self::Progressive => write!(f, "渐进回退"),
+        }
     }
 }
+
+/// 时间积分器类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeIntegrator {
+    #[default]
+    Explicit,
+    SemiImplicit,
+}
+
+impl std::fmt::Display for TimeIntegrator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Explicit => write!(f, "显式"),
+            Self::SemiImplicit => write!(f, "半隐式"),
+        }
+    }
+}
+
+/// 稳定性检查选项
+#[derive(Debug, Clone, Copy)]
+pub struct StabilityOptions {
+    pub check_nan: bool,
+    pub check_negative_depth: bool,
+    pub check_extreme_velocity: bool,
+    pub velocity_limit: f64,
+    pub depth_limit: f64,
+}
+
+impl Default for StabilityOptions {
+    fn default() -> Self {
+        Self {
+            check_nan: true,
+            check_negative_depth: true,
+            check_extreme_velocity: true,
+            velocity_limit: 100.0,
+            depth_limit: 1000.0,
+        }
+    }
+}
+
+// 类型别名
+pub type ShallowWaterSolverF64 = ShallowWaterSolver<CpuBackend<f64>>;
+pub type ShallowWaterSolverF32 = ShallowWaterSolver<CpuBackend<f32>>;

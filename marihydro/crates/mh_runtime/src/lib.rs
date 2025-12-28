@@ -52,7 +52,10 @@ pub const LAYER: u8 = 2;
 // 核心类型导出
 pub use scalar::RuntimeScalar;
 pub use backend::{Backend, CpuBackend, MemoryLocation, Vector2D};
-pub use buffer::DeviceBuffer;
+pub use buffer::{
+    DeviceBuffer, BufferState, BufferUsage, GpuBufferDescriptor,
+    BufferPoolConfig, CpuBufferPool, PooledBuffer,
+};
 pub use indices::{
     CellIndex, FaceIndex, NodeIndex, EdgeIndex, BoundaryIndex, LayerIndex, VertexIndex,
     HalfEdgeIndex, INVALID_INDEX

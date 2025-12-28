@@ -20,3 +20,6 @@ approx = "0.5"
 [features]
 default = ["order-8"]
 order-8 = []  # 启用8阶级数展开
+
+[lints]
+workspace = true

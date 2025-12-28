@@ -3,13 +3,39 @@
 //! Backend - 计算后端抽象
 //!
 //! 提供统一的计算后端接口，支持 CPU 和未来的 GPU 后端。
+//! 
+//! # 设计说明
+//! 
+//! 使用宏 `impl_cpu_backend!` 生成 f32/f64 后端实现，消除代码重复。
+//! 
+//! # 密封模式
+//! 
+//! `Backend` trait 使用密封模式（sealed trait pattern）防止外部实现。
+//! 这确保了只有库内部预定义的后端类型（如 `CpuBackend<f32>`、`CpuBackend<f64>`）
+//! 可以作为 Backend，从而：
+//! 1. 允许库在不破坏兼容性的情况下添加新方法
+//! 2. 确保所有 Backend 实现满足内部假设
+//! 3. 便于性能优化（编译器可以更好地内联）
+//!
+//! 如果用户需要自定义计算后端（如 GPU），应通过 feature flag 或 fork 实现。
 
 use bytemuck::Pod;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+#[allow(unused_imports)]
 use num_traits::FromPrimitive;
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
+
+// =============================================================================
+// 密封模块
+// =============================================================================
+
+/// 密封模块，用于限制 Backend trait 只能在库内部实现
+mod private {
+    /// 密封 trait - 外部 crate 无法实现此 trait
+    pub trait Sealed {}
+}
 
 /// 内存位置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,16 +60,25 @@ pub trait Vector2D: Copy + Clone + Send + Sync + 'static {
     fn y(&self) -> Self::Scalar;
 }
 
-/// 计算后端 Trait
+/// 计算后端 Trait（密封）
 ///
 /// 抽象不同计算设备的操作，包括内存分配、BLAS 操作等。
+/// 
+/// # 密封 Trait
+/// 
+/// 此 trait 是密封的，只能由库内部类型实现。外部 crate 无法为自定义类型
+/// 实现此 trait。这允许库在未来添加新方法而不破坏向后兼容性。
+/// 
+/// 当前支持的 Backend 实现：
+/// - `CpuBackend<f32>`: CPU 单精度后端
+/// - `CpuBackend<f64>`: CPU 双精度后端
 /// 
 /// # 类型参数
 /// 
 /// - `Scalar`: 标量类型（f32 或 f64）
 /// - `Buffer<T>`: 关联的缓冲区类型
 /// - `Vector2D`: 二维向量类型
-pub trait Backend: Clone + Send + Sync + 'static {
+pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 标量类型
     type Scalar: RuntimeScalar;
     /// 缓冲区类型
@@ -170,209 +205,124 @@ impl<S: RuntimeScalar> CpuBackend<S> {
     }
 }
 
-// f32 后端实现
-impl Vector2D for [f32; 2] {
-    type Scalar = f32;
-    
-    #[inline]
-    fn x(&self) -> f32 {
-        self[0]
-    }
-    
-    #[inline]
-    fn y(&self) -> f32 {
-        self[1]
-    }
-}
+// =============================================================================
+// 宏生成 CPU 后端实现
+// =============================================================================
 
-impl Backend for CpuBackend<f32> {
-    type Scalar = f32;
-    type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
-    type Vector2D = [f32; 2];
-
-    fn name(&self) -> &'static str {
-        "CPU-f32"
-    }
-    
-    fn memory_location(&self) -> MemoryLocation {
-        MemoryLocation::Host
-    }
-    
-    fn alloc<T: Pod + Clone + Default + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
-        vec![T::default(); len]
-    }
-
-    fn axpy(&self, alpha: f32, x: &Vec<f32>, y: &mut Vec<f32>) {
-        for (yi, xi) in y.iter_mut().zip(x.iter()) {
-            *yi += alpha * xi;
-        }
-    }
-
-    fn dot(&self, x: &Vec<f32>, y: &Vec<f32>) -> f32 {
-        x.iter().zip(y.iter()).map(|(a, b)| a * b).sum()
-    }
-
-    fn copy(&self, src: &Vec<f32>, dst: &mut Vec<f32>) {
-        dst.copy_from_slice(src);
-    }
-
-    fn scale(&self, alpha: f32, x: &mut Vec<f32>) {
-        for xi in x.iter_mut() {
-            *xi *= alpha;
-        }
-    }
-
-    fn reduce_max(&self, x: &Vec<f32>) -> f32 {
-        x.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-    }
-
-    fn reduce_min(&self, x: &Vec<f32>) -> f32 {
-        x.iter().cloned().fold(f32::INFINITY, f32::min)
-    }
-
-    fn reduce_sum(&self, x: &Vec<f32>) -> f32 {
-        x.iter().sum()
-    }
-
-    fn norm2(&self, x: &Vec<f32>) -> f32 {
-        self.dot(x, x).sqrt()
-    }
-
-    fn enforce_positivity(&self, x: &mut Vec<f32>, min_val: f32) {
-        for xi in x.iter_mut() {
-            if *xi < min_val {
-                *xi = min_val;
+/// 生成 CPU 后端 f32/f64 实现的宏
+/// 
+/// 使用宏统一 f32 和 f64 的实现，消除代码重复
+macro_rules! impl_cpu_backend {
+    ($scalar:ty, $name:literal) => {
+        impl Vector2D for [$scalar; 2] {
+            type Scalar = $scalar;
+            
+            #[inline]
+            fn x(&self) -> $scalar {
+                self[0]
+            }
+            
+            #[inline]
+            fn y(&self) -> $scalar {
+                self[1]
             }
         }
-    }
 
-    #[inline]
-    fn vec2_new(x: f32, y: f32) -> Self::Vector2D {
-        [x, y]
-    }
+        // 密封 trait 实现 - 确保只有库内部类型可以实现 Backend
+        impl private::Sealed for CpuBackend<$scalar> {}
 
-    #[inline]
-    fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar {
-        a[0] * b[0] + a[1] * b[1]
-    }
+        impl Backend for CpuBackend<$scalar> {
+            type Scalar = $scalar;
+            type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
+            type Vector2D = [$scalar; 2];
 
-    #[inline]
-    fn vec2_length(v: &Self::Vector2D) -> Self::Scalar {
-        (v[0] * v[0] + v[1] * v[1]).sqrt()
-    }
+            fn name(&self) -> &'static str {
+                $name
+            }
+            
+            fn memory_location(&self) -> MemoryLocation {
+                MemoryLocation::Host
+            }
+            
+            fn alloc<T: Pod + Clone + Default + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
+                vec![T::default(); len]
+            }
 
-    #[inline]
-    fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
-        [a[0] - b[0], a[1] - b[1]]
-    }
+            fn axpy(&self, alpha: $scalar, x: &Vec<$scalar>, y: &mut Vec<$scalar>) {
+                for (yi, xi) in y.iter_mut().zip(x.iter()) {
+                    *yi += alpha * xi;
+                }
+            }
 
-    #[inline]
-    fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
-        [v[0] * s, v[1] * s]
-    }
-}
+            fn dot(&self, x: &Vec<$scalar>, y: &Vec<$scalar>) -> $scalar {
+                x.iter().zip(y.iter()).map(|(a, b)| a * b).sum()
+            }
 
-// f64 后端实现
-impl Vector2D for [f64; 2] {
-    type Scalar = f64;
-    
-    #[inline]
-    fn x(&self) -> f64 {
-        self[0]
-    }
-    
-    #[inline]
-    fn y(&self) -> f64 {
-        self[1]
-    }
-}
+            fn copy(&self, src: &Vec<$scalar>, dst: &mut Vec<$scalar>) {
+                dst.copy_from_slice(src);
+            }
 
-impl Backend for CpuBackend<f64> {
-    type Scalar = f64;
-    type Buffer<T: Pod + Clone + Send + Sync> = Vec<T>;
-    type Vector2D = [f64; 2];
+            fn scale(&self, alpha: $scalar, x: &mut Vec<$scalar>) {
+                for xi in x.iter_mut() {
+                    *xi *= alpha;
+                }
+            }
 
-    fn name(&self) -> &'static str {
-        "CPU-f64"
-    }
-    
-    fn memory_location(&self) -> MemoryLocation {
-        MemoryLocation::Host
-    }
-    
-    fn alloc<T: Pod + Clone + Default + Send + Sync>(&self, len: usize) -> Self::Buffer<T> {
-        vec![T::default(); len]
-    }
+            fn reduce_max(&self, x: &Vec<$scalar>) -> $scalar {
+                x.iter().cloned().fold(<$scalar>::NEG_INFINITY, <$scalar>::max)
+            }
 
-    fn axpy(&self, alpha: f64, x: &Vec<f64>, y: &mut Vec<f64>) {
-        for (yi, xi) in y.iter_mut().zip(x.iter()) {
-            *yi += alpha * xi;
-        }
-    }
+            fn reduce_min(&self, x: &Vec<$scalar>) -> $scalar {
+                x.iter().cloned().fold(<$scalar>::INFINITY, <$scalar>::min)
+            }
 
-    fn dot(&self, x: &Vec<f64>, y: &Vec<f64>) -> f64 {
-        x.iter().zip(y.iter()).map(|(a, b)| a * b).sum()
-    }
+            fn reduce_sum(&self, x: &Vec<$scalar>) -> $scalar {
+                x.iter().sum()
+            }
 
-    fn copy(&self, src: &Vec<f64>, dst: &mut Vec<f64>) {
-        dst.copy_from_slice(src);
-    }
+            fn norm2(&self, x: &Vec<$scalar>) -> $scalar {
+                self.dot(x, x).sqrt()
+            }
 
-    fn scale(&self, alpha: f64, x: &mut Vec<f64>) {
-        for xi in x.iter_mut() {
-            *xi *= alpha;
-        }
-    }
+            fn enforce_positivity(&self, x: &mut Vec<$scalar>, min_val: $scalar) {
+                for xi in x.iter_mut() {
+                    if *xi < min_val {
+                        *xi = min_val;
+                    }
+                }
+            }
 
-    fn reduce_max(&self, x: &Vec<f64>) -> f64 {
-        x.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-    }
+            #[inline]
+            fn vec2_new(x: $scalar, y: $scalar) -> Self::Vector2D {
+                [x, y]
+            }
 
-    fn reduce_min(&self, x: &Vec<f64>) -> f64 {
-        x.iter().cloned().fold(f64::INFINITY, f64::min)
-    }
+            #[inline]
+            fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar {
+                a[0] * b[0] + a[1] * b[1]
+            }
 
-    fn reduce_sum(&self, x: &Vec<f64>) -> f64 {
-        x.iter().sum()
-    }
+            #[inline]
+            fn vec2_length(v: &Self::Vector2D) -> Self::Scalar {
+                (v[0] * v[0] + v[1] * v[1]).sqrt()
+            }
 
-    fn norm2(&self, x: &Vec<f64>) -> f64 {
-        self.dot(x, x).sqrt()
-    }
+            #[inline]
+            fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
+                [a[0] - b[0], a[1] - b[1]]
+            }
 
-    fn enforce_positivity(&self, x: &mut Vec<f64>, min_val: f64) {
-        for xi in x.iter_mut() {
-            if *xi < min_val {
-                *xi = min_val;
+            #[inline]
+            fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
+                [v[0] * s, v[1] * s]
             }
         }
-    }
-
-    #[inline]
-    fn vec2_new(x: f64, y: f64) -> Self::Vector2D {
-        [x, y]
-    }
-
-    #[inline]
-    fn vec2_dot(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Scalar {
-        a[0] * b[0] + a[1] * b[1]
-    }
-
-    #[inline]
-    fn vec2_length(v: &Self::Vector2D) -> Self::Scalar {
-        (v[0] * v[0] + v[1] * v[1]).sqrt()
-    }
-
-    #[inline]
-    fn vec2_sub(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
-        [a[0] - b[0], a[1] - b[1]]
-    }
-
-    #[inline]
-    fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
-        [v[0] * s, v[1] * s]
-    }
+    };
 }
+
+// 使用宏生成 f32 和 f64 后端实现
+impl_cpu_backend!(f32, "CPU-f32");
+impl_cpu_backend!(f64, "CPU-f64");
 
 #[cfg(test)]
 mod tests {

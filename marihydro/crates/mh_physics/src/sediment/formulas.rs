@@ -226,17 +226,32 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
     }
 
     fn compute_phi(&self, theta: S, theta_cr: S, props: &SedimentProperties) -> S {
-        if theta <= theta_cr {
+        // 临界 Shields 参数保护：防止除零
+        // 使用 1e-10 作为最小值，确保数值稳定性
+        let min_theta_cr = S::from_f64(1e-10).unwrap_or(S::EPSILON);
+        let theta_cr_safe = if theta_cr > min_theta_cr { theta_cr } else { min_theta_cr };
+        
+        if theta <= theta_cr_safe {
             return S::ZERO;
         }
 
-        // 输沙强度参数 T
-        let t_param = (theta - theta_cr) / theta_cr;
+        // 输沙强度参数 T = (θ - θ_cr) / θ_cr
+        let t_param = (theta - theta_cr_safe) / theta_cr_safe;
+        
+        // 限制 T 参数范围，防止极端值导致溢出
+        let max_t = S::from_f64(100.0).unwrap_or(S::ONE);
+        let t_param_clamped = if t_param < max_t { t_param } else { max_t };
 
-        // 无量纲粒径 D*
-        let d_star = S::from_f64(props.dimensionless_diameter).unwrap_or(S::ZERO);
+        // 无量纲粒径 D* 保护：防止 D*^(-0.3) 溢出
+        let min_d_star = S::from_f64(0.1).unwrap_or(S::EPSILON);
+        let d_star_raw = S::from_f64(props.dimensionless_diameter).unwrap_or(min_d_star);
+        let d_star = if d_star_raw > min_d_star { d_star_raw } else { min_d_star };
 
-        self.coefficient * t_param.powf(S::from_f64(2.1).unwrap_or(S::ZERO)) * d_star.powf(S::from_f64(-0.3).unwrap_or(S::ZERO))
+        // Φ = A × T^2.1 × D*^(-0.3)
+        let exp_t = S::from_f64(2.1).unwrap_or(S::TWO);
+        let exp_d = S::from_f64(-0.3).unwrap_or(S::ZERO);
+        
+        self.coefficient * t_param_clamped.powf(exp_t) * d_star.powf(exp_d)
     }
 }
 

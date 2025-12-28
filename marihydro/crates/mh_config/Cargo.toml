@@ -15,3 +15,6 @@ thiserror = "2.0"
 [features]
 default = []
 layer-guard = []  # CI中启用
+
+[lints]
+workspace = true

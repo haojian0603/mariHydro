@@ -64,6 +64,29 @@ pub struct AlignedVec<T: Pod + Default, A: Alignment = CpuAlign> {
     _align: PhantomData<A>,
 }
 
+// SAFETY: AlignedVec<T, A> 的线程安全性分析
+//
+// 1. 内部状态：
+//    - ptr: *mut T - 指向对齐分配的内存
+//    - len: usize - 当前长度
+//    - capacity: usize - 容量
+//    - _align: PhantomData<A> - 零大小标记
+//
+// 2. Send 安全性 (T: Send 时)：
+//    - 整个缓冲区由单一所有者持有
+//    - 当 T: Send 时，缓冲区可以安全地在线程间移动
+//    - 裸指针本身不提供安全保证，但所有权语义确保
+//      在任何时刻只有一个线程可以访问数据
+//
+// 3. Sync 安全性 (T: Sync 时)：
+//    - 共享引用 &AlignedVec<T, A> 只能获取 &[T]
+//    - 当 T: Sync 时，&T 可以在线程间安全共享
+//    - 不存在内部可变性，不会导致数据竞争
+//
+// 4. Pod 约束保证：
+//    - T: Pod 确保类型是 Plain Old Data
+//    - 可以安全地进行按位复制
+//    - 不包含任何需要特殊处理的资源
 unsafe impl<T: Pod + Default + Send, A: Alignment> Send for AlignedVec<T, A> {}
 unsafe impl<T: Pod + Default + Sync, A: Alignment> Sync for AlignedVec<T, A> {}
 
@@ -225,10 +248,20 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
     }
 
     /// Convert into Vec.
+    /// 
+    /// # 说明
+    /// 
+    /// 此方法将 AlignedVec 的内容复制到标准 Vec 中。
+    /// 原始 AlignedVec 会被正确释放，不会造成内存泄漏。
+    /// 
+    /// 注意：由于对齐要求不同，无法直接转移所有权，
+    /// 因此需要进行数据复制。
     pub fn into_vec(self) -> Vec<T> {
-        let slice = self.as_slice().to_vec();
-        std::mem::forget(self);
-        slice
+        // 先复制数据到新 Vec
+        let vec = self.as_slice().to_vec();
+        // self 在此处正常 drop，会调用 Drop::drop 释放内存
+        // 不再使用 mem::forget，确保内存被正确释放
+        vec
     }
 
     #[inline]

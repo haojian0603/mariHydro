@@ -39,6 +39,9 @@ aligned-vec = "0.5"
 parallel = ["rayon"]
 default = ["parallel"]
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 mh_geo = { path = "../mh_geo" }
 mh_mesh = { path = "../mh_mesh" }

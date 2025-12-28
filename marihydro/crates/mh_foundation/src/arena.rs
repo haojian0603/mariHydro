@@ -362,28 +362,37 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
         }
     }
 
-    /// 返回原始指针
+    /// 返回所有已占用元素的连续副本
     /// 
-    /// # 安全
+    /// # 说明
     /// 
-    /// 指针仅在Arena有效时有效。Arena移动或销毁后指针失效。
+    /// 由于 Arena 使用 Slot 枚举存储（包含空闲链表），无法直接提供连续内存指针。
+    /// 此方法收集所有已占用的值到一个新的 Vec 中。
+    /// 
+    /// 如需高性能连续内存访问，请考虑使用 `mh_foundation::AlignedVec` 或直接使用 `Vec<T>`。
     #[inline]
-    pub fn as_ptr(&self) -> *const T {
-        if self.slots.is_empty() {
-            std::ptr::null()
-        } else {
-            self.slots.as_ptr() as *const T
-        }
+    pub fn to_vec(&self) -> Vec<T> 
+    where
+        T: Clone,
+    {
+        self.iter().map(|(_, v)| v.clone()).collect()
     }
 
-    /// 返回可变原始指针
+    /// 返回所有已占用元素的引用切片（按索引顺序）
+    /// 
+    /// # 说明
+    /// 
+    /// 此方法返回对所有已占用元素的引用向量。
+    /// 由于内部使用枚举存储，无法提供直接的切片访问。
     #[inline]
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        if self.slots.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            self.slots.as_mut_ptr() as *mut T
-        }
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.iter().map(|(_, v)| v)
+    }
+
+    /// 返回所有已占用元素的可变引用迭代器
+    #[inline]
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.iter_mut().map(|(_, v)| v)
     }
 }
 

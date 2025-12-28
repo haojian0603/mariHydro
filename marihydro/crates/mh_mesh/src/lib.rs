@@ -62,6 +62,9 @@ pub mod locator;
 pub mod converter;
 pub mod topology;
 
+// 结构化网格
+pub mod structured;
+
 // 重新导出核心类型
 pub use attributes::{
     AttributeStats, AttributeStore, ATTR_BED_ELEVATION, ATTR_DISCHARGE_X, ATTR_DISCHARGE_Y,
@@ -88,3 +91,8 @@ pub use converter::{MeshStatisticsExt, SimpleMeshData};
 pub mod generation;
 pub use generation::{CircularMeshGenerator, RectMeshGenerator};
 
+// 结构化网格导出
+pub use structured::{
+    StructuredMesh, StructuredMeshConfig, FaceDirection,
+    FaceInfo, InternalFace, MeshStatistics as StructuredMeshStatistics,
+};

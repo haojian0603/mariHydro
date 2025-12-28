@@ -33,7 +33,33 @@ pub struct GpuBuffer<T: Pod> {
     _marker: PhantomData<T>,
 }
 
-// 手动实现 Send 和 Sync（GPU 缓冲区是安全的）
+// SAFETY: GpuBuffer<T> 的线程安全性分析
+//
+// 1. 当前实现说明：
+//    - 这是一个占位符类型，尚未实现实际的 GPU 功能
+//    - 所有操作方法都会 panic (unimplemented!)
+//
+// 2. 内部状态：
+//    - len: usize - 缓冲区长度（纯数据）
+//    - _marker: PhantomData<T> - 零大小类型标记
+//
+// 3. Send 安全性 (T: Pod 时)：
+//    - PhantomData<T> 不包含实际数据
+//    - len 是 Copy 类型
+//    - 当未来实现 GPU 功能时，CUDA/GPU 缓冲区句柄
+//      通常是线程安全的（GPU 驱动处理同步）
+//
+// 4. Sync 安全性 (T: Pod 时)：
+//    - 当前实现不包含可变状态
+//    - 未来实现 GPU 功能时，需要确保：
+//      a) GPU 内存访问通过驱动同步
+//      b) 主机端访问通过适当的复制操作
+//
+// 5. Pod 约束保证：
+//    - T: Pod 确保数据可以安全地在主机和设备间复制
+//    - 不包含指针或需要特殊处理的资源
+//
+// TODO: 实现实际 GPU 功能时需要重新审查这些保证
 unsafe impl<T: Pod> Send for GpuBuffer<T> {}
 unsafe impl<T: Pod> Sync for GpuBuffer<T> {}
 

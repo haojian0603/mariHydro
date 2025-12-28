@@ -17,3 +17,6 @@ rayon = { version = "1.10", optional = true }
 [features]
 default = []
 layer-guard = []  # CI中启用，防止低层crate错误引用
+
+[lints]
+workspace = true

@@ -39,7 +39,7 @@ pub use timestep::{
     CflCalculator, TimeStepController, TimeStepControllerBuilder, TimeStepStats,
 };
 pub use solver::{
-    ShallowWaterSolver, SolverConfig, SolverConfigBuilder, SolverBuilder,
+    ShallowWaterSolver,
     SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
     BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
     StabilityStatus,

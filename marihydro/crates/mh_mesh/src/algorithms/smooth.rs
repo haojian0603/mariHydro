@@ -6,8 +6,18 @@
 //! - Laplacian 光顺
 //! - Taubin 光顺 (防收缩)
 //! - 加权 Laplacian 光顺
+//!
+//! # 精度说明
+//!
+//! 网格几何操作使用 f64 精度，这是因为：
+//! 1. 网格坐标通常需要高精度（地理坐标系）
+//! 2. 光顺迭代过程中累积误差需要高精度
+//! 3. 网格质量指标计算需要精确的几何量
+//!
+//! 如需 f32 版本，可使用 `SmootherF32` 结构体。
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// 光顺配置
 #[derive(Debug, Clone)]
@@ -623,5 +633,273 @@ mod tests {
         assert!(boundary.contains(&1));
         assert!(boundary.contains(&2));
         assert!(boundary.contains(&3));
+    }
+
+    #[test]
+    fn test_smoother_f32() {
+        let mut vertices = vec![
+            [0.0f32, 0.0],
+            [1.0, 0.0],
+            [0.5, 0.1], // 稍微偏离
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ];
+
+        let neighbors = vec![
+            vec![1, 2, 3],
+            vec![0, 2, 4],
+            vec![0, 1, 3, 4],
+            vec![0, 2, 4],
+            vec![1, 2, 3],
+        ];
+
+        let boundary: HashSet<usize> = vec![0, 1, 3, 4].into_iter().collect();
+
+        let smoother = SmootherF32::new(SmoothConfigF32::laplacian(3, 0.5));
+        smoother.smooth_2d(&mut vertices, &neighbors, &boundary);
+
+        // 中心点应该移动到更中心的位置
+        assert!((vertices[2][1] - 0.5).abs() < 0.2);
+    }
+}
+
+// ============================================================
+// f32 版本光顺器
+// ============================================================
+
+/// 光顺配置 (f32 版本)
+#[derive(Debug, Clone)]
+pub struct SmoothConfigF32 {
+    /// 迭代次数
+    pub iterations: usize,
+    /// 平滑因子 (0-1)
+    pub lambda: f32,
+    /// 是否固定边界
+    pub fix_boundary: bool,
+    /// 平滑方法
+    pub method: SmoothMethodF32,
+}
+
+impl Default for SmoothConfigF32 {
+    fn default() -> Self {
+        Self {
+            iterations: 10,
+            lambda: 0.5,
+            fix_boundary: true,
+            method: SmoothMethodF32::Laplacian,
+        }
+    }
+}
+
+impl SmoothConfigF32 {
+    /// 创建Laplacian光顺配置
+    pub fn laplacian(iterations: usize, lambda: f32) -> Self {
+        Self {
+            iterations,
+            lambda,
+            method: SmoothMethodF32::Laplacian,
+            ..Default::default()
+        }
+    }
+
+    /// 创建Taubin光顺配置
+    pub fn taubin(iterations: usize) -> Self {
+        Self {
+            iterations,
+            lambda: 0.5,
+            method: SmoothMethodF32::Taubin { mu: -0.53 },
+            ..Default::default()
+        }
+    }
+}
+
+/// 平滑方法 (f32 版本)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SmoothMethodF32 {
+    /// 标准 Laplacian 光顺
+    Laplacian,
+    /// Taubin 光顺 (防收缩)
+    Taubin {
+        /// 反向平滑因子
+        mu: f32,
+    },
+}
+
+/// 网格光顺器 (f32 版本)
+pub struct SmootherF32 {
+    config: SmoothConfigF32,
+}
+
+impl SmootherF32 {
+    /// 创建光顺器
+    pub fn new(config: SmoothConfigF32) -> Self {
+        Self { config }
+    }
+
+    /// 使用默认配置创建
+    pub fn default_config() -> Self {
+        Self::new(SmoothConfigF32::default())
+    }
+
+    /// 光顺2D点集
+    pub fn smooth_2d(
+        &self,
+        vertices: &mut [[f32; 2]],
+        neighbors: &[Vec<usize>],
+        boundary: &HashSet<usize>,
+    ) {
+        match self.config.method {
+            SmoothMethodF32::Laplacian => {
+                self.laplacian_smooth_2d(vertices, neighbors, boundary);
+            }
+            SmoothMethodF32::Taubin { mu } => {
+                self.taubin_smooth_2d(vertices, neighbors, boundary, mu);
+            }
+        }
+    }
+
+    /// 2D Laplacian 光顺
+    fn laplacian_smooth_2d(
+        &self,
+        vertices: &mut [[f32; 2]],
+        neighbors: &[Vec<usize>],
+        boundary: &HashSet<usize>,
+    ) {
+        let lambda = self.config.lambda;
+        let n = vertices.len();
+
+        for _ in 0..self.config.iterations {
+            let mut displacements = vec![[0.0f32, 0.0]; n];
+
+            for i in 0..n {
+                if self.config.fix_boundary && boundary.contains(&i) {
+                    continue;
+                }
+
+                let neighbors_i = &neighbors[i];
+                if neighbors_i.is_empty() {
+                    continue;
+                }
+
+                let mut center = [0.0f32, 0.0];
+                for &j in neighbors_i {
+                    center[0] += vertices[j][0];
+                    center[1] += vertices[j][1];
+                }
+                center[0] /= neighbors_i.len() as f32;
+                center[1] /= neighbors_i.len() as f32;
+
+                displacements[i][0] = lambda * (center[0] - vertices[i][0]);
+                displacements[i][1] = lambda * (center[1] - vertices[i][1]);
+            }
+
+            for i in 0..n {
+                vertices[i][0] += displacements[i][0];
+                vertices[i][1] += displacements[i][1];
+            }
+        }
+    }
+
+    /// Taubin 光顺
+    fn taubin_smooth_2d(
+        &self,
+        vertices: &mut [[f32; 2]],
+        neighbors: &[Vec<usize>],
+        boundary: &HashSet<usize>,
+        mu: f32,
+    ) {
+        let lambda = self.config.lambda;
+        let n = vertices.len();
+
+        for _ in 0..self.config.iterations {
+            // 正向平滑
+            self.apply_laplacian_step_f32(vertices, neighbors, boundary, lambda);
+            // 反向平滑（防收缩）
+            self.apply_laplacian_step_f32(vertices, neighbors, boundary, mu);
+        }
+    }
+
+    fn apply_laplacian_step_f32(
+        &self,
+        vertices: &mut [[f32; 2]],
+        neighbors: &[Vec<usize>],
+        boundary: &HashSet<usize>,
+        factor: f32,
+    ) {
+        let n = vertices.len();
+        let mut displacements = vec![[0.0f32, 0.0]; n];
+
+        for i in 0..n {
+            if self.config.fix_boundary && boundary.contains(&i) {
+                continue;
+            }
+
+            let neighbors_i = &neighbors[i];
+            if neighbors_i.is_empty() {
+                continue;
+            }
+
+            let mut center = [0.0f32, 0.0];
+            for &j in neighbors_i {
+                center[0] += vertices[j][0];
+                center[1] += vertices[j][1];
+            }
+            center[0] /= neighbors_i.len() as f32;
+            center[1] /= neighbors_i.len() as f32;
+
+            displacements[i][0] = factor * (center[0] - vertices[i][0]);
+            displacements[i][1] = factor * (center[1] - vertices[i][1]);
+        }
+
+        for i in 0..n {
+            vertices[i][0] += displacements[i][0];
+            vertices[i][1] += displacements[i][1];
+        }
+    }
+
+    /// 光顺3D点集
+    pub fn smooth_3d(
+        &self,
+        vertices: &mut [[f32; 3]],
+        neighbors: &[Vec<usize>],
+        boundary: &HashSet<usize>,
+    ) {
+        let lambda = self.config.lambda;
+        let n = vertices.len();
+
+        for _ in 0..self.config.iterations {
+            let mut displacements = vec![[0.0f32, 0.0, 0.0]; n];
+
+            for i in 0..n {
+                if self.config.fix_boundary && boundary.contains(&i) {
+                    continue;
+                }
+
+                let neighbors_i = &neighbors[i];
+                if neighbors_i.is_empty() {
+                    continue;
+                }
+
+                let mut center = [0.0f32, 0.0, 0.0];
+                for &j in neighbors_i {
+                    center[0] += vertices[j][0];
+                    center[1] += vertices[j][1];
+                    center[2] += vertices[j][2];
+                }
+                center[0] /= neighbors_i.len() as f32;
+                center[1] /= neighbors_i.len() as f32;
+                center[2] /= neighbors_i.len() as f32;
+
+                displacements[i][0] = lambda * (center[0] - vertices[i][0]);
+                displacements[i][1] = lambda * (center[1] - vertices[i][1]);
+                displacements[i][2] = lambda * (center[2] - vertices[i][2]);
+            }
+
+            for i in 0..n {
+                vertices[i][0] += displacements[i][0];
+                vertices[i][1] += displacements[i][1];
+                vertices[i][2] += displacements[i][2];
+            }
+        }
     }
 }

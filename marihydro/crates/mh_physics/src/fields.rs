@@ -248,7 +248,27 @@ pub struct FieldRegistry {
     order: Vec<String>,
 }
 
-// 明确标记为线程安全
+// SAFETY: FieldRegistry 的线程安全性分析
+//
+// 1. 内部状态：
+//    - fields: HashMap<String, FieldMeta> - 字段元数据映射
+//    - order: Vec<String> - 注册顺序向量
+//
+// 2. Send 安全性：
+//    - HashMap<String, FieldMeta> 是 Send（当 String 和 FieldMeta 是 Send 时）
+//    - Vec<String> 是 Send
+//    - String 和 FieldMeta 都是纯数据类型，满足 Send
+//    - 因此 FieldRegistry 可以安全地在线程间移动
+//
+// 3. Sync 安全性：
+//    - 所有修改操作都需要 &mut self
+//    - 共享引用 &FieldRegistry 只能进行只读访问
+//    - HashMap 和 Vec 的共享引用是 Sync
+//    - 不存在内部可变性，不会导致数据竞争
+//
+// 4. 注意事项：
+//    - 运行时修改必须通过外部同步机制（如 RwLock）保护
+//    - 本 unsafe impl 假设用户不会通过其他方式获取内部可变引用
 unsafe impl Send for FieldRegistry {}
 unsafe impl Sync for FieldRegistry {}
 

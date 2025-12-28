@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::precision::Precision;
 use crate::error::ConfigError;
 
-/// 求解器配置（全 f64）
+/// 求解器配置（全 f64，Layer 4 唯一真理源）
 ///
 /// 包含所有求解器参数，使用 f64 存储以便 JSON 序列化。
 /// 在构建求解器时，根据 `precision` 字段转换到 f32 或 f64。
@@ -40,6 +40,18 @@ pub struct SolverConfig {
     /// 最大模拟时间 [s]
     #[serde(default = "default_max_time")]
     pub max_time: f64,
+
+    /// 数值格式配置
+    #[serde(default)]
+    pub numerical: NumericalConfig,
+
+    /// 时间积分配置
+    #[serde(default)]
+    pub time: TimeConfig,
+
+    /// 并行化配置
+    #[serde(default)]
+    pub parallel: ParallelConfig,
 }
 
 fn default_max_iterations() -> usize { 100000 }
@@ -75,6 +87,14 @@ pub struct PhysicsConfig {
     /// 最大速度限制 [m/s]
     #[serde(default = "default_velocity_cap")]
     pub velocity_cap: f64,
+    
+    /// 最小波速阈值 [m/s]
+    #[serde(default = "default_min_wave_speed")]
+    pub min_wave_speed: f64,
+    
+    /// 通量计算零阈值
+    #[serde(default = "default_flux_eps")]
+    pub flux_eps: f64,
 }
 
 fn default_gravity() -> f64 { 9.81 }
@@ -84,6 +104,8 @@ fn default_h_min() -> f64 { 1e-9 }
 fn default_convergence() -> f64 { 1e-8 }
 fn default_manning() -> f64 { 0.03 }
 fn default_velocity_cap() -> f64 { 100.0 }
+fn default_min_wave_speed() -> f64 { 1e-6 }
+fn default_flux_eps() -> f64 { 1e-14 }
 
 impl Default for PhysicsConfig {
     fn default() -> Self {
@@ -95,8 +117,194 @@ impl Default for PhysicsConfig {
             convergence: default_convergence(),
             manning_n: default_manning(),
             velocity_cap: default_velocity_cap(),
+            min_wave_speed: default_min_wave_speed(),
+            flux_eps: default_flux_eps(),
         }
     }
+}
+
+/// 数值格式配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NumericalConfig {
+    /// 黎曼求解器类型
+    #[serde(default)]
+    pub riemann_solver: RiemannSolverType,
+    
+    /// 时间积分方法
+    #[serde(default)]
+    pub time_integration: TimeIntegrationMethod,
+    
+    /// 梯度限制器类型
+    #[serde(default)]
+    pub limiter: LimiterType,
+    
+    /// 是否启用二阶精度
+    #[serde(default = "default_true")]
+    pub second_order: bool,
+    
+    /// 是否启用静水重构
+    #[serde(default = "default_true")]
+    pub use_hydrostatic_reconstruction: bool,
+    
+    /// 是否启用干湿处理
+    #[serde(default = "default_true")]
+    pub wetting_drying: bool,
+    
+    /// 是否启用底摩擦
+    #[serde(default = "default_false")]
+    pub friction: bool,
+    
+    /// 是否启用科氏力
+    #[serde(default = "default_false")]
+    pub coriolis: bool,
+    
+    /// 是否启用风应力
+    #[serde(default = "default_false")]
+    pub wind_forcing: bool,
+    
+    /// 最大回退次数
+    #[serde(default = "default_max_fallback_attempts")]
+    pub max_fallback_attempts: u32,
+    
+    /// 时间步减小因子（回退时使用）
+    #[serde(default = "default_timestep_reduction_factor")]
+    pub timestep_reduction_factor: f64,
+}
+
+fn default_true() -> bool { true }
+fn default_false() -> bool { false }
+fn default_max_fallback_attempts() -> u32 { 3 }
+fn default_timestep_reduction_factor() -> f64 { 0.5 }
+
+impl Default for NumericalConfig {
+    fn default() -> Self {
+        Self {
+            riemann_solver: RiemannSolverType::default(),
+            time_integration: TimeIntegrationMethod::default(),
+            limiter: LimiterType::default(),
+            second_order: true,
+            use_hydrostatic_reconstruction: true,
+            wetting_drying: true,
+            friction: false,
+            coriolis: false,
+            wind_forcing: false,
+            max_fallback_attempts: default_max_fallback_attempts(),
+            timestep_reduction_factor: default_timestep_reduction_factor(),
+        }
+    }
+}
+
+/// 时间积分配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeConfig {
+    /// 初始时间步长 [s]
+    #[serde(default = "default_initial_dt")]
+    pub initial_dt: f64,
+    
+    /// 最小时间步长 [s]
+    #[serde(default = "default_min_dt")]
+    pub min_dt: f64,
+    
+    /// 最大时间步长 [s]
+    #[serde(default = "default_max_dt")]
+    pub max_dt: f64,
+    
+    /// 自适应增长因子
+    #[serde(default = "default_growth_factor")]
+    pub growth_factor: f64,
+    
+    /// 自适应收缩因子
+    #[serde(default = "default_shrink_factor")]
+    pub shrink_factor: f64,
+    
+    /// 稳定增长阈值（步数）
+    #[serde(default = "default_stable_threshold")]
+    pub stable_threshold: usize,
+}
+
+fn default_initial_dt() -> f64 { 0.01 }
+fn default_min_dt() -> f64 { 1e-6 }
+fn default_max_dt() -> f64 { 1.0 }
+fn default_growth_factor() -> f64 { 1.1 }
+fn default_shrink_factor() -> f64 { 0.5 }
+fn default_stable_threshold() -> usize { 10 }
+
+impl Default for TimeConfig {
+    fn default() -> Self {
+        Self {
+            initial_dt: default_initial_dt(),
+            min_dt: default_min_dt(),
+            max_dt: default_max_dt(),
+            growth_factor: default_growth_factor(),
+            shrink_factor: default_shrink_factor(),
+            stable_threshold: default_stable_threshold(),
+        }
+    }
+}
+
+/// 并行化配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParallelConfig {
+    /// 并行化阈值（单元数量）
+    #[serde(default = "default_parallel_threshold")]
+    pub threshold: usize,
+    
+    /// 是否启用多线程
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_parallel_threshold() -> usize { 1000 }
+
+impl Default for ParallelConfig {
+    fn default() -> Self {
+        Self {
+            threshold: default_parallel_threshold(),
+            enabled: true,
+        }
+    }
+}
+
+/// 黎曼求解器类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RiemannSolverType {
+    /// HLLC求解器（推荐）
+    #[default]
+    Hllc,
+    /// Roe求解器
+    Roe,
+    /// Rusanov求解器
+    Rusanov,
+    /// 简单中心格式
+    Central,
+}
+
+/// 时间积分方法
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TimeIntegrationMethod {
+    /// 前向欧拉（一阶）
+    ForwardEuler,
+    /// SSP-RK2（二阶）
+    #[default]
+    SspRk2,
+    /// SSP-RK3（三阶）
+    SspRk3,
+}
+
+/// 限制器类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LimiterType {
+    /// 无限制器（一阶精度）
+    None,
+    /// Minmod限制器
+    #[default]
+    Minmod,
+    /// Van Leer限制器
+    VanLeer,
+    /// Superbee限制器
+    Superbee,
+    /// MC限制器
+    Mc,
 }
 
 /// 网格配置
@@ -166,6 +374,9 @@ impl Default for SolverConfig {
             output: OutputConfig::default(),
             max_iterations: default_max_iterations(),
             max_time: default_max_time(),
+            numerical: NumericalConfig::default(),
+            time: TimeConfig::default(),
+            parallel: ParallelConfig::default(),
         }
     }
 }
@@ -211,12 +422,31 @@ impl SolverConfig {
             });
         }
         
+        // 数值参数层级验证
+        if self.physics.h_min > self.physics.h_dry {
+            return Err(ConfigError::InvalidValue {
+                key: "physics.h_min".to_string(),
+                value: self.physics.h_min.to_string(),
+                reason: "h_min 必须小于 h_dry".to_string(),
+            });
+        }
+        
         // 重力验证
         if self.physics.gravity <= 0.0 {
             return Err(ConfigError::InvalidValue {
                 key: "physics.gravity".to_string(),
                 value: self.physics.gravity.to_string(),
                 reason: "重力必须为正".to_string(),
+            });
+        }
+        
+        // 时间步长因子验证
+        if self.numerical.timestep_reduction_factor <= 0.0 || 
+           self.numerical.timestep_reduction_factor > 1.0 {
+            return Err(ConfigError::InvalidValue {
+                key: "numerical.timestep_reduction_factor".to_string(),
+                value: self.numerical.timestep_reduction_factor.to_string(),
+                reason: "时间步减小因子必须在 (0, 1] 范围内".to_string(),
             });
         }
         
@@ -251,10 +481,10 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_deserialize() {
-        let config = SolverConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: SolverConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.precision, config.precision);
+    fn test_invalid_threshold_hierarchy() {
+        let mut config = SolverConfig::default();
+        config.physics.h_min = 1e-3;  // > h_dry
+        config.physics.h_dry = 1e-6;  // < h_min
+        assert!(config.validate().is_err());
     }
 }

@@ -26,3 +26,37 @@ members = [
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 
+# =============================================================================
+# Clippy 配置
+# =============================================================================
+# 
+# 这些规则确保代码质量和安全性：
+# - unwrap_used: 禁止使用 .unwrap()，强制显式错误处理
+# - expect_used: 警告使用 .expect()，建议使用 Result 传播
+# - panic: 警告直接使用 panic!，应返回 Result
+# - todo: 警告遗留的 todo! 宏
+# - indexing_slicing: 警告潜在的越界访问
+# 
+# 使用 #[allow(clippy::...)] 在特定位置临时禁用规则
+# 
+[workspace.lints.clippy]
+# 安全相关规则 - 严格禁止
+unwrap_used = "deny"
+# 代码质量规则 - 警告
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+# 数值安全规则
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+# 性能规则
+large_enum_variant = "warn"
+# 文档规则
+missing_docs_in_private_items = "allow"  # 暂时关闭，可后续开启
+
+[workspace.lints.rust]
+# 启用更严格的 Rust lint
+unsafe_code = "warn"  # 警告使用 unsafe，强制添加 SAFETY 注释
+

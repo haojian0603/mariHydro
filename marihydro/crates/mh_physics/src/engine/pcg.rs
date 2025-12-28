@@ -438,6 +438,18 @@ impl SparseMvp<CpuBackend<f64>> for DiagonalMatrix<CpuBackend<f64>> {
     }
 }
 
+impl SparseMvp<CpuBackend<f32>> for DiagonalMatrix<CpuBackend<f32>> {
+    fn apply(&self, x: &Vec<f32>, y: &mut Vec<f32>) {
+        for i in 0..self.n {
+            y[i] = self.diag[i] * x[i];
+        }
+    }
+    
+    fn dimension(&self) -> usize {
+        self.n
+    }
+}
+
 /// 通用稀疏矩阵（CSR 格式）
 /// 
 /// 压缩稀疏行（Compressed Sparse Row）格式的稀疏矩阵，
@@ -525,6 +537,177 @@ impl SparseMvp<CpuBackend<f64>> for CsrMatrix<CpuBackend<f64>> {
     fn dimension(&self) -> usize {
         self.n_rows
     }
+}
+
+impl SparseMvp<CpuBackend<f32>> for CsrMatrix<CpuBackend<f32>> {
+    fn apply(&self, x: &Vec<f32>, y: &mut Vec<f32>) {
+        for i in 0..self.n_rows {
+            y[i] = 0.0;
+        }
+        
+        for row in 0..self.n_rows {
+            let row_start = self.row_ptr[row];
+            let row_end = self.row_ptr[row + 1];
+            
+            let mut sum = 0.0f32;
+            for j in row_start..row_end {
+                let col = self.col_idx[j];
+                sum += self.values[j] * x[col];
+            }
+            y[row] = sum;
+        }
+    }
+    
+    fn dimension(&self) -> usize {
+        self.n_rows
+    }
+}
+
+/// CPU f32 后端的 PCG 求解器实现
+impl PcgSolver<CpuBackend<f32>> {
+    /// 求解线性系统 Ax = b
+    pub fn solve<M: SparseMvp<CpuBackend<f32>>>(
+        &mut self,
+        matrix: &M,
+        x: &mut Vec<f32>,
+        b: &Vec<f32>,
+        precond: Option<&DiagonalMatrix<CpuBackend<f32>>>,
+    ) -> PcgResult<f32> {
+        let n = matrix.dimension();
+        
+        self.workspace.ensure_capacity(&self.backend, n);
+        
+        // 步骤 1: 计算初始残差
+        matrix.apply(x, &mut self.workspace.r);
+        for i in 0..n {
+            self.workspace.r[i] = b[i] - self.workspace.r[i];
+        }
+        
+        let b_norm = dot_product_f32(b, b, n).sqrt();
+        let initial_r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
+        
+        if b_norm < self.config.atol as f32 {
+            return PcgResult {
+                converged: true,
+                iterations: 0,
+                residual_norm: initial_r_norm,
+                initial_residual_norm: initial_r_norm,
+                relative_residual: 0.0,
+            };
+        }
+        
+        // 步骤 2: 应用预处理
+        apply_preconditioner_f32(
+            &self.workspace.r,
+            &mut self.workspace.z,
+            &self.config,
+            precond,
+            n,
+        );
+        
+        // 步骤 3: 初始化搜索方向
+        for i in 0..n {
+            self.workspace.p[i] = self.workspace.z[i];
+        }
+        
+        let mut rho = dot_product_f32(&self.workspace.r, &self.workspace.z, n);
+        
+        // 主迭代循环
+        for iter in 0..self.config.max_iter {
+            matrix.apply(&self.workspace.p, &mut self.workspace.ap);
+            
+            let p_ap = dot_product_f32(&self.workspace.p, &self.workspace.ap, n);
+            if p_ap.abs() < 1e-20 {
+                let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
+                return PcgResult {
+                    converged: false,
+                    iterations: iter,
+                    residual_norm: r_norm,
+                    initial_residual_norm: initial_r_norm,
+                    relative_residual: r_norm / b_norm,
+                };
+            }
+            let alpha = rho / p_ap;
+            
+            for i in 0..n {
+                x[i] += alpha * self.workspace.p[i];
+                self.workspace.r[i] -= alpha * self.workspace.ap[i];
+            }
+            
+            let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
+            let relative_residual = r_norm / b_norm;
+            
+            if r_norm < self.config.atol as f32 || relative_residual < self.config.rtol as f32 {
+                return PcgResult {
+                    converged: true,
+                    iterations: iter + 1,
+                    residual_norm: r_norm,
+                    initial_residual_norm: initial_r_norm,
+                    relative_residual,
+                };
+            }
+            
+            apply_preconditioner_f32(
+                &self.workspace.r,
+                &mut self.workspace.z,
+                &self.config,
+                precond,
+                n,
+            );
+            
+            let rho_new = dot_product_f32(&self.workspace.r, &self.workspace.z, n);
+            let beta = rho_new / rho;
+            rho = rho_new;
+            
+            for i in 0..n {
+                self.workspace.p[i] = self.workspace.z[i] + beta * self.workspace.p[i];
+            }
+        }
+        
+        let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
+        PcgResult {
+            converged: false,
+            iterations: self.config.max_iter,
+            residual_norm: r_norm,
+            initial_residual_norm: initial_r_norm,
+            relative_residual: r_norm / b_norm,
+        }
+    }
+}
+
+fn apply_preconditioner_f32(
+    r: &[f32],
+    z: &mut [f32],
+    config: &PcgConfig,
+    precond: Option<&DiagonalMatrix<CpuBackend<f32>>>,
+    n: usize,
+) {
+    match (config.preconditioner, precond) {
+        (PreconditionerType::Jacobi, Some(diag)) => {
+            for i in 0..n {
+                let d = diag.diag[i];
+                if d.abs() > 1e-20 {
+                    z[i] = r[i] / d;
+                } else {
+                    z[i] = r[i];
+                }
+            }
+        }
+        _ => {
+            for i in 0..n {
+                z[i] = r[i];
+            }
+        }
+    }
+}
+
+#[inline]
+fn dot_product_f32(x: &[f32], y: &[f32], n: usize) -> f32 {
+    let mut sum = 0.0f32;
+    for i in 0..n {
+        sum += x[i] * y[i];
+    }
+    sum
 }
 
 /// 压力泊松矩阵构建器

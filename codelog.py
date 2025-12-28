@@ -216,7 +216,7 @@ class CodeCollector:
                     # 渲染目录
                     lines.append(f"{prefix}+-- {name}/")
                     # 准备下一级前缀
-                    next_prefix = prefix + ("    " if is_last else "|   ")
+                    next_prefix = prefix + (" " if is_last else "| ")
                     render_tree(subnode, next_prefix, is_last)
                 else:
                     # 渲染文件

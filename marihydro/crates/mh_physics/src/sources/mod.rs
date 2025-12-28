@@ -83,6 +83,10 @@ pub mod atmosphere;
 pub mod vegetation;
 pub mod wave_forcing;
 
+// ==================== 强迫适配器 ====================
+pub mod forcing_adapter;
+pub mod wave_source;
+
 // ==================== 湍流模型（独立子模块） ====================
 pub mod turbulence;
 
@@ -153,6 +157,10 @@ pub use inflow::{
 
 // ==================== 波浪驱动源项导出 ====================
 pub use wave_forcing::{WaveForcing, WaveForcingConfig};
+
+// ==================== 强迫适配器导出 ====================
+pub use forcing_adapter::{WindForcingAdapter, WindForcingAdapterGeneric};
+pub use wave_source::{WaveRadiationSource, WaveRadiationSourceGeneric};
 
 // ==================== 结构物源项导出 ====================
 pub use structures::{BridgePierDrag, WeirFlow, WeirType};

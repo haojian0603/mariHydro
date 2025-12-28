@@ -59,10 +59,11 @@ pub mod sediment;
 pub mod sources;
 pub mod waves;
 
-// 新增模块：字段注册、gpu和算子抽象
+// 新增模块：字段注册、gpu、配置桥接和统一错误处理
 pub mod fields;
 pub mod gpu;
-pub mod operators;
+pub mod config_bridge;
+pub mod error;
 
 // 重导出核心运行时符号
 pub use mh_runtime::{
@@ -128,3 +129,6 @@ pub use tracer::{
     TracerAdvectionScheme, TracerDiffusionConfig, TracerTransportConfig, TracerTransportSolver,
     MultiTracerSolver, FaceFlowData, TracerFaceFlux,
 };
+
+// 重导出统一错误类型
+pub use error::{PhysicsError, PhysicsResult};

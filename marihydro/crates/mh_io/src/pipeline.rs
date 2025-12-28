@@ -248,6 +248,40 @@ impl IoPipeline {
         })
     }
 
+    /// 原子地检查并增加待处理计数（修复 TOCTOU 竞争条件）
+    /// 
+    /// 使用 compare_exchange 确保检查和增加操作是原子的，
+    /// 避免多线程并发时的竞争条件。
+    fn try_increment_pending(&self) -> Result<usize, crate::error::IoError> {
+        if self.config.max_pending == 0 {
+            // 无限制模式，直接增加
+            let new_count = self.pending_count.fetch_add(1, Ordering::SeqCst) + 1;
+            return Ok(new_count);
+        }
+        
+        loop {
+            let current = self.pending_count.load(Ordering::SeqCst);
+            
+            if current >= self.config.max_pending {
+                return Err(crate::error::IoError::PipelineFailed {
+                    stage: "submit".to_string(),
+                    message: format!("队列已满 ({}/{})", current, self.config.max_pending),
+                });
+            }
+            
+            // 原子 CAS 操作：仅当当前值未变时才增加
+            match self.pending_count.compare_exchange(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(current + 1),
+                Err(_) => continue, // 值已被其他线程修改，重试
+            }
+        }
+    }
+
     /// 提交输出请求（公共 API）
     pub fn submit(&self, request: OutputRequest) -> crate::error::IoResult<()> {
         if self.shutdown_flag.load(Ordering::SeqCst) {
@@ -257,32 +291,31 @@ impl IoPipeline {
             });
         }
 
-        if self.config.max_pending > 0 {
-            let current = self.pending_count.load(Ordering::SeqCst);
-            if current >= self.config.max_pending {
-                return Err(crate::error::IoError::PipelineFailed {
-                    stage: "submit".to_string(),
-                    message: "队列已满".to_string(),
-                });
-            }
-        }
-
-        self.pending_count.fetch_add(1, Ordering::SeqCst);
+        // 使用原子操作安全地增加计数（修复 TOCTOU）
+        let new_count = self.try_increment_pending()?;
+        
+        // 更新统计信息（使用毒化恢复）
         {
-            let mut stats = self.stats.lock().unwrap();
+            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("PipelineStats mutex was poisoned, recovering");
+                poisoned.into_inner()
+            });
             stats.total_requests += 1;
-            let current = self.pending_count.load(Ordering::SeqCst);
-            stats.current_queue_length = current;
-            if current > stats.max_queue_length {
-                stats.max_queue_length = current;
+            stats.current_queue_length = new_count;
+            if new_count > stats.max_queue_length {
+                stats.max_queue_length = new_count;
             }
         }
 
         self.sender
             .send(request)
-            .map_err(|_| crate::error::IoError::PipelineFailed {
-                stage: "submit".to_string(),
-                message: "管道已关闭".to_string(),
+            .map_err(|_| {
+                // 发送失败时回滚计数
+                self.pending_count.fetch_sub(1, Ordering::SeqCst);
+                crate::error::IoError::PipelineFailed {
+                    stage: "submit".to_string(),
+                    message: "管道已关闭".to_string(),
+                }
             })
     }
 
@@ -368,7 +401,10 @@ impl IoPipeline {
 
     /// 获取统计信息
     pub fn stats(&self) -> PipelineStats {
-        self.stats.lock().unwrap().clone()
+        self.stats.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("PipelineStats mutex was poisoned, recovering");
+            poisoned.into_inner()
+        }).clone()
     }
 
     /// 显式关闭管道
@@ -403,7 +439,10 @@ impl IoPipeline {
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             {
-                let mut s = stats.lock().unwrap();
+                let mut s = stats.lock().unwrap_or_else(|poisoned| {
+                    eprintln!("[mh_io::pipeline] Stats mutex poisoned, recovering");
+                    poisoned.into_inner()
+                });
                 if result.is_ok() {
                     s.completed_requests += 1;
                 } else {
@@ -419,7 +458,10 @@ impl IoPipeline {
 
             pending_count.fetch_sub(1, Ordering::SeqCst);
             {
-                let mut s = stats.lock().unwrap();
+                let mut s = stats.lock().unwrap_or_else(|poisoned| {
+                    eprintln!("[mh_io::pipeline] Stats mutex poisoned, recovering");
+                    poisoned.into_inner()
+                });
                 s.current_queue_length = pending_count.load(Ordering::SeqCst);
             }
         }

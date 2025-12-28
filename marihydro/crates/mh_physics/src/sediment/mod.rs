@@ -29,6 +29,7 @@ pub mod morphology;
 pub mod properties;
 pub mod transport_2_5d;
 pub mod exchange;
+pub mod shear_stress;
 
 // 新版子模块
 #[path = "bed_load/mod.rs"]
@@ -57,5 +58,11 @@ pub use suspended::{DietrichSettling, StokesSettling, VanRijnSettling};
 pub use manager::{
     SedimentManagerGeneric, SedimentStateGeneric, SedimentConfigGeneric,
     SedimentError, SedimentFluxStats,
+};
+
+// 剪切应力导出
+pub use shear_stress::{
+    ShearStress, ShearStressCalculator, ManningCoeff,
+    shields_parameter, critical_shields,
 };
 pub use exchange::{SedimentExchange, ExchangeParams};

@@ -447,69 +447,84 @@ impl<B: Backend> ManningFrictionGeneric<B> {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for ManningFrictionGeneric<CpuBackend<f64>> {
-    fn name(&self) -> &'static str { "Manning 摩擦" }
+// =============================================================================
+// 使用宏生成 f32/f64 的 SourceTermGeneric 实现
+// =============================================================================
 
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+macro_rules! impl_manning_friction_generic {
+    ($scalar:ty) => {
+        impl SourceTermGeneric<CpuBackend<$scalar>> for ManningFrictionGeneric<CpuBackend<$scalar>> {
+            fn name(&self) -> &'static str { "Manning 摩擦" }
 
-    fn is_enabled(&self) -> bool { self.enabled }
+            fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
 
-    fn compute_cell(
-        &self,
-        cell: usize,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
-        let h = state.h[cell];
-        let hu = state.hu[cell];
-        let hv = state.hv[cell];
+            fn is_enabled(&self) -> bool { self.enabled }
 
-        if h < self.config.min_depth {
-            return SourceContributionGeneric::default();
+            fn compute_cell(
+                &self,
+                cell: usize,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) -> SourceContributionGeneric<$scalar> {
+                let h = state.h[cell];
+                let hu = state.hu[cell];
+                let hv = state.hv[cell];
+
+                if h < self.config.min_depth {
+                    return SourceContributionGeneric::default();
+                }
+
+                let n = self.config.manning_n.get(cell).copied().unwrap_or(0.03 as $scalar);
+                let g = self.config.gravity;
+
+                let u = hu / h;
+                let v = hv / h;
+                let speed = (u * u + v * v).sqrt();
+                if speed < (1e-10 as $scalar) {
+                    return SourceContributionGeneric::default();
+                }
+
+                // c_f = g n² / h^(1/3)
+                let h_pow = h.powf(1.0 / 3.0);
+                let cf = (g * n * n / h_pow).min(self.config.max_cf);
+
+                // γ = c_f * |u| / h
+                let gamma = cf * speed / h;
+                let factor = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+
+                SourceContributionGeneric { 
+                    s_h: 0.0 as $scalar, 
+                    s_hu: -cf * speed * u * factor, 
+                    s_hv: -cf * speed * v * factor 
+                }
+            }
+
+            fn accumulate(
+                &self,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                rhs_h: &mut Vec<$scalar>,
+                rhs_hu: &mut Vec<$scalar>,
+                rhs_hv: &mut Vec<$scalar>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) {
+                if !self.enabled {
+                    return;
+                }
+
+                let n_cells = state.n_cells();
+                for cell in 0..n_cells {
+                    let contrib = self.compute_cell(cell, state, ctx);
+                    rhs_h[cell] += contrib.s_h;
+                    rhs_hu[cell] += contrib.s_hu;
+                    rhs_hv[cell] += contrib.s_hv;
+                }
+            }
         }
-
-        let n = self.config.manning_n.get(cell).copied().unwrap_or(0.03);
-        let g = self.config.gravity;
-
-        let u = hu / h;
-        let v = hv / h;
-        let speed = (u * u + v * v).sqrt();
-        if speed < 1e-10 {
-            return SourceContributionGeneric::default();
-        }
-
-        // c_f = g n² / h^(1/3)
-        let h_pow = h.powf(1.0 / 3.0);
-        let cf = (g * n * n / h_pow).min(self.config.max_cf);
-
-        // γ = c_f * |u| / h
-        let gamma = cf * speed / h;
-        let factor = 1.0 / (1.0 + ctx.dt * gamma);
-
-        SourceContributionGeneric { s_h: 0.0, s_hu: -cf * speed * u * factor, s_hv: -cf * speed * v * factor }
-    }
-
-    fn accumulate(
-        &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        ctx: &SourceContextGeneric<f64>,
-    ) {
-        if !self.enabled {
-            return;
-        }
-
-        let n_cells = state.n_cells();
-        for cell in 0..n_cells {
-            let contrib = self.compute_cell(cell, state, ctx);
-            rhs_h[cell] += contrib.s_h;
-            rhs_hu[cell] += contrib.s_hu;
-            rhs_hv[cell] += contrib.s_hv;
-        }
-    }
+    };
 }
+
+impl_manning_friction_generic!(f32);
+impl_manning_friction_generic!(f64);
 
 /// Chezy 摩擦配置（泛型）
 #[derive(Debug, Clone)]
@@ -547,65 +562,80 @@ impl<B: Backend> ChezyFrictionGeneric<B> {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionGeneric<CpuBackend<f64>> {
-    fn name(&self) -> &'static str { "Chezy 摩擦" }
+// =============================================================================
+// 使用宏生成 Chezy f32/f64 的 SourceTermGeneric 实现
+// =============================================================================
 
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+macro_rules! impl_chezy_friction_generic {
+    ($scalar:ty) => {
+        impl SourceTermGeneric<CpuBackend<$scalar>> for ChezyFrictionGeneric<CpuBackend<$scalar>> {
+            fn name(&self) -> &'static str { "Chezy 摩擦" }
 
-    fn is_enabled(&self) -> bool { self.enabled }
+            fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
 
-    fn compute_cell(
-        &self,
-        cell: usize,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
-        let h = state.h[cell];
-        let hu = state.hu[cell];
-        let hv = state.hv[cell];
+            fn is_enabled(&self) -> bool { self.enabled }
 
-        if h < self.config.min_depth {
-            return SourceContributionGeneric::default();
+            fn compute_cell(
+                &self,
+                cell: usize,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) -> SourceContributionGeneric<$scalar> {
+                let h = state.h[cell];
+                let hu = state.hu[cell];
+                let hv = state.hv[cell];
+
+                if h < self.config.min_depth {
+                    return SourceContributionGeneric::default();
+                }
+
+                let c = self.config.chezy_c.get(cell).copied().unwrap_or(50.0 as $scalar);
+                let g = self.config.gravity;
+
+                let u = hu / h;
+                let v = hv / h;
+                let speed = (u * u + v * v).sqrt();
+                if speed < (1e-10 as $scalar) {
+                    return SourceContributionGeneric::default();
+                }
+
+                let cf = g / (c * c);
+                let gamma = cf * speed / h;
+                let factor = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+
+                SourceContributionGeneric { 
+                    s_h: 0.0 as $scalar, 
+                    s_hu: -cf * speed * u * factor, 
+                    s_hv: -cf * speed * v * factor 
+                }
+            }
+
+            fn accumulate(
+                &self,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                rhs_h: &mut Vec<$scalar>,
+                rhs_hu: &mut Vec<$scalar>,
+                rhs_hv: &mut Vec<$scalar>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) {
+                if !self.enabled {
+                    return;
+                }
+
+                let n_cells = state.n_cells();
+                for cell in 0..n_cells {
+                    let contrib = self.compute_cell(cell, state, ctx);
+                    rhs_h[cell] += contrib.s_h;
+                    rhs_hu[cell] += contrib.s_hu;
+                    rhs_hv[cell] += contrib.s_hv;
+                }
+            }
         }
-
-        let c = self.config.chezy_c.get(cell).copied().unwrap_or(50.0);
-        let g = self.config.gravity;
-
-        let u = hu / h;
-        let v = hv / h;
-        let speed = (u * u + v * v).sqrt();
-        if speed < 1e-10 {
-            return SourceContributionGeneric::default();
-        }
-
-        let cf = g / (c * c);
-        let gamma = cf * speed / h;
-        let factor = 1.0 / (1.0 + ctx.dt * gamma);
-
-        SourceContributionGeneric { s_h: 0.0, s_hu: -cf * speed * u * factor, s_hv: -cf * speed * v * factor }
-    }
-
-    fn accumulate(
-        &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        ctx: &SourceContextGeneric<f64>,
-    ) {
-        if !self.enabled {
-            return;
-        }
-
-        let n_cells = state.n_cells();
-        for cell in 0..n_cells {
-            let contrib = self.compute_cell(cell, state, ctx);
-            rhs_h[cell] += contrib.s_h;
-            rhs_hu[cell] += contrib.s_hu;
-            rhs_hv[cell] += contrib.s_hv;
-        }
-    }
+    };
 }
+
+impl_chezy_friction_generic!(f32);
+impl_chezy_friction_generic!(f64);
 
 #[cfg(test)]
 mod tests {

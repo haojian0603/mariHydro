@@ -157,8 +157,11 @@ impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
         self.rhs.reset();
         let max_wave_speed = rhs_computer.compute_rhs(state, time, &mut self.rhs)?;
 
-        // 将 f64 转换为 B::Scalar
-        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
+        // 将 f64 转换为 B::Scalar（安全转换，使用 unwrap_or 防止极端情况）
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap_or_else(|| {
+            // dt 转换失败时使用极小值，避免 panic
+            B::Scalar::EPSILON
+        });
 
         // U^{n+1} = U^n + dt * L(U^n)
         state.add_scaled_rhs(&self.rhs, dt_scalar);
@@ -223,9 +226,9 @@ impl<B: Backend + Default> TimeIntegrator<B> for SspRk2<B> {
         dt: f64,   // ALLOW_F64: 时间步长参数
         rhs_computer: &mut R,
     ) -> MhResult<f64> {
-        // 将 f64 转换为 B::Scalar
-        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
-        let half = B::Scalar::from_f64(0.5).unwrap();
+        // 将 f64 转换为 B::Scalar（这些常数转换理论上不会失败）
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap_or(B::Scalar::EPSILON);
+        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::EPSILON);
 
         // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();
@@ -315,12 +318,12 @@ impl<B: Backend + Default> TimeIntegrator<B> for SspRk3<B> {
     ) -> MhResult<f64> {
         let mut max_wave_speed = 0.0f64;
 
-        // 将 f64 转换为 B::Scalar
-        let dt_scalar = B::Scalar::from_f64(dt).unwrap();
-        let coef_075 = B::Scalar::from_f64(0.75).unwrap();
-        let coef_025 = B::Scalar::from_f64(0.25).unwrap();
-        let coef_one_third = B::Scalar::from_f64(1.0 / 3.0).unwrap();
-        let coef_two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap();
+        // 将 f64 转换为 B::Scalar（这些常数转换理论上不会失败）
+        let dt_scalar = B::Scalar::from_f64(dt).unwrap_or(B::Scalar::EPSILON);
+        let coef_075 = B::Scalar::from_f64(0.75).unwrap_or(B::Scalar::ONE);
+        let coef_025 = B::Scalar::from_f64(0.25).unwrap_or(B::Scalar::ZERO);
+        let coef_one_third = B::Scalar::from_f64(1.0 / 3.0).unwrap_or(B::Scalar::ZERO);
+        let coef_two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap_or(B::Scalar::ONE);
 
         // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();

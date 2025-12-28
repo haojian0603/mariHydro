@@ -161,6 +161,148 @@ impl CoriolisSource {
     }
 }
 
+// =============================================================================
+// 泛型科氏力源项
+// =============================================================================
+
+use super::traits::{
+    SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
+};
+use crate::state::ShallowWaterStateGeneric;
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+
+/// 泛型科氏力配置
+#[derive(Debug, Clone)]
+pub struct CoriolisConfigGeneric<S: RuntimeScalar> {
+    /// 是否启用
+    pub enabled: bool,
+    /// 科氏参数 f = 2ω sin(lat) [rad/s]
+    pub f: S,
+    /// 是否使用精确旋转
+    pub use_exact_rotation: bool,
+}
+
+impl<S: RuntimeScalar> CoriolisConfigGeneric<S> {
+    /// 创建新的科氏力配置
+    pub fn new(f: S) -> Self {
+        Self {
+            enabled: true,
+            f,
+            use_exact_rotation: true,
+        }
+    }
+
+    /// 从纬度创建配置（需要 f64 输入）
+    pub fn from_latitude(lat_deg: f64) -> Self {
+        let f_f64 = 2.0 * EARTH_ANGULAR_VELOCITY * (lat_deg * PI / 180.0).sin();
+        Self::new(S::from_f64(f_f64).unwrap_or(S::ZERO))
+    }
+
+    /// 禁用精确旋转
+    pub fn with_linear_approximation(mut self) -> Self {
+        self.use_exact_rotation = false;
+        self
+    }
+}
+
+impl<S: RuntimeScalar> Default for CoriolisConfigGeneric<S> {
+    fn default() -> Self {
+        Self::from_latitude(30.0)
+    }
+}
+
+/// 泛型科氏力源项
+pub struct CoriolisGeneric<B: Backend> {
+    config: CoriolisConfigGeneric<B::Scalar>,
+    #[allow(dead_code)]
+    backend: B,
+}
+
+impl<B: Backend> CoriolisGeneric<B> {
+    /// 创建新的泛型科氏力源项
+    pub fn new(backend: B, config: CoriolisConfigGeneric<B::Scalar>) -> Self {
+        Self { config, backend }
+    }
+
+    /// 从纬度创建
+    pub fn from_latitude(backend: B, lat_deg: f64) -> Self {
+        Self::new(backend, CoriolisConfigGeneric::from_latitude(lat_deg))
+    }
+}
+
+// 使用宏生成 f32/f64 实现
+macro_rules! impl_coriolis_generic {
+    ($scalar:ty) => {
+        impl SourceTermGeneric<CpuBackend<$scalar>> for CoriolisGeneric<CpuBackend<$scalar>> {
+            fn name(&self) -> &'static str { "Coriolis" }
+
+            fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+            fn is_enabled(&self) -> bool { self.config.enabled }
+
+            fn compute_cell(
+                &self,
+                cell: usize,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) -> SourceContributionGeneric<$scalar> {
+                let h = state.h[cell];
+                if ctx.is_dry(h) {
+                    return SourceContributionGeneric::default();
+                }
+
+                let hu = state.hu[cell];
+                let hv = state.hv[cell];
+                let dt = ctx.dt;
+                let f = self.config.f;
+
+                let (hu_new, hv_new) = if self.config.use_exact_rotation {
+                    let theta = f * dt;
+                    let (sin_t, cos_t) = if theta.abs() < (1e-3 as $scalar) {
+                        let t2 = theta * theta;
+                        (theta * ((1.0 as $scalar) - t2 / (6.0 as $scalar)), 
+                         (1.0 as $scalar) - t2 * (0.5 as $scalar))
+                    } else {
+                        (theta.sin(), theta.cos())
+                    };
+                    (hu * cos_t + hv * sin_t, -hu * sin_t + hv * cos_t)
+                } else {
+                    let dhu = f * hv * dt;
+                    let dhv = -f * hu * dt;
+                    (hu + dhu, hv + dhv)
+                };
+
+                SourceContributionGeneric::momentum(
+                    (hu_new - hu) / dt,
+                    (hv_new - hv) / dt,
+                )
+            }
+
+            fn accumulate(
+                &self,
+                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                _rhs_h: &mut Vec<$scalar>,
+                rhs_hu: &mut Vec<$scalar>,
+                rhs_hv: &mut Vec<$scalar>,
+                ctx: &SourceContextGeneric<$scalar>,
+            ) {
+                if !self.config.enabled {
+                    return;
+                }
+
+                for cell in 0..state.n_cells() {
+                    let contrib = self.compute_cell(cell, state, ctx);
+                    rhs_hu[cell] += contrib.s_hu;
+                    rhs_hv[cell] += contrib.s_hv;
+                }
+            }
+        }
+    };
+}
+
+impl_coriolis_generic!(f32);
+impl_coriolis_generic!(f64);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,6 +14,7 @@ pub mod error;
 pub mod index;
 pub mod memory;
 pub mod metrics;
+pub mod sync;
 pub mod validation;
 
 // 重导出核心类型（仅限基础层）
@@ -35,6 +36,9 @@ pub use memory::{AlignedVec, Alignment, CpuAlign, GpuAlign};
 
 // ✅ 修复：导出 ArenaTag trait
 pub use arena::ArenaTag;
+
+// ✅ 导出同步辅助函数
+pub use sync::{lock_or_recover, read_or_recover, write_or_recover, LockStrategy, lock_with_strategy};
 
 /// Prelude 模块，包含常用类型
 pub mod prelude {

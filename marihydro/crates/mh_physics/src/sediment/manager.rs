@@ -459,6 +459,138 @@ impl SedimentManagerGeneric<CpuBackend<f64>> {
         
         Ok(())
     }
+    
+    /// 完整的悬移质步进（包含对流-扩散输运）
+    /// 
+    /// 包含：
+    /// 1. 计算沉降通量
+    /// 2. 计算再悬浮通量（基于床面剪应力）
+    /// 3. 创建源项场
+    /// 4. 调用 TracerTransportSolver 进行对流-扩散输运
+    /// 5. 更新床面交换
+    /// 
+    /// # 参数
+    /// 
+    /// - `state`: 水动力状态
+    /// - `cell_areas`: 单元面积
+    /// - `tracer_rhs`: 用于 tracer 输运的源项缓冲区
+    /// - `dt`: 时间步长
+    /// 
+    /// # 返回
+    /// 
+    /// 返回泥沙通量统计
+    pub fn step_suspended_transport(
+        &mut self,
+        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        cell_areas: &[f64],
+        tracer_rhs: &mut [f64],
+        dt: f64,
+    ) -> Result<SedimentFluxStats<f64>, SedimentError> {
+        let n_cells = self.state.n_cells;
+        let h_min = self.config.min_depth;
+        let ws = self.config.settling_velocity;
+        let tau_c = self.config.tau_critical;
+        let m = self.config.erosion_rate;
+        
+        let mut stats = SedimentFluxStats::default();
+        let mut max_erosion = 0.0f64;
+        let mut max_deposition = 0.0f64;
+        
+        // 步骤 1-2: 计算沉降通量和再悬浮通量
+        for i in 0..n_cells {
+            let h = state.h[i];
+            let tau = self.tau_bed[i];
+            let c = self.state.concentration[i];
+            
+            if h < h_min {
+                tracer_rhs[i] = 0.0;
+                self.exchange_flux[i] = 0.0;
+                continue;
+            }
+            
+            // 沉降通量 [kg/m²/s]
+            let settling = ws * c;
+            
+            // 再悬浮通量 [kg/m²/s]
+            let resuspension = if tau > tau_c && self.state.bed_mass[i] > 0.0 {
+                m * (tau - tau_c) / tau_c
+            } else {
+                0.0
+            };
+            
+            // 净交换通量（正值=侵蚀）
+            let net_flux = resuspension - settling;
+            self.exchange_flux[i] = net_flux;
+            
+            // 步骤 3: 创建源项场（转换为浓度变化率）
+            // dC/dt = F/h
+            tracer_rhs[i] = net_flux / h;
+            
+            // 收集统计
+            let area = cell_areas.get(i).copied().unwrap_or(1.0);
+            if net_flux > 0.0 {
+                stats.total_erosion += net_flux * area;
+                if net_flux > max_erosion {
+                    max_erosion = net_flux;
+                    stats.max_erosion_cell = i;
+                }
+            } else {
+                stats.total_deposition += (-net_flux) * area;
+                if -net_flux > max_deposition {
+                    max_deposition = -net_flux;
+                    stats.max_deposition_cell = i;
+                }
+            }
+        }
+        
+        stats.net_exchange = stats.total_erosion - stats.total_deposition;
+        
+        Ok(stats)
+    }
+    
+    /// 应用对流-扩散后更新床面交换
+    /// 
+    /// 在 TracerTransportSolver 完成对流-扩散后调用此方法
+    /// 
+    /// # 参数
+    /// 
+    /// - `advected_concentration`: 对流后的浓度场
+    /// - `dt`: 时间步长
+    pub fn apply_bed_exchange(
+        &mut self,
+        advected_concentration: &[f64],
+        dt: f64,
+    ) {
+        let n_cells = self.state.n_cells;
+        
+        for i in 0..n_cells {
+            // 更新浓度
+            if i < advected_concentration.len() {
+                self.state.concentration[i] = advected_concentration[i].max(0.0);
+            }
+            
+            // 更新床面质量
+            let delta_mass = -self.exchange_flux[i] * dt; // 负交换通量增加床面
+            let new_bed = (self.state.bed_mass[i] + delta_mass).max(0.0);
+            self.state.bed_mass[i] = new_bed;
+        }
+    }
+    
+    /// 计算床面高程变化率
+    /// 
+    /// 基于 Exner 方程: ∂z_b/∂t = -1/((1-p)ρ_s) * (E - D)
+    /// 
+    /// # 参数
+    /// 
+    /// - `cell`: 单元索引
+    pub fn bed_elevation_change_rate(&self, cell: usize) -> f64 {
+        let flux = self.exchange_flux.get(cell).copied().unwrap_or(0.0);
+        let rho_s = self.config.sediment_density;
+        let p = self.config.porosity;
+        
+        // 侵蚀（正通量）降低床面高程
+        -flux / ((1.0 - p) * rho_s)
+    }
 }
 
 #[cfg(test)]

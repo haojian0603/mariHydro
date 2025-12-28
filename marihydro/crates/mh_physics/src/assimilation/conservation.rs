@@ -150,3 +150,180 @@ impl ConservationChecker {
             .map(|(_, e)| e)
     }
 }
+
+// ============================================================================
+// 能量守恒检查
+// ============================================================================
+
+/// 能量守恒检查结果
+#[derive(Debug, Clone)]
+pub enum EnergyCheckResult {
+    /// 能量守恒在容差范围内
+    Conserved {
+        /// 能量变化量
+        change: f64,
+        /// 相对变化
+        relative_change: f64,
+    },
+    /// 能量耗散（物理上允许）
+    Dissipated {
+        /// 耗散量
+        dissipation: f64,
+        /// 相对耗散率
+        relative_rate: f64,
+    },
+    /// 能量增加（非物理，错误）
+    Increased {
+        /// 增加量
+        increase: f64,
+        /// 相对增加率
+        relative_rate: f64,
+    },
+}
+
+impl EnergyCheckResult {
+    /// 检查是否为物理合理状态
+    pub fn is_physical(&self) -> bool {
+        matches!(self, Self::Conserved { .. } | Self::Dissipated { .. })
+    }
+    
+    /// 检查是否违反能量守恒
+    pub fn is_violated(&self) -> bool {
+        matches!(self, Self::Increased { .. })
+    }
+}
+
+/// 检查能量守恒
+///
+/// # 参数
+///
+/// - `before`: 变化前的守恒量
+/// - `after`: 变化后的守恒量
+/// - `tolerance`: 相对容差（用于判断是否守恒）
+///
+/// # 返回
+///
+/// 能量检查结果
+///
+/// # 说明
+///
+/// - 能量守恒：变化在容差范围内
+/// - 能量耗散：能量减少（物理上允许，如摩擦耗散）
+/// - 能量增加：能量增加（非物理，表明数值方法有问题）
+pub fn check_energy_conservation(
+    before: &ConservedQuantities,
+    after: &ConservedQuantities,
+    tolerance: f64,
+) -> EnergyCheckResult {
+    let energy_before = before.total_energy;
+    let energy_after = after.total_energy;
+    let change = energy_after - energy_before;
+    
+    // 避免除零
+    let reference_energy = energy_before.abs().max(1e-10);
+    let relative_change = change / reference_energy;
+    
+    if relative_change.abs() < tolerance {
+        EnergyCheckResult::Conserved {
+            change,
+            relative_change,
+        }
+    } else if relative_change < 0.0 {
+        // 能量减少 = 耗散
+        EnergyCheckResult::Dissipated {
+            dissipation: -change,
+            relative_rate: -relative_change,
+        }
+    } else {
+        // 能量增加 = 非物理
+        EnergyCheckResult::Increased {
+            increase: change,
+            relative_rate: relative_change,
+        }
+    }
+}
+
+/// 验证能量守恒，违反时返回错误
+///
+/// # 参数
+///
+/// - `before`: 变化前的守恒量
+/// - `after`: 变化后的守恒量
+/// - `tolerance`: 相对容差
+///
+/// # 返回
+///
+/// - `Ok(())`: 能量守恒或耗散
+/// - `Err(PhysicsError)`: 能量非物理增加
+pub fn verify_energy_conservation(
+    before: &ConservedQuantities,
+    after: &ConservedQuantities,
+    tolerance: f64,
+) -> crate::error::PhysicsResult<()> {
+    match check_energy_conservation(before, after, tolerance) {
+        EnergyCheckResult::Conserved { .. } | EnergyCheckResult::Dissipated { .. } => Ok(()),
+        EnergyCheckResult::Increased { increase, relative_rate } => {
+            Err(crate::error::PhysicsError::EnergyIncreased {
+                before: before.total_energy,
+                after: after.total_energy,
+                relative_increase: relative_rate,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_quantities(energy: f64) -> ConservedQuantities {
+        ConservedQuantities {
+            total_mass: 1000.0,
+            total_momentum_x: 0.0,
+            total_momentum_y: 0.0,
+            total_sediment: None,
+            total_energy: energy,
+        }
+    }
+
+    #[test]
+    fn test_energy_conserved() {
+        let before = make_quantities(1000.0);
+        let after = make_quantities(1000.001);
+        
+        let result = check_energy_conservation(&before, &after, 0.01);
+        assert!(matches!(result, EnergyCheckResult::Conserved { .. }));
+        assert!(result.is_physical());
+    }
+
+    #[test]
+    fn test_energy_dissipated() {
+        let before = make_quantities(1000.0);
+        let after = make_quantities(900.0);
+        
+        let result = check_energy_conservation(&before, &after, 0.01);
+        assert!(matches!(result, EnergyCheckResult::Dissipated { .. }));
+        assert!(result.is_physical());
+    }
+
+    #[test]
+    fn test_energy_increased() {
+        let before = make_quantities(1000.0);
+        let after = make_quantities(1100.0);
+        
+        let result = check_energy_conservation(&before, &after, 0.01);
+        assert!(matches!(result, EnergyCheckResult::Increased { .. }));
+        assert!(!result.is_physical());
+        assert!(result.is_violated());
+    }
+
+    #[test]
+    fn test_verify_energy_conservation() {
+        let before = make_quantities(1000.0);
+        let after_ok = make_quantities(950.0);
+        let after_bad = make_quantities(1100.0);
+        
+        assert!(verify_energy_conservation(&before, &after_ok, 0.01).is_ok());
+        assert!(verify_energy_conservation(&before, &after_bad, 0.01).is_err());
+    }
+}

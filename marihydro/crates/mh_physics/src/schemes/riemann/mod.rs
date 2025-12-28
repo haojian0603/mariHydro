@@ -29,6 +29,7 @@ mod adaptive;
 mod hllc;
 mod rusanov;
 mod traits;
+pub mod batch;
 
 // 核心类型（泛型化）
 pub use traits::{
@@ -53,4 +54,7 @@ pub use adaptive::{
     AdaptiveStats, SolverChoice,
 };
 
-
+// 批量求解器接口
+pub use batch::{
+    BatchRiemannSolver, BatchCellStates, BatchNormals, BatchFluxes,
+};

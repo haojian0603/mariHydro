@@ -66,6 +66,7 @@
 mod types;
 mod manager;
 mod ghost;
+pub mod traits;
 
 // 从 types 模块导出
 pub use types::{
@@ -92,4 +93,20 @@ pub use ghost::{
     decompose_velocity,
 };
 
-
+// 从 traits 模块导出核心类型
+pub use traits::{
+    BoundaryConditionTrait,
+    CellState,
+    DynBoundaryCondition,
+    BoundaryRegistry,
+    BoundaryParseError,
+    // 内置边界类型
+    Reflective,
+    Transmissive,
+    NoSlipWall,
+    SlipWall,
+    Inflow,
+    FixedLevelOutflow,
+    TidalLevel,
+    FlatherBoundary,
+};
