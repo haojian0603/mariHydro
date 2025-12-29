@@ -9,6 +9,9 @@ description = "Workflow management for MariHydro"
 [dependencies]
 # 内部依赖
 mh_foundation = { path = "../mh_foundation" }
+mh_runtime = { path = "../mh_runtime" }
+mh_io = { path = "../mh_io" }
+mh_physics = { path = "../mh_physics" }
 
 # 同步原语
 parking_lot = "0.12"

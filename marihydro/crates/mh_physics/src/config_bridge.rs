@@ -1,3 +1,4 @@
+// crates/mh_physics/src/config_bridge.rs
 //! 配置转换桥梁（Layer 4 → Layer 3）
 //!
 //! 本模块提供从应用层配置（mh_config::SolverConfig）到引擎层
@@ -130,6 +131,18 @@ where
     /// 设置隐式摩擦
     pub fn implicit_friction(mut self, value: bool) -> Self {
         self.config.implicit_friction = value;
+        self
+    }
+
+    /// 设置NaN检测（新增方法）
+    pub fn nan_detection_enabled(mut self, enabled: bool) -> Self {
+        self.config.stability.check_nan = enabled;
+        self
+    }
+
+    /// 设置稳定性选项（更通用的方法）
+    pub fn stability_options(mut self, options: StabilityOptions) -> Self {
+        self.config.stability = options;
         self
     }
 

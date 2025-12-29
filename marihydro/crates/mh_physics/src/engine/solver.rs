@@ -487,8 +487,19 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (flux_hu, flux_hv)
     }
 
-    /// 恢复并优化边界压力处理
-    /// 固壁边界需要压力项保持静水平衡，但质量通量为零
+    /// 新增：统一的边界压力处理函数
+    fn apply_boundary_pressures(&mut self, state: &ShallowWaterState<B>) {
+        for face_idx in self.mesh.boundary_faces() {
+            let face = FaceIndex::new(face_idx);
+            let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
+            let owner = self.mesh.face_owner(face);
+            self.workspace.flux_hu[owner.get()] += flux_hu;
+            self.workspace.flux_hv[owner.get()] += flux_hv;
+            // 质量通量保持为零（无穿透）
+        }
+    }
+
+    /// 简化后的串行版本
     fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let mut max_wave_speed = 0.0_f64;
 
@@ -520,20 +531,12 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 使用公共函数计算边界压力
-        for face_idx in self.mesh.boundary_faces() {
-            let face = FaceIndex::new(face_idx);
-            let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
-            let owner = self.mesh.face_owner(face);
-            self.workspace.flux_hu[owner.get()] += flux_hu;
-            self.workspace.flux_hv[owner.get()] += flux_hv;
-            // 质量通量保持为零（无穿透）
-        }
-
+        // 统一处理边界
+        self.apply_boundary_pressures(state);
         max_wave_speed
     }
 
-    /// 并行版本同样使用公共函数处理边界压力
+    /// 简化后的并行版本
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let max_speed_atomic = AtomicU64::new(0u64);
 
@@ -573,15 +576,9 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 使用公共函数计算边界压力
-        for face_idx in self.mesh.boundary_faces() {
-            let face = FaceIndex::new(face_idx);
-            let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
-            let owner = self.mesh.face_owner(face);
-            self.workspace.flux_hu[owner.get()] += flux_hu;
-            self.workspace.flux_hv[owner.get()] += flux_hv;
-        }
-
+        // 统一处理边界（边界通常较短，串行处理即可）
+        self.apply_boundary_pressures(state);
+        
         let bits = max_speed_atomic.load(Ordering::Relaxed);
         f64::from_bits(bits)
     }

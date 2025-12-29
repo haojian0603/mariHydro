@@ -40,6 +40,8 @@ pub use timestep::{
 };
 pub use solver::{
     ShallowWaterSolver,
+    ShallowWaterSolverF64,
+    ShallowWaterSolverF32,
     SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
     BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
     StabilityStatus,

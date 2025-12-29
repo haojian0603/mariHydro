@@ -1,5 +1,4 @@
 //! marihydro\crates\mh_physics\tests\pathological_tests.rs
-//! 
 //! 病态边缘情况与鲁棒性验证测试
 //!
 //! 本模块包含对求解器在极端数值条件下的严格验证，覆盖：
@@ -10,6 +9,7 @@
 //! - 多线程内存安全
 //!
 //! 所有测试必须满足：编译零警告、Miri无UB、覆盖率>95%。
+
 use mh_runtime::{KahanSum, CpuBackend};
 use mh_physics::{
     numerics::linear_algebra::{
@@ -18,12 +18,12 @@ use mh_physics::{
         IterativeSolver,
     },
     ShallowWaterStateF64,
-    engine::ShallowWaterSolver,
-    PhysicsMesh,
+    engine::ShallowWaterSolverF64,
+    adapter::PhysicsMesh,
     types::NumericalParams,
     Layer3Config,
+    engine::StabilityOptions,  // 新增：用于配置稳定性选项
 };
-use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -240,6 +240,12 @@ fn test_ill_conditioned_matrix_stability() {
             println!("求解器状态: {:?}", result.status);
         }
     }
+
+    // 解必须有限
+    assert!(
+        x.iter().all(|v: &f64| v.is_finite()),
+        "奇异矩阵求解产生非有限值"
+    );
 }
 
 // ============================================================
@@ -256,36 +262,23 @@ fn test_nan_propagation_blocking() {
     state.hu[5] = 1.0;
     state.hv[5] = 0.5;
 
-    let config = Layer3Config::default();
+    let config = Layer3Config::builder()
+        .nan_detection_enabled(true)  // 关键：启用NaN检测
+        .build();
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
 
-    // 必须捕获panic或优雅降级
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        solver.step(&mut state, 0.01);
-    }));
+    // 执行一步模拟，求解器应自动清理NaN
+    solver.step(&mut state, 0.01);
 
-    // 当前实现可能 panic 或继续运行
-    // 两种行为都是可接受的：
-    // 1. panic - 快速失败，防止污染扩散
-    // 2. 继续运行并清理 NaN - 优雅降级
-    // 不可接受的是：悄悄继续运行且不处理 NaN
+    // 验证：NaN单元被重置为干单元
+    assert_eq!(state.h[5], 0.0);
+    assert_eq!(state.hu[5], 0.0);
+    assert_eq!(state.hv[5], 0.0);
     
-    match result {
-        Ok(_) => {
-            // 如果没有 panic，检查是否清理了 NaN 或者 NaN 未被传播
-            // 当前实现可能保留 NaN，这是一个已知的改进点
-            // 标记为 TODO: 实现 NaN 检测和清理机制
-            println!("求解器未 panic，NaN 处理状态待验证");
-        }
-        Err(_) => {
-            // panic 是可接受的快速失败行为
-            println!("求解器因 NaN 输入而 panic，这是安全的快速失败行为");
-        }
-    }
-    
-    // 此测试目前仅验证不会导致未定义行为
-    // TODO: 增强实现以支持 NaN 检测和清理
+    // 验证：求解器统计了NaN
+    assert_eq!(solver.stats().nan_count, 1);
+    assert!(solver.stats().last_nan_location.is_some());
 }
 
 // ============================================================
@@ -311,7 +304,7 @@ fn test_negative_depth_recovery() {
     };
 
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
     
     // 执行一步模拟，求解器应内部处理负水深
     solver.step(&mut state, 0.001);
@@ -346,7 +339,7 @@ fn test_velocity_clamping_extreme() {
     };
 
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
     solver.step(&mut state, 0.001);
 
     // 获取速度
@@ -401,7 +394,7 @@ fn test_wet_dry_oscillation_stability() {
 
     let config = Layer3Config::default();
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
 
     // 运行100步模拟（减少以加快测试）
     let initial_mass: f64 = state.h.iter().sum();
@@ -434,20 +427,18 @@ fn test_wet_dry_oscillation_stability() {
 
 #[test]
 fn test_concurrent_state_read() {
-    // 使用标准库的多线程测试
     use std::thread;
-    use std::sync::Arc;
     
     let state = Arc::new(ShallowWaterStateF64::new(10));
     let params = Arc::new(NumericalParams::default());
     
     let handles: Vec<_> = (0..3)
         .map(|_| {
-            let state: Arc<ShallowWaterStateF64> = Arc::clone(&state);
+            let state = Arc::clone(&state);
             let params = Arc::clone(&params);
             thread::spawn(move || {
                 for i in 0..10 {
-                    let _ = state.velocity(i, &params);
+                    let _ = state.velocity(i % state.n_cells(), &params);
                 }
             })
         })
@@ -507,6 +498,7 @@ fn test_solver_on_singular_matrix() {
 // ============================================================
 // 测试 10: 灾难性抵消数值验证
 // ============================================================
+
 
 #[test]
 fn test_catastrophic_cancellation_prevention() {
@@ -570,7 +562,7 @@ fn test_boundary_extreme_values() {
 
     let config = Layer3Config::default();
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
 
     // 一步模拟
     solver.step(&mut state, 0.1);
@@ -590,6 +582,7 @@ fn test_boundary_extreme_values() {
 // 测试 12: 长期稳定性（1000步）
 // ============================================================
 
+
 #[test]
 fn test_long_term_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
@@ -606,7 +599,7 @@ fn test_long_term_stability() {
     };
 
     let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
 
     // 记录初始质量
     let initial_mass: f64 = state.h.iter().sum();
@@ -652,6 +645,7 @@ fn test_long_term_stability() {
 // ============================================================
 // 测试 13: 收敛判据边界值
 // ============================================================
+
 
 #[test]
 fn test_convergence_criteria_edge_cases() {
@@ -708,8 +702,9 @@ fn test_parallel_solver_consistency() {
 }
 
 // ============================================================
-// 测试 15: 内存泄漏检测（valgrind前置）
+// 测试 15: 内存泄漏检测（前置验证）
 // ============================================================
+
 
 #[test]
 fn test_no_memory_leak_in_solver() {
@@ -727,4 +722,51 @@ fn test_no_memory_leak_in_solver() {
 
     // 此测试通过valgrind运行，此处仅确保无panic
     // 如果执行到这里，说明100次求解无内存泄漏迹象
+}
+
+// ============================================================
+// 新增的NaN检测集成测试
+// ============================================================
+
+/// 验证求解器的NaN检测机制正确集成
+#[test]
+fn test_nan_detection_integration() {
+    let mesh = Arc::new(PhysicsMesh::empty(20));
+    let backend = CpuBackend::<f64>::new();
+    
+    // 启用NaN检测的配置
+    let config = Layer3Config::builder()
+        .stability_options(StabilityOptions {
+            check_nan: true,
+            ..Default::default()
+        })
+        .params(NumericalParams {
+            h_min: 1e-9,
+            h_dry: 1e-6,
+            ..Default::default()
+        })
+        .build();
+    
+    let mut solver = ShallowWaterSolverF64::new(mesh, config, backend);
+    let mut state = ShallowWaterStateF64::new(20);
+    
+    // 在随机位置注入NaN
+    state.h[5] = f64::NAN;
+    state.hu[10] = f64::NAN;
+    state.hv[15] = f64::INFINITY;
+    
+    // 执行多步，观察清理效果
+    for step in 0..10 {
+        solver.step(&mut state, 0.01);
+        
+        // 验证所有值已清理为有限值
+        for i in 0..20 {
+            assert!(state.h[i].is_finite(), "步数 {} 单元 {} h未清理", step, i);
+            assert!(state.hu[i].is_finite(), "步数 {} 单元 {} hu未清理", step, i);
+            assert!(state.hv[i].is_finite(), "步数 {} 单元 {} hv未清理", step, i);
+        }
+    }
+    
+    // 验证计数器正确累加
+    assert!(solver.stats().nan_count >= 3, "应检测到至少3个NaN");
 }

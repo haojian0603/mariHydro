@@ -16,20 +16,102 @@
 //! # 使用示例
 //!
 //! ```
-//! use mh_physics::numerics::{GreenGaussGradient, GradientMethodGeneric};
-//! use mh_mesh::FrozenMesh;
-//!
+//! use mh_physics::numerics::{GreenGaussGradient, GradientMethodGeneric, ScalarGradientStorage};
+//! use mh_physics::adapter::PhysicsMesh;
+//! use mh_runtime::CellIndex;
+//! 
+//! // 创建简单测试网格（2个单元）
+//! fn create_test_mesh() -> PhysicsMesh {
+//!     use mh_geo::{Point2D, Point3D};
+//!     use mh_mesh::FrozenMesh;
+//!     
+//!     let frozen = FrozenMesh {
+//!         n_nodes: 6,
+//!         node_coords: vec![
+//!             Point3D::new(0.0, 0.0, 0.0),
+//!             Point3D::new(1.0, 0.0, 0.0),
+//!             Point3D::new(2.0, 0.0, 0.0),
+//!             Point3D::new(0.0, 1.0, 0.0),
+//!             Point3D::new(1.0, 1.0, 0.0),
+//!             Point3D::new(2.0, 1.0, 0.0),
+//!         ],
+//!         n_cells: 2,
+//!         cell_center: vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)],
+//!         cell_area: vec![1.0, 1.0],
+//!         cell_z_bed: vec![0.0, 0.0],
+//!         cell_node_offsets: vec![0, 4, 8],
+//!         cell_node_indices: vec![0, 1, 4, 3, 1, 2, 5, 4],
+//!         cell_face_offsets: vec![0, 4, 8],
+//!         cell_face_indices: vec![0, 1, 2, 3, 0, 4, 5, 6],
+//!         cell_neighbor_offsets: vec![0, 1, 2],
+//!         cell_neighbor_indices: vec![1, 0],
+//!         n_faces: 7,
+//!         n_interior_faces: 1,
+//!         face_center: vec![
+//!             Point2D::new(1.0, 0.5),
+//!             Point2D::new(0.5, 0.0),
+//!             Point2D::new(0.0, 0.5),
+//!             Point2D::new(0.5, 1.0),
+//!             Point2D::new(1.5, 0.0),
+//!             Point2D::new(2.0, 0.5),
+//!             Point2D::new(1.5, 1.0),
+//!         ],
+//!         face_normal: vec![
+//!             Point3D::new(1.0, 0.0, 0.0),
+//!             Point3D::new(0.0, -1.0, 0.0),
+//!             Point3D::new(-1.0, 0.0, 0.0),
+//!             Point3D::new(0.0, 1.0, 0.0),
+//!             Point3D::new(0.0, -1.0, 0.0),
+//!             Point3D::new(1.0, 0.0, 0.0),
+//!             Point3D::new(0.0, 1.0, 0.0),
+//!         ],
+//!         face_length: vec![1.0; 7],
+//!         face_z_left: vec![0.0; 7],
+//!         face_z_right: vec![0.0; 7],
+//!         face_owner: vec![0, 0, 0, 0, 1, 1, 1],
+//!         face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
+//!         face_delta_owner: vec![Point2D::new(0.0, 0.0); 7],
+//!         face_delta_neighbor: vec![Point2D::new(0.0, 0.0); 7],
+//!         face_dist_o2n: vec![1.0; 7],
+//!         boundary_face_indices: (1..7).map(|i| i as u32).collect(),
+//!         boundary_names: vec!["boundary".to_string()],
+//!         face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
+//!         min_cell_size: 1.0,
+//!         max_cell_size: 1.0,
+//!         cell_refinement_level: vec![0; 2],
+//!         cell_parent: vec![0, 1],
+//!         ghost_capacity: 0,
+//!         cell_original_id: Vec::new(),
+//!         face_original_id: Vec::new(),
+//!         cell_permutation: Vec::new(),
+//!         cell_inv_permutation: Vec::new(),
+//!     };
+//!     PhysicsMesh::from_frozen(&frozen)
+//! }
+//! 
+//! // 辅助函数：检测边界单元（所有关联面都是边界面的单元）
+//! fn get_boundary_cells(mesh: &PhysicsMesh) -> Vec<usize> {
+//!     (0..mesh.n_cells())
+//!         .filter(|&cell| {
+//!             let cell_idx = CellIndex::new(cell);
+//!             mesh.cell_faces(cell_idx)
+//!                 .all(|face| mesh.face_neighbor(face).is_none())
+//!         })
+//!         .collect()
+//! }
+//! 
 //! let mesh = create_test_mesh();
 //! let gg = GreenGaussGradient::new()
 //!     .with_boundary_cache(&mesh); // 启用缓存优化
-//!
-//! let field = vec![1.0, 2.0, 3.0, 4.0];
+//! 
+//! let field = vec![1.0, 2.0];
 //! let mut grad = ScalarGradientStorage::new(mesh.n_cells());
-//!
+//! 
 //! gg.compute_scalar_gradient(&field, &mesh, &mut grad);
-//!
+//! 
 //! // 边界单元梯度精确为零（静水平衡保持）
-//! for i in mesh.boundary_cells() {
+//! let boundary_cells = get_boundary_cells(&mesh);
+//! for i in boundary_cells {
 //!     assert!(grad.get(i).length() < 1e-10);
 //! }
 //! ```
@@ -155,12 +237,87 @@ impl GreenGaussGradient {
     ///
     /// # 示例
     /// ```
-    /// let mesh = load_mesh("domain.msh");
+    /// use mh_physics::numerics::{GreenGaussGradient, GradientMethodGeneric, ScalarGradientStorage};
+    /// use mh_physics::adapter::PhysicsMesh;
+    /// use mh_runtime::CellIndex;
+    /// 
+    /// fn create_test_mesh() -> PhysicsMesh {
+    ///     use mh_geo::{Point2D, Point3D};
+    ///     use mh_mesh::FrozenMesh;
+    ///     
+    ///     let frozen = FrozenMesh {
+    ///         n_nodes: 6,
+    ///         node_coords: vec![
+    ///             Point3D::new(0.0, 0.0, 0.0),
+    ///             Point3D::new(1.0, 0.0, 0.0),
+    ///             Point3D::new(2.0, 0.0, 0.0),
+    ///             Point3D::new(0.0, 1.0, 0.0),
+    ///             Point3D::new(1.0, 1.0, 0.0),
+    ///             Point3D::new(2.0, 1.0, 0.0),
+    ///         ],
+    ///         n_cells: 2,
+    ///         cell_center: vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)],
+    ///         cell_area: vec![1.0, 1.0],
+    ///         cell_z_bed: vec![0.0, 0.0],
+    ///         cell_node_offsets: vec![0, 4, 8],
+    ///         cell_node_indices: vec![0, 1, 4, 3, 1, 2, 5, 4],
+    ///         cell_face_offsets: vec![0, 4, 8],
+    ///         cell_face_indices: vec![0, 1, 2, 3, 0, 4, 5, 6],
+    ///         cell_neighbor_offsets: vec![0, 1, 2],
+    ///         cell_neighbor_indices: vec![1, 0],
+    ///         n_faces: 7,
+    ///         n_interior_faces: 1,
+    ///         face_center: vec![
+    ///             Point2D::new(1.0, 0.5),
+    ///             Point2D::new(0.5, 0.0),
+    ///             Point2D::new(0.0, 0.5),
+    ///             Point2D::new(0.5, 1.0),
+    ///             Point2D::new(1.5, 0.0),
+    ///             Point2D::new(2.0, 0.5),
+    ///             Point2D::new(1.5, 1.0),
+    ///         ],
+    ///         face_normal: vec![
+    ///             Point3D::new(1.0, 0.0, 0.0),
+    ///             Point3D::new(0.0, -1.0, 0.0),
+    ///             Point3D::new(-1.0, 0.0, 0.0),
+    ///             Point3D::new(0.0, 1.0, 0.0),
+    ///             Point3D::new(0.0, -1.0, 0.0),
+    ///             Point3D::new(1.0, 0.0, 0.0),
+    ///             Point3D::new(0.0, 1.0, 0.0),
+    ///         ],
+    ///         face_length: vec![1.0; 7],
+    ///         face_z_left: vec![0.0; 7],
+    ///         face_z_right: vec![0.0; 7],
+    ///         face_owner: vec![0, 0, 0, 0, 1, 1, 1],
+    ///         face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
+    ///         face_delta_owner: vec![Point2D::new(0.0, 0.0); 7],
+    ///         face_delta_neighbor: vec![Point2D::new(0.0, 0.0); 7],
+    ///         face_dist_o2n: vec![1.0; 7],
+    ///         boundary_face_indices: (1..7).map(|i| i as u32).collect(),
+    ///         boundary_names: vec!["boundary".to_string()],
+    ///         face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
+    ///         min_cell_size: 1.0,
+    ///         max_cell_size: 1.0,
+    ///         cell_refinement_level: vec![0; 2],
+    ///         cell_parent: vec![0, 1],
+    ///         ghost_capacity: 0,
+    ///         cell_original_id: Vec::new(),
+    ///         face_original_id: Vec::new(),
+    ///         cell_permutation: Vec::new(),
+    ///         cell_inv_permutation: Vec::new(),
+    ///     };
+    ///     PhysicsMesh::from_frozen(&frozen)
+    /// }
+    /// 
+    /// let mesh = create_test_mesh();
     /// let gg = GreenGaussGradient::new()
     ///     .with_boundary_cache(&mesh); // 仅一次开销
-    ///
+    /// 
     /// // 在多个时间步中重复使用
-    /// for step in 0..1000 {
+    /// let mut field = vec![1.0, 2.0];
+    /// let mut grad = ScalarGradientStorage::new(mesh.n_cells());
+    /// for step in 0..10 {
+    ///     field[0] += 0.1;
     ///     gg.compute_scalar_gradient(&field, &mesh, &mut grad);
     /// }
     /// ```

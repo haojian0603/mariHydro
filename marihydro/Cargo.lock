@@ -705,6 +705,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "mh_foundation",
+ "mh_io",
+ "mh_physics",
+ "mh_runtime",
  "parking_lot",
  "rayon",
  "serde",
