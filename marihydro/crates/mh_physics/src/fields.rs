@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_clone_independence() {
-        let mut registry1 = FieldRegistry::shallow_water();
+        let registry1 = FieldRegistry::shallow_water();
         let mut registry2 = registry1.clone();
         
         // 修改 clone 不影响原注册表

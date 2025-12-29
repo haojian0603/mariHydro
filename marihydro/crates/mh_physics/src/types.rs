@@ -997,7 +997,6 @@ impl BoundaryValueProvider<f64> for ZeroBoundaryProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::RuntimeScalar;
 
     #[test]
     fn test_cell_index_basic() {
@@ -1121,7 +1120,7 @@ mod tests {
     fn test_boundary_provider_constant() {
         let provider = ConstantBoundaryProvider::new(10.0f64);
         assert_eq!(provider.get_value(0, 0.0), Some(10.0f64));
-        assert_eq!(provider.provides_for(999), true);
+        assert!(provider.provides_for(999));
     }
 
     #[test]

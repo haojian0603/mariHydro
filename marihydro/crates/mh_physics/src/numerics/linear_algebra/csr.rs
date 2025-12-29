@@ -1118,6 +1118,6 @@ mod tests {
         // 内部单元格: |4| + |-1| + |-1| + |-1| + |-1| = 8
         // 边缘单元格: 7, 角落单元格: 6
         let norm = mat.infinity_norm();
-        assert!(norm >= 6.0 && norm <= 8.0, "norm = {}", norm);
+        assert!((6.0..=8.0).contains(&norm), "norm = {}", norm);
     }
 }

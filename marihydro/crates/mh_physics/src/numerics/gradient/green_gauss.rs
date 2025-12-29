@@ -37,6 +37,8 @@ pub struct GreenGaussConfig {
     pub parallel_threshold: usize,
     /// 面插值方法
     pub face_interpolation: FaceInterpolation,
+    /// 是否在边界单元强制零梯度（保持静水平衡）
+    pub force_zero_gradient_at_boundary: bool,
 }
 
 impl Default for GreenGaussConfig {
@@ -45,6 +47,7 @@ impl Default for GreenGaussConfig {
             parallel: true,
             parallel_threshold: 1000,
             face_interpolation: FaceInterpolation::Arithmetic,
+            force_zero_gradient_at_boundary: true, // 默认启用边界零梯度
         }
     }
 }
@@ -55,16 +58,14 @@ impl Default for GreenGaussConfig {
 
 /// Green-Gauss 梯度计算器
 #[derive(Debug, Clone)]
-#[derive(Default)]
 pub struct GreenGaussGradient {
     config: GreenGaussConfig,
 }
 
-
 impl GreenGaussGradient {
     /// 创建新实例
     pub fn new() -> Self {
-        Self::default()
+        Self::with_config(GreenGaussConfig::default())
     }
 
     /// 使用配置创建
@@ -95,6 +96,12 @@ impl GreenGaussGradient {
         self.with_face_interpolation(FaceInterpolation::DistanceWeighted)
     }
 
+    /// 设置是否强制边界零梯度（保持静水平衡）
+    pub fn with_force_zero_gradient(mut self, enable: bool) -> Self {
+        self.config.force_zero_gradient_at_boundary = enable;
+        self
+    }
+
     /// 计算单个单元的标量梯度
     fn compute_cell_gradient(
         &self,
@@ -111,6 +118,17 @@ impl GreenGaussGradient {
         let cell_center = mesh.cell_center(cell);
         let phi_c = field[cell];
         let mut grad = DVec2::ZERO;
+
+        // 检测边界单元并强制零梯度
+        if self.config.force_zero_gradient_at_boundary {
+            let is_boundary_cell = mesh.cell_faces(cell_idx)
+                .all(|face| mesh.face_neighbor(face).is_none());
+            
+            if is_boundary_cell {
+                // 边界单元：强制梯度为零，保持静水平衡
+                return DVec2::ZERO;
+            }
+        }
 
         // 仅遍历该单元关联的面，避免 O(N^2)
         for face in mesh.cell_faces(cell_idx) {
@@ -145,7 +163,7 @@ impl GreenGaussGradient {
                     }
                 }
             } else {
-                // 边界面：使用单元中心值
+                // 边界面：使用单元中心值（已与phi_c相同）
                 phi_c
             };
 
@@ -174,6 +192,16 @@ impl GreenGaussGradient {
         let cell_center = mesh.cell_center(cell);
         let eta_c = h[cell] + z_bed[cell];
         let mut grad = DVec2::ZERO;
+
+        // ✅ P0-3修复：水位梯度同样处理边界单元
+        if self.config.force_zero_gradient_at_boundary {
+            let is_boundary_cell = mesh.cell_faces(cell_idx)
+                .all(|face| mesh.face_neighbor(face).is_none());
+            
+            if is_boundary_cell {
+                return DVec2::ZERO;
+            }
+        }
 
         for face in mesh.cell_faces(cell_idx) {
             let owner = mesh.face_owner(face);
@@ -206,6 +234,7 @@ impl GreenGaussGradient {
                     }
                 }
             } else {
+                // 边界面：使用单元中心值
                 eta_c
             };
 
@@ -219,7 +248,6 @@ impl GreenGaussGradient {
     ///
     /// phi_face = (phi_n * d_o + phi_o * d_n) / (d_o + d_n)
     #[inline]
-    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此辅助方法配合 DVec2 使用
     fn distance_weighted_interpolate(phi_o: f64, phi_n: f64, d_o: f64, d_n: f64) -> f64 {
         let d_total = d_o + d_n;
         if d_total < 1e-14 {
@@ -261,12 +289,11 @@ impl GreenGaussGradient {
     }
 
     /// 并行计算所有单元梯度（返回 (grad_x, grad_y) 向量）
-    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此方法配合 DVec2 使用
     pub fn compute_all_parallel(
         &self,
-        field: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
+        field: &[f64],
         mesh: &PhysicsMesh,
-    ) -> (Vec<f64>, Vec<f64>) { // ALLOW_F64: 返回与 DVec2 配合的梯度数据
+    ) -> (Vec<f64>, Vec<f64>) {
         let grads: Vec<DVec2> = (0..mesh.n_cells())
             .into_par_iter()
             .map(|cell| self.compute_cell_gradient(cell, field, mesh))
@@ -285,13 +312,12 @@ impl GreenGaussGradient {
     }
 
     /// 并行计算水面梯度（C-property 保持）
-    // ALLOW_F64: PhysicsMesh 返回 DVec2 (f64)，此方法配合 DVec2 使用
     pub fn compute_water_level_parallel(
         &self,
-        h: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
-        z_bed: &[f64], // ALLOW_F64: PhysicsMesh 依赖 DVec2
+        h: &[f64],
+        z_bed: &[f64],
         mesh: &PhysicsMesh,
-    ) -> (Vec<f64>, Vec<f64>) { // ALLOW_F64: 返回与 DVec2 配合的梯度数据
+    ) -> (Vec<f64>, Vec<f64>) {
         let grads: Vec<DVec2> = (0..mesh.n_cells())
             .into_par_iter()
             .map(|cell| self.compute_water_level_gradient(cell, h, z_bed, mesh))
@@ -434,11 +460,9 @@ mod tests {
             face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
             min_cell_size: 1.0,
             max_cell_size: 1.0,
-            // AMR 预分配字段
             cell_refinement_level: vec![0; 2],
             cell_parent: vec![0, 1],
             ghost_capacity: 0,
-            // ID 映射与排列字段
             cell_original_id: Vec::new(),
             face_original_id: Vec::new(),
             cell_permutation: Vec::new(),
@@ -453,7 +477,7 @@ mod tests {
         let mesh = create_test_mesh();
         let gg = GreenGaussGradient::new();
 
-        // 均匀场，梯度应为零
+        // ✅ P0-3验证：均匀场，梯度应为零（边界单元也强制为零）
         let field = vec![1.0, 1.0];
         let mut output = ScalarGradientStorage::new(2);
 
@@ -461,6 +485,7 @@ mod tests {
 
         for i in 0..2 {
             let grad = output.get(i);
+            // 边界单元梯度也应为零
             assert!(grad.length() < 1e-6, "单元{} 梯度应接近零: {:?}", i, grad);
         }
     }

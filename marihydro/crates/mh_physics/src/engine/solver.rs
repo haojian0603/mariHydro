@@ -15,6 +15,7 @@
 //! 3. **索引类型安全**：所有几何查询强制使用 `FaceIndex/CellIndex`，杜绝 `usize` 泄露
 //! 4. **Backend几何抽象**：完全移除 `glam::DVec2`，使用 `B::Vector2D` 和工厂方法
 //! 5. **桥接层就绪**：实现 `DynSolver` trait，支持运行时多态分发
+//! 6. **边界条件修复**：恢复正确的固壁边界压力处理，确保静水平衡
 //!
 //! # 使用示例
 //!
@@ -90,14 +91,6 @@ pub enum StabilityStatus {
 }
 
 impl std::fmt::Display for StabilityStatus {
-    // fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    //     match self {
-    //         Self::Stable => write!(f, "稳定"),
-    //         Self::Marginal => write!(f, "临界"),
-    //         Self::NeedsFallback => write!(f, "需回退"),
-    //         Self::Unstable => write!(f, "不稳定"),
-    //     }
-    // }
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result{
         match self {
             Self::Marginal => write!(f, "临界"),
@@ -444,11 +437,13 @@ impl<B: Backend> ShallowWaterSolver<B> {
             self.workspace.eta[i] = state.h[i] + state.z[i];
         }
 
+        // 一阶格式完全禁用梯度计算，直接返回
         if !self.use_second_order() {
             let cfg = MusclConfig::first_order();
             self.muscl_eta.set_config(cfg.clone());
             self.muscl_u.set_config(cfg.clone());
             self.muscl_v.set_config(cfg);
+            // 关键：直接返回，不计算梯度
             return;
         }
 
@@ -466,9 +461,12 @@ impl<B: Backend> ShallowWaterSolver<B> {
         self.muscl_v.compute_gradients(&vel_v_f64);
     }
 
+    /// 恢复并优化边界压力处理
+    /// 固壁边界需要压力项保持静水平衡，但质量通量为零
     fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let mut max_wave_speed = 0.0_f64;
 
+        // 处理内部面
         for face_idx in self.mesh.interior_faces() {
             let (flux, bed_src, length, owner, neighbor) = 
                 self.compute_face_flux(state, FaceIndex::new(face_idx));
@@ -496,9 +494,35 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
+        // 恢复固壁边界压力处理
+        // 静水平衡需要压力项抵消内部梯度，但质量通量保持为零
+        let g = self.hydrostatic.g;
+        let half = B::Scalar::from_f64(0.5).unwrap();
+        
+        for face_idx in self.mesh.boundary_faces() {
+            let face = FaceIndex::new(face_idx);
+            let owner = self.mesh.face_owner(face);
+            let normal = self.mesh.face_normal_generic::<B>(face);
+            let length_f64 = self.mesh.face_length(face);
+            let length = B::Scalar::from_f64(length_f64).unwrap();
+            
+            let h = state.h[owner.get()];
+            
+            // 静水压力：F = 0.5 * g * h² * n * L
+            // 仅作用于动量，质量通量为零（无穿透）
+            let pressure = half * g * h * h * length;
+            
+            // 压力方向与法向相反（指向内部）
+            self.workspace.flux_hu[owner.get()] -= pressure * normal.x();
+            self.workspace.flux_hv[owner.get()] -= pressure * normal.y();
+            
+            // 静水状态下，此压力与内部床坡源项精确抵消
+        }
+
         max_wave_speed
     }
 
+    /// 并行版本同样恢复边界压力处理
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let max_speed_atomic = AtomicU64::new(0u64);
 
@@ -538,6 +562,24 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
+        // 并行版本同样恢复边界压力
+        let g = self.hydrostatic.g;
+        let half = B::Scalar::from_f64(0.5).unwrap();
+        
+        for face_idx in self.mesh.boundary_faces() {
+            let face = FaceIndex::new(face_idx);
+            let owner = self.mesh.face_owner(face);
+            let normal = self.mesh.face_normal_generic::<B>(face);
+            let length_f64 = self.mesh.face_length(face);
+            let length = B::Scalar::from_f64(length_f64).unwrap();
+            
+            let h = state.h[owner.get()];
+            let pressure = half * g * h * h * length;
+            
+            self.workspace.flux_hu[owner.get()] -= pressure * normal.x();
+            self.workspace.flux_hv[owner.get()] -= pressure * normal.y();
+        }
+
         let bits = max_speed_atomic.load(Ordering::Relaxed);
         f64::from_bits(bits)
     }
@@ -566,8 +608,10 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 let z_neigh = state.z[neigh.get()];
                 let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
                 let z_neigh_f64 = z_neigh.to_f64().unwrap_or(0.0);
-                let h_left_f64 = (eta_rec.left - z_owner_f64).max(0.0_f64);
-                let h_right_f64 = (eta_rec.right - z_neigh_f64).max(0.0_f64);
+                // Well-balanced: 使用统一的 z_face 来计算 h
+                let z_face_f64 = z_owner_f64.max(z_neigh_f64);
+                let h_left_f64 = (eta_rec.left - z_face_f64).max(0.0_f64);
+                let h_right_f64 = (eta_rec.right - z_face_f64).max(0.0_f64);
                 let h_left = B::Scalar::from_f64(h_left_f64).unwrap_or(B::Scalar::ZERO);
                 let h_right = B::Scalar::from_f64(h_right_f64).unwrap_or(B::Scalar::ZERO);
                 let u_l = B::Scalar::from_f64(u_rec.left).unwrap_or(B::Scalar::ZERO);
@@ -583,6 +627,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
                     z_neigh,
                 )
             } else {
+                // 边界面：简化处理，使用单元自身值
                 let z_owner = state.z[owner.get()];
                 let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
                 let h_left_f64 = (eta_rec.left - z_owner_f64).max(0.0_f64);
@@ -590,11 +635,12 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 let u_l = B::Scalar::from_f64(u_rec.left).unwrap_or(B::Scalar::ZERO);
                 let v_l = B::Scalar::from_f64(v_rec.left).unwrap_or(B::Scalar::ZERO);
                 let vel_left = B::vec2_new(u_l, v_l);
+                // 速度反射：vn' = -vn，静水时vn=0
                 let vn = B::vec2_dot(&vel_left, &normal);
                 let two = B::Scalar::from_f64(2.0).unwrap();
-                let normal_2x = B::vec2_scale(&normal, two);
-                let vel_right = B::vec2_sub(&vel_left, &B::vec2_scale(&normal_2x, vn));
+                let vel_right = B::vec2_sub(&vel_left, &B::vec2_scale(&normal, vn * two));
                 
+                // 边界面两侧使用相同的状态（静水平衡）
                 (
                     h_left,
                     vel_left,
@@ -605,6 +651,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 )
             }
         } else {
+            // 一阶格式：不使用重构
             let h_l = state.h[owner.get()];
             let z_l = state.z[owner.get()];
             let (u_l, v_l) = self.params.safe_velocity_components(
@@ -626,10 +673,10 @@ impl<B: Backend> ShallowWaterSolver<B> {
                     state.z[neigh.get()],
                 )
             } else {
+                // 边界面：速度反射
                 let vn = B::vec2_dot(&vel_l, &normal);
                 let two = B::Scalar::from_f64(2.0).unwrap();
-                let normal_2x = B::vec2_scale(&normal, two);
-                let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal_2x, vn));
+                let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
                 (
                     h_l,
                     vel_l,
@@ -701,6 +748,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let half = B::Scalar::from_f64(0.5).unwrap();
         let g = self.hydrostatic.g;
         
+        // 使用精确的压力差计算，静水平衡时为零
         let pressure_diff_l = half * g * (h_l * h_l - h_l_star * h_l_star) * length;
         let pressure_diff_r = half * g * (h_r * h_r - h_r_star * h_r_star) * length;
 

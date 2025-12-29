@@ -1,7 +1,6 @@
-// =============================================================================
 // mh_physics/src/numerics/linear_algebra/vector_ops.rs
-// =============================================================================
-//! 向量运算（BLAS Level 1 风格）
+
+//! 向量运算
 //!
 //! 提供高效的向量运算函数，这些是迭代求解器的基础。
 //! 支持泛型标量类型 `S: RuntimeScalar`（f32 或 f64）。
@@ -40,6 +39,10 @@
 
 use mh_runtime::RuntimeScalar;
 
+// ============================================================================
+// 核心向量运算（生产级错误检查）
+// ============================================================================
+
 /// 点积 x·y
 ///
 /// # 参数
@@ -50,9 +53,14 @@ use mh_runtime::RuntimeScalar;
 /// # 返回
 ///
 /// 点积结果
+///
+/// # 错误处理
+/// 使用 `assert_eq!` 在**所有模式**下检查维度，维度不匹配立即 panic
 #[inline(always)]
 pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
-    debug_assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    // 维度不匹配是严重编程错误，必须在所有构建模式下捕获
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     x.iter().zip(y).map(|(&xi, &yi)| xi * yi).sum()
 }
 
@@ -91,9 +99,14 @@ pub fn norm_inf<S: RuntimeScalar>(x: &[S]) -> S {
 /// - `alpha`: 标量 α
 /// - `x`: 向量 x
 /// - `y`: 向量 y（将被修改）
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    
     // 使用 chunks_exact 提升向量化概率
     const CHUNK_SIZE: usize = 4;
     for (yi, xi) in y.chunks_exact_mut(CHUNK_SIZE)
@@ -120,9 +133,13 @@ pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
 /// - `x`: 向量 x
 /// - `alpha`: 标量 α
 /// - `y`: 向量 y（将被修改）
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn xpay<S: RuntimeScalar>(x: &[S], alpha: S, y: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     for (yi, &xi) in y.iter_mut().zip(x.iter()) {
         *yi = xi + alpha * *yi;
     }
@@ -147,9 +164,13 @@ pub fn scale<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
 ///
 /// - `x`: 源向量
 /// - `y`: 目标向量（将被覆盖）
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn copy<S: RuntimeScalar>(x: &[S], y: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     y.copy_from_slice(x);
 }
 
@@ -158,7 +179,8 @@ pub fn copy<S: RuntimeScalar>(x: &[S], y: &mut [S]) {
 /// 当 x 和 y 指向同一缓冲区时使用
 #[inline(always)]
 pub fn axpy_inplace<S: RuntimeScalar>(alpha: S, x: &mut [S], y: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     const UNROLL_FACTOR: usize = 4;
     let mut i = 0;
     while i + UNROLL_FACTOR <= x.len() {
@@ -205,14 +227,18 @@ pub fn fill<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
 /// - `beta`: 标量 β
 /// - `y`: 向量 y
 /// - `z`: 结果向量（将被覆盖）
+///
+/// # 错误处理
+/// 所有向量维度必须匹配，否则 panic
 #[inline(always)]
 pub fn linear_combination<S: RuntimeScalar>(
     alpha: S, x: &[S], 
     beta: S, y: &[S], 
     z: &mut [S]
 ) {
-    debug_assert_eq!(x.len(), y.len());
-    debug_assert_eq!(x.len(), z.len());
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
         *zi = alpha * xi + beta * yi;
     }
@@ -224,10 +250,14 @@ pub fn linear_combination<S: RuntimeScalar>(
 /// - `x`: 向量 x
 /// - `y`: 向量 y
 /// - `z`: 结果向量
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn sub<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len());
-    debug_assert_eq!(x.len(), z.len());
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
         *zi = xi - yi;
     }
@@ -239,10 +269,14 @@ pub fn sub<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 /// - `x`: 向量 x
 /// - `y`: 向量 y
 /// - `z`: 结果向量
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn add<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len());
-    debug_assert_eq!(x.len(), z.len());
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
         *zi = xi + yi;
     }
@@ -254,10 +288,14 @@ pub fn add<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 /// - `x`: 向量 x
 /// - `y`: 向量 y
 /// - `z`: 结果向量
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn hadamard<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len());
-    debug_assert_eq!(x.len(), z.len());
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
         *zi = xi * yi;
     }
@@ -267,10 +305,14 @@ pub fn hadamard<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 ///
 /// # 注意
 /// y中元素绝对值小于 S::EPSILON 时，z对应位置设为 0
+///
+/// # 错误处理
+/// 维度不匹配立即 panic
 #[inline(always)]
 pub fn hadamard_div<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    debug_assert_eq!(x.len(), y.len());
-    debug_assert_eq!(x.len(), z.len());
+    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
     for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
         *zi = if yi.abs() > S::EPSILON { xi / yi } else { S::ZERO };
     }
@@ -518,6 +560,6 @@ mod tests {
     fn test_dot_dimension_mismatch() {
         let x: Vec<Scalar> = vec![1.0, 2.0];
         let y: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        dot(&x, &y);
+        dot(&x, &y);  // ✅ 现在一定会 panic
     }
 }
