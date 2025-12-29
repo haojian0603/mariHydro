@@ -44,7 +44,7 @@ pub use solver::{
     ShallowWaterSolverF32,
     SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
     BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
-    StabilityStatus,
+    StabilityStatus, NanDetectionResult,
 };
 pub use parallel::{
     ParallelFluxCalculator, ParallelFluxConfig, ParallelFluxConfigBuilder,

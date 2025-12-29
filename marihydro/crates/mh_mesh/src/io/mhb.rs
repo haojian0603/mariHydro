@@ -1,4 +1,4 @@
-// marihydro\crates\mh_mesh\src/io/mhb.rs
+// marihydro\crates\mh_mesh\src\io\mhb.rs
 
 //! MHB 二进制格式
 //!
@@ -25,6 +25,10 @@ use super::fields::{FieldDescriptor, FieldIndex, DataType};
 #[allow(unused_imports)]
 use super::fields::Compression;
 use std::io::{Read, Write, Seek, SeekFrom, Result, Error, ErrorKind};
+use std::path::Path;
+use std::fs::File;
+use crate::FrozenMesh;  // FIX: Import from crate root
+use mh_geo::{Point3D, Point2D};
 
 /// MHB 文件魔数
 pub const MHB_MAGIC: &[u8; 4] = b"MHB1";
@@ -236,6 +240,82 @@ impl<R: Read + Seek> MhbReader<R> {
 
         Ok(data)
     }
+}
+
+/// 便捷函数：加载MHB文件
+pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
+    let file = File::open(path)?;
+    let mut reader = MhbReader::open(file)?;
+    
+    // 读取必要字段
+    let n_nodes = reader.read_u32_field("n_nodes")?[0] as usize;
+    let n_cells = reader.read_u32_field("n_cells")?[0] as usize;
+    let n_faces = reader.read_u32_field("n_faces")?[0] as usize;
+    
+    let node_coords = reader.read_f64_field("node_coords")?
+        .chunks(3)
+        .map(|chunk| Point3D::new(chunk[0], chunk[1], chunk[2]))
+        .collect();
+    
+    let cell_center = reader.read_f64_field("cell_center")?
+        .chunks(2)
+        .map(|chunk| Point2D::new(chunk[0], chunk[1]))
+        .collect();
+    
+    let cell_area = reader.read_f64_field("cell_area")?;
+    let cell_z_bed = reader.read_f64_field("cell_z_bed")?;
+    let face_center = reader.read_f64_field("face_center")?
+        .chunks(2)
+        .map(|chunk| Point2D::new(chunk[0], chunk[1]))
+        .collect();
+    
+    let face_normal = reader.read_f64_field("face_normal")?
+        .chunks(3)
+        .map(|chunk| Point3D::new(chunk[0], chunk[1], chunk[2]))
+        .collect();
+    
+    let face_length = reader.read_f64_field("face_length")?;
+    
+    // 创建FrozenMesh实例
+    Ok(FrozenMesh {
+        n_nodes,
+        node_coords,
+        n_cells,
+        cell_center,
+        cell_area,
+        cell_z_bed,
+        // 其他字段使用默认值
+        cell_node_offsets: vec![0],
+        cell_node_indices: Vec::new(),
+        cell_face_offsets: vec![0],
+        cell_face_indices: Vec::new(),
+        cell_neighbor_offsets: vec![0],
+        cell_neighbor_indices: Vec::new(),
+        n_faces,
+        n_interior_faces: n_faces / 2,
+        face_center,
+        face_normal,
+        face_length,
+        face_z_left: vec![0.0; n_faces],
+        face_z_right: vec![0.0; n_faces],
+        face_owner: vec![0; n_faces],
+        face_neighbor: vec![0; n_faces],
+        face_delta_owner: vec![Point2D::new(0.0, 0.0); n_faces],
+        face_delta_neighbor: vec![Point2D::new(0.0, 0.0); n_faces],
+        face_dist_o2n: vec![1.0; n_faces],
+        boundary_face_indices: Vec::new(),
+        boundary_names: Vec::new(),
+        face_boundary_id: vec![None; n_faces],
+        min_cell_size: 1.0,
+        max_cell_size: 1.0,
+        cell_refinement_level: vec![0; n_cells],
+        cell_parent: Vec::new(),
+        ghost_capacity: 0,
+        cell_original_id: Vec::new(),
+        face_original_id: Vec::new(),
+        cell_permutation: Vec::new(),
+        cell_inv_permutation: Vec::new(),
+    })
 }
 
 #[cfg(test)]

@@ -449,6 +449,42 @@ impl PhysicsMesh {
 }
 
 // ============================================================================
+// VTU trait实现
+// ============================================================================
+
+impl mh_io::exporters::vtu::VtuMesh for PhysicsMesh {
+    fn n_nodes(&self) -> usize {
+        self.n_nodes()
+    }
+
+    fn n_cells(&self) -> usize {
+        self.n_cells()
+    }
+
+    fn node_position(&self, idx: usize) -> [f64; 3] {
+        let p = &self.inner.node_coords[idx];
+        [p.x, p.y, p.z]
+    }
+
+    fn cell_nodes(&self, idx: usize) -> Vec<usize> {
+        let start = self.inner.cell_node_offsets[idx];
+        let end = self.inner.cell_node_offsets[idx + 1];
+        self.inner.cell_node_indices[start..end]
+            .iter()
+            .map(|&n| n as usize)
+            .collect()
+    }
+
+    fn cell_z_bed(&self, idx: usize) -> f64 {
+        self.inner.cell_z_bed[idx]
+    }
+
+    fn cell_area(&self, idx: usize) -> f64 {
+        self.inner.cell_area[idx]
+    }
+}
+
+// ============================================================================
 // 测试模块 - 覆盖Legacy和泛型接口
 // ============================================================================
 

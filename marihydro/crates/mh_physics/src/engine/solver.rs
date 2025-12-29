@@ -55,7 +55,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // ============================================================
-// 求解器统计（保持不变）
+// 求解器统计（修复：添加NaN检测字段）
 // ============================================================
 
 #[derive(Debug, Clone, Default)]
@@ -74,6 +74,10 @@ pub struct SolverStats {
     pub current_scheme: NumericalScheme,
     /// 稳定性状态
     pub stability_status: StabilityStatus,
+    /// NaN检测计数
+    pub nan_count: u32,
+    /// 最后NaN位置
+    pub last_nan_location: Option<usize>,
 }
 
 /// 稳定性状态
@@ -119,6 +123,18 @@ impl SolverStats {
             self.fallback_count
         )
     }
+}
+
+// ============================================================
+// NaN检测结果
+// ============================================================
+
+#[derive(Debug, Clone, Default)]
+pub struct NanDetectionResult {
+    /// 是否发现NaN
+    pub found_nan: bool,
+    /// 受影响的单元索引
+    pub affected_cells: Vec<usize>,
 }
 
 // ============================================================
@@ -796,12 +812,54 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (dry_count, limited_count)
     }
 
-    // 访问器
+    /// 检测并清理NaN值
+    pub fn detect_and_clean_nan(&mut self, state: &mut ShallowWaterState<B>) -> NanDetectionResult {
+        let mut result = NanDetectionResult::default();
+        
+        for i in self.mesh.cells() {
+            let idx = i;
+            let mut has_nan = false;
+            
+            // 检查h
+            if !state.h[idx].is_finite() {
+                state.h[idx] = B::Scalar::ZERO;
+                has_nan = true;
+            }
+            
+            // 检查hu
+            if !state.hu[idx].is_finite() {
+                state.hu[idx] = B::Scalar::ZERO;
+                has_nan = true;
+            }
+            
+            // 检查hv
+            if !state.hv[idx].is_finite() {
+                state.hv[idx] = B::Scalar::ZERO;
+                has_nan = true;
+            }
+            
+            if has_nan {
+                result.found_nan = true;
+                result.affected_cells.push(idx);
+                self.stats.nan_count += 1;
+                self.stats.last_nan_location = Some(idx);
+            }
+        }
+        
+        result
+    }
+
+    /// 访问器
     pub fn mesh(&self) -> &PhysicsMesh { &self.mesh }
     pub fn backend(&self) -> &B { &self.backend }
     pub fn stats(&self) -> &SolverStats { &self.stats }
     pub fn max_wave_speed(&self) -> f64 { self.stats.max_wave_speed }
     pub fn dry_cell_count(&self) -> usize { self.stats.dry_cells }
+    
+    /// 获取求解器配置
+    pub fn config(&self) -> &Layer3Config<B::Scalar> {
+        &self.config
+    }
 }
 
 // ============================================================

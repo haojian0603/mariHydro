@@ -20,9 +20,8 @@ use crate::job::{JobId, SimulationConfig, SimulationJob};
 use crate::manager::{WorkflowError, WorkflowManager};
 use crate::scheduler::{DeviceSelection, HybridScheduler};
 use crate::storage::Storage;
-use num_traits::cast::ToPrimitive;
 use mh_physics::{
-    engine::{ShallowWaterSolverF64, SolverStats, StabilityStatus},
+    engine::{ShallowWaterSolverF64, SolverStats, StabilityStatus,},
     state::ShallowWaterStateF64,
     adapter::PhysicsMesh,
     Layer3Config,
@@ -39,6 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use num_traits::cast::ToPrimitive;
 
 /// 运行器错误类型
 #[derive(Debug, Error)]
@@ -170,6 +170,7 @@ pub struct RunContext {
     /// 上次检查点时间
     last_checkpoint_time: RwLock<f64>,
 }
+
 
 impl RunContext {
     /// 创建并初始化运行上下文
@@ -308,6 +309,7 @@ impl RunContext {
 }
 
 /// 任务句柄，提供外部控制接口
+#[derive(Debug, Clone)]  // 新增Clone派生
 pub struct JobHandle {
     /// 任务ID
     pub job_id: JobId,
@@ -458,7 +460,7 @@ impl<S: Storage> JobRunner<S> {
     /// 获取任务句柄
     pub fn get_handle(&self, job_id: JobId) -> Option<JobHandle> {
         let handles = self.handles.read();
-        handles.get(&job_id).cloned()
+        handles.get(&job_id).cloned()  // 现在JobHandle实现了Clone，可以正常工作
     }
 
     /// 取消任务
@@ -596,8 +598,7 @@ impl<S: Storage> JobRunner<S> {
 
         // 2. 计算时间步
         let dt_computed = solver.compute_dt(&state);
-        let dt_cfl = dt_computed * context.config.max_cfl;
-        let dt = dt_cfl.max(1e-8).min(10.0); // 保护性限制
+        let dt = dt_computed.max(1e-8).min(10.0); // 保护性限制
 
         // 3. 执行步进
         solver.step(&mut state, dt);
@@ -620,8 +621,8 @@ impl<S: Storage> JobRunner<S> {
             }
         }
 
-        // 6. 稳定性检查
-        let stats = solver.stats();
+        // 6. 稳定性检查（克隆stats避免生命周期问题）
+        let stats = solver.stats().clone();
         if stats.stability_status == StabilityStatus::Unstable {
             return Err(RunnerError::Instability(format!(
                 "求解器在第 {} 步不稳定: {}",
@@ -653,18 +654,19 @@ impl<S: Storage> JobRunner<S> {
             state.hv_slice().to_vec(),
         ).with_bed(state.z_slice().to_vec());
 
-        // 3. 创建检查点
+        // 3. 创建检查点（修复类型转换）
         let mut checkpoint = Checkpoint::new(
             context.current_sim_time(),
-            context.completed_steps(),
+            context.completed_steps() as usize,  // 将u64转换为usize
             snapshot,
         );
+        
+        // 4. 添加配置和网格哈希（移除错误的with_mesh_snapshot调用）
         checkpoint = checkpoint
             .with_config_hash(compute_config_hash(&solver))
-            .with_mesh_snapshot(&context.mesh.clone())
             .with_mesh_hash(compute_mesh_hash(&context.mesh));
 
-        // 4. 保存到文件
+        // 5. 保存到文件
         let checkpoint_dir = context.config.project_path.join("checkpoints");
         std::fs::create_dir_all(&checkpoint_dir)?;
         
@@ -674,7 +676,7 @@ impl<S: Storage> JobRunner<S> {
         let path = manager.save(&checkpoint)
             .map_err(|e| RunnerError::Other(format!("检查点保存失败: {}", e)))?;
 
-        // 5. 发送事件
+        // 6. 发送事件
         self.manager.events().emit(WorkflowEvent::CheckpointSaved {
             job_id: context.job_id,
             path: path.display().to_string(),
@@ -718,7 +720,7 @@ impl<S: Storage> JobRunner<S> {
         let filename = format!("output_{:06}.vtu", step);
         let path = output_dir.join(&filename);
 
-        // 5. 执行导出
+        // 5. 执行导出（PhysicsMesh已实现VtuMesh trait）
         let exporter = VtuExporter::new()
             .binary(false)
             .h_dry(1e-6); // 可配置化
@@ -804,7 +806,6 @@ fn create_initial_state(
     mesh: &PhysicsMesh,
     config: &SimulationConfig,
 ) -> Result<ShallowWaterStateF64, Box<dyn std::error::Error>> {
-    let n_cells = mesh.n_cells();
     let backend = CpuBackend::<f64>::new();
     
     let initial_file = config.project_path.join("initial_state.json");
@@ -814,23 +815,33 @@ fn create_initial_state(
         let data: serde_json::Value = serde_json::from_str(&content)?;
         
         let h = parse_f64_array(&data["h"])?;
+        let n_cells = h.len();
         let hu = parse_f64_array(&data["hu"]).unwrap_or(vec![0.0; n_cells]);
         let hv = parse_f64_array(&data["hv"]).unwrap_or(vec![0.0; n_cells]);
         
-        if h.len() != n_cells {
-            return Err(format!("初始状态h数组长度不匹配: 期望 {}, 实际 {}", n_cells, h.len()).into());
+        if h.len() != mesh.n_cells() {
+            return Err(format!("初始状态h数组长度不匹配: 期望 {}, 实际 {}", mesh.n_cells(), h.len()).into());
         }
+        
+        // 使用类型安全的cell_z_bed获取
+        let z_bed: Vec<f64> = (0..mesh.n_cells())
+            .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
+            .collect();
         
         Ok(ShallowWaterStateF64::from_data(
             backend,
             h,
             hu,
             hv,
-            mesh.cell_z_bed().to_vec(),
+            z_bed,
         ))
     } else {
         tracing::info!("未找到初始状态文件，使用默认静水条件 (h=1.0m)");
-        Ok(ShallowWaterStateF64::cold_start(backend, 1.0, &mesh.cell_z_bed()))
+        // 使用类型安全的cell_z_bed获取
+        let z_bed: Vec<f64> = (0..mesh.n_cells())
+            .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
+            .collect();
+        Ok(ShallowWaterStateF64::cold_start(backend, 1.0, &z_bed))
     }
 }
 
@@ -852,8 +863,9 @@ fn compute_config_hash(solver: &ShallowWaterSolverF64) -> u64 {
     use std::hash::{Hash, Hasher};
     
     let mut hasher = DefaultHasher::new();
-    solver.config().cfl.to_bits().hash(&mut hasher);
-    solver.config().params.h_dry.to_bits().hash(&mut hasher);
+    let config = solver.config();  // 使用新增的config()方法
+    config.params.cfl.to_bits().hash(&mut hasher);
+    config.params.h_dry.to_bits().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -880,7 +892,6 @@ mod tests {
     use super::*;
     use crate::job::SimulationConfig;
     use crate::storage::MemoryStorage;
-    use std::path::PathBuf;
 
     #[test]
     fn test_runner_config_default() {

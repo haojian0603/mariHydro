@@ -662,6 +662,7 @@ dependencies = [
  "mh_config",
  "mh_foundation",
  "mh_geo",
+ "mh_io",
  "mh_mesh",
  "mh_runtime",
  "ndarray 0.16.1",
@@ -704,8 +705,10 @@ name = "mh_workflow"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "mh_config",
  "mh_foundation",
  "mh_io",
+ "mh_mesh",
  "mh_physics",
  "mh_runtime",
  "parking_lot",
