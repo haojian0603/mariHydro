@@ -86,7 +86,7 @@ pub use adapter::PhysicsMesh;
 pub use engine::{
     AtomicFluxAccumulator, CflCalculator, FluxAccumulator, ForwardEuler, RhsComputer, SspRk2,
     SspRk3, TimeIntegrator, TimeIntegratorEnum, TimeIntegratorKind, TimeStepController,
-    TimeStepControllerBuilder, TimeStepStats, create_integrator,
+    TimeStepControllerBuilder, TimeStepStats, create_integrator, NumericalScheme,
 };
 pub use schemes::{
     HllcSolver, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams, WetState,
@@ -132,3 +132,6 @@ pub use tracer::{
 
 // 重导出统一错误类型
 pub use error::{PhysicsError, PhysicsResult};
+
+// 重导出配置桥接类型（测试用）
+pub use config_bridge::Layer3Config;

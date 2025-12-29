@@ -44,8 +44,6 @@
 //! let neighbors = mesh.cell_neighbors(50, 25);
 //! ```
 
-use crate::traits::MeshAccess;
-
 /// 结构化网格配置
 #[derive(Debug, Clone, Copy)]
 pub struct StructuredMeshConfig {

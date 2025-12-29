@@ -33,7 +33,7 @@
 //!
 //! // 计算统计信息
 //! let stats = mesh.statistics();
-//! println!("网格面积: {:.2}", stats.total_area.to_f64().unwrap());
+//! println!("网格面积: {:.2}", stats.total_area);
 //! ```
 
 

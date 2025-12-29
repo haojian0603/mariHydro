@@ -30,7 +30,7 @@ use super::traits::{
 };
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateF64, ShallowWaterStateGeneric};
+use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
 
 /// Manning 摩擦配置
 #[derive(Debug, Clone)]

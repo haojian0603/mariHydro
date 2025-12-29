@@ -184,7 +184,7 @@ pub enum PhysicsError {
     },
 
     /// 能量增加（非物理）
-    #[error("能量非物理增加: 变化前={before:.4e}, 变化后={after:.4e}, 相对增加={relative_increase:.4%}")]
+    #[error("能量非物理增加: 变化前={before:.4e}, 变化后={after:.4e}, 相对增加={relative_increase:.4e}")]
     EnergyIncreased {
         /// 变化前的总能量
         before: f64,

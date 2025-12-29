@@ -111,7 +111,6 @@ pub struct WettingDryingConfig<S: RuntimeScalar> {
 impl<S: RuntimeScalar> Default for WettingDryingConfig<S> {
     /// 默认配置，使用标准物理默认值
     fn default() -> Self {
-        use num_traits::FromPrimitive;
         Self {
             h_dry: S::from_f64(1e-4).unwrap_or(S::ZERO),
             h_wet: S::from_f64(1e-3).unwrap_or(S::ZERO),

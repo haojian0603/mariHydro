@@ -13,7 +13,6 @@
 
 use bytemuck::Pod;
 use std::ops::{Index, IndexMut};
-use std::sync::Arc;
 
 /// 设备缓冲区 Trait
 /// 
@@ -234,7 +233,7 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
     }
 
     /// 从池中获取缓冲区
-    pub fn acquire(&self, len: usize, initial_value: T) -> PooledBuffer<T> {
+    pub fn acquire(&self, len: usize, initial_value: T) -> PooledBuffer<'_, T> {
         let buffer = {
             let mut free = self.free_buffers.lock().unwrap_or_else(|poisoned| {
                 eprintln!("[mh_runtime::buffer] BufferPool mutex poisoned, recovering");
@@ -313,18 +312,24 @@ pub struct PooledBuffer<'a, T: Pod + Clone + Send + Sync> {
 
 impl<'a, T: Pod + Clone + Send + Sync> PooledBuffer<'a, T> {
     /// 获取切片
+    #[allow(clippy::unwrap_used)]
     pub fn as_slice(&self) -> &[T] {
-        self.buffer.as_ref().unwrap().as_slice()
+        // Safety: buffer 只有在 Drop 时才会被设置为 None
+        self.buffer.as_ref().expect("buffer should always be Some").as_slice()
     }
 
     /// 获取可变切片
+    #[allow(clippy::unwrap_used)]
     pub fn as_slice_mut(&mut self) -> &mut [T] {
-        self.buffer.as_mut().unwrap().as_mut_slice()
+        // Safety: buffer 只有在 Drop 时才会被设置为 None
+        self.buffer.as_mut().expect("buffer should always be Some").as_mut_slice()
     }
 
     /// 获取长度
+    #[allow(clippy::unwrap_used)]
     pub fn len(&self) -> usize {
-        self.buffer.as_ref().unwrap().len()
+        // Safety: buffer 只有在 Drop 时才会被设置为 None
+        self.buffer.as_ref().expect("buffer should always be Some").len()
     }
 
     /// 是否为空

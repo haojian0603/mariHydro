@@ -549,6 +549,7 @@ struct RawGeoJson {
 
 #[derive(Debug, Deserialize)]
 struct RawFeature {
+    #[allow(dead_code)]
     r#type: String,
     #[serde(default)]
     id: Option<serde_json::Value>,

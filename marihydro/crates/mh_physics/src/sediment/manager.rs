@@ -484,7 +484,7 @@ impl SedimentManagerGeneric<CpuBackend<f64>> {
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
         cell_areas: &[f64],
         tracer_rhs: &mut [f64],
-        dt: f64,
+        _dt: f64,
     ) -> Result<SedimentFluxStats<f64>, SedimentError> {
         let n_cells = self.state.n_cells;
         let h_min = self.config.min_depth;

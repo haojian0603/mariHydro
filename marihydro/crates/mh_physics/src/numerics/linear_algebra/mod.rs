@@ -135,7 +135,7 @@ pub fn optimal_alignment() -> usize {
 /// 计算内存带宽效率（GB/s）
 ///
 /// 用于评估 BLAS 操作的内存效率
-#[cfg(feature = "profiling")]
+#[allow(dead_code)]
 pub fn memory_bandwidth(bytes: usize, nanoseconds: u64) -> f64 {
     let seconds = nanoseconds as f64 / 1e9;
     (bytes as f64 / 1e9) / seconds

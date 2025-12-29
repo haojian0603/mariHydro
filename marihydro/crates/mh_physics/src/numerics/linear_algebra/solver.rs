@@ -30,7 +30,7 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use super::preconditioner::{Preconditioner, ScalarPreconditioner};
+use super::preconditioner::ScalarPreconditioner;
 use super::vector_ops::{axpy, copy, dot, norm2};
 use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};

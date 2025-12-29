@@ -8,6 +8,12 @@
 //! **AlignedVec 将在未来版本中废弃**
 //!
 //! 推荐使用 `mh_physics::core::DeviceBuffer` trait 进行设备无关的缓冲区管理。
+//!
+//! # Safety
+//!
+//! 本模块使用 unsafe 代码进行底层内存分配和对齐操作。
+//! 所有 unsafe 块都经过审查，确保不违反内存安全。
+#![allow(unsafe_code)]
 //! `DeviceBuffer` 提供统一的 CPU/GPU 缓冲区抽象，支持更灵活的后端切换。
 //!
 //! ```ignore

@@ -24,7 +24,7 @@
 //! - 淹没/露出植被
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 
 /// 植被类型
 #[derive(Debug, Clone, Copy, PartialEq)]

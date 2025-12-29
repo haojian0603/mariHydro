@@ -31,6 +31,10 @@ pub enum WorkflowError {
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// 配置错误
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
     /// 任务已存在
     #[error("Job already exists: {0}")]
     AlreadyExists(JobId),

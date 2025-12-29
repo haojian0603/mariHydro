@@ -1109,10 +1109,15 @@ mod tests {
         }
 
         let mat = builder.build();
-        assert_eq!(mat.nnz(), 4 * n - 4 * 10); // 边界更少
+        // 对角线有 n 个元素，每个方向有 n-10 个非对角元素
+        // nnz = n (对角线) + 4 * (n - 10) (4个方向的邻居)
+        assert_eq!(mat.nnz(), n + 4 * (n - 10)); // = 100 + 4*90 = 460
 
         // 验证矩阵条件数相关性质
+        // 无穷范数 = max(行绝对值之和)
+        // 内部单元格: |4| + |-1| + |-1| + |-1| + |-1| = 8
+        // 边缘单元格: 7, 角落单元格: 6
         let norm = mat.infinity_norm();
-        assert!(norm > 4.0 && norm < 8.0);
+        assert!(norm >= 6.0 && norm <= 8.0, "norm = {}", norm);
     }
 }

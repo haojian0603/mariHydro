@@ -38,11 +38,10 @@ use crate::numerics::linear_algebra::{
     JacobiPreconditioner, PcgSolver, Preconditioner, SolverConfig, SolverResult, SolverStatus,
 };
 use crate::schemes::riemann::{HllcSolverF64, RiemannSolver};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 use crate::types::PhysicalConstants;
-use glam::DVec2;
 use mh_foundation::AlignedVec;
-use mh_runtime::{CpuBackend, CellIndex, FaceIndex};
+use mh_runtime::{CpuBackend, CellIndex};
 use serde::{Deserialize, Serialize};
 
 /// 半隐式配置
@@ -306,7 +305,7 @@ impl SemiImplicitStrategy {
         self.apply_dry_cell_bc(&wet_mask);
 
         // 7. 更新预条件器并求解
-        self.precond.update(self.pressure_assembler.matrix());
+        let _ = self.precond.update(self.pressure_assembler.matrix());
 
         self.eta_prime.as_mut_slice().fill(0.0);
         let result = self.solver.solve_with_workspace(

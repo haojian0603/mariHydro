@@ -33,7 +33,8 @@ use crate::core::CpuBackend;
 ///
 /// 从波场计算辐射应力梯度，作为动量源项
 pub struct WaveRadiationSource {
-    /// 辐射应力计算器
+    /// 辐射应力计算器（预留用于未来扩展）
+    #[allow(dead_code)]
     calculator: RadiationStressCalculator,
     /// 波场数据
     wave_field: WaveField,
@@ -53,7 +54,7 @@ impl WaveRadiationSource {
     /// 创建新的波浪辐射应力源项
     pub fn new(n_cells: usize) -> Self {
         Self {
-            calculator: RadiationStressCalculator::new(),
+            calculator: RadiationStressCalculator::new(n_cells),
             wave_field: WaveField::new(n_cells),
             stress: vec![RadiationStressTensor::default(); n_cells],
             stress_gradient: vec![(0.0, 0.0); n_cells],
@@ -95,7 +96,12 @@ impl WaveRadiationSource {
     pub fn compute_stress(&mut self) {
         let n_cells = self.wave_field.height.len();
         for i in 0..n_cells {
-            self.stress[i] = self.calculator.compute_cell(&self.wave_field, i);
+            // 使用 RadiationStressTensor::compute 直接计算每个单元的辐射应力
+            self.stress[i] = RadiationStressTensor::compute(
+                self.wave_field.energy[i],
+                self.wave_field.group_factor[i],
+                self.wave_field.direction[i],
+            );
         }
     }
 

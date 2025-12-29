@@ -3,6 +3,11 @@
 //!
 //! 预留 CUDA 后端支持，当前仅提供接口定义。
 //! 实际 GPU 实现将在未来阶段完成。
+//!
+//! # Safety
+//!
+//! 本模块使用 unsafe 代码实现 Send/Sync traits，经过审查确保线程安全。
+#![allow(unsafe_code)]
 
 use mh_runtime::DeviceBuffer;
 use mh_runtime::RuntimeScalar as Scalar;

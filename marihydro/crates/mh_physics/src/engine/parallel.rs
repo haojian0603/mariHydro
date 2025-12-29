@@ -16,6 +16,11 @@
 //!
 //! 当前实现的"并行"是伪并行：通量计算并行，但累加阶段串行。
 //! 对于大规模网格，需要实现真正的着色并行以避免累加瓶颈。
+//!
+//! # Safety
+//!
+//! 本模块使用 unsafe 代码进行性能优化的原子操作，安全性由图着色算法保证。
+#![allow(unsafe_code)]
 
 use crate::adapter::PhysicsMesh;
 use crate::engine::solver::{BedSlopeCorrectionF64, HydrostaticFaceState, HydrostaticReconstruction};
@@ -23,13 +28,40 @@ use crate::schemes::riemann::{HllcSolverF64, RiemannFluxF64, RiemannSolver, Solv
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandlerF64};
 use crate::state::ShallowWaterStateF64;
 use crate::types::NumericalParamsF64;
+use crate::core::CpuBackend;
 
 use glam::DVec2;
 use mh_runtime::FaceIndex;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tracing::{debug, info, trace};
+
+// 简单的日志宏替代 tracing
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            // 在调试模式下可以打印日志
+            // eprintln!("[DEBUG] {}", format!($($arg)*));
+        }
+    };
+}
+
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        // trace 级别默认不输出
+    };
+}
+
+macro_rules! info {
+    ($($arg:tt)*) => {
+        // info 级别可选输出
+        // eprintln!("[INFO] {}", format!($($arg)*));
+    };
+}
+
+/// HydrostaticReconstructionF64 类型别名
+pub type HydrostaticReconstructionF64 = HydrostaticReconstruction<CpuBackend<f64>>;
 
 // ============================================================
 // 配置
@@ -193,7 +225,8 @@ pub struct ParallelFluxCalculator {
     config: ParallelFluxConfig,
     /// 黎曼求解器
     riemann: HllcSolverF64,
-    /// 干湿处理器
+    /// 干湿处理器（预留用于未来扩展）
+    #[allow(dead_code)]
     wetting_drying: WettingDryingHandlerF64,
     /// 静水重构
     hydrostatic: HydrostaticReconstructionF64,
@@ -257,20 +290,20 @@ impl ParallelFluxCalculator {
             }
         }
 
-        let duration = start.elapsed();
+        let _duration = start.elapsed();
         
         // 计算着色质量指标
-        let avg_group_size = if num_colors > 0 { 
+        let _avg_group_size = if num_colors > 0 { 
             n_faces / num_colors 
         } else { 
             0 
         };
-        let max_group_size = color_faces.iter().map(|g| g.len()).max().unwrap_or(0);
-        let min_group_size = color_faces.iter().map(|g| g.len()).min().unwrap_or(0);
+        let _max_group_size = color_faces.iter().map(|g| g.len()).max().unwrap_or(0);
+        let _min_group_size = color_faces.iter().map(|g| g.len()).min().unwrap_or(0);
         
         info!(
             "Face coloring complete: {} faces, {} colors, avg/min/max group size = {}/{}/{}, took {:?}",
-            n_faces, num_colors, avg_group_size, min_group_size, max_group_size, duration
+            n_faces, num_colors, _avg_group_size, _min_group_size, _max_group_size, _duration
         );
 
         self.face_colors = Some(color_faces);

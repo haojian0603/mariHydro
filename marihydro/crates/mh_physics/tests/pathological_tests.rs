@@ -11,18 +11,17 @@
 //!
 //! 所有测试必须满足：编译零警告、Miri无UB、覆盖率>95%。
 use mh_runtime::{KahanSum, CpuBackend};
-use mh_foundation::{memory::AlignedVec};
 use mh_physics::{
     numerics::linear_algebra::{
         CsrMatrix, JacobiPreconditioner, PcgSolver, SolverConfig, SolverStatus,
         vector_ops::relative_residual,
         IterativeSolver,
     },
-    state::ShallowWaterState,
     ShallowWaterStateF64,
-    engine::{ShallowWaterSolver, SolverConfig as EngineConfig},
+    engine::ShallowWaterSolver,
     PhysicsMesh,
     types::NumericalParams,
+    Layer3Config,
 };
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
@@ -257,7 +256,7 @@ fn test_nan_propagation_blocking() {
     state.hu[5] = 1.0;
     state.hv[5] = 0.5;
 
-    let config = EngineConfig::default();
+    let config = Layer3Config::default();
     let backend = CpuBackend::<f64>::new();
     let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
@@ -303,7 +302,7 @@ fn test_negative_depth_recovery() {
     state.hu = vec![1.0, 1.0, 2.0, 1.0, 0.0];
     state.hv = vec![0.5, 0.5, 1.0, 0.5, 0.0];
 
-    let config = EngineConfig {
+    let config = Layer3Config {
         params: NumericalParams {
             h_min: H_DRY,
             ..Default::default()
@@ -338,7 +337,7 @@ fn test_velocity_clamping_extreme() {
     state.h[0] = 1e-10;
     state.hu[0] = 1.0; // 理论速度 u = 1e10 m/s
 
-    let config = EngineConfig {
+    let config = Layer3Config {
         params: NumericalParams {
             vel_max: VEL_MAX,
             ..Default::default()
@@ -400,7 +399,7 @@ fn test_wet_dry_oscillation_stability() {
         state.hv[i] = 0.0;
     }
 
-    let config = EngineConfig::default();
+    let config = Layer3Config::default();
     let backend = CpuBackend::<f64>::new();
     let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
@@ -569,7 +568,7 @@ fn test_boundary_extreme_values() {
         state.hu[i] = state.h[i] * 10.0; // 固定速度10 m/s
     }
 
-    let config = EngineConfig::default();
+    let config = Layer3Config::default();
     let backend = CpuBackend::<f64>::new();
     let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, config, backend);
 
@@ -601,7 +600,7 @@ fn test_long_term_stability() {
     state.hu.fill(0.0);
     state.hv.fill(0.0);
 
-    let config = EngineConfig {
+    let config = Layer3Config {
         use_hydrostatic_reconstruction: true,
         ..Default::default()
     };

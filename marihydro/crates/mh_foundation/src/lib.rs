@@ -4,8 +4,8 @@
 //!
 //! 零依赖基础层，提供整个项目的基础抽象。
 
+// 使用 workspace 统一的 lint 规则
 #![warn(missing_docs)]
-#![warn(clippy::all)]
 
 pub mod arena;
 pub mod dimension;

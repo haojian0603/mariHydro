@@ -20,6 +20,12 @@
 //! 3. 启用向量化（编译器可自动向量化循环）
 //! 4. 并行计算（批次内可并行）
 //!
+//! # Safety
+//!
+//! 本模块使用 unsafe 代码进行性能优化的无边界检查访问，
+//! 所有调用都经过边界验证，由外层循环保证安全性。
+#![allow(unsafe_code)]
+//!
 //! # 使用示例
 //!
 //! ```ignore
@@ -293,7 +299,9 @@ impl<S: RuntimeScalar> BatchFluxes<S> {
 ///
 /// 扩展 `RiemannSolver`，提供批量求解接口。
 /// 默认实现使用循环调用单次求解，但实现者可以覆盖以提供优化版本。
-pub trait BatchRiemannSolver: RiemannSolver {
+/// 
+/// 注意：此 trait 使用标量类型参数来避免循环依赖
+pub trait BatchRiemannSolver<S: RuntimeScalar>: RiemannSolver<Scalar = S, Vector2D = [S; 2]> {
     /// 批量求解 Riemann 问题
     ///
     /// # 参数
@@ -306,10 +314,10 @@ pub trait BatchRiemannSolver: RiemannSolver {
     /// 成功返回 Ok(())，失败返回错误
     fn solve_batch(
         &self,
-        left_states: &BatchCellStates<Self::Scalar>,
-        right_states: &BatchCellStates<Self::Scalar>,
-        normals: &BatchNormals<Self::Scalar>,
-        fluxes: &mut BatchFluxes<Self::Scalar>,
+        left_states: &BatchCellStates<S>,
+        right_states: &BatchCellStates<S>,
+        normals: &BatchNormals<S>,
+        fluxes: &mut BatchFluxes<S>,
     ) -> Result<(), RiemannError> {
         let n = left_states.len();
         debug_assert_eq!(right_states.len(), n);
@@ -343,13 +351,13 @@ pub trait BatchRiemannSolver: RiemannSolver {
     /// 计算结果通量数组，或错误
     fn solve_batch_parallel(
         &self,
-        left_states: &BatchCellStates<Self::Scalar>,
-        right_states: &BatchCellStates<Self::Scalar>,
-        normals: &BatchNormals<Self::Scalar>,
+        left_states: &BatchCellStates<S>,
+        right_states: &BatchCellStates<S>,
+        normals: &BatchNormals<S>,
         min_parallel_size: usize,
-    ) -> Result<BatchFluxes<Self::Scalar>, RiemannError>
+    ) -> Result<BatchFluxes<S>, RiemannError>
     where
-        Self::Scalar: Send + Sync,
+        S: Send + Sync,
     {
         let n = left_states.len();
         debug_assert_eq!(right_states.len(), n);
@@ -363,7 +371,7 @@ pub trait BatchRiemannSolver: RiemannSolver {
         }
 
         // 并行求解
-        let results: Vec<Result<RiemannFlux<Self::Scalar>, RiemannError>> = (0..n)
+        let results: Vec<Result<RiemannFlux<S>, RiemannError>> = (0..n)
             .into_par_iter()
             .map(|i| {
                 // SAFETY: i 在有效范围内
@@ -389,11 +397,11 @@ pub trait BatchRiemannSolver: RiemannSolver {
     /// 便捷方法，同时返回通量和全局最大波速（用于 CFL 条件）
     fn solve_batch_with_max_speed(
         &self,
-        left_states: &BatchCellStates<Self::Scalar>,
-        right_states: &BatchCellStates<Self::Scalar>,
-        normals: &BatchNormals<Self::Scalar>,
-        fluxes: &mut BatchFluxes<Self::Scalar>,
-    ) -> Result<Self::Scalar, RiemannError> {
+        left_states: &BatchCellStates<S>,
+        right_states: &BatchCellStates<S>,
+        normals: &BatchNormals<S>,
+        fluxes: &mut BatchFluxes<S>,
+    ) -> Result<S, RiemannError> {
         self.solve_batch(left_states, right_states, normals, fluxes)?;
         Ok(fluxes.global_max_wave_speed())
     }
@@ -403,8 +411,8 @@ pub trait BatchRiemannSolver: RiemannSolver {
 // 为现有求解器实现 BatchRiemannSolver
 // ============================================================
 
-// 所有实现 RiemannSolver 的类型自动获得 BatchRiemannSolver
-impl<T: RiemannSolver> BatchRiemannSolver for T {}
+// 所有实现 RiemannSolver 且 Vector2D = [Scalar; 2] 的类型自动获得 BatchRiemannSolver
+impl<S: RuntimeScalar, T: RiemannSolver<Scalar = S, Vector2D = [S; 2]>> BatchRiemannSolver<S> for T {}
 
 // ============================================================
 // 测试

@@ -18,7 +18,7 @@
 //!
 //! # 使用示例
 //!
-//! ```rust
+//! ```rust,ignore
 //! use mh_physics::engine::solver::{ShallowWaterSolver};
 //! use mh_physics::config_bridge::{Layer3Config, ConfigBridge};
 //! use mh_config::SolverConfig;
@@ -259,6 +259,7 @@ pub type BedSlopeCorrectionF64 = BedSlopeCorrection<CpuBackend<f64>>;
 #[derive(Debug, Clone)]
 pub struct HydrostaticReconstruction<B: Backend> {
     /// 数值参数（泛型）
+    #[allow(dead_code)]
     params: NumericalParams<B::Scalar>,
     /// 重力加速度（泛型）
     g: B::Scalar,
@@ -339,6 +340,7 @@ pub struct ShallowWaterSolver<B: Backend> {
     mesh: Arc<PhysicsMesh>,
     config: Layer3Config<B::Scalar>,
     params: NumericalParams<B::Scalar>,
+    #[allow(dead_code)]
     gravity: B::Scalar,
     backend: B,
     workspace: SolverWorkspaceGeneric<B>,

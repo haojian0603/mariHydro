@@ -15,7 +15,7 @@
 //! ```
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 

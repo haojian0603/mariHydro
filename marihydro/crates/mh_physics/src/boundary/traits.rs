@@ -406,7 +406,8 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for TidalLevel<S> {
 
     fn apply(&self, interior: &CellState<S>, _normal: [S; 2], time: S) -> CellState<S> {
         // η(t) = base + amplitude * sin(2π*t/T + φ)
-        let pi = S::from_f64(std::f64::consts::PI).unwrap_or(S::from_f64(3.141592653589793).unwrap_or(S::one()));
+        // 使用 std::f64::consts::PI，对于 f32 和 f64 转换始终成功
+        let pi = S::from_f64(std::f64::consts::PI).unwrap_or(S::one());
         let two = S::from_f64(2.0).unwrap_or(S::one() + S::one());
         let period_safe = if self.period > S::epsilon() { self.period } else { S::one() };
         
@@ -707,8 +708,8 @@ mod tests {
         let ghost = bc.apply(&interior, normal, 0.0);
 
         assert_eq!(ghost.h, 1.0);
-        assert!((ghost.u - (-1.0)).abs() < 1e-10); // u 反向
-        assert!((ghost.v - 0.0).abs() < 1e-10); // v 不变
+        assert!((ghost.u - (-1.0_f64)).abs() < 1e-10); // u 反向
+        assert!((ghost.v - 0.0_f64).abs() < 1e-10); // v 不变
     }
 
     #[test]
@@ -745,11 +746,11 @@ mod tests {
 
         // t=0: η = base + amplitude * sin(0) = 1.0
         let ghost = bc.apply(&interior, normal, 0.0);
-        assert!((ghost.h - 1.0).abs() < 1e-10);
+        assert!((ghost.h - 1.0_f64).abs() < 1e-10);
 
         // t=T/4: η = base + amplitude * sin(π/2) = 1.0 + 0.5 = 1.5
         let ghost = bc.apply(&interior, normal, 0.25);
-        assert!((ghost.h - 1.5).abs() < 1e-10);
+        assert!((ghost.h - 1.5_f64).abs() < 1e-10);
 
         assert!(bc.is_time_dependent());
     }

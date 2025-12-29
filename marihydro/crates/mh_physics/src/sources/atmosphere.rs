@@ -24,7 +24,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 
 /// 最大风速限制 [m/s]
 const MAX_WIND_SPEED: f64 = 100.0;

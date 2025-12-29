@@ -15,13 +15,11 @@
 //! - 手动展开小循环（n < 16）
 //! - 使用 fma 指令加速 AXPY
 
-use crate::engine::solver::SolverStats;
 use crate::numerics::linear_algebra::{AlignedVec64, aligned_vec};
 use crate::numerics::linear_algebra::csr::CsrMatrix;
 use mh_runtime::{Backend, RuntimeScalar, CpuBackend, DeviceBuffer};
-use num_traits::{Float, FromPrimitive, Zero, One};
+use num_traits::{FromPrimitive, Zero, One};
 use std::sync::Arc;
-use std::ops::{Deref, DerefMut};
 
 // ============================================================================
 // 预条件器错误类型
@@ -72,7 +70,7 @@ pub trait Preconditioner<B: Backend>: Send + Sync {
 
     /// 应用预条件（切片版本）: y = M⁻¹ * x
     /// 默认实现供 CPU 后端使用
-    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+    fn apply_slice(&self, _x: &[B::Scalar], _y: &mut [B::Scalar]) {
         // 默认 panic - 子类型应该覆盖此方法
         panic!("apply_slice not implemented for this preconditioner");
     }
@@ -149,7 +147,7 @@ pub struct JacobiPreconditioner<B: Backend> {
 
 impl<B: Backend> JacobiPreconditioner<B> {
     /// 创建新预条件器（初始为空）
-    pub fn new(backend: &B) -> Self {
+    pub fn new(_backend: &B) -> Self {
         let inv_diag = aligned_vec(0);
         Self {
             inv_diag,
@@ -158,7 +156,7 @@ impl<B: Backend> JacobiPreconditioner<B> {
     }
 
     /// 从对角线创建（自动取逆）
-    pub fn from_diagonal(backend: &B, diag: &[B::Scalar]) -> Result<Self, PreconditionerError> {
+    pub fn from_diagonal(_backend: &B, diag: &[B::Scalar]) -> Result<Self, PreconditionerError> {
         if diag.is_empty() {
             return Err(PreconditionerError::EmptyMatrix);
         }
@@ -234,12 +232,12 @@ impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {
         self.inv_diag.resize(n);
 
         let diag = matrix.extract_diagonal();
-        for (i, d) in diag.into_iter().enumerate() {
-            self.inv_diag[i] = d;
+        for (_i, d) in diag.into_iter().enumerate() {
+            self.inv_diag[_i] = d;
         }
 
         // 安全取逆
-        for (i, d) in self.inv_diag.iter_mut().enumerate() {
+        for (_i, d) in self.inv_diag.iter_mut().enumerate() {
             if d.is_zero() {
                 *d = B::Scalar::one();
                 self.stats.singular_entries += 1;
@@ -305,6 +303,7 @@ pub struct SsorPreconditioner<B: Backend> {
     /// 松弛因子
     omega: B::Scalar,
     /// 临时向量（前向替换）
+    #[allow(dead_code)]
     temp: AlignedVec64<B::Scalar>,
     /// 性能统计
     stats: PreconditionerStats,
@@ -313,7 +312,7 @@ pub struct SsorPreconditioner<B: Backend> {
 impl<B: Backend> SsorPreconditioner<B> {
     /// 从矩阵创建 SSOR 预条件器
     pub fn from_matrix(
-        backend: &B,
+        _backend: &B,
         matrix: Arc<CsrMatrix<B::Scalar>>,
         params: SsorParams,
     ) -> Result<Self, PreconditionerError> {
@@ -402,6 +401,7 @@ impl<B: Backend> ScalarPreconditioner<B::Scalar> for SsorPreconditioner<B> {
 /// 使用 CSR 矩阵的就地分解，不额外存储 LU 结构。
 pub struct Ilu0Preconditioner<B: Backend> {
     /// LU 分解后的矩阵值（覆盖存储）
+    #[allow(dead_code)]
     lu_values: AlignedVec64<B::Scalar>,
     /// 对角线索引
     diag_idxs: Vec<Option<usize>>,

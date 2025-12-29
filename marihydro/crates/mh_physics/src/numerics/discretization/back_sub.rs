@@ -24,7 +24,6 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use mh_runtime::CellIndex;
 use super::topology::CellFaceTopology;
 
 /// 水深校正器

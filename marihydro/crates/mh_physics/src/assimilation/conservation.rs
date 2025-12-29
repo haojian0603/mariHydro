@@ -156,6 +156,7 @@ impl ConservationChecker {
 // ============================================================================
 
 /// 能量守恒检查结果
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum EnergyCheckResult {
     /// 能量守恒在容差范围内
@@ -183,11 +184,13 @@ pub enum EnergyCheckResult {
 
 impl EnergyCheckResult {
     /// 检查是否为物理合理状态
+    #[allow(dead_code)]
     pub fn is_physical(&self) -> bool {
         matches!(self, Self::Conserved { .. } | Self::Dissipated { .. })
     }
     
     /// 检查是否违反能量守恒
+    #[allow(dead_code)]
     pub fn is_violated(&self) -> bool {
         matches!(self, Self::Increased { .. })
     }
@@ -210,6 +213,7 @@ impl EnergyCheckResult {
 /// - 能量守恒：变化在容差范围内
 /// - 能量耗散：能量减少（物理上允许，如摩擦耗散）
 /// - 能量增加：能量增加（非物理，表明数值方法有问题）
+#[allow(dead_code)]
 pub fn check_energy_conservation(
     before: &ConservedQuantities,
     after: &ConservedQuantities,
@@ -255,6 +259,7 @@ pub fn check_energy_conservation(
 ///
 /// - `Ok(())`: 能量守恒或耗散
 /// - `Err(PhysicsError)`: 能量非物理增加
+#[allow(dead_code)]
 pub fn verify_energy_conservation(
     before: &ConservedQuantities,
     after: &ConservedQuantities,
@@ -262,7 +267,7 @@ pub fn verify_energy_conservation(
 ) -> crate::error::PhysicsResult<()> {
     match check_energy_conservation(before, after, tolerance) {
         EnergyCheckResult::Conserved { .. } | EnergyCheckResult::Dissipated { .. } => Ok(()),
-        EnergyCheckResult::Increased { increase, relative_rate } => {
+        EnergyCheckResult::Increased { increase: _, relative_rate } => {
             Err(crate::error::PhysicsError::EnergyIncreased {
                 before: before.total_energy,
                 after: after.total_energy,

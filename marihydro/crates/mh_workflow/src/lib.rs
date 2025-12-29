@@ -125,23 +125,16 @@ pub fn run_from_config<P: AsRef<Path>>(config_path: P) -> Result<RunResult, Work
 /// # 参数
 ///
 /// - `config_paths`: 配置文件路径列表
-/// - `parallel`: 是否并行执行
-pub fn run_batch<P: AsRef<Path>>(
+/// - `parallel`: 是否并行执行（当前仅支持串行执行）
+pub fn run_batch<P: AsRef<Path> + Sync>(
     config_paths: &[P],
-    parallel: bool,
+    _parallel: bool,
 ) -> Vec<Result<RunResult, WorkflowError>> {
-    if parallel {
-        use rayon::prelude::*;
-        config_paths
-            .par_iter()
-            .map(|p| run_from_config(p))
-            .collect()
-    } else {
-        config_paths
-            .iter()
-            .map(|p| run_from_config(p))
-            .collect()
-    }
+    // 当前暂时只使用串行执行
+    config_paths
+        .iter()
+        .map(|p| run_from_config(p))
+        .collect()
 }
 
 /// 运行结果

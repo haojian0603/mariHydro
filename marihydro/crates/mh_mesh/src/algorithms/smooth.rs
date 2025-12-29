@@ -809,7 +809,7 @@ impl SmootherF32 {
         mu: f32,
     ) {
         let lambda = self.config.lambda;
-        let n = vertices.len();
+        let _n = vertices.len();
 
         for _ in 0..self.config.iterations {
             // 正向平滑

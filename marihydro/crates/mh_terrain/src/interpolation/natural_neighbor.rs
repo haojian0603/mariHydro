@@ -187,7 +187,7 @@ impl NaturalNeighborInterpolator {
         }
 
         // 按距离排序
-        neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // 检查邻居数量
         if neighbors.len() < self.config.min_neighbors {
@@ -315,7 +315,7 @@ impl NaturalNeighborInterpolator {
             .filter(|&(_, d)| d <= self.config.search_radius)
             .collect();
 
-        neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        neighbors.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         neighbors.truncate(self.config.max_neighbors);
 
         let weights = self.compute_weights(&neighbors);

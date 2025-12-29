@@ -369,7 +369,7 @@ where
         let ratio = B::Scalar::from_usize(iterations).unwrap_or(B::Scalar::ZERO)
             / B::Scalar::from_usize(target_iterations.max(1)).unwrap_or(B::Scalar::ONE);
 
-        let zero = B::Scalar::ZERO;
+        let _zero = B::Scalar::ZERO;
         let one = B::Scalar::ONE;
         let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE);
 
@@ -422,7 +422,8 @@ where
         if f.abs() < B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON) {
             None
         } else {
-            let pi = B::Scalar::from_f64(std::f64::consts::PI).unwrap_or(B::Scalar::from_f64(3.14159).unwrap_or(B::Scalar::ONE));
+            // 使用 std::f64::consts::PI，对于 f32 和 f64 转换始终成功
+            let pi = B::Scalar::from_f64(std::f64::consts::PI).unwrap_or(B::Scalar::ONE);
             Some(pi / f.abs())
         }
     }

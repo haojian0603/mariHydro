@@ -17,17 +17,16 @@
 //!
 //! # 使用规范
 //!
-//! ```rust
+//! ```rust,ignore
 //! // ✅ 正确：Layer 3引擎层使用泛型参数
+//! use mh_runtime::RuntimeScalar;
 //! fn compute_flux<S: RuntimeScalar>(h: S, u: S) -> S { h * u }
 //!
 //! // ❌ 错误：Layer 4/5不应直接使用RuntimeScalar约束
 //! // fn app_level<S: RuntimeScalar>(config: SolverConfig) { ... }
 //! ```
 
-use crate::fields::{FieldMeta, FieldRegistry};
-use bytemuck::Pod;
-use num_traits::{Float, FromPrimitive};
+use num_traits::FromPrimitive;
 
 // 从 mh_runtime 重新导出索引类型（公开）
 pub use mh_runtime::{

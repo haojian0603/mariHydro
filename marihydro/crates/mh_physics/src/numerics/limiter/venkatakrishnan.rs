@@ -169,6 +169,7 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for VenkatakrishnanGeneric<S> {
 pub type Venkatakrishnan = VenkatakrishnanGeneric<f64>;
 
 /// f32 特化版本 - 高性能模式
+#[allow(dead_code)]
 pub type VenkatakrishnanF32 = VenkatakrishnanGeneric<f32>;
 
 #[cfg(test)]

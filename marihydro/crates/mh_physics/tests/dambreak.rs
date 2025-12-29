@@ -9,7 +9,8 @@ use std::sync::Arc;
 use mh_mesh::halfedge::HalfEdgeMesh;
 use mh_mesh::io::GmshLoader;
 use mh_physics::adapter::PhysicsMesh;
-use mh_physics::engine::{SolverConfig, ShallowWaterSolver};
+use mh_physics::engine::ShallowWaterSolver;
+use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterStateF64;
 use mh_physics::types::NumericalParams;
 use mh_runtime::{CpuBackend, CellIndex};
@@ -187,7 +188,7 @@ fn run_dambreak_simulation(
         ..Default::default()
     };
     
-    let config = SolverConfig::builder()
+    let config = Layer3Config::builder()
         .gravity(9.81)
         .params(params)
         .use_hydrostatic_reconstruction(true)

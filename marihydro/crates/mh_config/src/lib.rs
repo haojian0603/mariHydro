@@ -29,8 +29,8 @@
 //! 3. **运行时分发**: 通过 Precision 枚举选择 f32/f64
 //! 4. **Trait 对象**: 通过 `Box<dyn DynSolver>` 实现多态
 
+// 使用 workspace 统一的 lint 规则
 #![warn(missing_docs)]
-#![warn(clippy::all)]
 
 #[cfg(feature = "layer-guard")]
 compile_error!("mh_config 禁止在 Layer 4 以下使用");

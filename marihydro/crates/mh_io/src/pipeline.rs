@@ -297,7 +297,7 @@ impl IoPipeline {
         // 更新统计信息（使用毒化恢复）
         {
             let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("PipelineStats mutex was poisoned, recovering");
+                // 警告：PipelineStats mutex 被毒化，正在恢复
                 poisoned.into_inner()
             });
             stats.total_requests += 1;
@@ -402,7 +402,7 @@ impl IoPipeline {
     /// 获取统计信息
     pub fn stats(&self) -> PipelineStats {
         self.stats.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("PipelineStats mutex was poisoned, recovering");
+            // 警告：PipelineStats mutex 被毒化，正在恢复
             poisoned.into_inner()
         }).clone()
     }

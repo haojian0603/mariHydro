@@ -14,14 +14,14 @@
 //! ```ignore
 //! use mh_physics::sources::forcing_adapter::WindForcingAdapter;
 //! use mh_physics::forcing::WindProvider;
-//! use mh_physics::sources::atmosphere::WindStressFormula;
+//! use mh_physics::sources::atmosphere::DragCoefficientMethod;
 //!
 //! let wind_provider = WindProvider::constant(10.0, 225.0);
-//! let adapter = WindForcingAdapter::new(wind_provider, WindStressFormula::Wu1982);
+//! let adapter = WindForcingAdapter::new(wind_provider, DragCoefficientMethod::Wu1982);
 //! ```
 
 use crate::forcing::wind::WindProvider;
-use crate::sources::atmosphere::{WindStressConfig, WindStressFormula};
+use crate::sources::atmosphere::DragCoefficientMethod;
 use crate::sources::traits::{
     SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
@@ -35,8 +35,13 @@ use crate::core::CpuBackend;
 pub struct WindForcingAdapter {
     /// 风场数据提供者
     provider: WindProvider,
-    /// 风应力配置
-    stress_config: WindStressConfig,
+    /// 风阻系数计算方法
+    drag_method: DragCoefficientMethod,
+    /// 空气密度 [kg/m³]
+    rho_air: f64,
+    /// 水密度 [kg/m³] (预留用于潜在扩展)
+    #[allow(dead_code)]
+    rho_water: f64,
     /// 缓存的风速 (u, v)
     cached_wind: (f64, f64),
     /// 是否启用
@@ -45,18 +50,20 @@ pub struct WindForcingAdapter {
 
 impl WindForcingAdapter {
     /// 创建新的风场强迫适配器
-    pub fn new(provider: WindProvider, formula: WindStressFormula) -> Self {
+    pub fn new(provider: WindProvider, drag_method: DragCoefficientMethod) -> Self {
         Self {
             provider,
-            stress_config: WindStressConfig::new(formula),
+            drag_method,
+            rho_air: 1.225,
+            rho_water: 1000.0,
             cached_wind: (0.0, 0.0),
             enabled: true,
         }
     }
 
     /// 从恒定风场创建
-    pub fn constant(speed: f64, direction_deg: f64, formula: WindStressFormula) -> Self {
-        Self::new(WindProvider::constant(speed, direction_deg), formula)
+    pub fn constant(speed: f64, direction_deg: f64, drag_method: DragCoefficientMethod) -> Self {
+        Self::new(WindProvider::constant(speed, direction_deg), drag_method)
     }
 
     /// 更新风场到指定时间
@@ -69,6 +76,11 @@ impl WindForcingAdapter {
         self.cached_wind
     }
 
+    /// 计算风阻系数
+    fn drag_coefficient(&self, wind_speed: f64) -> f64 {
+        self.drag_method.compute(wind_speed)
+    }
+
     /// 计算风应力
     fn compute_stress(&self, wind_u: f64, wind_v: f64) -> (f64, f64) {
         let wind_speed = (wind_u * wind_u + wind_v * wind_v).sqrt();
@@ -76,11 +88,10 @@ impl WindForcingAdapter {
             return (0.0, 0.0);
         }
         
-        let cd = self.stress_config.drag_coefficient(wind_speed);
-        let rho_air = self.stress_config.rho_air;
+        let cd = self.drag_coefficient(wind_speed);
         
         // τ = ρ_air × C_d × |W| × W
-        let tau = rho_air * cd * wind_speed;
+        let tau = self.rho_air * cd * wind_speed;
         (tau * wind_u, tau * wind_v)
     }
 }
@@ -195,11 +206,11 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use crate::sources::atmosphere::DragCoefficientMethod;
 
     #[test]
     fn test_wind_forcing_adapter() {
-        let adapter = WindForcingAdapter::constant(10.0, 180.0, WindStressFormula::Wu1982);
+        let adapter = WindForcingAdapter::constant(10.0, 180.0, DragCoefficientMethod::Wu1982);
         
         assert_eq!(adapter.name(), "WindForcing");
         assert!(adapter.is_enabled());

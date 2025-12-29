@@ -70,7 +70,7 @@ pub enum LockStrategy {
 /// assert_eq!(*guard, 100);
 /// ```
 #[inline]
-pub fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+pub fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| {
         // 在生产环境中记录警告
         #[cfg(feature = "tracing")]
@@ -103,7 +103,7 @@ pub fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
 pub fn lock_with_strategy<T>(
     mutex: &Mutex<T>,
     strategy: LockStrategy,
-) -> Result<MutexGuard<T>, PoisonError<MutexGuard<T>>> {
+) -> Result<MutexGuard<'_, T>, PoisonError<MutexGuard<'_, T>>> {
     match strategy {
         LockStrategy::Panic => Ok(mutex.lock().expect("Mutex poisoned")),
         LockStrategy::Recover => Ok(lock_or_recover(mutex)),
@@ -115,7 +115,7 @@ pub fn lock_with_strategy<T>(
 ///
 /// 非阻塞版本，如果锁不可用立即返回 None。
 #[inline]
-pub fn try_lock_or_recover<T>(mutex: &Mutex<T>) -> Option<MutexGuard<T>> {
+pub fn try_lock_or_recover<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
     match mutex.try_lock() {
         Ok(guard) => Some(guard),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
@@ -136,7 +136,7 @@ pub fn try_lock_or_recover<T>(mutex: &Mutex<T>) -> Option<MutexGuard<T>> {
 
 /// 安全获取 RwLock 读锁，毒化时恢复
 #[inline]
-pub fn read_or_recover<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<T> {
+pub fn read_or_recover<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
     rwlock.read().unwrap_or_else(|poisoned| {
         #[cfg(feature = "tracing")]
         tracing::warn!("RwLock was poisoned (read), recovering");
@@ -149,7 +149,7 @@ pub fn read_or_recover<T>(rwlock: &RwLock<T>) -> RwLockReadGuard<T> {
 
 /// 安全获取 RwLock 写锁，毒化时恢复
 #[inline]
-pub fn write_or_recover<T>(rwlock: &RwLock<T>) -> RwLockWriteGuard<T> {
+pub fn write_or_recover<T>(rwlock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     rwlock.write().unwrap_or_else(|poisoned| {
         #[cfg(feature = "tracing")]
         tracing::warn!("RwLock was poisoned (write), recovering");

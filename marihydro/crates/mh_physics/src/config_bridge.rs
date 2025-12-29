@@ -4,7 +4,8 @@
 //! 泛型配置的显式转换，确保类型安全和精度一致性。
 
 use mh_config::SolverConfig as Layer4Config;
-use crate::types::NumericalParams;
+use mh_config::solver_config::{RiemannSolverType, TimeIntegrationMethod};
+use crate::types::{NumericalParams, NumericalParamsF64};
 use crate::engine::solver::{NumericalScheme, FallbackStrategy, TimeIntegrator, StabilityOptions};
 use mh_runtime::RuntimeScalar;
 use num_traits::FromPrimitive;
@@ -47,10 +48,115 @@ pub struct Layer3Config<S: RuntimeScalar> {
     pub integrator: TimeIntegrator,
 }
 
+impl<S> Default for Layer3Config<S>
+where
+    S: RuntimeScalar + FromPrimitive,
+{
+    /// 创建默认配置，用于测试和简单场景
+    fn default() -> Self {
+        Self {
+            params: NumericalParams::<S>::default(),
+            gravity: S::from_f64(9.81).unwrap_or_else(|| S::ZERO),
+            use_hydrostatic_reconstruction: true,
+            parallel_threshold: 1000,
+            implicit_friction: true,
+            scheme: NumericalScheme::SecondOrderMuscl,
+            fallback: FallbackStrategy::default(),
+            stability: StabilityOptions::default(),
+            max_fallback_attempts: 3,
+            timestep_reduction_factor: S::from_f64(0.5).unwrap_or_else(|| S::ZERO),
+            integrator: TimeIntegrator::Explicit,
+        }
+    }
+}
+
+/// Layer3Config 构建器
+#[derive(Debug, Clone)]
+pub struct Layer3ConfigBuilder<S: RuntimeScalar> {
+    config: Layer3Config<S>,
+}
+
+impl<S> Layer3ConfigBuilder<S>
+where
+    S: RuntimeScalar + FromPrimitive,
+{
+    /// 创建新的构建器
+    pub fn new() -> Self {
+        Self {
+            config: Layer3Config::default(),
+        }
+    }
+
+    /// 设置数值格式
+    pub fn scheme(mut self, scheme: NumericalScheme) -> Self {
+        self.config.scheme = scheme;
+        self
+    }
+
+    /// 设置 CFL 数
+    pub fn cfl(mut self, cfl: f64) -> Self {
+        if let Some(cfl_s) = S::from_f64(cfl) {
+            self.config.params.cfl = cfl_s;
+        }
+        self
+    }
+
+    /// 设置重力加速度
+    pub fn gravity(mut self, g: f64) -> Self {
+        if let Some(g_s) = S::from_f64(g) {
+            self.config.gravity = g_s;
+        }
+        self
+    }
+
+    /// 设置数值参数
+    pub fn params(mut self, params: NumericalParams<S>) -> Self {
+        self.config.params = params;
+        self
+    }
+
+    /// 设置静水重构
+    pub fn use_hydrostatic_reconstruction(mut self, value: bool) -> Self {
+        self.config.use_hydrostatic_reconstruction = value;
+        self
+    }
+
+    /// 设置并行阈值
+    pub fn parallel_threshold(mut self, value: usize) -> Self {
+        self.config.parallel_threshold = value;
+        self
+    }
+
+    /// 设置隐式摩擦
+    pub fn implicit_friction(mut self, value: bool) -> Self {
+        self.config.implicit_friction = value;
+        self
+    }
+
+    /// 构建配置
+    pub fn build(self) -> Layer3Config<S> {
+        self.config
+    }
+}
+
+impl<S> Default for Layer3ConfigBuilder<S>
+where
+    S: RuntimeScalar + FromPrimitive,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> Layer3Config<S>
 where
     S: RuntimeScalar + FromPrimitive,
 {
+    /// 创建配置构建器
+    pub fn builder() -> Layer3ConfigBuilder<S> {
+        Layer3ConfigBuilder::new()
+    }
+
     /// 从 Layer 4 配置转换到指定精度
     ///
     /// # 参数
@@ -60,8 +166,19 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigBridgeError)`: 转换失败（数值溢出或无法转换）
     pub fn from_layer4(config: &Layer4Config) -> Result<Self, ConfigBridgeError> {
+        // 从 Layer4Config 构建 NumericalParamsF64
+        let params_f64 = NumericalParamsF64 {
+            h_min: config.physics.h_min,
+            h_dry: config.physics.h_dry,
+            cfl: config.physics.cfl,
+            vel_max: config.physics.velocity_cap,
+            flux_eps: config.physics.flux_eps,
+            min_wave_speed: config.physics.min_wave_speed,
+            ..NumericalParamsF64::default()
+        };
+
         // 转换数值参数
-        let params = NumericalParams::<S>::from_f64_params(&config.numerical)
+        let params = NumericalParams::<S>::from_f64_params(&params_f64)
             .map_err(|_| ConfigBridgeError::ConversionFailed {
                 field: "numerical_params", 
                 value: 0.0,
@@ -74,70 +191,52 @@ where
                 value: config.physics.gravity,
             })?;
         // 转换时间步减小因子
-        let timestep_reduction_factor = S::from_f64(config.timestep_reduction_factor)
+        let timestep_reduction_factor = S::from_f64(config.numerical.timestep_reduction_factor)
             .ok_or(ConfigBridgeError::ConversionFailed {
                 field: "timestep_reduction_factor",
-                value: config.timestep_reduction_factor,
+                value: config.numerical.timestep_reduction_factor,
             })?;
 
         // 判断是否为二阶格式
-        let second_order = matches!(
-            config.scheme,
-            mh_config::RiemannSolverType::Hllc | mh_config::RiemannSolverType::Roe
+        let _second_order = matches!(
+            config.numerical.riemann_solver,
+            RiemannSolverType::Hllc | RiemannSolverType::Roe
         );
 
         Ok(Self {
             params,
             gravity,
-            use_hydrostatic_reconstruction: config.use_hydrostatic_reconstruction,
-            parallel_threshold: config.parallel_threshold,
-            implicit_friction: config.implicit_friction,
-            scheme: config.scheme.into(),
-            fallback: config.fallback.into(),
-            stability: StabilityOptions {
-                check_nan: config.stability.check_nan,
-                check_negative_depth: config.stability.check_negative_depth,
-                check_extreme_velocity: config.stability.check_extreme_velocity,
-                velocity_limit: config.stability.velocity_limit,
-                depth_limit: config.stability.depth_limit,
-            },
-            max_fallback_attempts: config.max_fallback_attempts,
+            use_hydrostatic_reconstruction: config.numerical.use_hydrostatic_reconstruction,
+            parallel_threshold: config.parallel.threshold,
+            implicit_friction: config.numerical.friction,
+            scheme: config.numerical.riemann_solver.into(),
+            fallback: FallbackStrategy::default(),
+            stability: StabilityOptions::default(),
+            max_fallback_attempts: config.numerical.max_fallback_attempts,
             timestep_reduction_factor,
-            integrator: config.time_integration.into(),
-            second_order,
+            integrator: config.numerical.time_integration.into(),
         })
     }
 }
 
 // 转换 trait 实现
-impl From<mh_config::RiemannSolverType> for NumericalScheme {
-    fn from(value: mh_config::RiemannSolverType) -> Self {
+impl From<RiemannSolverType> for NumericalScheme {
+    fn from(value: RiemannSolverType) -> Self {
         match value {
-            mh_config::RiemannSolverType::Hllc => NumericalScheme::SecondOrderMuscl,
-            mh_config::RiemannSolverType::Roe => NumericalScheme::SecondOrderMuscl,
-            mh_config::RiemannSolverType::Rusanov => NumericalScheme::FirstOrder,
-            mh_config::RiemannSolverType::Central => NumericalScheme::FirstOrder,
+            RiemannSolverType::Hllc => NumericalScheme::SecondOrderMuscl,
+            RiemannSolverType::Roe => NumericalScheme::SecondOrderMuscl,
+            RiemannSolverType::Rusanov => NumericalScheme::FirstOrder,
+            RiemannSolverType::Central => NumericalScheme::FirstOrder,
         }
     }
 }
 
-impl From<mh_config::FallbackStrategy> for FallbackStrategy {
-    fn from(value: mh_config::FallbackStrategy) -> Self {
+impl From<TimeIntegrationMethod> for TimeIntegrator {
+    fn from(value: TimeIntegrationMethod) -> Self {
         match value {
-            mh_config::FallbackStrategy::NoFallback => FallbackStrategy::NoFallback,
-            mh_config::FallbackStrategy::FallbackToFirstOrder => FallbackStrategy::FallbackToFirstOrder,
-            mh_config::FallbackStrategy::ReduceTimestep => FallbackStrategy::ReduceTimestep,
-            mh_config::FallbackStrategy::Progressive => FallbackStrategy::Progressive,
-        }
-    }
-}
-
-impl From<mh_config::TimeIntegrationMethod> for TimeIntegrator {
-    fn from(value: mh_config::TimeIntegrationMethod) -> Self {
-        match value {
-            mh_config::TimeIntegrationMethod::ForwardEuler => TimeIntegrator::Explicit,
-            mh_config::TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
-            mh_config::TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
+            TimeIntegrationMethod::ForwardEuler => TimeIntegrator::Explicit,
+            TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
+            TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
         }
     }
 }

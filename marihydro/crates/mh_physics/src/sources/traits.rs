@@ -6,8 +6,8 @@
 
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateF64, ShallowWaterStateGeneric};
-use crate::types::{NumericalParams, NumericalParamsF64};
+use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
+use crate::types::NumericalParamsF64;
 use std::marker::PhantomData;
 
 /// 源项贡献
@@ -556,6 +556,8 @@ pub type SourceTermF64 = dyn SourceTermGeneric<CpuBackend<f64>>;
 
 #[cfg(test)]
 mod tests {
+    use crate::NumericalParams;
+
     use super::*;
 
     #[test]

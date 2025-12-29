@@ -37,11 +37,9 @@
 //! let distance_km = beijing.geodesic_distance_to(&shanghai) / 1000.0;
 //! ```
 
+// 使用 workspace 统一的 lint 规则
 #![warn(missing_docs)]
 #![warn(clippy::all)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::must_use_candidate)]
 
 pub mod crs;
 pub mod ellipsoid;

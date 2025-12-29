@@ -52,10 +52,7 @@ pub struct ShearStress<S: RuntimeScalar = f64> {
 
 impl<S: RuntimeScalar> ShearStress<S> {
     /// 零剪切应力
-    pub const fn zero() -> Self
-    where
-        S: ~const Default,
-    {
+    pub fn zero() -> Self {
         Self {
             magnitude: S::ZERO,
             tau_x: S::ZERO,
@@ -210,8 +207,8 @@ impl ShearStressCalculator {
         v: &[f64],
         manning_n: ManningCoeff<'_>,
         tau_out: &mut [f64],
-        tau_x_out: Option<&mut [f64]>,
-        tau_y_out: Option<&mut [f64]>,
+        mut tau_x_out: Option<&mut [f64]>,
+        mut tau_y_out: Option<&mut [f64]>,
     ) {
         let n_cells = h.len().min(u.len()).min(v.len()).min(tau_out.len());
         let rho_g = self.rho_water * self.g;
@@ -220,11 +217,15 @@ impl ShearStressCalculator {
             let hi = h[i];
             if hi < self.h_min {
                 tau_out[i] = 0.0;
-                if let Some(tx) = tau_x_out.as_deref_mut().map(|arr| &mut arr[i]) {
-                    *tx = 0.0;
+                if let Some(ref mut tx_arr) = tau_x_out {
+                    if i < tx_arr.len() {
+                        tx_arr[i] = 0.0;
+                    }
                 }
-                if let Some(ty) = tau_y_out.as_deref_mut().map(|arr| &mut arr[i]) {
-                    *ty = 0.0;
+                if let Some(ref mut ty_arr) = tau_y_out {
+                    if i < ty_arr.len() {
+                        ty_arr[i] = 0.0;
+                    }
                 }
                 continue;
             }
@@ -241,25 +242,25 @@ impl ShearStressCalculator {
 
             // 分量
             if speed > 1e-10 {
-                if let Some(tx_out) = tau_x_out {
-                    if i < tx_out.len() {
-                        tx_out[i] = tau_mag * ui / speed;
+                if let Some(ref mut tx_arr) = tau_x_out {
+                    if i < tx_arr.len() {
+                        tx_arr[i] = tau_mag * ui / speed;
                     }
                 }
-                if let Some(ty_out) = tau_y_out {
-                    if i < ty_out.len() {
-                        ty_out[i] = tau_mag * vi / speed;
+                if let Some(ref mut ty_arr) = tau_y_out {
+                    if i < ty_arr.len() {
+                        ty_arr[i] = tau_mag * vi / speed;
                     }
                 }
             } else {
-                if let Some(tx_out) = tau_x_out {
-                    if i < tx_out.len() {
-                        tx_out[i] = 0.0;
+                if let Some(ref mut tx_arr) = tau_x_out {
+                    if i < tx_arr.len() {
+                        tx_arr[i] = 0.0;
                     }
                 }
-                if let Some(ty_out) = tau_y_out {
-                    if i < ty_out.len() {
-                        ty_out[i] = 0.0;
+                if let Some(ref mut ty_arr) = tau_y_out {
+                    if i < ty_arr.len() {
+                        ty_arr[i] = 0.0;
                     }
                 }
             }

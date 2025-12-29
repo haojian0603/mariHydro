@@ -30,8 +30,8 @@
 //! 3. **无代际索引**: indices 模块的索引类型不包含代际验证
 //! 4. **可选代际**: 需要代际验证时使用 arena_ext::SafeArena
 
+// 使用 workspace 统一的 lint 规则
 #![warn(missing_docs)]
-#![warn(clippy::all)]
 
 #[cfg(feature = "layer-guard")]
 compile_error!("mh_runtime 禁止在 Layer 1 或更低层使用");

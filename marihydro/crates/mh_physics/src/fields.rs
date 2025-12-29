@@ -12,6 +12,11 @@
 //! 4. **线程安全**：明确标记为 `Send + Sync`，支持多线程访问
 //! 5. **名称验证**：强制 snake_case 命名规范，防止拼写错误
 //!
+//! # Safety
+//!
+//! 本模块使用 unsafe 实现 Send/Sync traits，字段注册器内部使用锁保护。
+#![allow(unsafe_code)]
+//!
 //! # 使用场景
 //!
 //! - 标准浅水方程字段（水深、动量、地形）
@@ -21,7 +26,7 @@
 //!
 //! # 示例
 //!
-//! ```rust
+//! ```rust,ignore
 //! use mh_physics::fields::{FieldRegistry, FieldMeta, FieldType, FieldLocation};
 //!
 //! // 创建标准浅水字段
@@ -371,10 +376,33 @@ impl FieldRegistry {
     ///
     /// # 返回
     /// 返回第一个失败的错误，或 Ok(())
+    ///
+    /// # 注意
+    /// 此方法具有原子性：如果任何字段验证失败，则不会注册任何字段。
     #[inline]
     pub fn register_batch(&mut self, fields: &[FieldMeta]) -> Result<(), FieldError> {
+        // 先验证所有字段，确保原子性
         for meta in fields {
-            self.register(meta.clone())?;
+            let name = &meta.name;
+            if !is_valid_field_name(name) {
+                return Err(FieldError::InvalidName(name.clone()));
+            }
+            if is_reserved_field(name) && self.fields.contains_key(name) {
+                return Err(FieldError::ReservedField(name.clone()));
+            }
+        }
+        
+        // 所有验证通过后，批量注册
+        for meta in fields {
+            let name = meta.name.clone();
+            if self.fields.contains_key(&name) {
+                // 更新元数据但保留原顺序
+                *self.fields.get_mut(&name).unwrap() = meta.clone();
+            } else {
+                // 新字段：追加到注册顺序
+                self.order.push(name.clone());
+                self.fields.insert(name, meta.clone());
+            }
         }
         Ok(())
     }

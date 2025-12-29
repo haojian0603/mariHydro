@@ -717,7 +717,7 @@ impl<B: Backend> ShallowWaterState<B> {
         let name = name.into();
         let idx = self.tracers.register(name.clone());
         if !self.field_registry.contains(&name) {
-            self.field_registry
+            let _ = self.field_registry
                 .register(FieldMeta::cell_scalar(name.clone(), unit.into()).with_desc("示踪剂标量"));
         }
         idx

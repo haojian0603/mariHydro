@@ -219,7 +219,7 @@ impl IdwInterpolator {
         }
 
         // 按距离排序
-        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // 应用最大邻居数限制
         if let Some(max_n) = self.config.max_neighbors {

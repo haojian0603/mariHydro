@@ -21,7 +21,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 // ALLOW_F64: 数学常数
 use std::f64::consts::PI;
 

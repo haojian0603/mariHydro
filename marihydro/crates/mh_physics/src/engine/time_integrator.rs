@@ -51,6 +51,7 @@
 use crate::state::{RhsBuffers, ShallowWaterState};
 use crate::Backend;
 use mh_foundation::error::MhResult;
+use mh_runtime::RuntimeScalar;
 use num_traits::FromPrimitive;
 
 /// RHS 计算器 trait (泛型版本)

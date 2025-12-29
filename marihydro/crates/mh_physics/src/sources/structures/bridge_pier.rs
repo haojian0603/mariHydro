@@ -10,7 +10,7 @@
 //! 通过亚网格参数化方法将桥墩效应作为动量源项添加。
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 use crate::types::PhysicalConstants;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};

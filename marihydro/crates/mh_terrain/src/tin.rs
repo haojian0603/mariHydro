@@ -38,7 +38,8 @@ pub struct TinTerrain {
     vertices: Vec<(f64, f64, f64)>,
     /// 三角形索引 [(v0, v1, v2), ...]
     triangles: Vec<(usize, usize, usize)>,
-    /// 三角形边界框 [min_x, min_y, max_x, max_y]
+    /// 三角形边界框 [min_x, min_y, max_x, max_y]（预留用于空间查询优化）
+    #[allow(dead_code)]
     triangle_bounds: Vec<[f64; 4]>,
     /// 全局边界框
     global_bounds: [f64; 4],

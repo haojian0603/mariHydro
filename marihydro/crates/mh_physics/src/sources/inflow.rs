@@ -24,7 +24,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::{ShallowWaterState, ShallowWaterStateF64};
+use crate::state::ShallowWaterStateF64;
 
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]
