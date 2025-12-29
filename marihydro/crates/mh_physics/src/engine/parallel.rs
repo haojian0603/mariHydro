@@ -12,8 +12,6 @@
 //! 从 legacy_src/physics/engine/parallel.rs 简化迁移。
 //! 完整的着色并行等高级功能将在后续版本实现。
 //!
-//! # 技术债务 (TD-5.3.2, TD-5.3.3)
-//!
 //! 当前实现的"并行"是伪并行：通量计算并行，但累加阶段串行。
 //! 对于大规模网格，需要实现真正的着色并行以避免累加瓶颈。
 //!
@@ -86,7 +84,7 @@ pub enum ParallelStrategy {
     /// 注意：累加阶段是串行的，对于大规模网格可能成为瓶颈
     CollectThenAccumulate,
     /// 着色并行：使用图着色分组面，同一颜色的面可安全并行处理
-    /// 
+    ///
     /// 这是推荐的大规模并行策略，需要预先计算面着色
     Colored,
     /// 自动选择（根据问题规模）
@@ -597,8 +595,8 @@ impl ParallelFluxCalculator {
 
         // 按颜色批次处理
         // 同一颜色的面不共享单元，可以安全并行写入
-        for (color_idx, faces_in_color) in color_faces.iter().enumerate() {
-            trace!("  color {}: {} faces", color_idx, faces_in_color.len());
+        for (_color_idx, faces_in_color) in color_faces.iter().enumerate() {
+            trace!("  color {}: {} faces", _color_idx, faces_in_color.len());
             
             // 使用 UnsafeCell 或指针技巧实现真正的并行写入
             // 由于着色保证了同一颜色的面不共享单元，这是安全的
@@ -654,7 +652,7 @@ impl ParallelFluxCalculator {
             debug_assert_eq!(
                 processed_count.load(Ordering::Relaxed), 
                 faces_in_color.len(),
-                "Not all faces in color {} were processed", color_idx
+                "Not all faces in color {} were processed", _color_idx
             );
         }
 

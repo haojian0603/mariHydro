@@ -1,18 +1,32 @@
 // crates/mh_physics/tests/benchmark_implicit.rs
 
 //! 隐式求解器性能基准测试
-//!
-//! 此模块用于评估隐式求解器的性能特性，包括：
-//! - 矩阵组装时间
-//! - 求解器收敛速度
-//! - 不同问题规模的扩展性
-//! - 预条件器效果对比
-//!
-//! # 使用方法
-//!
+//! 
+//! # 运行方法
+//! 
+//! 所有基准测试都需要在 release 模式下运行：
+//! 
 //! ```bash
+//! # 运行所有基准测试
 //! cargo test --release benchmark_ -- --ignored --nocapture
+//! 
+//! # 运行单个测试
+//! cargo test --release benchmark_scaling -- --ignored --nocapture
 //! ```
+//! 
+//! # 性能预期
+//! 
+//! - **小规模问题** (N=100)：求解时间 < 10ms
+//! - **中等规模** (N=10,000)：求解时间 < 100ms
+//! - **大规模** (N=100,000)：求解时间 < 1s
+//! - **SpMV性能**：>5 GFLOPS (AVX2)，>10 GFLOPS (AVX-512)
+//! - **迭代次数**：应随问题规模缓慢增长（O(N^0.5)）
+//! 
+//! # 注意事项
+//! 
+//! 1. 确保关闭其他占用CPU的程序
+//! 2. 多次运行取平均值
+//! 3. 在CI环境中应设置宽松的性能阈值
 
 use mh_foundation::AlignedVec;
 use mh_physics::numerics::linear_algebra::{
@@ -250,8 +264,11 @@ fn test_preconditioner_comparison() {
 // ============================================================
 
 /// 测试不同问题规模的求解性能
+/// 
+/// 运行命令：cargo test --release benchmark_scaling -- --ignored --nocapture
+/// 预期：求解时间近似线性增长（O(N)），验证算法可扩展性
 #[test]
-#[ignore = "长时间运行测试，使用 --release 模式"]
+#[ignore = "性能基准测试：需 --release -- --ignored --nocapture"]
 fn benchmark_scaling() {
     let sizes = [16, 32, 64, 128, 256];
     let mut results = Vec::new();
@@ -259,9 +276,9 @@ fn benchmark_scaling() {
     let config = SolverConfig::new(1e-10, 5000);
     
     println!("\n=== Scaling Benchmark ===\n");
-    println!("{:>10} {:>12} {:>12} {:>12} {:>10}", 
+    println!("{:>10} {:>12} {:>15} {:>15} {:>10}", 
         "N", "Cells", "NNZ", "Time(ms)", "Iterations");
-    println!("{}", "-".repeat(60));
+    println!("{}", "-".repeat(65));
     
     for &n in &sizes {
         let size = n * n;
@@ -287,7 +304,7 @@ fn benchmark_scaling() {
             converged: result.is_converged(),
         };
         
-        println!("{:>10} {:>12} {:>12} {:>12.2} {:>10}",
+        println!("{:>10} {:>12} {:>15} {:>15.2} {:>10}",
             n,
             size,
             matrix.nnz(),
@@ -303,17 +320,35 @@ fn benchmark_scaling() {
         result.print();
         println!();
     }
+    
+    // 验证可扩展性：检查时间增长是否近似线性
+    if results.len() >= 3 {
+        let time_16 = results[0].solve_time.as_secs_f64();
+        let time_64 = results[2].solve_time.as_secs_f64();
+        let scale_factor = (64.0 / 16.0) as f64;
+        let expected_time = time_16 * scale_factor;
+        
+        // 允许50%的偏差（包含预条件器 setup 开销）
+        assert!(time_64 < expected_time * 1.5, 
+            "求解时间增长非线性：64x64 耗时 {:.2?}，预期 < {:.2?}", 
+            time_64, expected_time * 1.5);
+    }
 }
 
 /// 测试迭代次数与问题规模的关系
+/// 
+/// 运行命令：cargo test --release benchmark_iteration_count -- --ignored --nocapture
+/// 预期：迭代次数随问题规模缓慢增长（O(N^0.5)）
 #[test]
-#[ignore = "长时间运行测试"]
+#[ignore = "性能基准测试：需 --release -- --ignored --nocapture"]
 fn benchmark_iteration_count() {
     let sizes = [16, 32, 64, 128];
     
     let config = SolverConfig::new(1e-12, 10000);
     
     println!("\n=== Iteration Count Scaling ===\n");
+    println!("{:>10} {:>12} {:>15} {:>15}", "N", "Cells", "Iterations", "Iter/√N");
+    println!("{}", "-".repeat(55));
     
     for &n in &sizes {
         let matrix = generate_laplacian_5pt(n);
@@ -322,7 +357,9 @@ fn benchmark_iteration_count() {
         
         let (_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config);
         
-        println!("N={}: {} iterations (converged: {})", n, result.iterations, result.is_converged());
+        let iter_per_sqrt_n = result.iterations as f64 / (n as f64).sqrt();
+        
+        println!("{:>10} {:>12} {:>15} {:>15.2}", n, n * n, result.iterations, iter_per_sqrt_n);
     }
 }
 
@@ -352,32 +389,44 @@ fn test_spmv_performance_small() {
     println!("  Per iteration: {:?}", per_iter);
 }
 
+/// 测试矩阵-向量乘法性能
+/// 
+/// 运行命令：cargo test --release benchmark_spmv_scaling -- --ignored --nocapture
+/// 预期：>5 GFLOPS (AVX2)，>10 GFLOPS (AVX-512)
 #[test]
-#[ignore = "长时间运行测试"]
+#[ignore = "性能基准测试：需 --release -- --ignored --nocapture"]
 fn benchmark_spmv_scaling() {
     let sizes = [32, 64, 128, 256, 512];
     let iterations = 1000;
     
     println!("\n=== SpMV Scaling Benchmark ===\n");
-    println!("{:>10} {:>12} {:>15} {:>15}", "N", "NNZ", "Time/iter(us)", "GFLOPS");
-    println!("{}", "-".repeat(55));
+    println!("{:>10} {:>12} {:>15} {:>15} {:>15}", "N", "NNZ", "Time/iter(us)", "GFLOPS", "GB/s");
+    println!("{}", "-".repeat(70));
     
     for &n in &sizes {
         let matrix = generate_laplacian_5pt(n);
         let x = generate_rhs(n * n, 42);
         let mut y = vec![0.0; n * n];
         
+        // 预热
+        for _ in 0..10 {
+            matrix.mul_vec(&x, &mut y);
+        }
+        
         let start = Instant::now();
         for _ in 0..iterations {
             matrix.mul_vec(&x, &mut y);
+            y.fill(0.0); // 重置避免依赖
         }
         let elapsed = start.elapsed();
         
         let per_iter_us = elapsed.as_secs_f64() * 1e6 / iterations as f64;
-        let flops = 2.0 * matrix.nnz() as f64; // 每个非零元素一次乘法一次加法
-        let gflops = flops * iterations as f64 / elapsed.as_secs_f64() / 1e9;
+        let flops = 2.0 * matrix.nnz() as f64; // 每次乘加2 FLOPs
+        let gflops = flops / per_iter_us / 1e3; // GFLOPS
+        let memory_bytes = (matrix.nnz() * 16 + matrix.n_rows() * 8) as f64; // 矩阵+向量
+        let memory_gb_s = memory_bytes * iterations as f64 / elapsed.as_secs_f64() / 1e9;
         
-        println!("{:>10} {:>12} {:>15.2} {:>15.3}", n * n, matrix.nnz(), per_iter_us, gflops);
+        println!("{:>10} {:>12} {:>15.2} {:>15.3} {:>15.1}", n * n, matrix.nnz(), per_iter_us, gflops, memory_gb_s);
     }
 }
 

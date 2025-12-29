@@ -1,36 +1,110 @@
 // marihydro/crates/mh_physics/src/lib.rs
 
 //! 物理求解器模块
-//!
-//! 提供浅水方程数值求解功能，包括：
-//! - 核心抽象层 (core) - Backend, Buffer, Scalar 抽象
-//! - 构建器层 (builder) - 从无泛型配置到泛型引擎的桥梁
-//! - 网格适配层 (adapter)
-//! - 核心类型定义 (types)
-//! - 状态管理 (state)
-//! - 状态访问抽象 (traits)
-//! - 数值格式 (schemes)
-//! - 引擎核心 (engine) - 时间积分、通量累加、时间步控制
-//! - 源项处理 (sources) - 摩擦、科氏力、湍流等
-//! - 垂向剖面 (vertical) - σ坐标、分层状态
-//!
-//! # 架构层级
-//!
+//! 
+//! # 架构概述
+//! 
+//! 本模块实现浅水方程和三维水动力学求解器，采用分层架构设计：
+//! 
 //! ```text
-//! Layer 5: Application (无泛型)
-//!     └─> SolverConfig, Precision
-//! Layer 4: Builder (枚举→泛型桥接)
-//!     └─> SolverBuilder -> Box<dyn DynSolver>
-//! Layer 3: Engine (全泛型)
-//!     └─> ShallowWaterSolver<B>
+//! Layer 5 (应用层): mh_config::SolverConfig (无泛型)
+//!     └─> 通过 builder 桥接
+//! Layer 4 (构建层): mh_physics::builder (枚举 → 泛型)
+//!     └─> 生成具体类型
+//! Layer 3 (引擎层): ShallowWaterSolver<B: Backend> (全泛型)
 //! ```
-//!
-//! # Trait 抽象
-//!
-//! - [`StateAccess`]: 状态只读访问接口
-//! - [`StateAccessMut`]: 状态可变访问接口
-//! - [`DynSolver`]: 运行时多态求解器接口
-//!
+//! 
+//! # 快速开始
+//! 
+//! ## 使用预设配置（推荐）
+//! 
+//! ```
+//! use mh_physics::{SolverConfig, Layer3Config, ConfigBridge};
+//! use mh_runtime::CpuBackend;
+//! 
+//! // 1. 创建 Layer 4 配置（无泛型，易用）
+//! let layer4_config = SolverConfig::fast();  // 使用快速预设
+//! 
+//! // 2. 转换为 Layer 3 配置（泛型，用于求解器）
+//! let layer3_config: Layer3Config<f64> = ConfigBridge::convert(&layer4_config).unwrap();
+//! 
+//! // 3. 创建求解器（需要网格，参见示例）
+//! // let solver = ShallowWaterSolver::new(mesh, layer3_config, CpuBackend::<f64>::new());
+//! 
+//! // 验证配置转换成功
+//! assert_eq!(layer3_config.cfl, 0.8);  // 快速配置使用较大CFL
+//! ```
+//! 
+//! ## 性能模式选择
+//! 
+//! ```no_run
+//! // f32 模式：内存占用减半，适合GPU加速
+//! use mh_physics::{SolverConfig, Layer3Config, ConfigBridge};
+//! use mh_runtime::CpuBackend;
+//! 
+//! let config = SolverConfig::builder()
+//!     .precision(mh_config::Precision::F32)
+//!     .build();
+//! 
+//! let layer3: Layer3Config<f32> = ConfigBridge::convert(&config).unwrap();
+//! let backend = CpuBackend::<f32>::new();
+//! // let solver_f32 = ShallowWaterSolver::new(mesh, layer3, backend);
+//! ```
+//! 
+//! ## 完整模拟流程
+//! 
+//! ```no_run
+//! //! 这展示了完整的模拟流程（需要外部网格文件）
+//! use mh_physics::{
+//!     SolverConfig, ShallowWaterSolver, ShallowWaterState,
+//!     TimeSeries, WindProvider
+//! };
+//! use mh_runtime::CpuBackend;
+//! 
+//! // 1. 配置
+//! let config = SolverConfig::builder()
+//!     .cfl(0.5)
+//!     .scheme(mh_physics::NumericalScheme::SecondOrderMuscl)
+//!     .build();
+//! 
+//! // 2. 求解器（需要网格）
+//! let mesh = load_mesh("river.msh"); // 假设的加载函数
+//! let mut solver = ShallowWaterSolver::new(mesh, config, CpuBackend::<f64>::new());
+//! 
+//! // 3. 初始状态
+//! let mut state = ShallowWaterState::new(n_cells);
+//! state.set_uniform_depth(1.0);
+//! 
+//! // 4. 外力
+//! let wind = WindProvider::constant(10.0, 225.0);
+//! 
+//! // 5. 时间循环
+//! for step in 0..1000 {
+//!     let dt = solver.compute_dt(&state);
+//!     solver.step(&mut state, dt);
+//!     
+//!     if step % 100 == 0 {
+//!         println!("Step {}: t={:.2}s, max_h={:.2}", step, step as f64 * dt, state.max_depth());
+//!     }
+//! }
+//! ```
+//! 
+//! # 模块说明
+//! 
+//! - `builder`: 无泛型配置桥接
+//! - `core`: Backend 抽象
+//! - `engine`: 时间积分和求解器核心
+//! - `schemes`: 数值格式（HLLC等）
+//! - `state`: 状态管理
+//! - `boundary`: 边界条件
+//! - `sources`: 物理源项
+//! 
+//! # 示例
+//! 
+//! 更多完整示例请参见 `examples/` 目录：
+//! - `dam_break.rs`: 经典溃坝问题
+//! - `tidal_basin.rs`: 潮汐驱动流动
+//! - `river_flow.rs`: 河道水流模拟
 
 // 核心抽象层
 pub mod core;

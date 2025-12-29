@@ -461,6 +461,32 @@ impl<B: Backend> ShallowWaterSolver<B> {
         self.muscl_v.compute_gradients(&vel_v_f64);
     }
 
+    /// 计算固壁边界的静水压力通量
+    /// 
+    /// 压力公式：F = 0.5 * g * h² * n * L
+    /// 仅作用于动量方程，质量通量为零（无穿透）
+    #[inline]
+    fn compute_boundary_pressure(
+        &self,
+        state: &ShallowWaterState<B>,
+        face_idx: FaceIndex,
+    ) -> (B::Scalar, B::Scalar) /* (flux_hu, flux_hv) */ {
+        let g = self.hydrostatic.g;
+        let half = B::Scalar::from_f64(0.5).unwrap();
+        
+        let owner = self.mesh.face_owner(face_idx);
+        let normal = self.mesh.face_normal_generic::<B>(face_idx);
+        let length_f64 = self.mesh.face_length(face_idx);
+        let length = B::Scalar::from_f64(length_f64).unwrap();
+        let h = state.h[owner.get()];
+        
+        let pressure = half * g * h * h * length;
+        let flux_hu = -pressure * normal.x();
+        let flux_hv = -pressure * normal.y();
+        
+        (flux_hu, flux_hv)
+    }
+
     /// 恢复并优化边界压力处理
     /// 固壁边界需要压力项保持静水平衡，但质量通量为零
     fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
@@ -494,35 +520,20 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 恢复固壁边界压力处理
-        // 静水平衡需要压力项抵消内部梯度，但质量通量保持为零
-        let g = self.hydrostatic.g;
-        let half = B::Scalar::from_f64(0.5).unwrap();
-        
+        // 使用公共函数计算边界压力
         for face_idx in self.mesh.boundary_faces() {
             let face = FaceIndex::new(face_idx);
+            let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
             let owner = self.mesh.face_owner(face);
-            let normal = self.mesh.face_normal_generic::<B>(face);
-            let length_f64 = self.mesh.face_length(face);
-            let length = B::Scalar::from_f64(length_f64).unwrap();
-            
-            let h = state.h[owner.get()];
-            
-            // 静水压力：F = 0.5 * g * h² * n * L
-            // 仅作用于动量，质量通量为零（无穿透）
-            let pressure = half * g * h * h * length;
-            
-            // 压力方向与法向相反（指向内部）
-            self.workspace.flux_hu[owner.get()] -= pressure * normal.x();
-            self.workspace.flux_hv[owner.get()] -= pressure * normal.y();
-            
-            // 静水状态下，此压力与内部床坡源项精确抵消
+            self.workspace.flux_hu[owner.get()] += flux_hu;
+            self.workspace.flux_hv[owner.get()] += flux_hv;
+            // 质量通量保持为零（无穿透）
         }
 
         max_wave_speed
     }
 
-    /// 并行版本同样恢复边界压力处理
+    /// 并行版本同样使用公共函数处理边界压力
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let max_speed_atomic = AtomicU64::new(0u64);
 
@@ -562,22 +573,13 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 并行版本同样恢复边界压力
-        let g = self.hydrostatic.g;
-        let half = B::Scalar::from_f64(0.5).unwrap();
-        
+        // 使用公共函数计算边界压力
         for face_idx in self.mesh.boundary_faces() {
             let face = FaceIndex::new(face_idx);
+            let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
             let owner = self.mesh.face_owner(face);
-            let normal = self.mesh.face_normal_generic::<B>(face);
-            let length_f64 = self.mesh.face_length(face);
-            let length = B::Scalar::from_f64(length_f64).unwrap();
-            
-            let h = state.h[owner.get()];
-            let pressure = half * g * h * h * length;
-            
-            self.workspace.flux_hu[owner.get()] -= pressure * normal.x();
-            self.workspace.flux_hv[owner.get()] -= pressure * normal.y();
+            self.workspace.flux_hu[owner.get()] += flux_hu;
+            self.workspace.flux_hv[owner.get()] += flux_hv;
         }
 
         let bits = max_speed_atomic.load(Ordering::Relaxed);
