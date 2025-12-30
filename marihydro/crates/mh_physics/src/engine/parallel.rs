@@ -250,7 +250,8 @@ pub struct ParallelFluxCalculator<B: Backend> {
     /// 面着色（用于 Colored 策略）
     /// 每个元素是一组可以并行处理的面索引
     face_colors: Option<Vec<Vec<usize>>>,
-    /// 后端实例
+    /// 后端实例（预留用于GPU加速）
+    #[allow(dead_code)]
     backend: B,
 }
 
@@ -832,7 +833,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
     use mh_runtime::CpuBackend;
 
     #[test]

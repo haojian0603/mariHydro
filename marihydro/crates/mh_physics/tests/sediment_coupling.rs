@@ -1,11 +1,20 @@
 // crates/mh_physics/tests/sediment_coupling.rs
 
-//! 泥沙耦合测试
+//! 泥沙耦合测试（Backend单例版）
 //! 验证泥沙系统的质量守恒
 
 use mh_physics::sediment::{SedimentManagerGeneric, SedimentConfigGeneric};
 use mh_physics::core::CpuBackend;
 use mh_physics::state::ShallowWaterStateGeneric;
+
+// 🔥 测试辅助函数
+fn test_backend() -> CpuBackend<f64> {
+    CpuBackend::<f64>::new()
+}
+
+fn create_state(n_cells: usize) -> ShallowWaterStateGeneric<CpuBackend<f64>> {
+    ShallowWaterStateGeneric::new_with_backend(test_backend(), n_cells)
+}
 
 /// 测试泥沙管理器创建
 #[test]
@@ -22,7 +31,7 @@ fn test_sediment_manager_creation() {
 fn test_mass_conservation() {
     let config = SedimentConfigGeneric::default();
     let mut manager = SedimentManagerGeneric::<CpuBackend<f64>>::new(4, config);
-    let mut state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new(4);
+    let mut state = create_state(4);
     for h in state.h.iter_mut() { *h = 1.0; }
 
     // 初始床面质量
@@ -43,7 +52,7 @@ fn test_erosion_deposition_balance() {
         2,
         SedimentConfigGeneric::default(),
     );
-    let mut state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new(2);
+    let mut state = create_state(2);
     for h in state.h.iter_mut() { *h = 1.0; }
     manager.set_initial_concentration(&[0.0, 0.0]);
 

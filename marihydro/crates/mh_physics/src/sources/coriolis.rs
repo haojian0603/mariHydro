@@ -115,9 +115,14 @@ impl SourceTerm for CoriolisConfig {
             // 精确旋转
             let theta = self.f * dt;
             let (sin_t, cos_t) = if theta.abs() < 1e-3 {
-                // 小角度泰勒展开，提高精度
+                // 🔥 增强小角度优化（6阶泰勒展开）
+                // sin(x) ≈ x - x³/6 + x⁵/120
+                // cos(x) ≈ 1 - x²/2 + x⁴/24
                 let t2 = theta * theta;
-                (theta * (1.0 - t2 / 6.0), 1.0 - t2 * 0.5)
+                let t4 = t2 * t2;
+                let sin_t = theta * (1.0 - t2 / 6.0 + t4 / 120.0);
+                let cos_t = 1.0 - t2 * 0.5 + t4 / 24.0;
+                (sin_t, cos_t)
             } else {
                 theta.sin_cos()
             };
@@ -261,10 +266,14 @@ macro_rules! impl_coriolis_generic {
 
                 let (hu_new, hv_new) = if self.config.use_exact_rotation {
                     let theta = f * dt;
+                    // 🔥 增强小角度优化（6阶泰勒展开）
                     let (sin_t, cos_t) = if theta.abs() < (1e-3 as $scalar) {
                         let t2 = theta * theta;
-                        (theta * ((1.0 as $scalar) - t2 / (6.0 as $scalar)), 
-                         (1.0 as $scalar) - t2 * (0.5 as $scalar))
+                        let t4 = t2 * t2;
+                        // sin(x) ≈ x - x³/6 + x⁵/120
+                        // cos(x) ≈ 1 - x²/2 + x⁴/24
+                        (theta * ((1.0 as $scalar) - t2 / (6.0 as $scalar) + t4 / (120.0 as $scalar)), 
+                         (1.0 as $scalar) - t2 * (0.5 as $scalar) + t4 / (24.0 as $scalar))
                     } else {
                         (theta.sin(), theta.cos())
                     };

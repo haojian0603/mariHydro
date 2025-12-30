@@ -145,7 +145,8 @@ pub struct BoundaryManager<B: Backend> {
     /// 计算参数
     params: BoundaryParams,
 
-    /// 后端实例
+    /// 后端实例（预留用于GPU加速）
+    #[allow(dead_code)]
     backend: B,
 }
 

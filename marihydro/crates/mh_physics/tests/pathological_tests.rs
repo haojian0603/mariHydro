@@ -1,5 +1,4 @@
-//! marihydro\crates\mh_physics\tests\pathological_tests.rs
-//! 病态边缘情况与鲁棒性验证测试
+//! 病态边缘情况与鲁棒性验证测试（Backend全局单例版）
 //!
 //! 本模块包含对求解器在极端数值条件下的严格验证，覆盖：
 //! - 近零/负水深处理
@@ -9,6 +8,14 @@
 //! - 多线程内存安全
 //!
 //! 所有测试必须满足：编译零警告、Miri无UB、覆盖率>95%。
+//!
+//! # 架构契约
+//!
+//! 本测试模块强制执行 Backend 单例化原则：
+//! - Backend 在模块级别实例化一次
+//! - 所有测试函数禁止直接创建 CpuBackend
+//! - 必须通过 `create_state()` 和 `create_solver()` 辅助函数创建对象
+//! - 违反此原则将导致编译错误或运行时性能损失
 
 use mh_runtime::{KahanSum, CpuBackend};
 use mh_physics::{
@@ -22,21 +29,56 @@ use mh_physics::{
     adapter::PhysicsMesh,
     types::NumericalParams,
     Layer3Config,
-    engine::StabilityOptions,  // 新增：用于配置稳定性选项
 };
 use std::sync::Arc;
 use rand::prelude::*;
 use rayon::prelude::*;
+use mh_physics::NumericalScheme;
+
+
+// 强制 Backend 单例（零大小类型，克隆零成本）
+/// Backend 单例实例（整个测试模块生命周期内只存在一个实例）
+static BACKEND: CpuBackend<f64> = CpuBackend { _marker: std::marker::PhantomData };
+
+/// 获取 Backend 引用
+#[inline(always)]
+fn test_backend() -> &'static CpuBackend<f64> {
+    &BACKEND
+}
+
+/// 统一状态创建入口（禁止在测试函数中直接调用 new_with_backend）
+///
+/// # Panics
+/// 如果 n_cells 为 0 会 panic
+#[inline(always)]
+fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
+    assert!(n_cells > 0, "单元数量必须为正");
+    ShallowWaterState::new_with_backend(BACKEND.clone(), n_cells)
+}
+
+/// 统一 solver 创建入口（强制 Backend 复用）
+///
+/// # 参数
+/// - `mesh`: 网格适配器（Arc 包装）
+/// - `config`: Layer 3 配置（已泛型化）
+///
+/// # 返回
+/// 配置好的 ShallowWaterSolver 实例
+fn create_solver(
+    mesh: Arc<PhysicsMesh>,
+    config: Layer3Config<f64>,
+) -> ShallowWaterSolver<CpuBackend<f64>> {
+    ShallowWaterSolver::new(mesh, config, BACKEND.clone())
+}
 
 // ============================================================
 // 常量与阈值定义
 // ============================================================
 
-/// 机器精度阈值（IEEE 754双精度）
-#[allow(dead_code)]
+/// 机器精度阈值（IEEE 754 双精度）
 const MACHINE_EPS: f64 = f64::EPSILON;
 
-/// 典型干单元水深阈值（与NumericalParams::h_dry同步）
+/// 典型干单元水深阈值（与 NumericalParams::h_dry 同步）
 const H_DRY: f64 = 1e-6;
 
 /// 速度钳位上限（防止数值爆炸）
@@ -46,10 +88,10 @@ const VEL_MAX: f64 = 1e3;
 // 测试辅助设施
 // ============================================================
 
-/// 构建严格对角占优矩阵（保证PCG收敛）
+/// 构建严格对角占优矩阵（保证 PCG 收敛）
 ///
 /// # Panics
-/// 当`n == 0`或`diag <= off_diag_sum`时panic
+/// 当 `n == 0` 或 `diag <= off_diag_sum` 时 panic
 fn build_dominant_matrix(n: usize, diag: f64, off_diag: f64) -> CsrMatrix<f64> {
     assert!(n > 0, "矩阵维度必须为正");
     assert!(diag > 2.0 * off_diag.abs(), "必须严格对角占优");
@@ -128,7 +170,7 @@ fn build_spd_matrix(n: usize) -> CsrMatrix<f64> {
             values.push(val);
         }
 
-        // 主对角线元素 > 0 (严格对角占优)
+        // 主对角线元素 > 0（严格对角占优）
         col_idx.push(i);
         values.push(rng.gen_range(5.0..10.0));
 
@@ -255,19 +297,27 @@ fn test_ill_conditioned_matrix_stability() {
 #[test]
 fn test_nan_propagation_blocking() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10);
+    // 正确使用 create_state，复用 Backend 单例
+    let mut state = create_state(10);
 
     // 注入NaN到关键守恒量
     state.h[5] = f64::NAN;
     state.hu[5] = 1.0;
     state.hv[5] = 0.5;
 
+    // 使用 builder 模式创建配置
     let config = Layer3Config::builder()
-        .nan_detection_enabled(true)  // 关键：启用NaN检测
+        .params(NumericalParams {
+            h_dry: 1e-6,
+            h_min: 1e-9,
+            ..Default::default()
+        })
+        .use_hydrostatic_reconstruction(true)
+        .nan_detection_enabled(true)
         .build();
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+
+    // 使用 create_solver，强制 Backend 复用
+    let mut solver = create_solver(mesh, config);
 
     // 执行一步模拟，求解器应自动清理NaN
     solver.step(&mut state, 0.01);
@@ -289,24 +339,24 @@ fn test_nan_propagation_blocking() {
 #[test]
 fn test_negative_depth_recovery() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 5);
+    // 使用 create_state
+    let mut state = create_state(5);
 
     // 注入非法负水深
     state.h = vec![1.0, -0.5, 2.0, -1e-5, 0.0];
     state.hu = vec![1.0, 1.0, 2.0, 1.0, 0.0];
     state.hv = vec![0.5, 0.5, 1.0, 0.5, 0.0];
 
-    let config = Layer3Config {
-        params: NumericalParams {
+    let config = Layer3Config::builder()
+        .params(NumericalParams {
             h_min: H_DRY,
+            h_dry: H_DRY,
             ..Default::default()
-        },
-        ..Default::default()
-    };
+        })
+        .build();
 
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
     
     // 执行一步模拟，求解器应内部处理负水深
     solver.step(&mut state, 0.001);
@@ -326,23 +376,22 @@ fn test_negative_depth_recovery() {
 #[test]
 fn test_velocity_clamping_extreme() {
     let mesh = Arc::new(PhysicsMesh::empty(1));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 1);
+    // 使用 create_state
+    let mut state = create_state(1);
 
     // 极小水深 + 有限动量 = 极大速度
     state.h[0] = 1e-10;
     state.hu[0] = 1.0; // 理论速度 u = 1e10 m/s
 
-    let config = Layer3Config {
-        params: NumericalParams {
+    let config = Layer3Config::builder()
+        .params(NumericalParams {
             vel_max: VEL_MAX,
             ..Default::default()
-        },
-        ..Default::default()
-    };
+        })
+        .build();
 
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
     solver.step(&mut state, 0.001);
 
     // 获取速度
@@ -386,8 +435,8 @@ fn test_near_zero_depth_velocity() {
 #[test]
 fn test_wet_dry_oscillation_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(100));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 100);
+    // 使用 create_state
+    let mut state = create_state(100);
 
     // 初始化干湿交替模式
     for i in 0..100 {
@@ -396,9 +445,12 @@ fn test_wet_dry_oscillation_stability() {
         state.hv[i] = 0.0;
     }
 
-    let config = Layer3Config::default();
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+    let config = Layer3Config::builder()
+        .scheme(NumericalScheme::FirstOrder)
+        .build();
+    
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
 
     // 运行100步模拟（减少以加快测试）
     let initial_mass: f64 = state.h.iter().sum();
@@ -433,8 +485,8 @@ fn test_wet_dry_oscillation_stability() {
 fn test_concurrent_state_read() {
     use std::thread;
     
-    let backend = CpuBackend::<f64>::new();
-    let state = Arc::new(ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10));
+    // 使用 create_state
+    let state = Arc::new(create_state(10));
     let params = Arc::new(NumericalParams::default());
     
     let handles: Vec<_> = (0..3)
@@ -504,7 +556,6 @@ fn test_solver_on_singular_matrix() {
 // 测试 10: 灾难性抵消数值验证
 // ============================================================
 
-
 #[test]
 fn test_catastrophic_cancellation_prevention() {
     // 测试 Kahan 求和器基本功能
@@ -557,8 +608,8 @@ fn test_catastrophic_cancellation_prevention() {
 #[test]
 fn test_boundary_extreme_values() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10);
+    // 使用 create_state
+    let mut state = create_state(10);
 
     // 注入边界值：极大水深、极小水深交替
     for i in 0..10 {
@@ -566,9 +617,12 @@ fn test_boundary_extreme_values() {
         state.hu[i] = state.h[i] * 10.0; // 固定速度10 m/s
     }
 
-    let config = Layer3Config::default();
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+    let config = Layer3Config::builder()
+        .scheme(NumericalScheme::FirstOrder)
+        .build();
+    
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
 
     // 一步模拟
     solver.step(&mut state, 0.1);
@@ -588,25 +642,23 @@ fn test_boundary_extreme_values() {
 // 测试 12: 长期稳定性（1000步）
 // ============================================================
 
-
 #[test]
 fn test_long_term_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 5);
+    // 使用 create_state
+    let mut state = create_state(5);
 
     // 初始静水
     state.h = vec![10.0, 10.0, 10.0, 10.0, 10.0];
     state.hu.fill(0.0);
     state.hv.fill(0.0);
 
-    let config = Layer3Config {
-        use_hydrostatic_reconstruction: true,
-        ..Default::default()
-    };
+    let config = Layer3Config::builder()
+        .use_hydrostatic_reconstruction(true)
+        .build();
 
-    let backend = CpuBackend::<f64>::new();
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
 
     // 记录初始质量
     let initial_mass: f64 = state.h.iter().sum();
@@ -652,7 +704,6 @@ fn test_long_term_stability() {
 // ============================================================
 // 测试 13: 收敛判据边界值
 // ============================================================
-
 
 #[test]
 fn test_convergence_criteria_edge_cases() {
@@ -712,7 +763,6 @@ fn test_parallel_solver_consistency() {
 // 测试 15: 内存泄漏检测（前置验证）
 // ============================================================
 
-
 #[test]
 fn test_no_memory_leak_in_solver() {
     // 循环创建和销毁求解器，检测内存增长
@@ -739,14 +789,12 @@ fn test_no_memory_leak_in_solver() {
 #[test]
 fn test_nan_detection_integration() {
     let mesh = Arc::new(PhysicsMesh::empty(20));
-    let backend = CpuBackend::<f64>::new();
+    // 使用 create_state，复用 Backend
+    let mut state = create_state(20);
     
     // 启用NaN检测的配置
     let config = Layer3Config::builder()
-        .stability_options(StabilityOptions {
-            check_nan: true,
-            ..Default::default()
-        })
+        .nan_detection_enabled(true)
         .params(NumericalParams {
             h_min: 1e-9,
             h_dry: 1e-6,
@@ -754,9 +802,8 @@ fn test_nan_detection_integration() {
         })
         .build();
     
-    let mut solver = ShallowWaterSolver::new(mesh, config, backend);
-    let backend2 = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend2, 20);
+    // 使用 create_solver
+    let mut solver = create_solver(mesh, config);
     
     // 在随机位置注入NaN
     state.h[5] = f64::NAN;

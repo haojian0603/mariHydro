@@ -1,17 +1,39 @@
 ﻿// crates/mh_physics/src/state.rs
 
 //! 浅水方程状态管理
-//! 
-//! 本模块提供浅水方程求解所需的状态管理，基于 Backend 泛型设计。
+//!
+//! 本模块提供浅水方程求解所需的状态管理，基于 [`Backend`] 泛型设计。
 //! 支持 f32/f64 精度切换和 GPU 后端扩展，采用 SoA 布局优化缓存性能。
+//!
+//! # 核心类型
+//!
+//! - [`ShallowWaterState`]：泛型状态存储
+//! - [`ConservedState`]：单元状态
+//! - [`ShallowWaterStateF64`]：f64精度状态别名（Layer 4专用）
+//! - [`ShallowWaterStateF32`]：f32精度状态别名（GPU测试专用）
+//!
+//! # 设计原则
+//!
+//! 1. **单轨泛型**：所有接口基于 [`RuntimeScalar`]，无 Legacy f64 别名
+//! 2. **Backend 无关**：使用 `[S; 2]` 元组表示向量
 
 use crate::fields::{FieldMeta, FieldRegistry};
 use crate::traits::{StateAccess, StateAccessMut};
 use crate::types::{NumericalParams, SafeVelocity};
-use mh_runtime::Backend;
+use mh_runtime::{Backend, CpuBackend};
 use num_traits::{Float, Zero};
 use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
+
+// ============================================
+// 🔥 强制类型别名（Layer 4专用，无泛型）
+// ============================================
+
+/// f64精度浅水状态（Layer 4直接调用，禁止在Layer 3使用）
+pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
+
+/// f32精度浅水状态（GPU测试专用）
+pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
 
 /// 单个单元的守恒状态
 /// 
@@ -31,8 +53,10 @@ where
     S: RuntimeScalar,
 {
     /// 创建新的守恒状态
+    /// 
+    /// 🔥 注意：移除 const 关键字，RuntimeScalar 不保证 const 支持
     #[inline]
-    pub const fn new(h: S, hu: S, hv: S) -> Self {
+    pub fn new(h: S, hu: S, hv: S) -> Self {
         Self { h, hu, hv }
     }
 

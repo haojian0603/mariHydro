@@ -318,6 +318,8 @@ impl<B: Backend> SmagorinskyData<B> {
 pub struct TracerTransportSolver<B: Backend> {
     config: TracerTransportConfig<B::Scalar>,
     face_fluxes: Vec<TracerFaceFlux<B::Scalar>>,
+    /// 后端实例（预留用于GPU加速）
+    #[allow(dead_code)]
     backend: B,
 }
 

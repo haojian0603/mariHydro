@@ -1,4 +1,4 @@
-//! 溃堤测试
+//! 溃堤测试（Backend强制复用版）
 //!
 //! 使用 assets/mesh 目录中的 Gmsh 网格文件测试溃堤场景。
 //! 这是一个经典的浅水方程验证案例。
@@ -12,9 +12,39 @@ use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
 use mh_physics::types::NumericalParams;
-use mh_runtime::{CpuBackend, CellIndex};
+use mh_runtime::{CpuBackend, CellIndex}; // 仅保留一次
+
+// ============================================
+// 🔥 强制Backend单例模块（整个文件复用）
+// ============================================
+
+static BACKEND: CpuBackend<f64> = CpuBackend::<f64>::new();
+
+#[cfg(test)]
+mod test_harness {
+    use super::*;
+
+    /// Backend 单例
+    pub fn get_backend() -> CpuBackend<f64> {
+        BACKEND
+    }
+
+    pub fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = get_backend();
+        ShallowWaterState::new_with_backend(backend, n_cells)
+    }
+
+    pub fn create_solver(
+        mesh: Arc<PhysicsMesh>,
+        config: Layer3Config<f64>,
+    ) -> ShallowWaterSolver<CpuBackend<f64>> {
+        let backend = get_backend();
+        ShallowWaterSolver::new(mesh, config, backend)
+    }
+}
+
+use test_harness::{create_state, create_solver};
 
 /// 从 Gmsh 文件加载网格并转换为 PhysicsMesh
 fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
@@ -63,7 +93,7 @@ fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
     Ok(PhysicsMesh::from_frozen(&frozen))
 }
 
-/// 溃堤初始条件
+/// 溃堤初始条件（强制Backend复用）
 /// 
 /// 设置左侧高水位，右侧低水位的初始状态
 fn setup_dambreak_initial_condition(
@@ -73,7 +103,7 @@ fn setup_dambreak_initial_condition(
     dam_x: f64,
 ) -> ShallowWaterState<CpuBackend<f64>> {
     let n_cells = mesh.n_cells();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
+    let mut state = create_state(n_cells); // 🔥 强制使用辅助
     
     // 设置底床高程（平底）
     for i in 0..n_cells {
@@ -195,7 +225,8 @@ fn run_dambreak_simulation(
         .use_hydrostatic_reconstruction(true)
         .build();
     
-    let mut solver = ShallowWaterSolver::new(Arc::new(mesh.clone()), config, CpuBackend::<f64>::new());
+    // 🔥 强制复用Backend
+    let mut solver = create_solver(Arc::new(mesh.clone()), config);
     
     // 模拟
     let mut time = 0.0;

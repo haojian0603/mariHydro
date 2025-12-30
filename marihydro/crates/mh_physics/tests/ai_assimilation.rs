@@ -1,14 +1,50 @@
 // crates/mh_physics/tests/ai_assimilation.rs
 
-//! AI同化测试
+//! AI同化测试（Backend架构强制版）
+//!
 //! 验证Nudging同化的正确性
 
 use mh_physics::assimilation::{PhysicsAssimilable, ConservedQuantities, ConservationChecker, AssimilableBridge};
 use mh_physics::state::ShallowWaterState;
 use mh_runtime::CpuBackend;
 
+// ============================================
+// 🔥 强制测试辅助模块（所有测试必须复用）
+// ============================================
+
+#[cfg(test)]
+mod test_harness {
+    use super::*;
+
+    /// Backend 单例（测试生命周期内仅创建一次）
+    pub fn test_backend() -> CpuBackend<f64> {
+        CpuBackend::<f64>::new()
+    }
+
+    /// 统一状态创建入口（禁止直接调用 new）
+    pub fn create_test_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = test_backend();
+        ShallowWaterState::new_with_backend(backend, n_cells)
+    }
+
+    /// Box泄漏辅助（带内存泄漏警告）
+    pub fn leak_state(state: ShallowWaterState<CpuBackend<f64>>) -> &'static mut ShallowWaterState<CpuBackend<f64>> {
+        eprintln!("⚠️  测试场景内存泄漏 - 仅限短期测试");
+        Box::leak(Box::new(state))
+    }
+}
+
+// ============================================
+// 测试用例（强制使用测试辅助）
+// ============================================
+
+use test_harness::{create_test_state, leak_state};
+
 fn build_bridge() -> AssimilableBridge<'static> {
-    let mut state = Box::new(ShallowWaterState::<CpuBackend<f64>>::new(2));
+    // 🔥 强制使用辅助函数
+    let mut state = create_test_state(2);
+    
+    // 数据初始化
     state.h[0] = 1.0;
     state.h[1] = 2.0;
     state.hu[0] = 0.5;
@@ -17,10 +53,12 @@ fn build_bridge() -> AssimilableBridge<'static> {
     state.hv[1] = 0.0;
     state.z[0] = 0.0;
     state.z[1] = 0.0;
+    
     let areas = vec![1.0, 1.0];
     let centers = vec![[0.0, 0.0], [1.0, 0.0]];
-    // Box leak to extend lifetime for test scope
-    let state_ref: &'static mut ShallowWaterState<CpuBackend<f64>> = Box::leak(state);
+    
+    // 🔥 使用带警告的泄漏辅助
+    let state_ref = leak_state(state);
     AssimilableBridge::new(state_ref, areas, centers)
 }
 

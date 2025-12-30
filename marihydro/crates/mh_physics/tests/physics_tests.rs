@@ -1,6 +1,6 @@
 // crates/mh_physics/tests/physics_tests.rs
 //!
-//! 物理守恒律与半隐式正确性测试
+//! 物理守恒律与半隐式正确性测试（强制Backend单例版）
 //!
 //! 验证算法不破坏物理本质
 
@@ -9,6 +9,20 @@ use mh_physics::forcing::timeseries::{ExtrapolationMode, TimeSeries};
 use mh_physics::state::ShallowWaterState;
 use std::f64::consts::PI;
 use std::time::Instant;
+
+// ============================================
+// 🔥 测试Backend单例（整个测试模块复用）
+// ============================================
+
+static BACKEND: CpuBackend<f64> = CpuBackend::<f64>::new();
+
+fn test_backend() -> CpuBackend<f64> {
+    BACKEND
+}
+
+fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
+    ShallowWaterState::new_with_backend(test_backend(), n_cells)
+}
 
 // ============================================================
 // Test 1: C-property Static Water
@@ -28,8 +42,8 @@ fn test_cproperty_static_water() {
 
     // 创建碗形地形
     let dx = 1.0 / n_cells as f64;
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    // 🔥 使用辅助函数创建状态
+    let mut state = create_state(n_cells);
 
     // 设置碗形地形和静水状态
     let water_level = 1.0;
@@ -113,8 +127,8 @@ fn test_mass_conservation_semi_implicit() {
     let start = Instant::now();
 
     // 溃坝初始条件
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    // 🔥 使用辅助函数创建状态
+    let mut state = create_state(n_cells);
     let dx = 10.0 / n_cells as f64;
 
     for i in 0..n_cells {
@@ -251,7 +265,8 @@ fn test_pressure_solve_convergence_rate() {
     // RHS
     let rhs: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.01).sin()).collect();
 
-    // 预条件器
+    // 预条件器 - 使用 Backend 单例
+    let backend = test_backend();
     let precond = JacobiF64::from_matrix(&matrix).expect("创建预条件器失败");
 
     // 求解器 - 使用 SolverConfig
@@ -314,8 +329,8 @@ fn test_wet_dry_mass_conservation() {
     let start = Instant::now();
 
     // 创建包含干湿过渡的状态
-    let backend = CpuBackend::<f64>::new();
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    // 🔥 使用辅助函数创建状态
+    let mut state = create_state(n_cells);
 
     for i in 0..n_cells {
         state.z[i] = 0.0;

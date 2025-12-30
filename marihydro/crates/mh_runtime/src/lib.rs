@@ -4,34 +4,37 @@
 //!
 //! 运行时抽象层，提供计算后端、标量类型、设备缓冲区等核心抽象。
 //!
-//! # 模块概览
+//! # 模块
 //!
-//! - [`scalar`]: RuntimeScalar trait（密封，仅 f32/f64 可实现）
-//! - [`backend`]: Backend trait 和 CpuBackend 实现
-//! - [`buffer`]: DeviceBuffer trait 设备缓冲区抽象
+//! - [`scalar`]: RuntimeScalar trait（密封，仅f32/f64可实现）
+//! - [`backend`]: Backend trait和CpuBackend实现
+//! - [`buffer`]: DeviceBuffer trait设备缓冲区抽象
 //! - [`indices`]: 公共计算索引（无代际验证）
 //! - [`tolerance`]: 泛型容差配置
-//! - [`arena_ext`]: SafeArena 带代际验证的安全内存池
+//! - [`arena_ext`]: SafeArena带代际验证的安全内存池
 //! - [`error`]: 运行时错误类型
 //!
 //! # 层级架构
 //!
 //! ```text
-//! Layer 4: mh_config   ─> Precision, SolverConfig, DynSolver
-//! Layer 3: mh_physics  ─> ShallowWaterSolver<B: Backend>
-//! Layer 2: mh_runtime  ─> Backend, RuntimeScalar, DeviceBuffer (本层)
-//! Layer 1: mh_foundation ─> Arena, Dimension, AlignedVec
+//! Layer 4: mh_config   → Precision, SolverConfig, DynSolver
+//! Layer 3: mh_physics  → ShallowWaterSolver<B: Backend>
+//! Layer 2: mh_runtime  → Backend, RuntimeScalar, DeviceBuffer (本层)
+//! Layer 1: mh_foundation → Arena, Dimension, AlignedVec
 //! ```
 //!
 //! # 设计原则
 //!
-//! 1. **密封 Trait**: RuntimeScalar 只有 f32/f64 实现
+//! 1. **密封Trait**: RuntimeScalar只有f32/f64实现
 //! 2. **零成本抽象**: 编译期单态化，运行时无开销
-//! 3. **无代际索引**: indices 模块的索引类型不包含代际验证
-//! 4. **可选代际**: 需要代际验证时使用 arena_ext::SafeArena
+//! 3. **无代际索引**: indices模块的索引类型不包含代际验证
+//! 4. **可选代际**: 需要代际验证时使用arena_ext::SafeArena
 
 // 使用 workspace 统一的 lint 规则
 #![warn(missing_docs)]
+
+/// 层级标识
+pub const LAYER: u8 = 2;
 
 #[cfg(feature = "layer-guard")]
 compile_error!("mh_runtime 禁止在 Layer 1 或更低层使用");
@@ -45,9 +48,6 @@ pub mod numerics;
 pub mod tolerance;
 pub mod arena_ext;
 pub mod error;
-
-/// 层级标识
-pub const LAYER: u8 = 2;
 
 // 核心类型导出
 pub use scalar::RuntimeScalar;

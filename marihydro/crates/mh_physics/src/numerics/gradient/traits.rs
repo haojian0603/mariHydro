@@ -198,7 +198,13 @@ impl<S: RuntimeScalar> VectorGradientStorageGeneric<S> {
 
 use crate::adapter::PhysicsMesh;
 
+// ============================================================
+// 梯度方法 Trait（强制显式类型标注）
+// ============================================================
+
 /// 泛型梯度计算方法 trait
+/// 
+/// 所有实现者必须显式实现 `supports_parallel()` 方法，不提供默认实现。
 pub trait GradientMethodGeneric<S: RuntimeScalar>: Send + Sync {
     /// 计算标量场梯度
     fn compute_scalar_gradient(
@@ -220,10 +226,8 @@ pub trait GradientMethodGeneric<S: RuntimeScalar>: Send + Sync {
     /// 方法名称
     fn name(&self) -> &'static str;
 
-    /// 是否支持并行
-    fn supports_parallel(&self) -> bool {
-        true
-    }
+    /// 🔥 删除默认实现，强制所有实现者必须指定S类型
+    fn supports_parallel(&self) -> bool;
 }
 
 // ============================================================

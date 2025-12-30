@@ -106,6 +106,16 @@ impl LeastSquaresGradient {
         self
     }
 
+    /// 🔥 添加非泛型方法供测试直接调用
+    pub fn supports_parallel(&self) -> bool {
+        self.config.parallel
+    }
+
+    /// 🔥 强制类型标注的泛型方法
+    pub fn supports_parallel_typed<S: RuntimeScalar>(&self) -> bool {
+        self.config.parallel
+    }
+
     /// 求解 2x2 对称正定系统
     ///
     /// [a11 a12] [x1]   [b1]
