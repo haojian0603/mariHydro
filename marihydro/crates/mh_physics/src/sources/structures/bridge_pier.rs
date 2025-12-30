@@ -10,9 +10,10 @@
 //! 通过亚网格参数化方法将桥墩效应作为动量源项添加。
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::AlignedVec;
+use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
 
 /// 桥墩拖曳力配置
@@ -137,7 +138,7 @@ impl SourceTerm for BridgePierDrag {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -164,8 +165,8 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

@@ -7,11 +7,6 @@
 //! - 收集后累加（先并行计算通量，后串行累加到单元）
 //! - 着色并行（使用图着色实现真正无锁并行，TODO）
 //!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/engine/parallel.rs 简化迁移。
-//! 完整的着色并行等高级功能将在后续版本实现。
-//!
 //! 当前实现的"并行"是伪并行：通量计算并行，但累加阶段串行。
 //! 对于大规模网格，需要实现真正的着色并行以避免累加瓶颈。
 //!
@@ -21,17 +16,16 @@
 #![allow(unsafe_code)]
 
 use crate::adapter::PhysicsMesh;
-use crate::engine::solver::{BedSlopeCorrectionF64, HydrostaticFaceState, HydrostaticReconstruction};
-use crate::schemes::riemann::{HllcSolverF64, RiemannFluxF64, RiemannSolver, SolverParamsF64};
-use crate::schemes::wetting_drying::{WetState, WettingDryingHandlerF64};
-use crate::state::ShallowWaterStateF64;
-use crate::types::NumericalParamsF64;
-use crate::core::CpuBackend;
+use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
+use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
+use crate::state::ShallowWaterState;
+use crate::types::NumericalParams;
 
-use glam::DVec2;
-use mh_runtime::FaceIndex;
+use mh_runtime::{Backend, CpuBackend, FaceIndex, RuntimeScalar};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 // 简单的日志宏替代 tracing
@@ -57,9 +51,6 @@ macro_rules! info {
         // eprintln!("[INFO] {}", format!($($arg)*));
     };
 }
-
-/// HydrostaticReconstructionF64 类型别名
-pub type HydrostaticReconstructionF64 = HydrostaticReconstruction<CpuBackend<f64>>;
 
 // ============================================================
 // 配置
@@ -95,11 +86,11 @@ pub enum ParallelStrategy {
 
 /// 并行计算配置
 #[derive(Debug, Clone)]
-pub struct ParallelFluxConfig {
+pub struct ParallelFluxConfig<S: RuntimeScalar> {
     /// 数值参数
-    pub params: NumericalParamsF64,
+    pub params: NumericalParams<S>,
     /// 重力加速度
-    pub g: f64, // ALLOW_F64: Layer 4 配置参数
+    pub g: S,
     /// 最小并行面数（低于此值使用串行）
     pub min_parallel_size: usize,
     /// 并行策略
@@ -108,11 +99,11 @@ pub struct ParallelFluxConfig {
     pub use_hydrostatic_reconstruction: bool,
 }
 
-impl Default for ParallelFluxConfig {
+impl<S: RuntimeScalar> Default for ParallelFluxConfig<S> {
     fn default() -> Self {
         Self {
-            params: NumericalParamsF64::default(),
-            g: 9.81,
+            params: NumericalParams::<S>::default(),
+            g: S::from_config(9.81).unwrap_or(S::ZERO),
             min_parallel_size: 1000,
             strategy: ParallelStrategy::Auto,
             use_hydrostatic_reconstruction: true,
@@ -120,26 +111,33 @@ impl Default for ParallelFluxConfig {
     }
 }
 
-impl ParallelFluxConfig {
+impl<S: RuntimeScalar> ParallelFluxConfig<S> {
     /// 创建构建器
-    pub fn builder() -> ParallelFluxConfigBuilder {
+    pub fn builder() -> ParallelFluxConfigBuilder<S> {
         ParallelFluxConfigBuilder::default()
     }
 }
 
 /// 配置构建器
-#[derive(Default)]
-pub struct ParallelFluxConfigBuilder {
-    config: ParallelFluxConfig,
+pub struct ParallelFluxConfigBuilder<S: RuntimeScalar> {
+    config: ParallelFluxConfig<S>,
 }
 
-impl ParallelFluxConfigBuilder {
-    pub fn params(mut self, params: NumericalParamsF64) -> Self {
+impl<S: RuntimeScalar> Default for ParallelFluxConfigBuilder<S> {
+    fn default() -> Self {
+        Self {
+            config: ParallelFluxConfig::default(),
+        }
+    }
+}
+
+impl<S: RuntimeScalar> ParallelFluxConfigBuilder<S> {
+    pub fn params(mut self, params: NumericalParams<S>) -> Self {
         self.config.params = params;
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
+    pub fn gravity(mut self, g: S) -> Self {
         self.config.g = g;
         self
     }
@@ -159,7 +157,7 @@ impl ParallelFluxConfigBuilder {
         self
     }
 
-    pub fn build(self) -> ParallelFluxConfig {
+    pub fn build(self) -> ParallelFluxConfig<S> {
         self.config
     }
 }
@@ -219,33 +217,40 @@ impl FluxComputeMetrics {
 /// 并行通量计算器
 ///
 /// 封装通量计算的并行执行逻辑。
-pub struct ParallelFluxCalculator {
-    config: ParallelFluxConfig,
+/// 
+/// # 类型参数
+/// 
+/// - `B`: 计算后端，提供存储和计算能力
+pub struct ParallelFluxCalculator<B: Backend> {
+    config: ParallelFluxConfig<B::Scalar>,
     /// 黎曼求解器
-    riemann: HllcSolverF64,
+    riemann: HllcSolver<B>,
     /// 干湿处理器（预留用于未来扩展）
     #[allow(dead_code)]
-    wetting_drying: WettingDryingHandlerF64,
+    wetting_drying: WettingDryingHandler<B>,
     /// 静水重构
-    hydrostatic: HydrostaticReconstructionF64,
+    hydrostatic: HydrostaticReconstruction<B>,
     /// 性能指标
     metrics: FluxComputeMetrics,
     /// 面着色（用于 Colored 策略）
     /// 每个元素是一组可以并行处理的面索引
     face_colors: Option<Vec<Vec<usize>>>,
+    /// 后端实例
+    backend: B,
 }
 
-impl ParallelFluxCalculator {
+impl<B: Backend> ParallelFluxCalculator<B> {
     /// 创建计算器
-    pub fn new(config: ParallelFluxConfig) -> Self {
-        let riemann_params = SolverParamsF64::from_numerical(&config.params, config.g);
+    pub fn new(config: ParallelFluxConfig<B::Scalar>, backend: B) -> Self {
+        let riemann_params = SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
         Self {
-            riemann: HllcSolverF64::new(&riemann_params, config.g),
-            wetting_drying: WettingDryingHandlerF64::from_params(&config.params),
-            hydrostatic: HydrostaticReconstructionF64::new(&config.params, config.g),
+            riemann: HllcSolver::<B>::new(&riemann_params, config.g),
+            wetting_drying: WettingDryingHandler::<B>::from_params(&config.params),
+            hydrostatic: HydrostaticReconstruction::<B>::new(&config.params, config.g),
             metrics: FluxComputeMetrics::default(),
             face_colors: None,
             config,
+            backend,
         }
     }
 
@@ -397,14 +402,14 @@ impl ParallelFluxCalculator {
     /// 计算通量（自动选择策略）
     pub fn compute_fluxes(
         &mut self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [f64],
-        flux_hu: &mut [f64],
-        flux_hv: &mut [f64],
-        source_hu: &mut [f64],
-        source_hv: &mut [f64],
-    ) -> f64 {
+        flux_h: &mut [B::Scalar],
+        flux_hu: &mut [B::Scalar],
+        flux_hv: &mut [B::Scalar],
+        source_hu: &mut [B::Scalar],
+        source_hv: &mut [B::Scalar],
+    ) -> B::Scalar {
         let n_faces = mesh.n_faces();
         let start = Instant::now();
 
@@ -444,46 +449,48 @@ impl ParallelFluxCalculator {
     /// 串行计算
     fn compute_serial(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [f64],
-        flux_hu: &mut [f64],
-        flux_hv: &mut [f64],
-        source_hu: &mut [f64],
-        source_hv: &mut [f64],
-    ) -> f64 {
+        flux_h: &mut [B::Scalar],
+        flux_hu: &mut [B::Scalar],
+        flux_hv: &mut [B::Scalar],
+        source_hu: &mut [B::Scalar],
+        source_hv: &mut [B::Scalar],
+    ) -> B::Scalar {
         // 重置
-        flux_h.fill(0.0);
-        flux_hu.fill(0.0);
-        flux_hv.fill(0.0);
-        source_hu.fill(0.0);
-        source_hv.fill(0.0);
+        for v in flux_h.iter_mut() { *v = B::Scalar::ZERO; }
+        for v in flux_hu.iter_mut() { *v = B::Scalar::ZERO; }
+        for v in flux_hv.iter_mut() { *v = B::Scalar::ZERO; }
+        for v in source_hu.iter_mut() { *v = B::Scalar::ZERO; }
+        for v in source_hv.iter_mut() { *v = B::Scalar::ZERO; }
 
         let n_faces = mesh.n_faces();
-        let mut max_speed = 0.0f64;
+        let mut max_speed = B::Scalar::ZERO;
 
         for face_idx in 0..n_faces {
             let (flux, bed_src, length, owner, neighbor) = 
                 self.compute_face(state, mesh, FaceIndex(face_idx));
 
-            max_speed = max_speed.max(flux.max_wave_speed);
+            if flux.max_wave_speed > max_speed {
+                max_speed = flux.max_wave_speed;
+            }
 
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
             let fhv = flux.momentum_y * length;
 
-            flux_h[owner] -= fh;
-            flux_hu[owner] -= fhu;
-            flux_hv[owner] -= fhv;
-            source_hu[owner] += bed_src.source_left_x;
-            source_hv[owner] += bed_src.source_left_y;
+            flux_h[owner] = flux_h[owner] - fh;
+            flux_hu[owner] = flux_hu[owner] - fhu;
+            flux_hv[owner] = flux_hv[owner] - fhv;
+            source_hu[owner] = source_hu[owner] + bed_src.source_left_x;
+            source_hv[owner] = source_hv[owner] + bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
-                flux_h[neigh] += fh;
-                flux_hu[neigh] += fhu;
-                flux_hv[neigh] += fhv;
-                source_hu[neigh] += bed_src.source_right_x;
-                source_hv[neigh] += bed_src.source_right_y;
+                flux_h[neigh] = flux_h[neigh] + fh;
+                flux_hu[neigh] = flux_hu[neigh] + fhu;
+                flux_hv[neigh] = flux_hv[neigh] + fhv;
+                source_hu[neigh] = source_hu[neigh] + bed_src.source_right_x;
+                source_hv[neigh] = source_hv[neigh] + bed_src.source_right_y;
             }
         }
 
@@ -493,7 +500,7 @@ impl ParallelFluxCalculator {
     /// 并行计算（先并行计算，后串行累加）
     fn compute_parallel(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -566,7 +573,7 @@ impl ParallelFluxCalculator {
     /// - 对于 N 个颜色，有 N-1 次同步点，但每个批次内完全并行
     fn compute_colored(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         flux_h: &mut [f64],
         flux_hu: &mut [f64],
@@ -663,11 +670,12 @@ impl ParallelFluxCalculator {
     #[allow(deprecated)]
     fn compute_face(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         face_idx: FaceIndex,
-    ) -> (RiemannFluxF64, BedSlopeCorrectionF64, f64, usize, Option<usize>) {
-        let normal = mesh.face_normal(face_idx.get());
+    ) -> (RiemannFlux<f64>, BedSlopeCorrection<CpuBackend<f64>>, f64, usize, Option<usize>) {
+        let (nx, ny) = mesh.face_normal_2d_tuple(face_idx.get());
+        let normal = (nx, ny);
         let length = mesh.face_length(face_idx);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
@@ -681,7 +689,7 @@ impl ParallelFluxCalculator {
         let (u_l, v_l) = self.config.params.safe_velocity_components(
             state.hu[owner_idx], state.hv[owner_idx], h_l
         );
-        let vel_l = DVec2::new(u_l, v_l);
+        let vel_l = (u_l, v_l);
 
         // 右侧状态
         let (h_r, vel_r, z_r) = if let Some(neigh_idx) = neighbor_idx {
@@ -689,21 +697,23 @@ impl ParallelFluxCalculator {
             let (u, v) = self.config.params.safe_velocity_components(
                 state.hu[neigh_idx], state.hv[neigh_idx], h
             );
-            (h, DVec2::new(u, v), state.z[neigh_idx])
+            (h, (u, v), state.z[neigh_idx])
         } else {
-            let vn = vel_l.dot(normal);
-            (h_l, vel_l - 2.0 * vn * normal, z_l)
+            // 边界处理: vn = vel_l · normal, vel_r = vel_l - 2 * vn * normal
+            let vn = vel_l.0 * normal.0 + vel_l.1 * normal.1;
+            let vel_r = (vel_l.0 - 2.0 * vn * normal.0, vel_l.1 - 2.0 * vn * normal.1);
+            (h_l, vel_r, z_l)
         };
 
         // 静水重构
         let recon = if self.config.use_hydrostatic_reconstruction {
-            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, [vel_l.x, vel_l.y], [vel_r.x, vel_r.y])
+            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, [vel_l.0, vel_l.1], [vel_r.0, vel_r.1])
         } else {
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
-                vel_left: [vel_l.x, vel_l.y],
-                vel_right: [vel_r.x, vel_r.y],
+                vel_left: [vel_l.0, vel_l.1],
+                vel_right: [vel_r.0, vel_r.1],
                 z_face: 0.5 * (z_l + z_r),
             }
         };
@@ -728,12 +738,12 @@ impl ParallelFluxCalculator {
         // 黎曼通量
         let vel_l_arr = [recon.vel_left[0], recon.vel_left[1]];
         let vel_r_arr = [recon.vel_right[0], recon.vel_right[1]];
-        let normal_arr = [normal.x, normal.y];
+        let normal_arr = [normal.0, normal.1];
         let flux = self.riemann.solve(
             recon.h_left, recon.h_right,
             vel_l_arr, vel_r_arr,
             normal_arr,
-        ).unwrap_or(RiemannFluxF64::zero());
+        ).unwrap_or(RiemannFlux::<f64>::zero());
 
         let limited_flux = if flux_limiter < 1.0 {
             flux.scaled(flux_limiter)
@@ -788,12 +798,12 @@ impl ParallelFluxCalculatorBuilder {
         self
     }
 
-    pub fn params(mut self, params: NumericalParamsF64) -> Self {
+    pub fn params(mut self, params: NumericalParams<f64>) -> Self {
         self.config.params = params;
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self { // ALLOW_F64: 物理常数配置参数
+    pub fn gravity(mut self, g: f64) -> Self { 
         self.config.g = g;
         self
     }
@@ -813,7 +823,7 @@ impl Default for ParallelFluxCalculatorBuilder {
         Self::new()
     }
 }
-
+    
 // ============================================================
 // 测试
 // ============================================================

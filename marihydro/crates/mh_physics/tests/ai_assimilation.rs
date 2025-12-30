@@ -4,10 +4,11 @@
 //! 验证Nudging同化的正确性
 
 use mh_physics::assimilation::{PhysicsAssimilable, ConservedQuantities, ConservationChecker, AssimilableBridge};
-use mh_physics::state::ShallowWaterStateF64;
+use mh_physics::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 
 fn build_bridge() -> AssimilableBridge<'static> {
-    let mut state = Box::new(ShallowWaterStateF64::new(2));
+    let mut state = Box::new(ShallowWaterState::<CpuBackend<f64>>::new(2));
     state.h[0] = 1.0;
     state.h[1] = 2.0;
     state.hu[0] = 0.5;
@@ -19,7 +20,7 @@ fn build_bridge() -> AssimilableBridge<'static> {
     let areas = vec![1.0, 1.0];
     let centers = vec![[0.0, 0.0], [1.0, 0.0]];
     // Box leak to extend lifetime for test scope
-    let state_ref: &'static mut ShallowWaterStateF64 = Box::leak(state);
+    let state_ref: &'static mut ShallowWaterState<CpuBackend<f64>> = Box::leak(state);
     AssimilableBridge::new(state_ref, areas, centers)
 }
 

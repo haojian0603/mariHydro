@@ -30,7 +30,8 @@
 use super::topology::CellFaceTopology;
 use crate::adapter::PhysicsMesh;
 use crate::numerics::linear_algebra::{CsrBuilder, CsrMatrix, CsrPattern};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 use mh_runtime::CellIndex;
 use serde::{Deserialize, Serialize};
 
@@ -138,7 +139,7 @@ impl PressureMatrixAssembler {
         &mut self,
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         dt: f64,
         g: f64,
     ) {
@@ -248,7 +249,7 @@ impl PressureMatrixAssembler {
         &mut self,
         mesh: &PhysicsMesh,
         topo: &CellFaceTopology,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         hu_star: &[f64],
         hv_star: &[f64],
         dt: f64,
@@ -271,7 +272,7 @@ impl PressureMatrixAssembler {
             // 面法向通量
             let hu_f = 0.5 * (hu_star[owner] + hu_star[neighbor]);
             let hv_f = 0.5 * (hv_star[owner] + hv_star[neighbor]);
-            let flux = (face.normal.x * hu_f + face.normal.y * hv_f) * face.length;
+            let flux = (face.normal.0 * hu_f + face.normal.1 * hv_f) * face.length;
 
             let area_o = mesh.cell_area_unchecked(CellIndex(owner));
             let area_n = mesh.cell_area_unchecked(CellIndex(neighbor));
@@ -368,7 +369,7 @@ impl ImplicitMomentumAssembler {
     pub fn assemble_friction(
         &mut self,
         topo: &CellFaceTopology,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         manning_n: f64,
         dt: f64,
         g: f64,

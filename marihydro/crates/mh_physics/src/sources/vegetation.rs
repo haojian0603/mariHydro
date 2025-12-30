@@ -24,7 +24,8 @@
 //! - 淹没/露出植被
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 
 /// 植被类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -242,7 +243,7 @@ impl SourceTerm for VegetationConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -327,7 +328,7 @@ impl VegetationImplicit {
     ///
     /// 返回 exp(-Δt * 0.5 * C_d * A_v * |u|)
     // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn compute_decay_factors(&mut self, state: &ShallowWaterStateF64, dt: f64) {
+    pub fn compute_decay_factors(&mut self, state: &ShallowWaterState<CpuBackend<f64>>, dt: f64) {
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {
@@ -355,7 +356,7 @@ impl VegetationImplicit {
     }
 
     /// 应用隐式衰减
-    pub fn apply_decay(&self, state: &mut ShallowWaterStateF64) {
+    pub fn apply_decay(&self, state: &mut ShallowWaterState<CpuBackend<f64>>) {
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {
@@ -377,8 +378,9 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

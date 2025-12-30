@@ -356,12 +356,6 @@ where
     pub conservation_tolerance: S,
 }
 
-/// f64参数类型别名
-pub type NumericalParamsF64 = NumericalParams<f64>;
-
-/// f32参数类型别名
-pub type NumericalParamsF32 = NumericalParams<f32>;
-
 impl<S> Default for NumericalParams<S>
 where
     S: RuntimeScalar + PartialOrd + FromPrimitive,
@@ -403,7 +397,7 @@ impl<S> NumericalParams<S>
 where
     S: RuntimeScalar + PartialOrd + FromPrimitive,
 {
-    /// 从NumericalParamsF64转换到泛型参数
+    /// 从 NumericalParams<f64> 转换到泛型参数
     ///
     /// # 参数
     /// - `params_f64`: f64类型的数值参数
@@ -411,7 +405,7 @@ where
     /// # 返回
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
-    pub fn from_f64_params(params_f64: &NumericalParamsF64) -> Result<Self, ConfigError> {
+    pub fn from_f64_params(params_f64: &NumericalParams<f64>) -> Result<Self, ConfigError> {
         Ok(Self {
             h_min: S::from_f64(params_f64.h_min)
                 .ok_or(ConfigError::Conversion("h_min"))?,
@@ -817,7 +811,7 @@ pub enum LimiterType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {
     /// 数值参数（f64配置）
-    pub numerical: NumericalParamsF64,
+    pub numerical: NumericalParams<f64>,
     /// 物理常数
     pub physics: PhysicalConstants,
     /// 黎曼求解器类型
@@ -842,7 +836,7 @@ impl Default for SolverConfig {
     /// 使用标准默认值
     fn default() -> Self {
         Self {
-            numerical: NumericalParamsF64::default(),
+            numerical: NumericalParams::<f64>::default(),
             physics: PhysicalConstants::default(),
             riemann_solver: RiemannSolverType::default(),
             time_integration: TimeIntegration::default(),
@@ -870,9 +864,9 @@ impl SolverConfig {
     /// 创建用于稳定性测试的配置
     pub fn for_stability_test() -> Self {
         Self {
-            numerical: NumericalParamsF64 {
+            numerical: NumericalParams::<f64> {
                 cfl: 0.3,
-                ..NumericalParamsF64::default()
+                ..NumericalParams::<f64>::default()
             },
             second_order: false,
             ..Self::default()
@@ -882,9 +876,9 @@ impl SolverConfig {
     /// 创建高精度配置
     pub fn high_accuracy() -> Self {
         Self {
-            numerical: NumericalParamsF64 {
+            numerical: NumericalParams::<f64> {
                 cfl: 0.3,
-                ..NumericalParamsF64::default()
+                ..NumericalParams::<f64>::default()
             },
             time_integration: TimeIntegration::SspRk3,
             limiter: LimiterType::Venkatakrishnan,

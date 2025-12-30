@@ -27,7 +27,7 @@
 //! - 支持多种对流格式
 //! - 与新架构的时间积分器集成
 
-use glam::DVec2;
+use mh_runtime::Backend;
 use serde::{Deserialize, Serialize};
 use super::state::{TracerField, TracerState};
 
@@ -242,8 +242,8 @@ pub struct FaceFlowData {
     pub left_cell: usize,
     /// 右侧单元索引（边界面为 None）
     pub right_cell: Option<usize>,
-    /// 面法向量（从左到右）
-    pub normal: DVec2,
+    /// 面法向量（从左到右）(nx, ny)
+    pub normal: (f64, f64),
     /// 面长度 [m]
     pub length: f64,
     /// 面上的法向流速 [m/s]
@@ -485,9 +485,9 @@ impl TracerTransportSolver {
     /// - `flow_data`: 面流动数据
     /// - `cell_volumes`: 单元体积
     /// - `face_distances`: 面对应的单元中心间距
-    pub fn compute_rhs(
+    pub fn compute_rhs<B: Backend<Scalar = f64>>(
         &mut self,
-        field: &mut TracerField,
+        field: &mut TracerField<B>,
         flow_data: &[FaceFlowData],
         cell_volumes: &[f64],
         face_distances: &[f64],
@@ -505,9 +505,9 @@ impl TracerTransportSolver {
     /// - `cell_volumes`: 单元体积
     /// - `face_distances`: 面对应的单元中心间距
     /// - `smagorinsky_data`: Smagorinsky 模型数据（网格尺度和应变率）
-    pub fn compute_rhs_with_smagorinsky(
+    pub fn compute_rhs_with_smagorinsky<B: Backend<Scalar = f64>>(
         &mut self,
-        field: &mut TracerField,
+        field: &mut TracerField<B>,
         flow_data: &[FaceFlowData],
         cell_volumes: &[f64],
         face_distances: &[f64],
@@ -517,9 +517,9 @@ impl TracerTransportSolver {
     }
 
     /// 内部实现：计算 RHS
-    fn compute_rhs_internal(
+    fn compute_rhs_internal<B: Backend<Scalar = f64>>(
         &mut self,
-        field: &mut TracerField,
+        field: &mut TracerField<B>,
         flow_data: &[FaceFlowData],
         cell_volumes: &[f64],
         face_distances: &[f64],
@@ -534,9 +534,9 @@ impl TracerTransportSolver {
 
         // 计算所有面的通量
         for (i, face) in flow_data.iter().enumerate() {
-            let c_left = field.concentration(face.left_cell);
+            let c_left = field.concentration()[face.left_cell];
             let c_right = face.right_cell
-                .map(|idx| field.concentration(idx))
+                .map(|idx| field.concentration()[idx])
                 .unwrap_or(c_left); // 边界面使用左侧值
 
             // 对流通量
@@ -604,12 +604,12 @@ impl TracerTransportSolver {
     /// # 参数
     /// - `field`: 示踪剂场
     /// - `dt`: 时间步长 [s]
-    pub fn update_forward_euler(&self, field: &mut TracerField, dt: f64) {
+    pub fn update_forward_euler<B: Backend<Scalar = f64>>(&self, field: &mut TracerField<B>, dt: f64) {
         field.apply_euler_update(dt);
     }
 
     /// 应用浓度限制
-    pub fn apply_clipping(&self, field: &mut TracerField) {
+    pub fn apply_clipping<B: Backend<Scalar = f64>>(&self, field: &mut TracerField<B>) {
         if self.config.enable_clipping {
             field.clamp_concentration(self.config.c_min, self.config.c_max);
         }
@@ -624,9 +624,9 @@ impl TracerTransportSolver {
     /// - `face_distances`: 面对应的单元中心间距
     /// - `water_depths`: 水深数组（用于更新浓度）
     /// - `dt`: 时间步长
-    pub fn step(
+    pub fn step<B: Backend<Scalar = f64>>(
         &mut self,
-        field: &mut TracerField,
+        field: &mut TracerField<B>,
         flow_data: &[FaceFlowData],
         cell_volumes: &[f64],
         face_distances: &[f64],
@@ -713,9 +713,9 @@ impl MultiTracerSolver {
     }
 
     /// 更新所有示踪剂
-    pub fn step_all(
+    pub fn step_all<B: Backend<Scalar = f64>>(
         &mut self,
-        state: &mut TracerState,
+        state: &mut TracerState<B>,
         flow_data: &[FaceFlowData],
         cell_volumes: &[f64],
         face_distances: &[f64],
@@ -815,10 +815,14 @@ mod tests {
     fn test_single_step() {
         let mut solver = TracerTransportSolver::default();
         let props = TracerProperties::salinity().with_background(0.0);
-        let mut field = TracerField::from_concentration(
-            props,
-            vec![10.0, 5.0, 0.0], // 浓度梯度
-        );
+        let n_cells = 3;
+        let mut field = TracerField::new(props, n_cells);
+        
+        // 手动设置浓度梯度
+        let concentrations = [10.0, 5.0, 0.0];
+        for (i, &c) in concentrations.iter().enumerate() {
+            field.concentration_slice_mut()[i] = c;
+        }
 
         // 初始化守恒量
         let depths = vec![1.0, 1.0, 1.0];
@@ -830,7 +834,7 @@ mod tests {
                 face_id: 0,
                 left_cell: 0,
                 right_cell: Some(1),
-                normal: DVec2::new(1.0, 0.0),
+                normal: (1.0, 0.0),
                 length: 1.0,
                 un: 1.0,  // 从左到右
                 h_face: 1.0,
@@ -839,7 +843,7 @@ mod tests {
                 face_id: 1,
                 left_cell: 1,
                 right_cell: Some(2),
-                normal: DVec2::new(1.0, 0.0),
+                normal: (1.0, 0.0),
                 length: 1.0,
                 un: 1.0,
                 h_face: 1.0,

@@ -443,29 +443,19 @@ impl<B: Backend> RiemannSolver for AdaptiveSolver<B> {
 }
 
 // ============================================================================
-// 向后兼容类型别名
-// ============================================================================
-
-/// f64 版本的 AdaptiveSolver
-pub type AdaptiveSolverF64 = AdaptiveSolver<CpuBackend<f64>>;
-
-/// f32 版本的 AdaptiveSolver
-pub type AdaptiveSolverF32 = AdaptiveSolver<CpuBackend<f32>>;
-
-// ============================================================================
 // 工厂函数
 // ============================================================================
 
 /// 创建默认自适应求解器 (f64)
-pub fn create_adaptive_solver(gravity: f64) -> AdaptiveSolverF64 {
+pub fn create_adaptive_solver(gravity: f64) -> AdaptiveSolver<CpuBackend<f64>> {
     let params = NumericalParams::<f64>::default();
-    AdaptiveSolverF64::new(&params, gravity)
+    AdaptiveSolver::<CpuBackend<f64>>::new(&params, gravity)
 }
 
 /// 创建保守自适应求解器 (f64)
-pub fn create_conservative_adaptive_solver(gravity: f64) -> AdaptiveSolverF64 {
+pub fn create_conservative_adaptive_solver(gravity: f64) -> AdaptiveSolver<CpuBackend<f64>> {
     let params = NumericalParams::<f64>::default();
-    AdaptiveSolverF64::with_config(&params, gravity, AdaptiveConfig::conservative())
+    AdaptiveSolver::<CpuBackend<f64>>::with_config(&params, gravity, AdaptiveConfig::conservative())
 }
 
 // ============================================================================
@@ -496,7 +486,7 @@ mod tests {
     #[test]
     fn test_adaptive_solver_f32() {
         let params = NumericalParams::<f32>::default();
-        let solver = AdaptiveSolverF32::new(&params, 9.81f32);
+        let solver = AdaptiveSolver::<CpuBackend<f32>>::new(&params, 9.81f32);
 
         let flux = solver
             .solve(

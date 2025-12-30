@@ -34,23 +34,21 @@ pub mod batch;
 // 核心类型（泛型化）
 pub use traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
-    // 向后兼容类型别名
-    RiemannFluxF64, RiemannFluxF32, SolverParamsF64, SolverParamsF32,
 };
 
 // HLLC 求解器
-pub use hllc::{HllcSolver, HllcSolverF64, HllcSolverF32};
+pub use hllc::HllcSolver;
 
 // Rusanov 求解器
 pub use rusanov::{
     create_robust_rusanov_solver, create_rusanov_solver, 
-    RusanovConfig, RusanovSolver, RusanovSolverF64, RusanovSolverF32,
+    RusanovConfig, RusanovSolver,
 };
 
 // 自适应求解器
 pub use adaptive::{
     create_adaptive_solver, create_conservative_adaptive_solver,
-    AdaptiveConfig, AdaptiveSolver, AdaptiveSolverF64, AdaptiveSolverF32,
+    AdaptiveConfig, AdaptiveSolver,
     AdaptiveStats, SolverChoice,
 };
 

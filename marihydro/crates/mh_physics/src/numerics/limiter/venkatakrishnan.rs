@@ -165,17 +165,14 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for VenkatakrishnanGeneric<S> {
     }
 }
 
-/// f64 特化版本 - 高精度模式
-pub type Venkatakrishnan = VenkatakrishnanGeneric<f64>;
-
-/// f32 特化版本 - 高性能模式
-#[allow(dead_code)]
-pub type VenkatakrishnanF32 = VenkatakrishnanGeneric<f32>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::traits::LimiterContext;
+    
+    // 测试用类型别名
+    type Venkatakrishnan = VenkatakrishnanGeneric<f64>;
+    type VenkatakrishnanF32 = VenkatakrishnanGeneric<f32>;
+    type LimiterContext = LimiterContextGeneric<f64>;
 
     #[test]
     fn test_creation_f64() {

@@ -7,6 +7,11 @@
 //! - 面的几何信息（法向、长度、距离）
 //! - 邻居单元查找
 //!
+//! # 设计原则
+//!
+//! 1. **无 DVec2**: 所有法向使用 `(f64, f64)` 元组
+//! 2. **元组几何接口**: 使用 `cell_center_tuple`、`face_normal_2d_tuple` 等方法
+//!
 //! # 使用示例
 //!
 //! ```ignore
@@ -17,13 +22,12 @@
 //! // 遍历单元的所有面
 //! for face_info in topo.cell_faces(cell_idx) {
 //!     let neighbor = face_info.neighbor;
-//!     let normal = face_info.normal;
+//!     let (nx, ny) = face_info.normal;
 //!     // ...
 //! }
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use glam::DVec2;
 
 /// 邻居信息
 #[derive(Debug, Clone, Copy)]
@@ -32,8 +36,8 @@ pub struct NeighborInfo {
     pub cell_idx: Option<usize>,
     /// 面索引
     pub face_idx: usize,
-    /// 指向邻居的法向（归一化）
-    pub normal: DVec2,
+    /// 指向邻居的法向（归一化）- 元组版
+    pub normal: (f64, f64),
     /// 面长度 [m]
     pub length: f64,
     /// 单元中心到面的距离 [m]
@@ -51,8 +55,8 @@ pub struct FaceInfo {
     pub owner: usize,
     /// Neighbor 单元索引（None 表示边界）
     pub neighbor: Option<usize>,
-    /// Owner -> Neighbor 方向的法向（归一化）
-    pub normal: DVec2,
+    /// Owner -> Neighbor 方向的法向（归一化）- 元组版
+    pub normal: (f64, f64),
     /// 面长度 [m]
     pub length: f64,
     /// Owner 中心到 Neighbor 中心的距离 [m]
@@ -137,7 +141,7 @@ impl CellFaceTopology {
             let fi = mh_runtime::FaceIndex(face_idx);
             let owner = mesh.face_owner(fi);
             let neighbor = mesh.face_neighbor(fi);
-            let normal = mesh.face_normal(face_idx);
+            let normal = mesh.face_normal_2d_tuple(face_idx);
             let length = mesh.face_length(fi);
             let dist_o2n = mesh.face_dist_o2n(fi);
 
@@ -180,6 +184,10 @@ impl CellFaceTopology {
         }
     }
 
+    // =========================================================================
+    // 基本访问器
+    // =========================================================================
+
     /// 获取单元数量
     #[inline]
     pub fn n_cells(&self) -> usize {
@@ -204,19 +212,9 @@ impl CellFaceTopology {
         self.n_faces - self.n_boundary_faces
     }
 
-    /// 获取单元的面索引列表
-    #[inline]
-    pub fn cell_faces(&self, cell_idx: usize) -> &[usize] {
-        let start = self.cell_face_ptr[cell_idx];
-        let end = self.cell_face_ptr[cell_idx + 1];
-        &self.cell_face_idx[start..end]
-    }
-
-    /// 获取单元的面数量
-    #[inline]
-    pub fn cell_n_faces(&self, cell_idx: usize) -> usize {
-        self.cell_face_ptr[cell_idx + 1] - self.cell_face_ptr[cell_idx]
-    }
+    // =========================================================================
+    // 面信息访问
+    // =========================================================================
 
     /// 获取面信息
     #[inline]
@@ -224,99 +222,102 @@ impl CellFaceTopology {
         &self.face_info[face_idx]
     }
 
-    /// 获取所有面信息
-    #[inline]
-    pub fn faces(&self) -> &[FaceInfo] {
-        &self.face_info
-    }
-
-    /// 获取内部面索引列表
+    /// 获取所有内部面索引
     #[inline]
     pub fn interior_faces(&self) -> &[usize] {
         &self.interior_faces
     }
 
-    /// 获取边界面索引列表
+    /// 获取所有边界面索引
     #[inline]
     pub fn boundary_faces(&self) -> &[usize] {
         &self.boundary_faces
     }
 
-    /// 遍历单元的邻居信息
-    pub fn cell_neighbors(&self, cell_idx: usize) -> impl Iterator<Item = NeighborInfo> + '_ {
-        self.cell_faces(cell_idx).iter().map(move |&face_idx| {
-            let info = &self.face_info[face_idx];
-
-            // 确定邻居和法向方向
-            let (neighbor, normal, dist_to_face) = if info.owner == cell_idx {
-                (info.neighbor, info.normal, info.dist_o2f)
-            } else {
-                (Some(info.owner), -info.normal, info.dist_n2f)
-            };
-
-            NeighborInfo {
-                cell_idx: neighbor,
-                face_idx,
-                normal,
-                length: info.length,
-                dist_to_face,
-                dist_to_neighbor: info.dist_o2n,
-            }
-        })
+    /// 迭代所有面信息
+    #[inline]
+    pub fn faces(&self) -> impl Iterator<Item = &FaceInfo> {
+        self.face_info.iter()
     }
 
-    /// 获取单元的邻居单元索引列表
-    pub fn cell_neighbor_indices(&self, cell_idx: usize) -> Vec<usize> {
-        self.cell_neighbors(cell_idx)
-            .filter_map(|n| n.cell_idx)
+    // =========================================================================
+    // 单元-面关系
+    // =========================================================================
+
+    /// 获取单元的所有面索引
+    #[inline]
+    pub fn cell_face_indices(&self, cell_idx: usize) -> &[usize] {
+        let start = self.cell_face_ptr[cell_idx];
+        let end = self.cell_face_ptr[cell_idx + 1];
+        &self.cell_face_idx[start..end]
+    }
+
+    /// 获取单元的所有面信息
+    #[inline]
+    pub fn cell_faces(&self, cell_idx: usize) -> impl Iterator<Item = &FaceInfo> {
+        self.cell_face_indices(cell_idx)
+            .iter()
+            .map(move |&fi| &self.face_info[fi])
+    }
+
+    /// 获取单元的邻居信息
+    pub fn cell_neighbors(&self, cell_idx: usize) -> Vec<NeighborInfo> {
+        self.cell_face_indices(cell_idx)
+            .iter()
+            .map(|&face_idx| {
+                let face = &self.face_info[face_idx];
+                let (cell, dist_to_face, normal) = if face.owner == cell_idx {
+                    // 当前单元是 owner，邻居在 neighbor
+                    (face.neighbor, face.dist_o2f, face.normal)
+                } else {
+                    // 当前单元是 neighbor，邻居是 owner
+                    (Some(face.owner), face.dist_n2f, (-face.normal.0, -face.normal.1))
+                };
+
+                NeighborInfo {
+                    cell_idx: cell,
+                    face_idx,
+                    normal,
+                    length: face.length,
+                    dist_to_face,
+                    dist_to_neighbor: face.dist_o2n,
+                }
+            })
             .collect()
     }
 
-    /// 获取单元的边界面数量
-    pub fn cell_n_boundary_faces(&self, cell_idx: usize) -> usize {
-        self.cell_neighbors(cell_idx)
-            .filter(|n| n.cell_idx.is_none())
-            .count()
-    }
+    // =========================================================================
+    // 验证
+    // =========================================================================
 
-    /// 检查单元是否有边界面
-    pub fn cell_is_boundary(&self, cell_idx: usize) -> bool {
-        self.cell_neighbors(cell_idx)
-            .any(|n| n.cell_idx.is_none())
-    }
-
-    /// 验证拓扑数据有效性
-    ///
-    /// 检查以下问题：
-    /// - 退化面（长度过小）
-    /// - 负面积单元
-    /// - 无效连接（owner == neighbor）
+    /// 验证拓扑完整性
     pub fn validate(&self) -> Result<(), TopologyError> {
-        const MIN_FACE_LENGTH: f64 = 1e-12;
-
-        for face_idx in 0..self.n_faces {
-            let face = &self.face_info[face_idx];
-
-            // 检查退化面
-            if face.length < MIN_FACE_LENGTH {
+        // 检查面长度
+        for face in &self.face_info {
+            if face.length < 1e-14 {
                 return Err(TopologyError::DegenerateFace {
-                    face_idx,
+                    face_idx: face.face_idx,
                     length: face.length,
                 });
             }
+        }
 
-            // 检查自连接
+        // 检查自连接
+        for face in &self.face_info {
             if let Some(neigh) = face.neighbor {
-                if face.owner == neigh {
+                if neigh == face.owner {
                     return Err(TopologyError::SelfConnectedFace {
-                        face_idx,
+                        face_idx: face.face_idx,
                         cell: face.owner,
                     });
                 }
             }
+        }
 
-            // 检查非正距离
-            if face.dist_o2n <= 0.0 {
+        // 检查距离
+        for face in &self.face_info {
+            let face_idx = face.face_idx;
+            if face.dist_o2n < 1e-14 {
                 return Err(TopologyError::InvalidDistance {
                     face_idx,
                     distance: face.dist_o2n,
@@ -334,13 +335,14 @@ impl CellFaceTopology {
         let face = &self.face_info[face_idx];
         
         if let Some(neigh) = face.neighbor {
-            let owner_center = mesh.cell_center(face.owner);
-            let neigh_center = mesh.cell_center(neigh);
-            let delta = neigh_center - owner_center;
+            let owner_center = mesh.cell_center_tuple(face.owner);
+            let neigh_center = mesh.cell_center_tuple(neigh);
+            let delta_x = neigh_center.0 - owner_center.0;
+            let delta_y = neigh_center.1 - owner_center.1;
             
             // 投影到面法向
-            let normal = face.normal;
-            let proj = delta.x * normal.x + delta.y * normal.y;
+            let (nx, ny) = face.normal;
+            let proj = delta_x * nx + delta_y * ny;
             proj.abs()
         } else {
             face.dist_o2n
@@ -354,18 +356,19 @@ impl CellFaceTopology {
         let face = &self.face_info[face_idx];
         
         if let Some(neigh) = face.neighbor {
-            let owner_center = mesh.cell_center(face.owner);
-            let neigh_center = mesh.cell_center(neigh);
-            let delta = neigh_center - owner_center;
-            let delta_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+            let owner_center = mesh.cell_center_tuple(face.owner);
+            let neigh_center = mesh.cell_center_tuple(neigh);
+            let delta_x = neigh_center.0 - owner_center.0;
+            let delta_y = neigh_center.1 - owner_center.1;
+            let delta_len = (delta_x * delta_x + delta_y * delta_y).sqrt();
             
             if delta_len < 1e-14 {
                 return 0.0;
             }
             
             // 计算连接线与法向的夹角余弦
-            let normal = face.normal;
-            let cos_theta = (delta.x * normal.x + delta.y * normal.y).abs() / delta_len;
+            let (nx, ny) = face.normal;
+            let cos_theta = (delta_x * nx + delta_y * ny).abs() / delta_len;
             
             // 非正交因子 = 1 - |cos(theta)|
             (1.0 - cos_theta).max(0.0)
@@ -421,7 +424,7 @@ mod tests {
             face_idx: 0,
             owner: 0,
             neighbor: Some(1),
-            normal: DVec2::new(1.0, 0.0),
+            normal: (1.0, 0.0),
             length: 10.0,
             dist_o2n: 5.0,
             dist_o2f: 2.5,
@@ -438,7 +441,7 @@ mod tests {
         let info = NeighborInfo {
             cell_idx: Some(5),
             face_idx: 10,
-            normal: DVec2::new(0.0, 1.0),
+            normal: (0.0, 1.0),
             length: 8.0,
             dist_to_face: 3.0,
             dist_to_neighbor: 6.0,

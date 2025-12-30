@@ -19,9 +19,10 @@
 //! 其中 S 为淹没修正系数
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::AlignedVec;
+use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
 
 /// 堰类型
@@ -237,7 +238,7 @@ impl SourceTerm for WeirFlow {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -288,8 +289,9 @@ mod tests {
     use super::*;
 
     #[allow(dead_code)]
-    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = z;

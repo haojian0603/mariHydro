@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use num_traits::cast::ToPrimitive;
+use num_traits::ToPrimitive;
 
 /// 运行器错误类型
 #[derive(Debug, Error)]

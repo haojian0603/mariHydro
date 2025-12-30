@@ -56,7 +56,7 @@
 //! //! 这展示了完整的模拟流程（需要外部网格文件）
 //! use mh_config::SolverConfig;
 //! use mh_physics::{
-//!     ShallowWaterSolver, ShallowWaterStateF64,  // 使用类型别名避免歧义
+//!     ShallowWaterSolver, ShallowWaterState,
 //!     forcing::{TimeSeries, WindProvider},
 //!     config_bridge::Layer3Config,
 //! };
@@ -68,11 +68,13 @@
 //! 
 //! // 2. 求解器（需要网格）
 //! // let mesh = FrozenMesh::default(); // 实际应从文件加载
+//! // let layer3_config: Layer3Config<f64> = Layer3Config::from_layer4(&config).unwrap();
 //! // let mut solver = ShallowWaterSolver::new(mesh, layer3_config, CpuBackend::<f64>::new());
 //! 
 //! // 3. 初始状态（示例）
 //! let n_cells = 100; // 实际应从网格获取
-//! let mut state = ShallowWaterStateF64::new(n_cells);
+//! let backend = CpuBackend::<f64>::new();
+//! let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
 //! // state.set_uniform_depth(1.0);  // 假设的方法
 //! 
 //! // 4. 外力
@@ -139,7 +141,7 @@ pub use adapter::PhysicsMesh;
 pub use engine::{
     AtomicFluxAccumulator, CflCalculator, FluxAccumulator, ForwardEuler, RhsComputer, SspRk2,
     SspRk3, TimeIntegrator, TimeIntegratorEnum, TimeIntegratorKind, create_integrator, NumericalScheme,
-    ShallowWaterSolver, ShallowWaterSolverF64, ShallowWaterSolverF32,  // 新增类型别名
+    ShallowWaterSolver,
 };
 pub use schemes::{
     HllcSolver, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams, WetState,
@@ -147,7 +149,7 @@ pub use schemes::{
 };
 pub use state::{
     ConservedState, Flux, GradientState, RhsBuffers, ShallowWaterState, StateError,
-    ShallowWaterStateGeneric, ShallowWaterStateDefault, ShallowWaterStateF64, ShallowWaterStateF32,
+    ShallowWaterStateGeneric,
 };
 pub use traits::{StateAccess, StateAccessExt, StateAccessMut, StateStatistics, StateView, StateViewMut};
 
@@ -157,7 +159,7 @@ pub use engine::SolverStats;
 // 重导出类型（从types模块导入，不重复导入索引）
 pub use types::{
     LimiterType, NumericalParams,
-    NumericalParamsF64, ParamsValidationError, PhysicalConstants, RiemannSolverType,
+    ParamsValidationError, PhysicalConstants, RiemannSolverType,
     SafeDepth, SafeVelocity, SolverConfig, TimeIntegration,
     BoundaryValueProvider, ConstantBoundaryProvider, ZeroBoundaryProvider,
 };

@@ -116,9 +116,6 @@ pub struct SolverResult<S: RuntimeScalar> {
     pub relative_residual: S,
 }
 
-/// Legacy 类型别名，保持向后兼容
-pub type SolverResultF64 = SolverResult<f64>;
-
 impl<S: RuntimeScalar> SolverResult<S> {
     /// 是否成功收敛
     pub fn is_converged(&self) -> bool {
@@ -145,9 +142,6 @@ pub struct CgWorkspace<S: RuntimeScalar> {
     /// 预条件后的残差
     pub z: Vec<S>,
 }
-
-/// Legacy 类型别名，保持向后兼容
-pub type CgWorkspaceF64 = CgWorkspace<f64>;
 
 impl<S: RuntimeScalar> CgWorkspace<S> {
     /// 创建新的工作区
@@ -207,9 +201,6 @@ pub struct BiCgStabWorkspace<S: RuntimeScalar> {
     /// 预条件后的向量
     pub s_hat: Vec<S>,
 }
-
-/// Legacy 类型别名，保持向后兼容
-pub type BiCgStabWorkspaceF64 = BiCgStabWorkspace<f64>;
 
 impl<S: RuntimeScalar> BiCgStabWorkspace<S> {
     /// 创建新的工作区

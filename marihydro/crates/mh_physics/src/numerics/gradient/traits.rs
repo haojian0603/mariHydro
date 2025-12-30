@@ -5,8 +5,12 @@
 //! **层级**: Layer 3 - Engine Layer
 //!
 //! 本模块提供泛型化的梯度存储和计算接口，支持 f32/f64 精度切换。
+//!
+//! # 设计原则
+//!
+//! 1. **单轨泛型**: 所有接口基于 `RuntimeScalar` 泛型，无 Legacy f64 别名
+//! 2. **Backend 无关**: 使用 `[S; 2]` 元组表示向量，不依赖 glam::DVec2
 
-use glam::DVec2;
 use mh_runtime::RuntimeScalar;
 
 // ============================================================
@@ -21,9 +25,6 @@ pub struct ScalarGradientStorageGeneric<S: RuntimeScalar> {
     /// y方向梯度分量
     pub grad_y: Vec<S>,
 }
-
-/// 标量场梯度存储 (SoA布局) - Legacy f64 版本
-pub type ScalarGradientStorage = ScalarGradientStorageGeneric<f64>;
 
 impl<S: RuntimeScalar> ScalarGradientStorageGeneric<S> {
     /// 创建指定大小的存储
@@ -78,21 +79,8 @@ impl<S: RuntimeScalar> ScalarGradientStorageGeneric<S> {
     }
 }
 
-// f64 版本的 DVec2 兼容方法
-impl ScalarGradientStorageGeneric<f64> {
-    /// 获取单元梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn get(&self, i: usize) -> DVec2 {
-        DVec2::new(self.grad_x[i], self.grad_y[i])
-    }
-
-    /// 设置单元梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn set(&mut self, i: usize, g: DVec2) {
-        self.grad_x[i] = g.x;
-        self.grad_y[i] = g.y;
-    }
-}
+// 注意：DVec2 兼容方法已删除
+// 请使用 get_tuple() 和 set_tuple() 方法
 
 /// 向量场梯度存储 (速度梯度张量) - 泛型版本
 ///
@@ -113,9 +101,6 @@ pub struct VectorGradientStorageGeneric<S: RuntimeScalar> {
     /// ∂v/∂y
     pub dv_dy: Vec<S>,
 }
-
-/// 向量场梯度存储 - Legacy f64 版本
-pub type VectorGradientStorage = VectorGradientStorageGeneric<f64>;
 
 impl<S: RuntimeScalar> VectorGradientStorageGeneric<S> {
     /// 创建指定大小的存储
@@ -204,34 +189,8 @@ impl<S: RuntimeScalar> VectorGradientStorageGeneric<S> {
     }
 }
 
-// f64 版本的 DVec2 兼容方法
-impl VectorGradientStorageGeneric<f64> {
-    /// 获取 u 的梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn grad_u(&self, i: usize) -> DVec2 {
-        DVec2::new(self.du_dx[i], self.du_dy[i])
-    }
-
-    /// 获取 v 的梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn grad_v(&self, i: usize) -> DVec2 {
-        DVec2::new(self.dv_dx[i], self.dv_dy[i])
-    }
-
-    /// 设置 u 的梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn set_grad_u(&mut self, i: usize, g: DVec2) {
-        self.du_dx[i] = g.x;
-        self.du_dy[i] = g.y;
-    }
-
-    /// 设置 v 的梯度 (DVec2 版本，仅 f64)
-    #[inline]
-    pub fn set_grad_v(&mut self, i: usize, g: DVec2) {
-        self.dv_dx[i] = g.x;
-        self.dv_dy[i] = g.y;
-    }
-}
+// 注意：DVec2 兼容方法已删除
+// 请使用 grad_u_tuple() / grad_v_tuple() 和 set_grad_u_tuple() / set_grad_v_tuple() 方法
 
 // ============================================================
 // 梯度方法 Trait
@@ -267,12 +226,6 @@ pub trait GradientMethodGeneric<S: RuntimeScalar>: Send + Sync {
     }
 }
 
-/// 梯度计算方法 trait - f64 版本别名
-pub trait GradientMethod: GradientMethodGeneric<f64> {}
-
-/// 为所有实现 GradientMethodGeneric<f64> 的类型自动实现 GradientMethod
-impl<T: GradientMethodGeneric<f64>> GradientMethod for T {}
-
 // ============================================================
 // 测试
 // ============================================================
@@ -283,26 +236,29 @@ mod tests {
 
     #[test]
     fn test_scalar_gradient_storage() {
-        let mut storage = ScalarGradientStorage::new(4);
+        let mut storage = ScalarGradientStorageGeneric::<f64>::new(4);
         assert_eq!(storage.len(), 4);
 
-        storage.set(0, DVec2::new(1.0, 2.0));
-        storage.set(1, DVec2::new(3.0, 4.0));
+        storage.set_tuple(0, (1.0, 2.0));
+        storage.set_tuple(1, (3.0, 4.0));
 
-        assert!((storage.get(0).x - 1.0).abs() < 1e-10);
-        assert!((storage.get(0).y - 2.0).abs() < 1e-10);
+        let (x, y) = storage.get_tuple(0);
+        assert!((x - 1.0).abs() < 1e-10);
+        assert!((y - 2.0).abs() < 1e-10);
 
         storage.reset();
-        assert!(storage.get(0).length() < 1e-10);
+        let (x, y) = storage.get_tuple(0);
+        assert!(x.abs() < 1e-10);
+        assert!(y.abs() < 1e-10);
     }
 
     #[test]
     fn test_vector_gradient_storage() {
-        let mut storage = VectorGradientStorage::new(4);
+        let mut storage = VectorGradientStorageGeneric::<f64>::new(4);
         assert_eq!(storage.len(), 4);
 
-        storage.set_grad_u(0, DVec2::new(1.0, 0.0));
-        storage.set_grad_v(0, DVec2::new(0.0, 1.0));
+        storage.set_grad_u_tuple(0, (1.0, 0.0));
+        storage.set_grad_v_tuple(0, (0.0, 1.0));
 
         // 测试散度: div = du/dx + dv/dy = 1 + 1 = 2
         assert!((storage.divergence(0) - 2.0).abs() < 1e-10);
@@ -313,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_strain_rate() {
-        let mut storage = VectorGradientStorage::new(1);
+        let mut storage = VectorGradientStorageGeneric::<f64>::new(1);
         
         // 纯剪切流: du/dy = 1, 其他为0
         storage.du_dy[0] = 1.0;
@@ -326,17 +282,21 @@ mod tests {
 
     #[test]
     fn test_apply_limiter() {
-        let mut storage = ScalarGradientStorage::new(3);
-        storage.set(0, DVec2::new(2.0, 4.0));
-        storage.set(1, DVec2::new(6.0, 8.0));
-        storage.set(2, DVec2::new(1.0, 1.0));
+        let mut storage = ScalarGradientStorageGeneric::<f64>::new(3);
+        storage.set_tuple(0, (2.0, 4.0));
+        storage.set_tuple(1, (6.0, 8.0));
+        storage.set_tuple(2, (1.0, 1.0));
 
         let limiters = vec![0.5, 0.25, 1.0];
         storage.apply_limiter(&limiters);
 
-        assert!((storage.get(0).x - 1.0).abs() < 1e-10);
-        assert!((storage.get(0).y - 2.0).abs() < 1e-10);
-        assert!((storage.get(1).x - 1.5).abs() < 1e-10);
-        assert!((storage.get(2).x - 1.0).abs() < 1e-10);
+        let (x0, y0) = storage.get_tuple(0);
+        let (x1, _y1) = storage.get_tuple(1);
+        let (x2, _y2) = storage.get_tuple(2);
+        
+        assert!((x0 - 1.0).abs() < 1e-10);
+        assert!((y0 - 2.0).abs() < 1e-10);
+        assert!((x1 - 1.5).abs() < 1e-10);
+        assert!((x2 - 1.0).abs() < 1e-10);
     }
 }

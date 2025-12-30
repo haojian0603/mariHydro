@@ -13,17 +13,10 @@
 //! 2. 通过名称关联条件和面
 //! 3. 按边界类型分类存储面信息，便于批量处理
 //! 4. 支持与外部强迫数据源集成
-//!
-//! # 迁移说明
-//!
-//! 从 legacy_src/domain/boundary/manager.rs 迁移，适配新架构：
-//! - 使用 usize 索引（与 MeshAccess trait 一致）
-//! - 使用 glam::DVec2 表示法向量
-//! - 使用 thiserror 定义错误类型
+
 
 use std::collections::HashMap;
 
-use glam::DVec2;
 use thiserror::Error;
 
 use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing};
@@ -44,8 +37,8 @@ pub struct BoundaryFaceInfo {
     /// 所属单元索引
     pub cell_id: usize,
 
-    /// 面外法向量（单位向量）
-    pub normal: DVec2,
+    /// 面外法向量（单位向量）(nx, ny)
+    pub normal: (f64, f64),
 
     /// 面长度 [m]
     pub length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
@@ -59,7 +52,7 @@ impl BoundaryFaceInfo {
     pub fn new(
         face_id: usize,
         cell_id: usize,
-        normal: DVec2,
+        normal: (f64, f64),
         length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
         boundary_idx: usize,
     ) -> Self {
@@ -89,7 +82,6 @@ pub trait BoundaryDataProvider: Send + Sync {
     ///
     /// # 返回
     /// 强迫数据，若无数据返回 None
-    // ALLOW_F64: 时间参数与模拟进度配合
     fn get_forcing(&self, face_id: usize, time: f64) -> Option<ExternalForcing>;
 
     /// 批量获取强迫数据
@@ -98,7 +90,7 @@ pub trait BoundaryDataProvider: Send + Sync {
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
-        time: f64, // ALLOW_F64: 时间参数与模拟进度配合
+        time: f64,
         output: &mut [ExternalForcing],
     ) {
         debug_assert_eq!(face_ids.len(), output.len());
@@ -122,21 +114,20 @@ impl ConstantForcingProvider {
     }
 
     /// 创建仅水位的恒定提供者
-    // ALLOW_F64: Layer 4 配置 API
     pub fn with_eta(eta: f64) -> Self {
         Self::new(ExternalForcing::with_eta(eta))
     }
 }
 
 impl BoundaryDataProvider for ConstantForcingProvider {
-    fn get_forcing(&self, _face_id: usize, _time: f64) -> Option<ExternalForcing> { // ALLOW_F64: 时间参数
+    fn get_forcing(&self, _face_id: usize, _time: f64) -> Option<ExternalForcing> {
         Some(self.forcing)
     }
 
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
-        _time: f64, // ALLOW_F64: 时间参数与模拟进度配合
+        _time: f64,
         output: &mut [ExternalForcing],
     ) {
         output[..face_ids.len()].fill(self.forcing);
@@ -165,7 +156,6 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 ///
 /// ```ignore
 /// use mh_physics::boundary::{BoundaryManager, BoundaryCondition, BoundaryParams};
-/// use glam::DVec2;
 ///
 /// let mut manager = BoundaryManager::new(BoundaryParams::default());
 ///
@@ -173,9 +163,9 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 /// manager.add_condition(BoundaryCondition::wall("north"));
 /// manager.add_condition(BoundaryCondition::open_sea("south"));
 ///
-/// // 注册边界面
-/// manager.register_face(0, 0, DVec2::new(0.0, 1.0), 1.0, "north").unwrap();
-/// manager.register_face(1, 1, DVec2::new(0.0, -1.0), 1.0, "south").unwrap();
+/// // 注册边界面 (normal 使用元组 (nx, ny))
+/// manager.register_face(0, 0, (0.0, 1.0), 1.0, "north").unwrap();
+/// manager.register_face(1, 1, (0.0, -1.0), 1.0, "south").unwrap();
 /// ```
 pub struct BoundaryManager {
     /// 边界条件定义（按名称索引）
@@ -258,7 +248,7 @@ impl BoundaryManager {
     /// # 参数
     /// - `face_id`: 面索引
     /// - `cell_id`: 所属单元索引
-    /// - `normal`: 面外法向量（应为单位向量）
+    /// - `normal`: 面外法向量（应为单位向量）(nx, ny)
     /// - `length`: 面长度 [m]
     /// - `boundary_name`: 边界条件名称
     ///
@@ -268,8 +258,8 @@ impl BoundaryManager {
         &mut self,
         face_id: usize,
         cell_id: usize,
-        normal: DVec2,
-        length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
+        normal: (f64, f64),
+        length: f64,
         boundary_name: &str,
     ) -> Result<(), BoundaryError> {
         let boundary_idx = *self
@@ -299,18 +289,17 @@ impl BoundaryManager {
     ///
     /// # 参数
     /// - `h_interior`: 内部单元水深 [m]
-    /// - `normal`: 面外法向量
+    /// - `normal`: 面外法向量 (nx, ny)
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
-    // ALLOW_F64: 与 BoundaryParams 和 DVec2 配合使用
-    pub fn compute_wall_flux(&self, h_interior: f64, normal: DVec2) -> (f64, DVec2) {
+    pub fn compute_wall_flux(&self, h_interior: f64, normal: (f64, f64)) -> (f64, (f64, f64)) {
         // 质量通量为零（无穿透）
         let mass_flux = 0.0;
 
         // 动量通量仅有压力项
         let p = self.params.hydrostatic_pressure(h_interior);
-        let momentum_flux = normal * p;
+        let momentum_flux = (normal.0 * p, normal.1 * p);
 
         (mass_flux, momentum_flux)
     }
@@ -324,28 +313,27 @@ impl BoundaryManager {
     /// - `interior`: 内部单元状态
     /// - `z_interior`: 内部单元底高程 [m]
     /// - `external`: 外部强迫数据
-    /// - `normal`: 面外法向量
+    /// - `normal`: 面外法向量 (nx, ny)
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
     pub fn compute_flather_flux(
         &self,
         interior: ConservedState<f64>,
-        z_interior: f64, // ALLOW_F64: 与 BoundaryParams、ConservedState 和 DVec2 配合使用
+        z_interior: f64,
         external: &ExternalForcing,
-        normal: DVec2,
-    ) -> (f64, DVec2) { // ALLOW_F64: 与 DVec2 配合
+        normal: (f64, f64),
+    ) -> (f64, (f64, f64)) {
         let h = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h);
 
         // 内部速度
         let u = interior.hu / h;
         let v = interior.hv / h;
-        let velocity = DVec2::new(u, v);
 
-        // 法向速度
-        let un_int = velocity.dot(normal);
-        let un_ext = external.velocity.dot(normal);
+        // 法向速度 (dot product)
+        let un_int = u * normal.0 + v * normal.1;
+        let un_ext = external.velocity.0 * normal.0 + external.velocity.1 * normal.1;
 
         // 内部水位
         let eta_int = h + z_interior;
@@ -356,7 +344,7 @@ impl BoundaryManager {
         // 通量计算
         let mass_flux = h * un_star;
         let p = self.params.hydrostatic_pressure(h);
-        let momentum_flux = normal * (mass_flux * un_int + p);
+        let momentum_flux = (normal.0 * (mass_flux * un_int + p), normal.1 * (mass_flux * un_int + p));
 
         (mass_flux, momentum_flux)
     }
@@ -367,20 +355,20 @@ impl BoundaryManager {
     ///
     /// # 参数
     /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量
+    /// - `normal`: 面外法向量 (nx, ny)
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
-    pub fn compute_outflow_flux(&self, interior: ConservedState<f64>, normal: DVec2) -> (f64, DVec2) {
+    pub fn compute_outflow_flux(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> (f64, (f64, f64)) {
         let h = interior.h.max(self.params.h_min);
         let u = interior.hu / h;
         let v = interior.hv / h;
-        let velocity = DVec2::new(u, v);
 
-        let un = velocity.dot(normal);
+        // dot product
+        let un = u * normal.0 + v * normal.1;
         let mass_flux = h * un;
         let p = self.params.hydrostatic_pressure(h);
-        let momentum_flux = normal * (mass_flux * un + p);
+        let momentum_flux = (normal.0 * (mass_flux * un + p), normal.1 * (mass_flux * un + p));
 
         (mass_flux, momentum_flux)
     }
@@ -393,23 +381,23 @@ impl BoundaryManager {
     /// - `h_interior`: 内部单元水深 [m]
     /// - `discharge`: 入流流量 [m³/s]
     /// - `face_length`: 面长度 [m]
-    /// - `normal`: 面外法向量
+    /// - `normal`: 面外法向量 (nx, ny)
     ///
     /// # 返回
     /// (质量通量, 动量通量向量)
     pub fn compute_inflow_flux(
         &self,
-        h_interior: f64, // ALLOW_F64: 与 BoundaryParams 和 DVec2 配合使用
-        discharge: f64, // ALLOW_F64: 入流流量参数
-        face_length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
-        normal: DVec2,
-    ) -> (f64, DVec2) { // ALLOW_F64: 与 DVec2 配合
+        h_interior: f64,
+        discharge: f64,
+        face_length: f64,
+        normal: (f64, f64),
+    ) -> (f64, (f64, f64)) {
         // 入流流量（负号因为入流方向与法向相反）
         let qn = -discharge / face_length.max(1e-10);
 
         let p = self.params.hydrostatic_pressure(h_interior);
         let u_in = qn / h_interior.max(self.params.h_min);
-        let momentum_flux = normal * (qn * u_in + p);
+        let momentum_flux = (normal.0 * (qn * u_in + p), normal.1 * (qn * u_in + p));
 
         (qn, momentum_flux)
     }
@@ -490,7 +478,7 @@ impl BoundaryManager {
 
         for face in self.all_faces() {
             // 检查法向量是否单位化
-            let mag_sq = face.normal.length_squared();
+            let mag_sq = face.normal.0 * face.normal.0 + face.normal.1 * face.normal.1;
             if (mag_sq - 1.0).abs() > 1e-6 {
                 return Err(BoundaryError::InvalidNormal {
                     face_id: face.face_id,
@@ -529,7 +517,7 @@ pub enum BoundaryError {
     #[error("边界面 {face_id} 法向量未单位化，模长为 {magnitude}")]
     InvalidNormal {
         face_id: usize,
-        magnitude: f64, // ALLOW_F64: 错误信息中的幅度值
+        magnitude: f64,
     },
 
     /// 重复的边界面
@@ -579,10 +567,10 @@ mod tests {
         manager.add_condition(BoundaryCondition::open_sea("south"));
 
         manager
-            .register_face(0, 0, DVec2::new(0.0, 1.0), 1.0, "north")
+            .register_face(0, 0, (0.0, 1.0), 1.0, "north")
             .unwrap();
         manager
-            .register_face(1, 1, DVec2::new(0.0, -1.0), 1.0, "south")
+            .register_face(1, 1, (0.0, -1.0), 1.0, "south")
             .unwrap();
 
         assert_eq!(manager.wall_faces().len(), 1);
@@ -593,7 +581,7 @@ mod tests {
     #[test]
     fn test_register_unknown_condition() {
         let mut manager = BoundaryManager::default();
-        let result = manager.register_face(0, 0, DVec2::new(0.0, 1.0), 1.0, "unknown");
+        let result = manager.register_face(0, 0, (0.0, 1.0), 1.0, "unknown");
 
         assert!(result.is_err());
         if let Err(BoundaryError::ConditionNotFound(name)) = result {
@@ -606,18 +594,18 @@ mod tests {
     #[test]
     fn test_wall_flux() {
         let manager = BoundaryManager::default();
-        let (mass, momentum) = manager.compute_wall_flux(1.0, DVec2::new(1.0, 0.0));
+        let (mass, momentum) = manager.compute_wall_flux(1.0, (1.0, 0.0));
 
         assert_eq!(mass, 0.0);
-        assert!(momentum.x > 0.0); // 压力向外
-        assert!((momentum.y).abs() < 1e-10);
+        assert!(momentum.0 > 0.0); // 压力向外
+        assert!((momentum.1).abs() < 1e-10);
     }
 
     #[test]
     fn test_outflow_flux() {
         let manager = BoundaryManager::default();
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
-        let (mass, _) = manager.compute_outflow_flux(interior, DVec2::new(1.0, 0.0));
+        let (mass, _) = manager.compute_outflow_flux(interior, (1.0, 0.0));
 
         assert!((mass - 1.0).abs() < 1e-10); // h * u * normal = 1 * 1 * 1
     }
@@ -629,14 +617,14 @@ mod tests {
 
         // 单位向量应该通过
         manager
-            .register_face(0, 0, DVec2::new(1.0, 0.0), 1.0, "test")
+            .register_face(0, 0, (1.0, 0.0), 1.0, "test")
             .unwrap();
         assert!(manager.validate().is_ok());
 
         // 清空并添加非单位向量
         manager.clear_faces();
         manager
-            .register_face(1, 0, DVec2::new(2.0, 0.0), 1.0, "test")
+            .register_face(1, 0, (2.0, 0.0), 1.0, "test")
             .unwrap();
         assert!(manager.validate().is_err());
     }

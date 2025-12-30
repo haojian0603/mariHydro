@@ -24,7 +24,8 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -200,7 +201,7 @@ impl SourceTerm for InflowConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -341,7 +342,7 @@ impl SourceTerm for RainfallConfig {
 
     fn compute_cell(
         &self,
-        _state: &ShallowWaterStateF64,
+        _state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -403,7 +404,7 @@ impl SourceTerm for EvaporationConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -469,8 +470,8 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = 0.0;

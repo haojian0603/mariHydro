@@ -1,10 +1,15 @@
+// marihydro/crates/mh_physics/src/numerics/reconstruction/traits.rs
 //! 重构 trait 定义
 //!
 //! **层级**: Layer 3 - Engine Layer
 //!
 //! 本模块提供泛型化的重构器接口，支持 f32/f64 精度切换。
+//!
+//! # 设计原则
+//!
+//! 1. **单轨泛型**: 所有接口基于 `RuntimeScalar` 泛型，无 Legacy f64 别名
+//! 2. **Backend 无关**: 使用 `(S, S)` 元组表示向量，不依赖 glam::DVec2
 
-use glam::DVec2;
 use mh_runtime::RuntimeScalar;
 
 // ============================================================
@@ -22,9 +27,6 @@ pub struct ReconstructedStateGeneric<S: RuntimeScalar> {
     /// 右侧单元的重构值
     pub right: S,
 }
-
-/// 重构后的面状态值 - Legacy f64 版本
-pub type ReconstructedState = ReconstructedStateGeneric<f64>;
 
 impl<S: RuntimeScalar> ReconstructedStateGeneric<S> {
     /// 创建新的重构状态
@@ -101,33 +103,13 @@ pub trait ReconstructorGeneric<S: RuntimeScalar>: Send + Sync {
     fn name(&self) -> &'static str;
 }
 
-/// 重构器 trait - Legacy f64 版本
-///
-/// 所有重构方案实现此 trait。
-pub trait Reconstructor: Send + Sync {
-    /// 计算所有单元的梯度
-    fn compute_gradients(&mut self, values: &[f64]);
-    
-    /// 重构标量场的面值
-    fn reconstruct_scalar(&self, face_id: usize, values: &[f64]) -> ReconstructedState;
-    
-    /// 获取限制后的梯度
-    fn get_limited_gradient(&self, cell_id: usize) -> DVec2;
-    
-    /// 是否启用二阶精度
-    fn is_second_order(&self) -> bool;
-    
-    /// 重构器名称
-    fn name(&self) -> &'static str;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[test]
     fn test_reconstructed_state() {
-        let state = ReconstructedState::new(1.0, 2.0);
+        let state = ReconstructedStateGeneric::<f64>::new(1.0, 2.0);
         assert_eq!(state.left, 1.0);
         assert_eq!(state.right, 2.0);
         assert_eq!(state.average(), 1.5);
@@ -136,7 +118,7 @@ mod tests {
     
     #[test]
     fn test_reconstructed_state_ensure_positive() {
-        let mut state = ReconstructedState::new(-0.1, 0.5);
+        let mut state = ReconstructedStateGeneric::<f64>::new(-0.1, 0.5);
         state.ensure_positive(0.0);
         assert_eq!(state.left, 0.0);
         assert_eq!(state.right, 0.5);

@@ -225,15 +225,15 @@ impl<S: Scalar> SmagorinskySolver<S> {
                     let u_n = hu[neigh_idx] / h_n;
                     let v_n = hv[neigh_idx] / h_n;
 
-                    let normal = mesh.face_normal(face_id.into());
+                    let (nx, ny) = mesh.face_normal_2d_tuple(face_id.get());
                     let dist = self.grid_scale[i];
 
                     if dist > S::from_f64(1e-10).unwrap_or(S::ZERO) {
                         let weight = S::ONE / dist;
-                        du_dx = du_dx + (u_n - u) * S::from_f64(normal.x).unwrap_or(S::ZERO) * weight;
-                        du_dy = du_dy + (u_n - u) * S::from_f64(normal.y).unwrap_or(S::ZERO) * weight;
-                        dv_dx = dv_dx + (v_n - v) * S::from_f64(normal.x).unwrap_or(S::ZERO) * weight;
-                        dv_dy = dv_dy + (v_n - v) * S::from_f64(normal.y).unwrap_or(S::ZERO) * weight;
+                        du_dx = du_dx + (u_n - u) * S::from_f64(nx).unwrap_or(S::ZERO) * weight;
+                        du_dy = du_dy + (u_n - u) * S::from_f64(ny).unwrap_or(S::ZERO) * weight;
+                        dv_dx = dv_dx + (v_n - v) * S::from_f64(nx).unwrap_or(S::ZERO) * weight;
+                        dv_dy = dv_dy + (v_n - v) * S::from_f64(ny).unwrap_or(S::ZERO) * weight;
                         weight_sum = weight_sum + weight;
                     }
                 }

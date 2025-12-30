@@ -157,8 +157,8 @@ impl VelocityCorrector {
             let eta_f = 0.5 * (eta_prime[owner] + eta_prime[neighbor]);
 
             // 面通量
-            let flux_x = eta_f * face.normal.x * face.length;
-            let flux_y = eta_f * face.normal.y * face.length;
+            let flux_x = eta_f * face.normal.0 * face.length;
+            let flux_y = eta_f * face.normal.1 * face.length;
 
             // 累加到梯度
             let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
@@ -178,8 +178,8 @@ impl VelocityCorrector {
 
             let eta_f = eta_prime[owner]; // 零梯度外推
 
-            let flux_x = eta_f * face.normal.x * face.length;
-            let flux_y = eta_f * face.normal.y * face.length;
+            let flux_x = eta_f * face.normal.0 * face.length;
+            let flux_y = eta_f * face.normal.1 * face.length;
 
             let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
 

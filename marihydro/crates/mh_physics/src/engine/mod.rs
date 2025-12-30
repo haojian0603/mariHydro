@@ -14,10 +14,7 @@
 //! - `semi_implicit` - 半隐式时间推进策略
 //! - `strategy` - 时间积分策略模式
 //! - `pcg` - 预处理共轭梯度法求解器
-//!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/engine 迁移，保持算法不变。
+
 
 pub mod flux_accumulator;
 pub mod friction;
@@ -40,8 +37,6 @@ pub use timestep::{
 };
 pub use solver::{
     ShallowWaterSolver,
-    ShallowWaterSolverF64,
-    ShallowWaterSolverF32,
     SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
     BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
     StabilityStatus, NanDetectionResult,

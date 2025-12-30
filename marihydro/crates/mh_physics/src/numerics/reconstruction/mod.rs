@@ -12,10 +12,10 @@
 //! ## 使用方式
 //!
 //! ```ignore
-//! use mh_physics::numerics::reconstruction::{MusclReconstructor, MusclConfig};
+//! use mh_physics::numerics::reconstruction::{MusclReconstructorGeneric, MusclConfig};
 //!
 //! let config = MusclConfig::default();
-//! let reconstructor = MusclReconstructor::new(config, mesh);
+//! let reconstructor = MusclReconstructorGeneric::<f64>::new(config, mesh);
 //!
 //! // 计算梯度
 //! reconstructor.compute_gradients(&cell_values);
@@ -34,8 +34,12 @@ mod traits;
 mod muscl;
 mod config;
 
-pub use traits::{Reconstructor, ReconstructedState};
-pub use muscl::MusclReconstructor;
+// ============================================================================
+// 泛型 API (Layer 3) - 主要导出
+// ============================================================================
+
+pub use traits::{ReconstructorGeneric, ReconstructedStateGeneric};
+pub use muscl::MusclReconstructorGeneric;
 pub use config::{MusclConfig, GradientType};
 
 #[cfg(test)]

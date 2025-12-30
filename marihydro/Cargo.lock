@@ -711,6 +711,7 @@ dependencies = [
  "mh_mesh",
  "mh_physics",
  "mh_runtime",
+ "num-traits",
  "parking_lot",
  "rayon",
  "serde",

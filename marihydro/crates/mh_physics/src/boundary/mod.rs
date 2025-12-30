@@ -23,7 +23,6 @@
 //!
 //! ```ignore
 //! use mh_physics::boundary::{BoundaryManager, BoundaryCondition, BoundaryParams};
-//! use glam::DVec2;
 //!
 //! let mut manager = BoundaryManager::new(BoundaryParams::default());
 //!
@@ -31,8 +30,8 @@
 //! manager.add_condition(BoundaryCondition::wall("north"));
 //! manager.add_condition(BoundaryCondition::open_sea("south"));
 //!
-//! // 注册边界面
-//! manager.register_face(0, 0, DVec2::new(0.0, 1.0), 1.0, "north").unwrap();
+//! // 注册边界面 (normal 使用元组 (nx, ny))
+//! manager.register_face(0, 0, (0.0, 1.0), 1.0, "north").unwrap();
 //! ```
 //!
 //! ## 计算幽灵状态
@@ -40,11 +39,10 @@
 //! ```ignore
 //! use mh_physics::boundary::{GhostStateCalculator, BoundaryKind, BoundaryParams};
 //! use mh_physics::state::ConservedState;
-//! use glam::DVec2;
 //!
 //! let calculator = GhostStateCalculator::default();
 //! let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
-//! let normal = DVec2::new(1.0, 0.0);
+//! let normal = (1.0, 0.0);  // 使用元组而非 DVec2
 //! let z_bed = 0.0; // 底床高程
 //!
 //! let ghost = calculator.compute_ghost(

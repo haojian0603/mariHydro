@@ -18,20 +18,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 单线程通量累加器
 ///
 /// 用于小规模问题的串行通量累加。
-// ALLOW_F64: 与 CpuBackend<f64> 配合的通量累加器
 #[derive(Clone)]
 pub struct FluxAccumulator {
     n_cells: usize,
     /// 质量通量累加
-    pub delta_h: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+    pub delta_h: Vec<f64>,
     /// x动量通量累加
-    pub delta_hu: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+    pub delta_hu: Vec<f64>,
     /// y动量通量累加
-    pub delta_hv: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+    pub delta_hv: Vec<f64>,
     /// 床坡源项x分量
-    pub bed_source_x: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+    pub bed_source_x: Vec<f64>,
     /// 床坡源项y分量
-    pub bed_source_y: Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
+    pub bed_source_y: Vec<f64>,
 }
 
 impl FluxAccumulator {
@@ -82,7 +81,6 @@ impl FluxAccumulator {
     /// - `length`: 面长度
     /// - `mesh`: 物理网格
     #[inline]
-    // ALLOW_F64: 与 PhysicsMesh 配合
     pub fn accumulate_flux(&mut self, face_idx: usize, flux: &RiemannFlux<f64>, length: f64, mesh: &PhysicsMesh) {
         let face = FaceIndex::new(face_idx);
         let owner = mesh.face_owner(face);
@@ -107,7 +105,6 @@ impl FluxAccumulator {
 
     /// 累加床坡源项
     #[inline]
-    // ALLOW_F64: 与 PhysicsMesh 配合
     pub fn accumulate_bed_source(&mut self, cell_idx: usize, source_x: f64, source_y: f64) {
         self.bed_source_x[cell_idx] += source_x;
         self.bed_source_y[cell_idx] += source_y;
@@ -127,7 +124,7 @@ impl FluxAccumulator {
         hu: &mut [f64],
         hv: &mut [f64],
         areas: &[f64],
-        dt: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        dt: f64,
     ) {
         for i in 0..self.n_cells {
             let inv_area = 1.0 / areas[i];
@@ -178,7 +175,6 @@ impl AtomicFluxAccumulator {
     ///
     /// 使用 compare-exchange 循环实现浮点数的原子加法
     #[inline]
-    // ALLOW_F64: 与 CpuBackend<f64> 配合
     fn atomic_add(atomic: &AtomicU64, val: f64) {
         let mut old = atomic.load(Ordering::Relaxed);
         loop {
@@ -198,7 +194,6 @@ impl AtomicFluxAccumulator {
 
     /// 累加通量到指定单元（线程安全）
     #[inline]
-    // ALLOW_F64: 与 CpuBackend<f64> 配合
     pub fn accumulate(&self, cell_idx: usize, dh: f64, dhu: f64, dhv: f64) {
         Self::atomic_add(&self.delta_h[cell_idx], dh);
         Self::atomic_add(&self.delta_hu[cell_idx], dhu);
@@ -208,7 +203,6 @@ impl AtomicFluxAccumulator {
     /// 累加面通量（线程安全）
     ///
     /// 同时更新owner和neighbor单元
-    // ALLOW_F64: 与 PhysicsMesh 配合
     pub fn accumulate_flux(&self, owner: usize, neighbor: Option<usize>, fh: f64, fhu: f64, fhv: f64) {
         // 所有者单元（通量流出为负）
         self.accumulate(owner, -fh, -fhu, -fhv);
@@ -222,17 +216,16 @@ impl AtomicFluxAccumulator {
     /// 收集累加结果
     ///
     /// 返回 (delta_h, delta_hu, delta_hv) 的非原子副本
-    // ALLOW_F64: 与 CpuBackend<f64> 配合
     pub fn collect(&self) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-        let h: Vec<f64> = self.delta_h // ALLOW_F64: 与 CpuBackend<f64> 配合
+        let h: Vec<f64> = self.delta_h 
             .iter()
             .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
             .collect();
-        let hu: Vec<f64> = self.delta_hu // ALLOW_F64: 与 CpuBackend<f64> 配合
+        let hu: Vec<f64> = self.delta_hu
             .iter()
             .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
             .collect();
-        let hv: Vec<f64> = self.delta_hv // ALLOW_F64: 与 CpuBackend<f64> 配合
+        let hv: Vec<f64> = self.delta_hv
             .iter()
             .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
             .collect();
@@ -240,14 +233,13 @@ impl AtomicFluxAccumulator {
     }
 
     /// 应用累加的通量到状态
-    // ALLOW_F64: 与 CpuBackend<f64> 配合
     pub fn apply_to_state(
         &self,
-        h: &mut [f64], // ALLOW_F64: 与 CpuBackend<f64> 配合
-        hu: &mut [f64], // ALLOW_F64: 与 CpuBackend<f64> 配合
-        hv: &mut [f64], // ALLOW_F64: 与 CpuBackend<f64> 配合
-        areas: &[f64], // ALLOW_F64: 与 PhysicsMesh 配合
-        dt: f64, // ALLOW_F64: 时间步长参数
+        h: &mut [f64],
+        hu: &mut [f64], 
+        hv: &mut [f64],
+        areas: &[f64], 
+        dt: f64,
     ) {
         let (delta_h, delta_hu, delta_hv) = self.collect();
         for i in 0..self.n_cells {

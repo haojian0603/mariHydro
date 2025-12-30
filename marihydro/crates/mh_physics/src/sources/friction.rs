@@ -1,4 +1,4 @@
-﻿// crates/mh_physics/src/sources/friction.rs
+// crates/mh_physics/src/sources/friction.rs
 
 //! 摩擦源项
 //!
@@ -30,7 +30,7 @@ use super::traits::{
 };
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
+use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 
 /// Manning 摩擦配置
 #[derive(Debug, Clone)]
@@ -49,7 +49,6 @@ pub struct ManningFrictionConfig {
 
 impl ManningFrictionConfig {
     /// 创建均匀 Manning 系数配置
-    // ALLOW_F64: 物理参数
     pub fn new(g: f64, n_cells: usize, default_n: f64) -> Self {
         let gn2 = g * default_n * default_n;
         Self {
@@ -62,7 +61,6 @@ impl ManningFrictionConfig {
     }
 
     /// 创建空间变化 Manning 系数配置
-    // ALLOW_F64: 物理参数
     pub fn with_field(g: f64, manning_n: Vec<f64>) -> Self {
         Self {
             enabled: true,
@@ -79,7 +77,6 @@ impl ManningFrictionConfig {
     }
 
     /// 设置最小摩擦水深
-    // ALLOW_F64: 物理参数
     pub fn with_min_depth(mut self, h_min: f64) -> Self {
         self.h_friction_min = h_min;
         self
@@ -87,7 +84,6 @@ impl ManningFrictionConfig {
 
     /// 计算摩擦系数 c_f = g n² / h^(1/3)
     #[inline]
-    // ALLOW_F64: 源项计算
     fn compute_cf(&self, h: f64, cell: usize) -> f64 {
         let h_safe = h.max(self.h_friction_min);
         if let Some(gn2) = self.precomputed_gn2 {
@@ -110,7 +106,7 @@ impl SourceTerm for ManningFrictionConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -143,7 +139,7 @@ impl SourceTerm for ManningFrictionConfig {
 
     fn compute_all(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         ctx: &SourceContext,
         _output_h: &mut [f64],
         output_hu: &mut [f64],
@@ -197,16 +193,16 @@ pub struct ChezyFrictionConfig {
     /// 是否启用
     pub enabled: bool,
     /// 重力加速度 [m/s²]
-    pub g: f64, // ALLOW_F64: Layer 4 配置参数
+    pub g: f64,
     /// Chezy 系数 [m^(1/2)/s]
-    pub chezy_c: f64, // ALLOW_F64: Layer 4 配置参数
+    pub chezy_c: f64,
     /// 预计算 cf = g / C²
-    cf: f64, // ALLOW_F64: Layer 4 配置参数
+    cf: f64,
 }
 
 impl ChezyFrictionConfig {
     /// 创建新的 Chezy 摩擦配置
-    // ALLOW_F64: 物理参数
+    
     pub fn new(g: f64, chezy_c: f64) -> Self {
         let cf = g / (chezy_c * chezy_c);
         Self {
@@ -234,7 +230,7 @@ impl SourceTerm for ChezyFrictionConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -276,27 +272,26 @@ impl SourceTerm for ChezyFrictionConfig {
 ///
 /// 提供摩擦相关的辅助计算函数。
 pub struct FrictionCalculator {
-    g: f64, // ALLOW_F64: 物理参数
-    h_min: f64, // ALLOW_F64: 物理参数
-    h_friction: f64, // ALLOW_F64: 物理参数
+    g: f64, 
+    h_min: f64, 
+    h_friction: f64, 
 }
 
 impl FrictionCalculator {
     /// 创建新的计算器
-    // ALLOW_F64: 物理参数
+    
     pub fn new(g: f64, h_min: f64, h_friction: f64) -> Self {
         Self { g, h_min, h_friction }
     }
 
     /// 从数值参数创建
-    // ALLOW_F64: 物理参数
+    
     pub fn from_params(g: f64, params: &crate::types::NumericalParams<f64>) -> Self {
         Self::new(g, params.h_dry, params.h_dry)
     }
 
     /// 计算 Manning 摩擦系数
     #[inline]
-    // ALLOW_F64: 源项计算
     pub fn manning_cf(&self, h: f64, n: f64) -> f64 {
         let h_safe = h.max(self.h_friction);
         self.g * n * n / h_safe.cbrt()
@@ -304,21 +299,18 @@ impl FrictionCalculator {
 
     /// 计算 Chezy 摩擦系数
     #[inline]
-    // ALLOW_F64: 源项计算
     pub fn chezy_cf(&self, chezy_c: f64) -> f64 {
         self.g / (chezy_c * chezy_c)
     }
 
     /// 计算衰减因子
     #[inline]
-    // ALLOW_F64: 源项计算
     pub fn decay_factor(&self, cf: f64, speed: f64, dt: f64) -> f64 {
         1.0 / (1.0 + dt * cf * speed)
     }
 
     /// 应用隐式摩擦
     #[inline]
-    // ALLOW_F64: 源项计算
     pub fn apply_implicit(&self, hu: f64, hv: f64, h: f64, cf: f64, dt: f64) -> (f64, f64) {
         if h < self.h_min {
             return (0.0, 0.0);
@@ -340,13 +332,13 @@ pub struct ManningFriction;
 
 impl ManningFriction {
     /// 创建均匀 Manning 系数配置
-    // ALLOW_F64: 物理参数
+    
     pub fn new(g: f64, n_cells: usize, default_n: f64) -> ManningFrictionConfig {
         ManningFrictionConfig::new(g, n_cells, default_n)
     }
 
     /// 创建空间变化 Manning 系数配置
-    // ALLOW_F64: 物理参数
+    
     pub fn with_field(g: f64, manning_n: Vec<f64>) -> ManningFrictionConfig {
         ManningFrictionConfig::with_field(g, manning_n)
     }
@@ -362,7 +354,7 @@ pub struct ChezyFriction;
 
 impl ChezyFriction {
     /// 创建 Chezy 摩擦配置
-    // ALLOW_F64: 物理参数
+    
     pub fn new(g: f64, chezy_c: f64) -> ChezyFrictionConfig {
         ChezyFrictionConfig::new(g, chezy_c)
     }
@@ -643,8 +635,8 @@ mod tests {
     use crate::types::NumericalParams;
     use mh_runtime::CpuBackend;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new_with_backend(CpuBackend::<f64>::new(), n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

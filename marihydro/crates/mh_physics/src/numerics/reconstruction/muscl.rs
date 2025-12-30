@@ -1,44 +1,61 @@
-//! marihydro\crates\mh_physics\src\numerics\reconstruction\muscl.rs
-//! MUSCL 重构器实现
+//! MUSCL 重构器实现 - 泛型版本
+//!
+//! **层级**: Layer 3 - Engine Layer
+//!
+//! 实现完整的二阶 MUSCL 重构流程：
+//! 1. 使用 Green-Gauss 或 Least-Squares 计算梯度
+//! 2. 使用选定的限制器进行梯度限制
+//! 3. 线性外推到面中心
+//!
+//! # 设计原则
+//!
+//! 1. **全泛型**: 实现 `ReconstructorGeneric<S>` 支持任意 RuntimeScalar
+//! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
+//! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
 
-use glam::DVec2;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use mh_runtime::RuntimeScalar;
+
 use super::config::{GradientType, MusclConfig};
-use super::traits::{ReconstructedState, Reconstructor};
+use super::traits::{ReconstructedStateGeneric, ReconstructorGeneric};
 use crate::adapter::PhysicsMesh;
 use crate::numerics::gradient::{
-    GradientMethodGeneric, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage,
+    GradientMethodGeneric, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorageGeneric,
 };
-use crate::numerics::limiter::{create_limiter, LimiterContext, SlopeLimiterGeneric};
+use crate::numerics::limiter::{create_limiter_generic, LimiterContextGeneric, SlopeLimiterGeneric};
 
-/// MUSCL 重构器
+// ============================================================================
+// MUSCL 重构器 - 泛型版本
+// ============================================================================
+
+/// MUSCL 重构器 - 泛型版本
 ///
-/// 实现完整的二阶 MUSCL 重构流程：
-/// 1. 使用 Green-Gauss 或 Least-Squares 计算梯度
-/// 2. 使用选定的限制器进行梯度限制
-/// 3. 线性外推到面中心
-pub struct MusclReconstructor {
+/// 实现完整的二阶 MUSCL 重构流程，支持任意 RuntimeScalar 精度。
+pub struct MusclReconstructorGeneric<S: RuntimeScalar> {
     /// 配置
     config: MusclConfig,
     
     /// 网格引用
     mesh: Arc<PhysicsMesh>,
     
-    /// 梯度存储
-    gradients: ScalarGradientStorage,
+    /// 梯度存储 (S 空间)
+    gradients: ScalarGradientStorageGeneric<S>,
     
-    /// 限制因子存储
-    limiters: Vec<f64>, // ALLOW_F64: PhysicsMesh 依赖 DVec2，重构器与 DVec2 交互
+    /// 限制因子存储 (S 空间)
+    limiters: Vec<S>,
     
     /// 梯度计算器
     gradient_computer: GradientComputer,
     
     /// 限制器
-    limiter: Box<dyn SlopeLimiterGeneric<f64> + Send + Sync>,
+    limiter: Box<dyn SlopeLimiterGeneric<S> + Send + Sync>,
     
-    /// 网格特征尺度（用于 Venkatakrishnan）
-    mesh_scale: f64, // ALLOW_F64: 配置参数，来自 PhysicsMesh 计算
+    /// 网格特征尺度 (f64, 几何量)
+    mesh_scale: f64,
+    
+    _marker: PhantomData<S>,
 }
 
 /// 梯度计算器枚举
@@ -47,7 +64,7 @@ enum GradientComputer {
     LeastSquares(LeastSquaresGradient),
 }
 
-impl MusclReconstructor {
+impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     /// 创建新的 MUSCL 重构器
     pub fn new(config: MusclConfig, mesh: Arc<PhysicsMesh>) -> Self {
         let n_cells = mesh.n_cells();
@@ -65,17 +82,18 @@ impl MusclReconstructor {
             }
         };
         
-        // 创建限制器
-        let limiter = create_limiter(config.limiter_type, config.venkat_k, mesh_scale);
+        // 创建限制器 (泛型版本)
+        let limiter = create_limiter_generic::<S>(config.limiter_type, config.venkat_k, mesh_scale);
         
         Self {
             config,
             mesh,
-            gradients: ScalarGradientStorage::new(n_cells),
-            limiters: vec![1.0; n_cells],
+            gradients: ScalarGradientStorageGeneric::new(n_cells),
+            limiters: vec![S::ONE; n_cells],
             gradient_computer,
             limiter,
             mesh_scale,
+            _marker: PhantomData,
         }
     }
     
@@ -84,7 +102,7 @@ impl MusclReconstructor {
         // 如果限制器类型改变，重新创建
         if config.limiter_type != self.config.limiter_type 
            || config.venkat_k != self.config.venkat_k {
-            self.limiter = create_limiter(config.limiter_type, config.venkat_k, self.mesh_scale);
+            self.limiter = create_limiter_generic::<S>(config.limiter_type, config.venkat_k, self.mesh_scale);
         }
         
         // 如果梯度类型改变，重新创建
@@ -108,13 +126,13 @@ impl MusclReconstructor {
     }
     
     /// 计算并限制梯度
-    fn compute_and_limit_gradients(&mut self, values: &[f64]) {
+    fn compute_and_limit_gradients(&mut self, values: &[S]) {
         let n_cells = self.mesh.n_cells();
         
         if !self.config.second_order {
             // 一阶精度：梯度为零
             self.gradients.resize(n_cells);
-            self.limiters.fill(1.0);
+            self.limiters.fill(S::ONE);
             return;
         }
         
@@ -136,15 +154,16 @@ impl MusclReconstructor {
     }
     
     /// 计算限制因子
-    fn compute_limiters(&mut self, values: &[f64]) {
+    fn compute_limiters(&mut self, values: &[S]) {
         let n_cells = self.mesh.n_cells();
+        let dry_tol = S::from_f64(self.config.dry_tolerance).unwrap_or(S::EPSILON);
         
         for cell_id in 0..n_cells {
             let cell_value = values[cell_id];
             
             // 检查干单元
-            if cell_value < self.config.dry_tolerance {
-                self.limiters[cell_id] = 0.0;
+            if cell_value < dry_tol {
+                self.limiters[cell_id] = S::ZERO;
                 continue;
             }
             
@@ -155,7 +174,7 @@ impl MusclReconstructor {
             let (grad_projection, max_distance) = self.compute_max_gradient_projection(cell_id);
             
             // 创建限制器上下文
-            let ctx = LimiterContext::new(
+            let ctx = LimiterContextGeneric::new(
                 cell_value,
                 grad_projection,
                 min_neighbor,
@@ -173,39 +192,38 @@ impl MusclReconstructor {
     }
     
     /// 查找邻居单元的极值
-    /// 
-    /// 使用 cell_neighbors 进行 O(邻居数量) 查找
-    fn find_neighbor_extrema(&self, cell_id: usize, values: &[f64]) -> (f64, f64) {
+    fn find_neighbor_extrema(&self, cell_id: usize, values: &[S]) -> (S, S) {
         let cell_value = values[cell_id];
         let mut min_val = cell_value;
         let mut max_val = cell_value;
         
-        // 直接遍历邻居单元，复杂度 O(邻居数)
         for neighbor_id in self.mesh.cell_neighbors(mh_runtime::CellIndex(cell_id)) {
             let neighbor_value = values[neighbor_id.0];
-            min_val = min_val.min(neighbor_value);
-            max_val = max_val.max(neighbor_value);
+            if neighbor_value < min_val {
+                min_val = neighbor_value;
+            }
+            if neighbor_value > max_val {
+                max_val = neighbor_value;
+            }
         }
         
         (min_val, max_val)
     }
     
     /// 计算最大梯度投影和距离
-    /// 
-    /// 使用 cell_faces 进行 O(面数量) 查找
-    fn compute_max_gradient_projection(&self, cell_id: usize) -> (f64, f64) {
-        let grad_x = self.gradients.grad_x[cell_id];
-        let grad_y = self.gradients.grad_y[cell_id];
-        let cell_center = self.mesh.cell_center(cell_id);
+    fn compute_max_gradient_projection(&self, cell_id: usize) -> (S, S) {
+        let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
+        let cell_center = self.mesh.cell_center_tuple(cell_id);
         
-        let mut max_projection = 0.0f64;
-        let mut max_distance = 0.0f64;
+        let mut max_projection = S::ZERO;
+        let mut max_distance = S::ZERO;
         
-        // 直接遍历单元的面，复杂度 O(单元面数)
         for face_id in self.mesh.cell_faces(mh_runtime::CellIndex(cell_id)) {
-            let face_center = self.mesh.face_center(face_id.into());
-            let dx = face_center.x - cell_center.x;
-            let dy = face_center.y - cell_center.y;
+            let face_center = self.mesh.face_center_tuple(face_id.into());
+            
+            // 几何数据 f64 转换为 S
+            let dx = S::from_f64(face_center.0 - cell_center.0).unwrap_or(S::ZERO);
+            let dy = S::from_f64(face_center.1 - cell_center.1).unwrap_or(S::ZERO);
             
             let distance = (dx * dx + dy * dy).sqrt();
             let projection = (grad_x * dx + grad_y * dy).abs();
@@ -220,48 +238,49 @@ impl MusclReconstructor {
     }
     
     /// 应用正定约束
-    /// 
-    /// 使用 cell_faces 进行 O(单元面数) 查找
-    // ALLOW_F64: PhysicsMesh 依赖 DVec2，与 DVec2 交互
-    fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: f64) {
-        if cell_value <= 0.0 {
-            self.limiters[cell_id] = 0.0;
+    fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: S) {
+        if cell_value <= S::ZERO {
+            self.limiters[cell_id] = S::ZERO;
             return;
         }
         
-        let grad_x = self.gradients.grad_x[cell_id];
-        let grad_y = self.gradients.grad_y[cell_id];
-        let cell_center = self.mesh.cell_center(cell_id);
+        let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
+        let cell_center = self.mesh.cell_center_tuple(cell_id);
         
-        // 收集面列表避免借用冲突
-        let faces: Vec<usize> = self.mesh.cell_faces(mh_runtime::CellIndex(cell_id)).map(|f| f.into()).collect();
+        let faces: Vec<usize> = self.mesh.cell_faces(mh_runtime::CellIndex(cell_id))
+            .map(|f| f.into())
+            .collect();
         
         for face_id in faces {
-            let face_center = self.mesh.face_center(face_id);
-            let dx = face_center.x - cell_center.x;
-            let dy = face_center.y - cell_center.y;
+            let face_center = self.mesh.face_center_tuple(face_id);
+            
+            // 几何数据 f64 转换为 S
+            let dx = S::from_f64(face_center.0 - cell_center.0).unwrap_or(S::ZERO);
+            let dy = S::from_f64(face_center.1 - cell_center.1).unwrap_or(S::ZERO);
             
             let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx + grad_y * dy);
             
-            if reconstructed < 0.0 {
-                // 计算保持正定的最大限制因子
+            if reconstructed < S::ZERO {
                 let denominator = grad_x * dx + grad_y * dy;
-                if denominator.abs() > 1e-12 {
-                    let alpha_safe = (-cell_value / denominator).abs().min(1.0);
-                    self.limiters[cell_id] = self.limiters[cell_id].min(alpha_safe * 0.9);
+                let eps = S::from_f64(1e-12).unwrap_or(S::EPSILON);
+                if denominator.abs() > eps {
+                    let alpha_safe = (-cell_value / denominator).abs();
+                    let alpha_safe = if alpha_safe < S::ONE { alpha_safe } else { S::ONE };
+                    let new_limiter = self.limiters[cell_id] * S::from_f64(0.9).unwrap_or(S::ONE);
+                    self.limiters[cell_id] = if alpha_safe < new_limiter { alpha_safe } else { new_limiter };
                 } else {
-                    self.limiters[cell_id] = 0.0;
+                    self.limiters[cell_id] = S::ZERO;
                 }
             }
         }
     }
     
-    /// 重构面值（内部方法）
-    fn reconstruct_at_face(&self, face_id: usize, values: &[f64]) -> ReconstructedState {
+    /// 重构面值
+    fn reconstruct_at_face(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
         let fi = mh_runtime::FaceIndex(face_id);
         let left_cell: usize = self.mesh.face_owner(fi).into();
         let right_cell: Option<usize> = self.mesh.face_neighbor(fi).map(|c| c.into());
-        let face_center = self.mesh.face_center(face_id);
+        let face_center = self.mesh.face_center_tuple(face_id);
         
         // 左侧重构
         let left_value = self.reconstruct_at_point(left_cell, face_center, values);
@@ -270,45 +289,45 @@ impl MusclReconstructor {
         let right_value = if let Some(right_id) = right_cell {
             self.reconstruct_at_point(right_id, face_center, values)
         } else {
-            // 边界面：使用左侧值
             left_value
         };
         
-        ReconstructedState::new(left_value, right_value)
+        ReconstructedStateGeneric::new(left_value, right_value)
     }
     
     /// 从单元中心重构到指定点
-    fn reconstruct_at_point(&self, cell_id: usize, point: DVec2, values: &[f64]) -> f64 {
+    fn reconstruct_at_point(&self, cell_id: usize, point: (f64, f64), values: &[S]) -> S {
         if !self.config.second_order {
             return values[cell_id];
         }
         
-        let cell_center = self.mesh.cell_center(cell_id);
-        let dx = point.x - cell_center.x;
-        let dy = point.y - cell_center.y;
+        let cell_center = self.mesh.cell_center_tuple(cell_id);
         
-        // 注意：梯度已经被限制
-        let grad_x = self.gradients.grad_x[cell_id];
-        let grad_y = self.gradients.grad_y[cell_id];
+        // 几何数据 f64 转换为 S
+        let dx = S::from_f64(point.0 - cell_center.0).unwrap_or(S::ZERO);
+        let dy = S::from_f64(point.1 - cell_center.1).unwrap_or(S::ZERO);
+        
+        let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
         
         values[cell_id] + grad_x * dx + grad_y * dy
     }
 }
 
-impl Reconstructor for MusclReconstructor {
-    fn compute_gradients(&mut self, values: &[f64]) {
+// ============================================================================
+// Trait 实现
+// ============================================================================
+
+impl<S: RuntimeScalar> ReconstructorGeneric<S> for MusclReconstructorGeneric<S> {
+    fn compute_gradients(&mut self, values: &[S]) {
         self.compute_and_limit_gradients(values);
     }
     
-    fn reconstruct_scalar(&self, face_id: usize, values: &[f64]) -> ReconstructedState {
+    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
         self.reconstruct_at_face(face_id, values)
     }
     
-    fn get_limited_gradient(&self, cell_id: usize) -> DVec2 {
-        DVec2::new(
-            self.gradients.grad_x[cell_id],
-            self.gradients.grad_y[cell_id],
-        )
+    fn get_limited_gradient_tuple(&self, cell_id: usize) -> (S, S) {
+        self.gradients.get_tuple(cell_id)
     }
     
     fn is_second_order(&self) -> bool {
@@ -320,27 +339,31 @@ impl Reconstructor for MusclReconstructor {
     }
 }
 
+// ============================================================================
+// 工具函数
+// ============================================================================
+
 /// 计算网格特征尺度
-// ALLOW_F64: PhysicsMesh 返回 f64 面积，配置参数计算
 fn compute_mesh_scale(mesh: &PhysicsMesh) -> f64 {
     if mesh.n_cells() == 0 {
         return 1.0;
     }
     
     // 使用平均单元面积的平方根作为特征尺度
-    // ALLOW_F64: PhysicsMesh 返回 f64 面积
     let total_area: f64 = (0..mesh.n_cells())
         .filter_map(|i| mesh.cell_area(mh_runtime::CellIndex(i)))
         .sum();
-    // ALLOW_F64: PhysicsMesh 返回 f64 面积
+    
     (total_area / mesh.n_cells() as f64).sqrt()
 }
+
+// ============================================================================
+// 测试
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    // 注意：完整测试需要 PhysicsMesh 实例，这里只测试辅助函数
     
     #[test]
     fn test_config_creation() {
@@ -356,9 +379,16 @@ mod tests {
     }
     
     #[test]
-    fn test_reconstructed_state_basic() {
-        let state = ReconstructedState::new(1.5, 2.0);
+    fn test_reconstructed_state_basic_f64() {
+        let state = ReconstructedStateGeneric::<f64>::new(1.5, 2.0);
         assert_eq!(state.average(), 1.75);
         assert_eq!(state.jump(), 0.5);
+    }
+    
+    #[test]
+    fn test_reconstructed_state_basic_f32() {
+        let state = ReconstructedStateGeneric::<f32>::new(1.5, 2.0);
+        assert!((state.average() - 1.75).abs() < 1e-5);
+        assert!((state.jump() - 0.5).abs() < 1e-5);
     }
 }

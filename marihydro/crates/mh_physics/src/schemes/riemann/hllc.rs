@@ -316,12 +316,6 @@ impl<B: Backend> RiemannSolver for HllcSolver<B> {
     }
 }
 
-/// f64 类型别名（向后兼容）
-pub type HllcSolverF64 = HllcSolver<CpuBackend<f64>>;
-
-/// f32 类型别名（高性能模式）
-pub type HllcSolverF32 = HllcSolver<CpuBackend<f32>>;
-
 #[cfg(test)]
 mod tests {
     use super::*;

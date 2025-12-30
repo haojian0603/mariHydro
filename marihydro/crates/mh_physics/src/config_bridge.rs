@@ -6,7 +6,7 @@
 
 use mh_config::SolverConfig as Layer4Config;
 use mh_config::solver_config::{RiemannSolverType, TimeIntegrationMethod};
-use crate::types::{NumericalParams, NumericalParamsF64};
+use crate::types::NumericalParams;
 use crate::engine::solver::{NumericalScheme, FallbackStrategy, TimeIntegrator, StabilityOptions};
 use mh_runtime::RuntimeScalar;
 use num_traits::FromPrimitive;
@@ -179,15 +179,15 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigBridgeError)`: 转换失败（数值溢出或无法转换）
     pub fn from_layer4(config: &Layer4Config) -> Result<Self, ConfigBridgeError> {
-        // 从 Layer4Config 构建 NumericalParamsF64
-        let params_f64 = NumericalParamsF64 {
+        // 从 Layer4Config 构建 NumericalParams<f64>
+        let params_f64 = NumericalParams::<f64> {
             h_min: config.physics.h_min,
             h_dry: config.physics.h_dry,
             cfl: config.physics.cfl,
             vel_max: config.physics.velocity_cap,
             flux_eps: config.physics.flux_eps,
             min_wave_speed: config.physics.min_wave_speed,
-            ..NumericalParamsF64::default()
+            ..NumericalParams::<f64>::default()
         };
 
         // 转换数值参数

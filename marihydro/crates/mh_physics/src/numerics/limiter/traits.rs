@@ -160,22 +160,6 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for NoLimiterGeneric<S> {
 }
 
 // ============================================================================
-// 类型别名（向后兼容）
-// ============================================================================
-
-/// 限制器上下文 - f64 版本别名
-pub type LimiterContext = LimiterContextGeneric<f64>;
-
-/// 无限制器 - f64 版本别名
-pub type NoLimiter = NoLimiterGeneric<f64>;
-
-/// 梯度限制器 trait - f64 版本别名
-pub trait SlopeLimiter: SlopeLimiterGeneric<f64> {}
-
-/// 为所有实现 SlopeLimiterGeneric<f64> 的类型自动实现 SlopeLimiter
-impl<T: SlopeLimiterGeneric<f64>> SlopeLimiter for T {}
-
-// ============================================================================
 // 测试
 // ============================================================================
 
@@ -185,7 +169,7 @@ mod tests {
     
     #[test]
     fn test_limiter_context_creation() {
-        let ctx = LimiterContext::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        let ctx = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1);
         assert_eq!(ctx.cell_value, 1.0);
         assert_eq!(ctx.gradient, 0.5);
         assert_eq!(ctx.min_neighbor, 0.5);
@@ -195,51 +179,51 @@ mod tests {
     
     #[test]
     fn test_limiter_context_deltas() {
-        let ctx = LimiterContext::new(1.0, 0.5, 0.3, 1.8, 0.1);
+        let ctx = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.3, 1.8, 0.1);
         assert!((ctx.delta_max() - 0.8).abs() < 1e-10);
         assert!((ctx.delta_min() - (-0.7)).abs() < 1e-10);
     }
     
     #[test]
     fn test_limiter_context_zero_gradient() {
-        let ctx1 = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        let ctx1 = LimiterContextGeneric::<f64>::new(1.0, 0.0, 0.5, 1.5, 0.1);
         assert!(ctx1.is_gradient_zero(1e-10));
         
-        let ctx2 = LimiterContext::new(1.0, 1e-15, 0.5, 1.5, 0.1);
+        let ctx2 = LimiterContextGeneric::<f64>::new(1.0, 1e-15, 0.5, 1.5, 0.1);
         assert!(ctx2.is_gradient_zero(1e-10));
         
-        let ctx3 = LimiterContext::new(1.0, 0.1, 0.5, 1.5, 0.1);
+        let ctx3 = LimiterContextGeneric::<f64>::new(1.0, 0.1, 0.5, 1.5, 0.1);
         assert!(!ctx3.is_gradient_zero(1e-10));
     }
     
     #[test]
     fn test_no_limiter() {
-        let limiter = NoLimiter::new();
+        let limiter = NoLimiterGeneric::<f64>::new();
         
         // 应始终返回 1.0
-        let ctx1 = LimiterContext::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        let ctx1 = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx1), 1.0);
         
-        let ctx2 = LimiterContext::new(1.0, -10.0, 0.5, 1.5, 0.1);
+        let ctx2 = LimiterContextGeneric::<f64>::new(1.0, -10.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx2), 1.0);
         
-        let ctx3 = LimiterContext::new(1.0, 1000.0, 0.5, 1.5, 0.1);
+        let ctx3 = LimiterContextGeneric::<f64>::new(1.0, 1000.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx3), 1.0);
     }
     
     #[test]
     fn test_no_limiter_name() {
-        let limiter = NoLimiter::new();
+        let limiter = NoLimiterGeneric::<f64>::new();
         assert_eq!(limiter.name(), "NoLimiter");
     }
     
     #[test]
     fn test_no_limiter_batch() {
-        let limiter = NoLimiter::new();
+        let limiter = NoLimiterGeneric::<f64>::new();
         let contexts = vec![
-            LimiterContext::new(1.0, 0.5, 0.5, 1.5, 0.1),
-            LimiterContext::new(2.0, -0.5, 1.5, 2.5, 0.1),
-            LimiterContext::new(0.5, 0.0, 0.0, 1.0, 0.1),
+            LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1),
+            LimiterContextGeneric::<f64>::new(2.0, -0.5, 1.5, 2.5, 0.1),
+            LimiterContextGeneric::<f64>::new(0.5, 0.0, 0.0, 1.0, 0.1),
         ];
         
         let results = limiter.compute_limiters(&contexts);

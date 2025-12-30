@@ -1,6 +1,4 @@
-// =============================================================================
 // mh_physics/src/numerics/linear_algebra/mod.rs
-// =============================================================================
 //! 稀疏线性代数模块
 //!
 //! 提供隐式求解所需的稀疏矩阵、预条件器和迭代求解器，
@@ -35,8 +33,10 @@ pub mod vector_ops;
 // pub use crate::builder::dyn_solver::{SolverStats, DynSolver}; // 错误：路径不存在且 SolverStats 已定义
 
 pub use csr::{
-    CsrBuilder, CsrMatrix, CsrPattern, CsrBuilderF64 as CsrBuilderLegacy,
+    CsrBuilder, CsrMatrix, CsrPattern,
 };
+
+// 注意：CsrBuilderLegacy 别名已删除，请直接使用 CsrBuilder<S>
 
 pub use vector_ops::{
     axpy, axpy_inplace, copy, copy_bounded, dot, fill, norm2, norm_inf,

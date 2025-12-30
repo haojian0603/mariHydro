@@ -15,39 +15,40 @@
 //! 3. **索引类型安全**：所有几何查询强制使用 `FaceIndex/CellIndex`，杜绝 `usize` 泄露
 //! 4. **Backend几何抽象**：完全移除 `glam::DVec2`，使用 `B::Vector2D` 和工厂方法
 //! 5. **桥接层就绪**：实现 `DynSolver` trait，支持运行时多态分发
-//! 6. **边界条件修复**：恢复正确的固壁边界压力处理，确保静水平衡
+//! 6. **稳定性检查修复**：集成 NaN 检测机制，确保病态数据被及时清理
+//! 7. **边界压力修正**：恢复正确的固壁边界压力处理，确保静水平衡
 //!
 //! # 使用示例
 //!
 //! ```rust,ignore
 //! use mh_physics::engine::solver::{ShallowWaterSolver};
-//! use mh_physics::config_bridge::{Layer3Config, ConfigBridge};
-//! use mh_config::SolverConfig;
+//! use mh_physics::builder::{SolverConfig, Precision};
 //! use mh_runtime::{CpuBackend};
 //!
-//! // 从 Layer 4 配置转换
-//! let layer4_config = SolverConfig::default();
-//! let layer3_config: Layer3Config<f64> = ConfigBridge::convert(&layer4_config).unwrap();
+//! // 1. 创建 Layer 4 配置（无泛型）
+//! let mut config = SolverConfig::default();
+//! config.precision = Precision::F64;
 //!
-//! // f64高精度模式
+//! // 2. 转换为 Layer 3 配置（泛型化）
+//! let layer3_config: Layer3Config<f64> = Layer3Config::from_builder(&config).unwrap();
+//!
+//! // 3. 创建求解器
 //! let backend_f64 = CpuBackend::<f64>::new();
-//! let solver_f64 = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, layer3_config, backend_f64);
-//!
-//! // f32高性能模式
-//! let backend_f32 = CpuBackend::<f32>::new();
-//! let solver_f32 = ShallowWaterSolver::<CpuBackend<f32>>::new(mesh, layer3_config, backend_f32);
+//! let solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh, layer3_config, backend_f64);
 //! ```
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
 use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver, SolverParams};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
-use crate::numerics::{MusclConfig, MusclReconstructor};
-use crate::numerics::reconstruction::Reconstructor;
+use crate::numerics::{MusclConfig, MusclReconstructorGeneric};
+use crate::numerics::reconstruction::ReconstructorGeneric;
 use crate::state::ShallowWaterStateGeneric as ShallowWaterState;
 use crate::types::{NumericalParams};
-use crate::config_bridge::Layer3Config;
+use crate::Layer3Config;
 
+use serde::Serialize;
+use serde::Deserialize;
 use mh_runtime::{Backend, CpuBackend, DeviceBuffer, RuntimeScalar, Vector2D};
 use num_traits::{Float, FromPrimitive, ToPrimitive};
 use rayon::prelude::*;
@@ -55,9 +56,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 // ============================================================
-// 求解器统计（修复：添加NaN检测字段）
+// 求解器统计信息（修复：添加 NaN 检测字段）
 // ============================================================
 
+/// 求解器运行统计信息
 #[derive(Debug, Clone, Default)]
 pub struct SolverStats {
     /// 最大波速 [m/s]
@@ -70,32 +72,32 @@ pub struct SolverStats {
     pub dt: f64,
     /// 回退次数
     pub fallback_count: u32,
-    /// 当前使用的格式
+    /// 当前使用的数值格式
     pub current_scheme: NumericalScheme,
     /// 稳定性状态
     pub stability_status: StabilityStatus,
-    /// NaN检测计数
+    /// NaN 检测计数（累计值）
     pub nan_count: u32,
-    /// 最后NaN位置
+    /// 最后检测到 NaN 的单元索引
     pub last_nan_location: Option<usize>,
 }
 
-/// 稳定性状态
+/// 稳定性状态枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StabilityStatus {
-    /// 稳定
+    /// 计算稳定
     #[default]
     Stable,
-    /// 接近不稳定
+    /// 接近不稳定边界
     Marginal,
-    /// 需要回退
+    /// 需要算法回退
     NeedsFallback,
     /// 不稳定（计算失败）
     Unstable,
 }
 
 impl std::fmt::Display for StabilityStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Marginal => write!(f, "临界"),
             Self::Stable => write!(f, "稳定"),
@@ -106,34 +108,36 @@ impl std::fmt::Display for StabilityStatus {
 }
 
 impl SolverStats {
-    /// 检查是否需要回退
+    /// 检查是否需要回退计算
     pub fn needs_fallback(&self) -> bool {
         matches!(self.stability_status, StabilityStatus::NeedsFallback | StabilityStatus::Unstable)
     }
 
-    /// 生成诊断摘要
+    /// 生成诊断摘要字符串
     pub fn summary(&self) -> String {
         format!(
-            "dt={:.4}s, wave_speed={:.2}m/s, dry={}, limited={}, status={}, fallbacks={}",
+            "dt={:.4}s, wave_speed={:.2}m/s, dry={}, limited={}, status={}, fallbacks={}, nan_detected={}",
             self.dt,
             self.max_wave_speed,
             self.dry_cells,
             self.limited_faces,
             self.stability_status,
-            self.fallback_count
+            self.fallback_count,
+            self.nan_count,
         )
     }
 }
 
 // ============================================================
-// NaN检测结果
+// NaN 检测结果结构体
 // ============================================================
 
+/// NaN 检测操作的结果
 #[derive(Debug, Clone, Default)]
 pub struct NanDetectionResult {
-    /// 是否发现NaN
+    /// 是否发现 NaN/Inf 值
     pub found_nan: bool,
-    /// 受影响的单元索引
+    /// 受影响的单元索引列表
     pub affected_cells: Vec<usize>,
 }
 
@@ -141,26 +145,27 @@ pub struct NanDetectionResult {
 // 求解器工作区（Backend泛型化）
 // ============================================================
 
-/// 求解器工作区（泛型版本）
-/// 
-/// 存储中间计算结果，避免重复分配。所有字段使用 Backend 缓冲区。
+/// 求解器工作区（Backend 泛型版本）
+///
+/// 存储中间计算结果，避免重复内存分配。所有字段使用 Backend 的缓冲区类型，
+/// 支持 CPU 和 GPU 后端的无缝切换。
 #[derive(Debug)]
 pub struct SolverWorkspaceGeneric<B: Backend> {
-    /// 通量累加（质量）
+    /// 质量通量累加器
     pub flux_h: B::Buffer<B::Scalar>,
-    /// 通量累加（x动量）
+    /// x 方向动量通量累加器
     pub flux_hu: B::Buffer<B::Scalar>,
-    /// 通量累加（y动量）
+    /// y 方向动量通量累加器
     pub flux_hv: B::Buffer<B::Scalar>,
-    /// 源项累加（x动量）
+    /// x 方向源项累加器
     pub source_hu: B::Buffer<B::Scalar>,
-    /// 源项累加（y动量）
+    /// y 方向源项累加器
     pub source_hv: B::Buffer<B::Scalar>,
-    /// 单元速度 u 分量（用于重构）
+    /// 单元速度 u 分量（用于重构计算）
     pub vel_u: B::Buffer<B::Scalar>,
-    /// 单元速度 v 分量（用于重构）
+    /// 单元速度 v 分量（用于重构计算）
     pub vel_v: B::Buffer<B::Scalar>,
-    /// 水位 η = h + z（用于 well-balanced 重构）
+    /// 水位 η = h + z_b（用于 well-balanced 重构）
     pub eta: B::Buffer<B::Scalar>,
 }
 
@@ -179,7 +184,7 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
         }
     }
 
-    /// 重置通量
+    /// 重置通量累加器为零
     pub fn reset_fluxes(&mut self) {
         use mh_runtime::DeviceBuffer;
         self.flux_h.fill(B::Scalar::ZERO);
@@ -187,20 +192,20 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
         self.flux_hv.fill(B::Scalar::ZERO);
     }
 
-    /// 重置源项
+    /// 重置源项累加器为零
     pub fn reset_sources(&mut self) {
         use mh_runtime::DeviceBuffer;
         self.source_hu.fill(B::Scalar::ZERO);
         self.source_hv.fill(B::Scalar::ZERO);
     }
 
-    /// 重置所有
+    /// 重置所有累加器
     pub fn reset(&mut self) {
         self.reset_fluxes();
         self.reset_sources();
     }
 
-    /// 调整大小
+    /// 调整工作区大小以匹配网格
     pub fn resize(&mut self, n_cells: usize) {
         use mh_runtime::DeviceBuffer;
         self.flux_h.resize(n_cells, B::Scalar::ZERO);
@@ -214,29 +219,29 @@ impl<B: Backend> SolverWorkspaceGeneric<B> {
     }
 }
 
-/// 向后兼容类型别名
+/// 向后兼容类型别名（f64 后端）
 pub type SolverWorkspace = SolverWorkspaceGeneric<CpuBackend<f64>>;
 
 // ============================================================
-// 静水重构（Backend几何化）
+// 静水重构（Backend 几何抽象）
 // ============================================================
 
-/// 面上的静水重构状态（Backend泛型）
+/// 面上的静水重构状态（Backend泛型化）
 #[derive(Debug, Clone, Copy)]
 pub struct HydrostaticFaceState<B: Backend> {
     /// 左侧有效水深
     pub h_left: B::Scalar,
     /// 右侧有效水深
     pub h_right: B::Scalar,
-    /// 左侧速度
+    /// 左侧速度向量
     pub vel_left: B::Vector2D,
-    /// 右侧速度
+    /// 右侧速度向量
     pub vel_right: B::Vector2D,
     /// 面处高程
     pub z_face: B::Scalar,
 }
 
-/// 床坡源项修正（Backend泛型）
+/// 床坡源项修正（Backend 几何抽象）
 #[derive(Debug, Clone, Copy)]
 pub struct BedSlopeCorrection<B: Backend> {
     /// 左侧（owner）单元 x 方向源项
@@ -250,7 +255,7 @@ pub struct BedSlopeCorrection<B: Backend> {
 }
 
 impl<B: Backend> BedSlopeCorrection<B> {
-    /// 零源项常量
+    /// 零源项常量（用于干单元）
     pub fn zero() -> Self {
         Self {
             source_left_x: B::Scalar::ZERO,
@@ -261,10 +266,7 @@ impl<B: Backend> BedSlopeCorrection<B> {
     }
 }
 
-/// 类型别名
-pub type BedSlopeCorrectionF64 = BedSlopeCorrection<CpuBackend<f64>>;
-
-/// 静水重构处理器（Backend泛型化）
+/// 静水重构处理器（Backend 泛型化）
 #[derive(Debug, Clone)]
 pub struct HydrostaticReconstruction<B: Backend> {
     /// 数值参数（泛型）
@@ -283,7 +285,7 @@ impl<B: Backend> HydrostaticReconstruction<B> {
         }
     }
 
-    /// 简单静水重构
+    /// 执行面两侧的静水重构（简化版本）
     #[inline]
     pub fn reconstruct_face_simple(
         &self,
@@ -310,7 +312,7 @@ impl<B: Backend> HydrostaticReconstruction<B> {
         }
     }
 
-    /// 计算床坡源项
+    /// 计算床坡源项修正
     #[inline]
     pub fn bed_slope_correction(
         &self,
@@ -342,28 +344,47 @@ impl<B: Backend> HydrostaticReconstruction<B> {
 }
 
 // ============================================================
-// 主求解器（Backend泛型化 - 最终版本）
+// 主求解器（Backend 泛型化 - 最终版本）
 // ============================================================
 
+/// 浅水方程求解器（Backend 泛型）
+///
+/// 基于有限体积法的非结构化网格求解器，支持 f32/f64 精度切换。
+/// 提供完整的数值模拟功能，包括通量计算、源项处理、干湿边界等。
 pub struct ShallowWaterSolver<B: Backend> {
+    /// 网格适配器（不可变共享）
     mesh: Arc<PhysicsMesh>,
+    /// 求解器配置（泛型化）
     config: Layer3Config<B::Scalar>,
+    /// 数值参数（泛型化）
     params: NumericalParams<B::Scalar>,
+    /// 重力加速度（泛型化）
     #[allow(dead_code)]
     gravity: B::Scalar,
+    /// 计算后端实例
     backend: B,
+    /// 求解器工作区（内存复用）
     workspace: SolverWorkspaceGeneric<B>,
+    /// HLLC 黎曼求解器
     riemann: HllcSolver<B>,
+    /// 干湿边界处理器
     wetting_drying: WettingDryingHandler<B>,
+    /// 静水重构处理器
     hydrostatic: HydrostaticReconstruction<B>,
+    /// 时间步控制器
     timestep_ctrl: TimeStepController<B>,
+    /// 运行统计信息
     stats: SolverStats,
-    muscl_eta: MusclReconstructor,
-    muscl_u: MusclReconstructor,
-    muscl_v: MusclReconstructor,
+    /// 水位重构器（MUSCL）
+    muscl_eta: MusclReconstructorGeneric<B::Scalar>,
+    /// x 速度重构器
+    muscl_u: MusclReconstructorGeneric<B::Scalar>,
+    /// y 速度重构器
+    muscl_v: MusclReconstructorGeneric<B::Scalar>,
 }
 
 impl<B: Backend> ShallowWaterSolver<B> {
+    /// 创建新的求解器实例
     pub fn new(
         mesh: Arc<PhysicsMesh>, 
         config: Layer3Config<B::Scalar>, 
@@ -376,7 +397,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         // 时间步控制器（已泛型化，接收 B::Scalar 参数）
         let timestep_ctrl = TimeStepController::<B>::new(gravity, &params);
 
-        // 根据配置选择重构器模式
+        // 根据格式选择重构器配置
         let muscl_config = match config.scheme {
             NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno => {
                 MusclConfig::default()
@@ -390,9 +411,9 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let riemann = HllcSolver::<B>::new(&solver_params, gravity);
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
         let hydrostatic = HydrostaticReconstruction::<B>::new(&params, gravity);
-        let muscl_eta = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
-        let muscl_u = MusclReconstructor::new(muscl_config.clone(), mesh.clone());
-        let muscl_v = MusclReconstructor::new(muscl_config, mesh.clone());
+        let muscl_eta = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
+        let muscl_u = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
+        let muscl_v = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config, mesh.clone());
 
         Self {
             mesh,
@@ -412,32 +433,68 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
+    /// 执行一个时间步
+    ///
+    /// # 主要流程
+    /// 1. NaN 检测与清理（如果启用）
+    /// 2. 准备重构数据（速度、水位）
+    /// 3. 计算通量（并行或串行）
+    /// 4. 更新守恒量
+    /// 5. 后处理 NaN 检测（如果启用）
+    /// 6. 强制正性约束（水深、速度）
+    /// 7. 更新统计信息
+    ///
+    /// # 参数
+    /// - `state`: 状态向量（将被修改）
+    /// - `dt`: 时间步长
+    ///
+    /// # 返回
+    /// 实际使用的时间步长
     pub fn step(&mut self, state: &mut ShallowWaterState<B>, dt: B::Scalar) -> B::Scalar {
+        // 步骤 1：检测并清理初始状态中的 NaN/Inf（预防性）
+        if self.config.stability.check_nan {
+            let _ = self.detect_and_clean_nan(state);
+        }
+        
         self.workspace.reset();
         self.prepare_reconstruction(state);
+        
         let max_wave_speed = if self.mesh.n_faces() >= self.config.parallel_threshold as usize {
             self.compute_fluxes_parallel(state)
         } else {
             self.compute_fluxes_serial(state)
         };
+        
         self.update_state(state, dt);
-        let (dry_cells, _) = self.enforce_positivity(state, dt);
+        
+        // 步骤 5：检测并清理计算过程中产生的 NaN/Inf（保护性）
+        if self.config.stability.check_nan {
+            let _ = self.detect_and_clean_nan(state);
+        }
+        
+        let (dry_cells, limited_count) = self.enforce_positivity(state, dt);
+        
+        // 更新求解器统计信息
         self.stats.max_wave_speed = max_wave_speed.to_f64().unwrap_or(0.0);
         self.stats.dry_cells = dry_cells;
+        self.stats.limited_faces = limited_count;
         self.stats.dt = dt.to_f64().unwrap_or(0.0);
+        
         dt
     }
 
-    /// ✅ 修复类型不匹配：直接传递泛型参数
+    /// 计算建议时间步长（基于 CFL 条件）
     pub fn compute_dt(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
         self.timestep_ctrl.update(state, &self.mesh, &self.params)
     }
 
+    /// 判断是否使用二阶精度格式
     #[inline]
     fn use_second_order(&self) -> bool {
         matches!(self.config.scheme, NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno)
     }
 
+    /// 准备重构所需数据（速度、水位）
     fn prepare_reconstruction(&mut self, state: &ShallowWaterState<B>) {
         let n = state.n_cells();
         if self.workspace.vel_u.len() != n {
@@ -453,13 +510,13 @@ impl<B: Backend> ShallowWaterSolver<B> {
             self.workspace.eta[i] = state.h[i] + state.z[i];
         }
 
-        // 一阶格式完全禁用梯度计算，直接返回
+        // 一阶格式：禁用梯度计算，直接返回
         if !self.use_second_order() {
             let cfg = MusclConfig::first_order();
             self.muscl_eta.set_config(cfg.clone());
             self.muscl_u.set_config(cfg.clone());
             self.muscl_v.set_config(cfg);
-            // 关键：直接返回，不计算梯度
+            // 直接返回，不计算梯度（性能优化）
             return;
         }
 
@@ -468,7 +525,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         self.muscl_u.set_config(cfg.clone());
         self.muscl_v.set_config(cfg);
 
-        // 注意：MusclReconstructor 使用 f64，需要转换
+        // 转换到 f64 进行重构（MUSCL 使用 f64 内部计算）
         let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
         let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
         let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
@@ -478,9 +535,9 @@ impl<B: Backend> ShallowWaterSolver<B> {
     }
 
     /// 计算固壁边界的静水压力通量
-    /// 
-    /// 压力公式：F = 0.5 * g * h² * n * L
-    /// 仅作用于动量方程，质量通量为零（无穿透）
+    ///
+    /// 压力公式：`F = 0.5 * g * h² * n * L`
+    /// 仅作用于动量方程，质量通量为零（无穿透条件）
     #[inline]
     fn compute_boundary_pressure(
         &self,
@@ -503,7 +560,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (flux_hu, flux_hv)
     }
 
-    /// 新增：统一的边界压力处理函数
+    /// 应用所有固壁边界的压力通量
     fn apply_boundary_pressures(&mut self, state: &ShallowWaterState<B>) {
         for face_idx in self.mesh.boundary_faces() {
             let face = FaceIndex::new(face_idx);
@@ -515,7 +572,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
-    /// 简化后的串行版本
+    /// 计算通量（串行版本）
     fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let mut max_wave_speed = 0.0_f64;
 
@@ -524,7 +581,8 @@ impl<B: Backend> ShallowWaterSolver<B> {
             let (flux, bed_src, length, owner, neighbor) = 
                 self.compute_face_flux(state, FaceIndex::new(face_idx));
 
-            max_wave_speed = max_wave_speed.max(flux.max_wave_speed.to_f64().unwrap_or(0.0));
+            let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
+            max_wave_speed = max_wave_speed.max(speed_f64);
 
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
@@ -547,15 +605,16 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 统一处理边界
+        // 统一处理边界压力
         self.apply_boundary_pressures(state);
         max_wave_speed
     }
 
-    /// 简化后的并行版本
+    /// 计算通量（并行版本）
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
         let max_speed_atomic = AtomicU64::new(0u64);
 
+        // 并行计算所有面的通量
         let face_results: Vec<_> = self.mesh.interior_faces()
             .into_par_iter()
             .map(|face_idx| {
@@ -570,6 +629,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
             })
             .collect();
 
+        // 串行累加通量到工作区
         for (flux, bed_src, length, owner, neighbor) in face_results {
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
@@ -592,13 +652,14 @@ impl<B: Backend> ShallowWaterSolver<B> {
             }
         }
 
-        // 统一处理边界（边界通常较短，串行处理即可）
+        // 边界处理（通常面数较少，串行即可）
         self.apply_boundary_pressures(state);
         
         let bits = max_speed_atomic.load(Ordering::Relaxed);
         f64::from_bits(bits)
     }
 
+    /// 计算单个面的通量和源项
     fn compute_face_flux(
         &self,
         state: &ShallowWaterState<B>,
@@ -611,6 +672,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let neighbor = self.mesh.face_neighbor(face_idx);
 
         let (h_l, vel_l, z_l, h_r, vel_r, z_r) = if self.use_second_order() {
+            // 二阶格式：使用重构值
             let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
             let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
             let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
@@ -642,7 +704,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
                     z_neigh,
                 )
             } else {
-                // 边界面：简化处理，使用单元自身值
+                // 边界面：简化处理
                 let z_owner = state.z[owner.get()];
                 let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
                 let h_left_f64 = (eta_rec.left - z_owner_f64).max(0.0_f64);
@@ -650,12 +712,12 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 let u_l = B::Scalar::from_f64(u_rec.left).unwrap_or(B::Scalar::ZERO);
                 let v_l = B::Scalar::from_f64(v_rec.left).unwrap_or(B::Scalar::ZERO);
                 let vel_left = B::vec2_new(u_l, v_l);
-                // 速度反射：vn' = -vn，静水时vn=0
+                // 速度反射（边界无穿透）
                 let vn = B::vec2_dot(&vel_left, &normal);
                 let two = B::Scalar::from_f64(2.0).unwrap();
                 let vel_right = B::vec2_sub(&vel_left, &B::vec2_scale(&normal, vn * two));
                 
-                // 边界面两侧使用相同的状态（静水平衡）
+                // 边界两侧使用相同状态（静水平衡）
                 (
                     h_left,
                     vel_left,
@@ -666,7 +728,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
                 )
             }
         } else {
-            // 一阶格式：不使用重构
+            // 一阶格式：直接使用单元中心值
             let h_l = state.h[owner.get()];
             let z_l = state.z[owner.get()];
             let (u_l, v_l) = self.params.safe_velocity_components(
@@ -750,6 +812,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (limited_flux, bed_src, length, owner, neighbor)
     }
 
+    /// 计算静水床坡源项修正
     #[inline]
     fn compute_hydrostatic_bed_slope(
         &self,
@@ -775,6 +838,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
+    /// 更新守恒量（时间推进）
     fn update_state(&self, state: &mut ShallowWaterState<B>, dt: B::Scalar) {
         for i in self.mesh.cells() {
             let area_f64 = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0_f64);
@@ -788,6 +852,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         }
     }
 
+    /// 强制正性约束（水深、速度）
     fn enforce_positivity(&mut self, state: &mut ShallowWaterState<B>, _dt: B::Scalar) -> (usize, usize) {
         let h_min = self.params.h_min;
         let h_dry = self.params.h_dry;
@@ -796,11 +861,13 @@ impl<B: Backend> ShallowWaterSolver<B> {
 
         for i in self.mesh.cells() {
             if state.h[i] < h_min {
+                // 水深过小，设为干单元
                 state.h[i] = B::Scalar::ZERO;
                 state.hu[i] = B::Scalar::ZERO;
                 state.hv[i] = B::Scalar::ZERO;
                 dry_count += 1;
             } else if state.h[i] < h_dry {
+                // 过渡区，速度钳位
                 let factor = self.wetting_drying.wet_fraction_smooth(state.h[i]);
                 state.hu[i] = state.hu[i] * factor;
                 state.hv[i] = state.hv[i] * factor;
@@ -812,53 +879,91 @@ impl<B: Backend> ShallowWaterSolver<B> {
         (dry_count, limited_count)
     }
 
-    /// 检测并清理NaN值
+    /// 检测并清理 NaN/Inf 值，更新统计信息
+    ///
+    /// # 功能
+    /// - 遍历所有单元，检查 h, hu, hv 是否为有限值
+    /// - 将非有限值重置为零（干单元状态）
+    /// - 累计 NaN 计数器
+    /// - 记录最后出现位置
+    ///
+    /// # 参数
+    /// - `state`: 状态向量（将被修改）
+    ///
+    /// # 返回
+    /// 检测结果，包含是否发现 NaN 和受影响单元列表
     pub fn detect_and_clean_nan(&mut self, state: &mut ShallowWaterState<B>) -> NanDetectionResult {
         let mut result = NanDetectionResult::default();
         
         for i in self.mesh.cells() {
-            let idx = i;
             let mut has_nan = false;
             
-            // 检查h
-            if !state.h[idx].is_finite() {
-                state.h[idx] = B::Scalar::ZERO;
+            // 检查水深 h
+            if !state.h[i].is_finite() {
+                state.h[i] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
-            // 检查hu
-            if !state.hu[idx].is_finite() {
-                state.hu[idx] = B::Scalar::ZERO;
+            // 检查 x 方向动量 hu
+            if !state.hu[i].is_finite() {
+                state.hu[i] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
-            // 检查hv
-            if !state.hv[idx].is_finite() {
-                state.hv[idx] = B::Scalar::ZERO;
+            // 检查 y 方向动量 hv
+            if !state.hv[i].is_finite() {
+                state.hv[i] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
+            // 如果检测到 NaN/Inf，更新统计信息
             if has_nan {
                 result.found_nan = true;
-                result.affected_cells.push(idx);
+                result.affected_cells.push(i);
+                // 累计计数器（不覆盖之前的值）
                 self.stats.nan_count += 1;
-                self.stats.last_nan_location = Some(idx);
+                self.stats.last_nan_location = Some(i);
             }
         }
         
         result
     }
 
-    /// 访问器
-    pub fn mesh(&self) -> &PhysicsMesh { &self.mesh }
-    pub fn backend(&self) -> &B { &self.backend }
-    pub fn stats(&self) -> &SolverStats { &self.stats }
-    pub fn max_wave_speed(&self) -> f64 { self.stats.max_wave_speed }
-    pub fn dry_cell_count(&self) -> usize { self.stats.dry_cells }
+    // ========== 访问器方法 ==========
+
+    /// 获取网格适配器
+    pub fn mesh(&self) -> &PhysicsMesh {
+        &self.mesh
+    }
+
+    /// 获取计算后端
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    /// 获取求解器统计信息（只读）
+    pub fn stats(&self) -> &SolverStats {
+        &self.stats
+    }
+
+    /// 获取最大波速
+    pub fn max_wave_speed(&self) -> f64 {
+        self.stats.max_wave_speed
+    }
+
+    /// 获取干单元数量
+    pub fn dry_cell_count(&self) -> usize {
+        self.stats.dry_cells
+    }
     
     /// 获取求解器配置
     pub fn config(&self) -> &Layer3Config<B::Scalar> {
         &self.config
+    }
+
+    /// 获取数值参数
+    pub fn params(&self) -> &NumericalParams<B::Scalar> {
+        &self.params
     }
 }
 
@@ -866,12 +971,15 @@ impl<B: Backend> ShallowWaterSolver<B> {
 // 辅助类型定义（引擎层内部使用）
 // ============================================================
 
-/// 数值格式类型
+/// 数值格式类型枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NumericalScheme {
+    /// 一阶精度（最稳定）
     #[default]
     FirstOrder,
+    /// 二阶 MUSCL 格式
     SecondOrderMuscl,
+    /// 二阶 WENO 格式（未来扩展）
     SecondOrderWeno,
 }
 
@@ -885,13 +993,17 @@ impl std::fmt::Display for NumericalScheme {
     }
 }
 
-/// 回退策略
+/// 回退策略枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FallbackStrategy {
+    /// 不回退，继续计算
     #[default]
     NoFallback,
+    /// 回退到一阶格式
     FallbackToFirstOrder,
+    /// 减小时间步长
     ReduceTimestep,
+    /// 渐进式回退
     Progressive,
 }
 
@@ -906,11 +1018,13 @@ impl std::fmt::Display for FallbackStrategy {
     }
 }
 
-/// 时间积分器类型
+/// 时间积分器类型枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimeIntegrator {
+    /// 显式时间积分
     #[default]
     Explicit,
+    /// 半隐式时间积分（未来扩展）
     SemiImplicit,
 }
 
@@ -923,13 +1037,19 @@ impl std::fmt::Display for TimeIntegrator {
     }
 }
 
-/// 稳定性检查选项
-#[derive(Debug, Clone, Copy)]
+
+/// 稳定性检查选项结构体
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct StabilityOptions {
+    /// 是否检查 NaN/Inf 值
     pub check_nan: bool,
+    /// 是否检查负水深
     pub check_negative_depth: bool,
+    /// 是否检查速度过大
     pub check_extreme_velocity: bool,
+    /// 速度限制阈值 [m/s]
     pub velocity_limit: f64,
+    /// 水深限制阈值 [m]
     pub depth_limit: f64,
 }
 
@@ -944,7 +1064,3 @@ impl Default for StabilityOptions {
         }
     }
 }
-
-// 类型别名
-pub type ShallowWaterSolverF64 = ShallowWaterSolver<CpuBackend<f64>>;
-pub type ShallowWaterSolverF32 = ShallowWaterSolver<CpuBackend<f32>>;

@@ -18,10 +18,6 @@
 //! - 并行波速计算使用原子操作
 //! - 可选的自适应时间步长增长
 //!
-//! # 迁移说明
-//!
-//! 从 legacy_src/physics/engine/timestep.rs 迁移。
-//!
 //! # 架构改造
 //!
 //! **Phase 3 泛型化**：完全支持 `CpuBackend<f32>` 和 `CpuBackend<f64>`。

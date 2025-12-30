@@ -21,7 +21,8 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 // ALLOW_F64: 数学常数
 use std::f64::consts::PI;
 
@@ -95,7 +96,7 @@ impl SourceTerm for CoriolisConfig {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -169,7 +170,7 @@ use super::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterStateGeneric;
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use mh_runtime::{Backend, RuntimeScalar};
 
 /// 泛型科氏力配置
 #[derive(Debug, Clone)]
@@ -308,8 +309,8 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

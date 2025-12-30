@@ -8,28 +8,24 @@
 //! 
 //! 1. **类型安全强制**：所有几何查询接口必须使用Runtime索引类型（CellIndex/FaceIndex/NodeIndex）
 //! 2. **职责隔离**：杜绝usize泄露，索引转换必须在调用层显式完成
-//! 3. **双重接口**：保留DVec2接口供Legacy代码短期过渡，新增Backend泛型接口供Layer 3使用
+//! 3. **Backend 泛型化**：所有几何接口使用 `B::Vector2D` 返回类型
 //! 4. **错误透明**：坐标转换失败时panic而非静默回退，确保开发期暴露精度问题
 //! 
 //! # 架构约束
 //! 
-//! - **Layer 3 (Engine)** 必须调用泛型接口，禁止直接使用Legacy接口
-//! - **Layer 4/5 (Config/App)** 可使用Legacy接口，但需通过clippy.toml标记弃用
+//! - **Layer 3 (Engine)** 必须调用泛型接口
+//! - DVec2 Legacy 接口已删除
 //! 
 //! # 使用示例
 //! 
 //! ```rust,ignore
+//! use mh_physics::adapter::PhysicsMesh;
+//! use mh_runtime::{CpuBackend, CellIndex, FaceIndex};
 //! 
-//! // ❌ 错误：usize索引导致职责泄露
-//! // let normal = mesh.face_normal(0); 
-//! 
-//! // ✅ 正确：强制使用类型安全索引
-//! let face_idx = FaceIndex::new(0);
-//! let normal_f32 = mesh.face_center_generic::<CpuBackend<f32>>(face_idx);
-//! let normal_f64 = mesh.face_center_generic::<CpuBackend<f64>>(face_idx);
+//! let cell_idx = CellIndex::new(0);
+//! let normal_f32 = mesh.face_center_generic::<CpuBackend<f32>>(FaceIndex::new(0));
+//! let normal_f64 = mesh.face_center_generic::<CpuBackend<f64>>(FaceIndex::new(0));
 //! ```
-
-use glam::DVec2;
 
 use mh_mesh::FrozenMesh;
 use num_traits::FromPrimitive;
@@ -117,13 +113,6 @@ impl PhysicsMesh {
     // 单元访问 - 强制使用CellIndex (核心改造)
     // =========================================================================
 
-    /// 获取单元中心 (DVec2 - f64精度版本)
-    #[inline]
-    pub fn cell_center(&self, cell: usize) -> DVec2 {
-        let p = self.inner.cell_center[cell];
-        DVec2::new(p.x, p.y)
-    }
-
     /// 获取单元中心 (Backend几何类型 - Layer 3强制使用)
     #[inline]
     pub fn cell_center_generic<B: Backend>(&self, cell: CellIndex) -> B::Vector2D {
@@ -135,6 +124,13 @@ impl PhysicsMesh {
             B::Scalar::from_f64(p.y as f64)
                 .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
         )
+    }
+
+    /// 获取单元中心坐标（元组版 - usize索引）
+    #[inline]
+    pub fn cell_center_tuple(&self, cell: usize) -> (f64, f64) {
+        let p = self.inner.cell_center[cell];
+        (p.x, p.y)
     }
 
     /// 获取单元底床高程 [m]
@@ -216,13 +212,6 @@ impl PhysicsMesh {
     // 面访问 - 强制使用FaceIndex (核心改造)
     // =========================================================================
 
-    /// 获取面中心 (DVec2 - f64精度版本)
-    #[inline]
-    pub fn face_center(&self, face: usize) -> DVec2 {
-        let p = self.inner.face_center[face];
-        DVec2::new(p.x, p.y)
-    }
-
     /// 获取面中心 (Backend几何类型 - Layer 3强制使用)
     #[inline]
     pub fn face_center_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
@@ -237,11 +226,11 @@ impl PhysicsMesh {
         )
     }
 
-    /// 获取面法向量 (DVec2 - f64精度版本)
+    /// 获取面中心坐标（元组版 - usize索引）
     #[inline]
-    pub fn face_normal(&self, face: usize) -> DVec2 {
-        let n = self.inner.face_normal[face];
-        DVec2::new(n.x, n.y)
+    pub fn face_center_tuple(&self, face: usize) -> (f64, f64) {
+        let p = self.inner.face_center[face];
+        (p.x, p.y)
     }
 
     /// 获取面法向量 (Backend几何类型 - Layer 3强制使用)
@@ -263,6 +252,13 @@ impl PhysicsMesh {
     pub fn face_normal_3d(&self, face: FaceIndex) -> (f64, f64, f64) {
         let n = self.inner.face_normal[face.get()];
         (n.x, n.y, n.z)
+    }
+
+    /// 获取面法向量 (2D元组)
+    #[inline]
+    pub fn face_normal_2d_tuple(&self, face: usize) -> (f64, f64) {
+        let n = self.inner.face_normal[face];
+        (n.x, n.y)
     }
 
     /// 获取面长度 [m]
@@ -319,13 +315,6 @@ impl PhysicsMesh {
     #[inline]
     pub fn face_z_right(&self, face: FaceIndex) -> f64 {
         self.inner.face_z_right[face.get()]
-    }
-
-    /// 获取面到owner的向量 (DVec2 - f64精度版本)
-    #[inline]
-    pub fn face_delta_owner(&self, face: usize) -> DVec2 {
-        let d = self.inner.face_delta_owner[face];
-        DVec2::new(d.x, d.y)
     }
 
     /// 获取面到owner的向量 (Backend几何类型 - Layer 3强制使用)
@@ -390,11 +379,16 @@ impl PhysicsMesh {
     // 节点访问 - 强制使用NodeIndex
     // =========================================================================
 
-    /// 获取节点坐标 (2D)
+    /// 获取节点坐标 (Backend 几何类型)
     #[inline]
-    pub fn node_xy(&self, node: NodeIndex) -> DVec2 {
+    pub fn node_xy_generic<B: Backend>(&self, node: NodeIndex) -> B::Vector2D {
         let p = self.inner.node_coords[node.get()];
-        DVec2::new(p.x, p.y)
+        B::vec2_new(
+            B::Scalar::from_f64(p.x as f64)
+                .unwrap_or_else(|| panic!("坐标x={}转换失败", p.x)),
+            B::Scalar::from_f64(p.y as f64)
+                .unwrap_or_else(|| panic!("坐标y={}转换失败", p.y))
+        )
     }
 
     /// 获取节点高程 [m]

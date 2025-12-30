@@ -30,7 +30,8 @@
 //! ```
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
 
@@ -171,7 +172,7 @@ impl MorphodynamicsSolver {
     /// - `dt`: 时间步长 [s]
     pub fn step(
         &mut self,
-        state: &mut ShallowWaterStateF64,
+        state: &mut ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         qb_x: &[f64],
         qb_y: &[f64],
@@ -206,7 +207,7 @@ impl MorphodynamicsSolver {
     /// - `tol`: 收敛容差
     pub fn step_semi_implicit<F>(
         &mut self,
-        state: &mut ShallowWaterStateF64,
+        state: &mut ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         compute_transport: F,
         dt: f64,
@@ -214,7 +215,7 @@ impl MorphodynamicsSolver {
         tol: f64,
     ) -> usize
     where
-        F: Fn(&ShallowWaterStateF64) -> (Vec<f64>, Vec<f64>),
+        F: Fn(&ShallowWaterState<CpuBackend<f64>>) -> (Vec<f64>, Vec<f64>),
     {
         // 重置统计
         self.stats = MorphologyStats::default();
@@ -283,7 +284,7 @@ impl MorphodynamicsSolver {
     pub fn compute_jacobian_diagonal(
         &self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         qb_x: &[f64],
         qb_y: &[f64],
     ) -> Vec<f64> {
@@ -314,7 +315,7 @@ impl MorphodynamicsSolver {
     pub fn compute_divergence(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         qb_x: &[f64],
         qb_y: &[f64],
     ) -> &[f64] {
@@ -326,7 +327,7 @@ impl MorphodynamicsSolver {
     fn compute_divergence_upwind(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         qb_x: &[f64],
         qb_y: &[f64],
     ) {
@@ -344,15 +345,15 @@ impl MorphodynamicsSolver {
             let owner: usize = owner_ci.get();
             let neighbor = neighbor_ci.map(|c| c.get());
 
-            let normal = mesh.face_normal(face_idx);
+            let (nx, ny) = mesh.face_normal_2d_tuple(face_idx);
             let length = mesh.face_length(fi);
 
             // Owner 的法向通量
-            let q_n_owner = qb_x[owner] * normal.x + qb_y[owner] * normal.y;
+            let q_n_owner = qb_x[owner] * nx + qb_y[owner] * ny;
 
             // 迎风选择通量
             let q_n = if let Some(neigh) = neighbor {
-                let q_n_neigh = qb_x[neigh] * normal.x + qb_y[neigh] * normal.y;
+                let q_n_neigh = qb_x[neigh] * nx + qb_y[neigh] * ny;
                 // 选择上游值
                 if q_n_owner + q_n_neigh >= 0.0 {
                     q_n_owner
@@ -384,7 +385,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 强耦合更新河床和水深
-    fn update_bed_coupled(&mut self, state: &mut ShallowWaterStateF64, mesh: &PhysicsMesh, dt: f64) {
+    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh, dt: f64) {
         let max_dz = self.config.max_dz_rate * dt;
 
         for i in 0..state.n_cells() {
@@ -438,7 +439,7 @@ impl MorphodynamicsSolver {
     /// 应用崩塌处理
     ///
     /// 当相邻单元间坡度超过安息角时，进行泥沙重分布
-    fn apply_avalanche(&mut self, state: &mut ShallowWaterStateF64, mesh: &PhysicsMesh) {
+    fn apply_avalanche(&mut self, state: &mut ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh) {
         let mut total_faces = 0;
 
         for iter in 0..self.config.max_avalanche_iter {
@@ -510,7 +511,7 @@ impl MorphodynamicsSolver {
     /// 应用崩塌处理（带绝对收敛准则）
     fn apply_avalanche_with_convergence(
         &mut self,
-        state: &mut ShallowWaterStateF64,
+        state: &mut ShallowWaterState<CpuBackend<f64>>,
         mesh: &PhysicsMesh,
         tol: f64,
     ) {

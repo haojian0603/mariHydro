@@ -1,4 +1,4 @@
-﻿// crates/mh_physics/src/sources/traits.rs
+// crates/mh_physics/src/sources/traits.rs
 
 //! 源项 Trait 定义
 //!
@@ -6,8 +6,8 @@
 
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
-use crate::types::NumericalParamsF64;
+use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
+use crate::types::NumericalParams;
 use std::marker::PhantomData;
 
 /// 源项贡献
@@ -16,11 +16,11 @@ use std::marker::PhantomData;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SourceContribution {
     /// 质量源 [m/s]
-    pub s_h: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    pub s_h: f64, // ALLOW_F64: 与 ConservedState 配合
     /// x动量源 [m²/s²]
-    pub s_hu: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    pub s_hu: f64, // ALLOW_F64: 与 ConservedState 配合
     /// y动量源 [m²/s²]
-    pub s_hv: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    pub s_hv: f64, // ALLOW_F64: 与 ConservedState 配合
 }
 
 impl SourceContribution {
@@ -33,21 +33,21 @@ impl SourceContribution {
 
     /// 创建新的源项贡献
     #[inline]
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn new(s_h: f64, s_hu: f64, s_hv: f64) -> Self {
         Self { s_h, s_hu, s_hv }
     }
 
     /// 创建仅动量贡献
     #[inline]
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn momentum(s_hu: f64, s_hv: f64) -> Self {
         Self { s_h: 0.0, s_hu, s_hv }
     }
 
     /// 创建仅质量贡献
     #[inline]
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn mass(s_h: f64) -> Self {
         Self { s_h, s_hu: 0.0, s_hv: 0.0 }
     }
@@ -72,7 +72,7 @@ impl SourceContribution {
 
     /// 缩放
     #[inline]
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn scale(&self, factor: f64) -> Self {
         Self {
             s_h: self.s_h * factor,
@@ -89,7 +89,7 @@ impl SourceContribution {
 
     /// 钳位到安全范围
     #[inline]
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     pub fn clamp(&self, max_abs: f64) -> Self {
         Self {
             s_h: self.s_h.clamp(-max_abs, max_abs),
@@ -119,11 +119,11 @@ impl std::ops::AddAssign for SourceContribution {
     }
 }
 
-// ALLOW_F64: 与 ConservedState 和 DVec2 配合
+// ALLOW_F64: 与 ConservedState 配合
 impl std::ops::Mul<f64> for SourceContribution {
     type Output = Self;
 
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+    // ALLOW_F64: 与 ConservedState 配合
     fn mul(self, rhs: f64) -> Self::Output {
         self.scale(rhs)
     }
@@ -135,17 +135,16 @@ impl std::ops::Mul<f64> for SourceContribution {
 #[derive(Debug, Clone)]
 pub struct SourceContext<'a> {
     /// 当前模拟时间 [s]
-    pub time: f64, // ALLOW_F64: 时间参数与模拟进度配合
+    pub time: f64,
     /// 时间步长 [s]
-    pub dt: f64, // ALLOW_F64: 时间参数与模拟进度配合
+    pub dt: f64,
     /// 数值参数
-    pub params: &'a NumericalParamsF64,
+    pub params: &'a NumericalParams<f64>,
 }
 
 impl<'a> SourceContext<'a> {
     /// 创建新的源项上下文
-    // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn new(time: f64, dt: f64, params: &'a NumericalParamsF64) -> Self {
+    pub fn new(time: f64, dt: f64, params: &'a NumericalParams<f64>) -> Self {
         Self { time, dt, params }
     }
 
@@ -177,7 +176,7 @@ pub trait SourceTerm: Send + Sync {
     /// 计算单个单元的源项贡献
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution;
@@ -188,7 +187,7 @@ pub trait SourceTerm: Send + Sync {
     /// 子类可以覆盖以提供优化的批量计算。
     fn compute_all(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         ctx: &SourceContext,
         output_h: &mut [f64],
         output_hu: &mut [f64],
@@ -233,7 +232,7 @@ pub trait SourceTerm: Send + Sync {
     /// 用于半隐式方法的预测阶段。默认返回完整源项。
     fn compute_prediction(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
@@ -245,7 +244,7 @@ pub trait SourceTerm: Send + Sync {
     /// 用于半隐式方法的校正阶段。默认返回零贡献。
     fn compute_correction(
         &self,
-        _state: &ShallowWaterStateF64,
+        _state: &ShallowWaterState<CpuBackend<f64>>,
         _cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -274,7 +273,7 @@ pub trait SourceTerm: Send + Sync {
     ///
     /// 返回 None 表示无限制，Some(dt) 表示最大允许时间步长。
     // ALLOW_F64: 时间参数与模拟进度配合
-    fn stability_limit(&self, _state: &ShallowWaterStateF64, _ctx: &SourceContext) -> Option<f64> {
+    fn stability_limit(&self, _state: &ShallowWaterState<CpuBackend<f64>>, _ctx: &SourceContext) -> Option<f64> {
         None
     }
 }

@@ -10,28 +10,26 @@
 //! # 使用示例
 //!
 //! ```ignore
-//! use glam::DVec2;
 //! use mh_physics::forcing::spatial::SpatialTimeSeries;
 //! use mh_physics::forcing::timeseries::TimeSeries;
 //!
 //! // 创建多个气象站点的降雨数据
 //! let station1 = (
-//!     DVec2::new(0.0, 0.0),
+//!     (0.0, 0.0),
 //!     TimeSeries::new(vec![0.0, 1.0, 2.0], vec![0.0, 10.0, 5.0]),
 //! );
 //! let station2 = (
-//!     DVec2::new(100.0, 0.0),
+//!     (100.0, 0.0),
 //!     TimeSeries::new(vec![0.0, 1.0, 2.0], vec![0.0, 20.0, 10.0]),
 //! );
 //!
 //! let spatial = SpatialTimeSeries::new(vec![station1, station2]);
 //!
 //! // 获取某位置和时间的插值
-//! let value = spatial.get_value_at(DVec2::new(50.0, 0.0), 1.0);
+//! let value = spatial.get_value_at((50.0, 0.0), 1.0);
 //! // value ≈ 15.0 (两站点的平均)
 //! ```
 
-use glam::DVec2;
 use serde::{Deserialize, Serialize};
 
 use super::timeseries::TimeSeries;
@@ -47,14 +45,14 @@ struct StationData {
 }
 
 impl StationData {
-    fn position(&self) -> DVec2 {
-        DVec2::new(self.x, self.y)
+    fn position(&self) -> (f64, f64) {
+        (self.x, self.y)
     }
 
-    fn from_dvec2(pos: DVec2, series: TimeSeries) -> Self {
+    fn from_pos(pos: (f64, f64), series: TimeSeries) -> Self {
         Self {
-            x: pos.x,
-            y: pos.y,
+            x: pos.0,
+            y: pos.1,
             series,
         }
     }
@@ -78,19 +76,19 @@ impl SpatialTimeSeries {
     ///
     /// # 参数
     ///
-    /// - `stations`: 站点列表，每个站点包含 (位置, 时间序列)
+    /// - `stations`: 站点列表，每个站点包含 (位置 (x, y), 时间序列)
     ///
     /// # Panics
     ///
     /// 如果站点列表为空
-    pub fn new(stations: Vec<(DVec2, TimeSeries)>) -> Self {
+    pub fn new(stations: Vec<((f64, f64), TimeSeries)>) -> Self {
         assert!(
             !stations.is_empty(),
             "SpatialTimeSeries requires at least one station"
         );
         let stations = stations
             .into_iter()
-            .map(|(pos, series)| StationData::from_dvec2(pos, series))
+            .map(|(pos, series)| StationData::from_pos(pos, series))
             .collect();
         Self {
             stations,
@@ -120,7 +118,7 @@ impl SpatialTimeSeries {
     }
 
     /// 获取站点位置列表
-    pub fn station_positions(&self) -> Vec<DVec2> {
+    pub fn station_positions(&self) -> Vec<(f64, f64)> {
         self.stations.iter().map(|s| s.position()).collect()
     }
 
@@ -141,13 +139,13 @@ impl SpatialTimeSeries {
     ///
     /// # 参数
     ///
-    /// - `pos`: 空间位置
+    /// - `pos`: 空间位置 (x, y)
     /// - `time`: 查询时间 [s]
     ///
     /// # 返回
     ///
     /// 空间和时间插值后的值
-    pub fn get_value_at(&self, pos: DVec2, time: f64) -> f64 {
+    pub fn get_value_at(&self, pos: (f64, f64), time: f64) -> f64 {
         // 只有一个站点时直接返回
         if self.stations.len() == 1 {
             return self.stations[0].series.get_value(time);
@@ -158,7 +156,10 @@ impl SpatialTimeSeries {
 
         for station in &self.stations {
             let loc = station.position();
-            let dist = pos.distance(loc);
+            // 计算距离: sqrt((x2-x1)^2 + (y2-y1)^2)
+            let dx = pos.0 - loc.0;
+            let dy = pos.1 - loc.1;
+            let dist = (dx * dx + dy * dy).sqrt();
 
             // 距离极小时直接返回该站点值
             if dist < self.min_distance {
@@ -182,7 +183,7 @@ impl SpatialTimeSeries {
     /// 高精度 IDW 插值（使用 Kahan 求和）
     ///
     /// 当站点数量很多或权重差异很大时使用此方法。
-    pub fn get_value_at_precise(&self, pos: DVec2, time: f64) -> f64 {
+    pub fn get_value_at_precise(&self, pos: (f64, f64), time: f64) -> f64 {
         // 只有一个站点时直接返回
         if self.stations.len() == 1 {
             return self.stations[0].series.get_value(time);
@@ -196,7 +197,10 @@ impl SpatialTimeSeries {
 
         for station in &self.stations {
             let loc = station.position();
-            let dist = pos.distance(loc);
+            // 计算距离
+            let dx = pos.0 - loc.0;
+            let dy = pos.1 - loc.1;
+            let dist = (dx * dx + dy * dy).sqrt();
 
             // 距离极小时直接返回该站点值
             if dist < self.min_distance {
@@ -238,7 +242,7 @@ impl SpatialTimeSeries {
     }
 
     /// 批量计算多个位置的 IDW 插值值（并行）
-    pub fn get_values_at_parallel(&self, positions: &[DVec2], time: f64) -> Vec<f64> {
+    pub fn get_values_at_parallel(&self, positions: &[(f64, f64)], time: f64) -> Vec<f64> {
         use rayon::prelude::*;
 
         positions
@@ -248,12 +252,15 @@ impl SpatialTimeSeries {
     }
 
     /// 获取最近站点的值（无插值）
-    pub fn get_nearest_value(&self, pos: DVec2, time: f64) -> f64 {
+    pub fn get_nearest_value(&self, pos: (f64, f64), time: f64) -> f64 {
         let mut min_dist = f64::MAX;
         let mut nearest_idx = 0;
 
         for (i, station) in self.stations.iter().enumerate() {
-            let dist = pos.distance(station.position());
+            let loc = station.position();
+            let dx = pos.0 - loc.0;
+            let dy = pos.1 - loc.1;
+            let dist = (dx * dx + dy * dy).sqrt();
             if dist < min_dist {
                 min_dist = dist;
                 nearest_idx = i;
@@ -264,12 +271,15 @@ impl SpatialTimeSeries {
     }
 
     /// 计算指定位置的 IDW 权重
-    pub fn compute_weights(&self, pos: DVec2) -> Vec<f64> {
+    pub fn compute_weights(&self, pos: (f64, f64)) -> Vec<f64> {
         let mut weights = Vec::with_capacity(self.stations.len());
         let mut sum = 0.0;
 
         for station in &self.stations {
-            let dist = pos.distance(station.position()).max(self.min_distance);
+            let loc = station.position();
+            let dx = pos.0 - loc.0;
+            let dy = pos.1 - loc.1;
+            let dist = (dx * dx + dy * dy).sqrt().max(self.min_distance);
             let w = 1.0 / dist.powf(self.power);
             weights.push(w);
             sum += w;
@@ -286,19 +296,21 @@ impl SpatialTimeSeries {
     }
 
     /// 添加站点
-    pub fn add_station(&mut self, pos: DVec2, series: TimeSeries) {
-        self.stations.push(StationData::from_dvec2(pos, series));
+    pub fn add_station(&mut self, pos: (f64, f64), series: TimeSeries) {
+        self.stations.push(StationData::from_pos(pos, series));
     }
 
     /// 获取数据范围
-    pub fn spatial_bounds(&self) -> (DVec2, DVec2) {
-        let mut min = DVec2::splat(f64::MAX);
-        let mut max = DVec2::splat(f64::MIN);
+    pub fn spatial_bounds(&self) -> ((f64, f64), (f64, f64)) {
+        let mut min = (f64::MAX, f64::MAX);
+        let mut max = (f64::MIN, f64::MIN);
 
         for station in &self.stations {
             let pos = station.position();
-            min = min.min(pos);
-            max = max.max(pos);
+            min.0 = min.0.min(pos.0);
+            min.1 = min.1.min(pos.1);
+            max.0 = max.0.max(pos.0);
+            max.1 = max.1.max(pos.1);
         }
 
         (min, max)
@@ -343,7 +355,7 @@ impl SpatialVectorTimeSeries {
 
     /// 从站点数据创建
     pub fn from_stations(
-        positions: Vec<DVec2>,
+        positions: Vec<(f64, f64)>,
         x_series: Vec<TimeSeries>,
         y_series: Vec<TimeSeries>,
     ) -> Self {
@@ -368,7 +380,7 @@ impl SpatialVectorTimeSeries {
     }
 
     /// 获取指定位置和时间的向量值
-    pub fn get_value_at(&self, pos: DVec2, time: f64) -> (f64, f64) {
+    pub fn get_value_at(&self, pos: (f64, f64), time: f64) -> (f64, f64) {
         (
             self.x_spatial.get_value_at(pos, time),
             self.y_spatial.get_value_at(pos, time),
@@ -376,13 +388,13 @@ impl SpatialVectorTimeSeries {
     }
 
     /// 获取指定位置和时间的模长
-    pub fn get_magnitude_at(&self, pos: DVec2, time: f64) -> f64 {
+    pub fn get_magnitude_at(&self, pos: (f64, f64), time: f64) -> f64 {
         let (x, y) = self.get_value_at(pos, time);
         (x * x + y * y).sqrt()
     }
 
     /// 获取指定位置和时间的方向（弧度）
-    pub fn get_direction_at(&self, pos: DVec2, time: f64) -> f64 {
+    pub fn get_direction_at(&self, pos: (f64, f64), time: f64) -> f64 {
         let (x, y) = self.get_value_at(pos, time);
         y.atan2(x)
     }
@@ -392,9 +404,9 @@ impl SpatialVectorTimeSeries {
 mod tests {
     use super::*;
 
-    fn make_station(x: f64, y: f64, values: Vec<f64>) -> (DVec2, TimeSeries) {
+    fn make_station(x: f64, y: f64, values: Vec<f64>) -> ((f64, f64), TimeSeries) {
         let times: Vec<f64> = (0..values.len()).map(|i| i as f64).collect();
-        (DVec2::new(x, y), TimeSeries::new(times, values))
+        ((x, y), TimeSeries::new(times, values))
     }
 
     #[test]
@@ -402,7 +414,7 @@ mod tests {
         let station = make_station(0.0, 0.0, vec![0.0, 1.0, 2.0]);
         let spatial = SpatialTimeSeries::new(vec![station]);
 
-        let value = spatial.get_value_at(DVec2::new(100.0, 100.0), 1.0);
+        let value = spatial.get_value_at((100.0, 100.0), 1.0);
         assert!((value - 1.0).abs() < 1e-10);
     }
 
@@ -414,7 +426,7 @@ mod tests {
         let spatial = SpatialTimeSeries::new(vec![station1, station2]);
 
         // 中点应该是两站点的平均
-        let value = spatial.get_value_at(DVec2::new(50.0, 0.0), 1.0);
+        let value = spatial.get_value_at((50.0, 0.0), 1.0);
         assert!((value - 15.0).abs() < 1e-10);
     }
 
@@ -426,11 +438,11 @@ mod tests {
         let spatial = SpatialTimeSeries::new(vec![station1, station2]);
 
         // 中点权重应该相等
-        let weights = spatial.compute_weights(DVec2::new(50.0, 0.0));
+        let weights = spatial.compute_weights((50.0, 0.0));
         assert!((weights[0] - weights[1]).abs() < 1e-10);
 
         // 靠近站点1的权重应该更大
-        let weights = spatial.compute_weights(DVec2::new(25.0, 0.0));
+        let weights = spatial.compute_weights((25.0, 0.0));
         assert!(weights[0] > weights[1]);
     }
 
@@ -442,7 +454,7 @@ mod tests {
         let spatial = SpatialTimeSeries::new(vec![station1, station2]);
 
         // 非常接近站点1时应该返回站点1的值
-        let value = spatial.get_value_at(DVec2::new(1e-8, 0.0), 1.0);
+        let value = spatial.get_value_at((1e-8, 0.0), 1.0);
         assert!((value - 100.0).abs() < 1e-6);
     }
 
@@ -461,7 +473,7 @@ mod tests {
         let y_spatial = SpatialTimeSeries::new(y_stations);
         let vector = SpatialVectorTimeSeries::new(x_spatial, y_spatial);
 
-        let (x, y) = vector.get_value_at(DVec2::new(50.0, 0.0), 0.0);
+        let (x, y) = vector.get_value_at((50.0, 0.0), 0.0);
         assert!((x - 0.0).abs() < 1e-10);  // 中点 x 分量应该是 0
         assert!((y - 0.0).abs() < 1e-10);
     }

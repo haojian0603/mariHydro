@@ -220,22 +220,6 @@ impl std::fmt::Display for RiemannError {
 
 impl std::error::Error for RiemannError {}
 
-// ============================================================================
-// 向后兼容类型别名
-// ============================================================================
-
-/// f64 版本的 RiemannFlux（向后兼容）
-pub type RiemannFluxF64 = RiemannFlux<f64>;
-
-/// f32 版本的 RiemannFlux
-pub type RiemannFluxF32 = RiemannFlux<f32>;
-
-/// f64 版本的 SolverParams（向后兼容）
-pub type SolverParamsF64 = SolverParams<f64>;
-
-/// f32 版本的 SolverParams
-pub type SolverParamsF32 = SolverParams<f32>;
-
 #[cfg(test)]
 mod tests {
     use super::*;

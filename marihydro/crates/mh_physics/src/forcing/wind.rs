@@ -22,8 +22,6 @@
 //! let (u, v) = wind.get_wind_at(3600.0); // t = 1 hour
 //! ```
 
-use glam::DVec2;
-
 /// 风场数据提供者
 #[derive(Debug, Clone)]
 pub struct WindProvider {
@@ -31,8 +29,8 @@ pub struct WindProvider {
     data: WindData,
     /// 最后更新时间
     last_update: f64,
-    /// 缓存的风速
-    cached_wind: DVec2,
+    /// 缓存的风速 (u, v)
+    cached_wind: (f64, f64),
 }
 
 /// 风场数据类型
@@ -76,7 +74,7 @@ impl WindProvider {
         Self {
             data: WindData::Constant { u, v },
             last_update: 0.0,
-            cached_wind: DVec2::new(u, v),
+            cached_wind: (u, v),
         }
     }
 
@@ -98,7 +96,7 @@ impl WindProvider {
         Self {
             data: WindData::TimeSeries { times, u_values, v_values },
             last_update: 0.0,
-            cached_wind: DVec2::new(initial_u, initial_v),
+            cached_wind: (initial_u, initial_v),
         }
     }
 
@@ -119,7 +117,7 @@ impl WindProvider {
                 phase: 0.0,
             },
             last_update: 0.0,
-            cached_wind: DVec2::new(mean_speed, 0.0),
+            cached_wind: (mean_speed, 0.0),
         }
     }
 
@@ -173,9 +171,8 @@ impl WindProvider {
     }
 
     /// 获取指定时刻的风速向量
-    pub fn get_wind_vector(&self, time: f64) -> DVec2 {
-        let (u, v) = self.get_wind_at(time);
-        DVec2::new(u, v)
+    pub fn get_wind_vector(&self, time: f64) -> (f64, f64) {
+        self.get_wind_at(time)
     }
 
     /// 获取指定时刻的风速标量
@@ -200,7 +197,7 @@ impl WindProvider {
     }
 
     /// 获取缓存的风速
-    pub fn cached(&self) -> DVec2 {
+    pub fn cached(&self) -> (f64, f64) {
         self.cached_wind
     }
 }
@@ -265,8 +262,8 @@ impl SpatialWindProvider {
             let shelter = self.shelter_factor[i];
             let factor = spatial * shelter;
 
-            wind_u[i] = base_wind.x * factor;
-            wind_v[i] = base_wind.y * factor;
+            wind_u[i] = base_wind.0 * factor;
+            wind_v[i] = base_wind.1 * factor;
         }
     }
 }

@@ -1107,41 +1107,8 @@ where
 
 impl<S> std::error::Error for StateError<S> where S: std::fmt::Debug + std::fmt::Display {}
 
-/// 泛型状态类型别名（向后兼容）
+/// 泛型状态类型别名（向后兼容 - 内部使用）
 pub type ShallowWaterStateGeneric<B> = ShallowWaterState<B>;
-
-/// 默认后端状态类型别名（使用 f64）
-pub type ShallowWaterStateDefault = ShallowWaterState<CpuBackend<f64>>;
-
-/// f64 后端的状态类型别名
-pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
-
-/// f32 后端的状态类型别名
-pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
-
-/// 为 f64 状态提供便捷构造方法
-impl ShallowWaterStateF64 {
-    /// 创建新的 f64 状态（便捷方法）
-    pub fn new(n_cells: usize) -> Self {
-        let backend = CpuBackend::<f64>::new();
-        Self::new_with_backend(backend, n_cells)
-    }
-}
-
-/// 为 f32 状态提供便捷构造方法
-impl ShallowWaterStateF32 {
-    /// 创建新的 f32 状态（便捷方法）
-    pub fn new(n_cells: usize) -> Self {
-        let backend = CpuBackend::<f32>::new();
-        Self::new_with_backend(backend, n_cells)
-    }
-}
-
-/// f64 RhsBuffers 类型别名
-pub type RhsBuffersF64 = RhsBuffers<f64>;
-
-/// f32 RhsBuffers 类型别名
-pub type RhsBuffersF32 = RhsBuffers<f32>;
 
 // StateAccess Trait 实现（泛型版本）
 impl<B> StateAccess for ShallowWaterState<B>

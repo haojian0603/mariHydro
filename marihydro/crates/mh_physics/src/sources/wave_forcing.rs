@@ -15,8 +15,9 @@
 //! ```
 
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
 use mh_foundation::AlignedVec;
+use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
 
 /// 波浪驱动源项配置
@@ -226,7 +227,7 @@ impl SourceTerm for WaveForcing {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         _ctx: &SourceContext,
     ) -> SourceContribution {
@@ -254,8 +255,9 @@ mod tests {
     use super::*;
     use crate::types::NumericalParams;
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
         }

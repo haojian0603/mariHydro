@@ -35,10 +35,6 @@ use std::marker::PhantomData;
 
 use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
-// Re-export for tests
-#[cfg(test)]
-use super::traits::LimiterContext;
-
 // ============================================================================
 // 泛型版本（核心实现）
 // ============================================================================
@@ -155,19 +151,16 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for BarthJespersenGeneric<S> {
 }
 
 // ============================================================================
-// 类型别名（向后兼容）
-// ============================================================================
-
-/// Barth-Jespersen 限制器 - f64 版本别名
-pub type BarthJespersen = BarthJespersenGeneric<f64>;
-
-// ============================================================================
 // 测试
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    // 测试用类型别名
+    type BarthJespersen = BarthJespersenGeneric<f64>;
+    type LimiterContext = LimiterContextGeneric<f64>;
     
     #[test]
     fn test_barth_jespersen_creation() {

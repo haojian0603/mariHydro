@@ -27,12 +27,11 @@ use crate::types::{NumericalParams, SafeVelocity};
 use mh_runtime::RuntimeScalar;
 use num_traits::Float;
 use num_traits::FromPrimitive;
-/// 泛型版本的 ConservedState
-pub type ConservedStateGeneric<S> = ConservedState<S>;
-/// 泛型版本的 NumericalParams
-pub type NumericalParamsGeneric<S> = NumericalParams<S>;
-/// 泛型版本的 SafeVelocity
-pub type SafeVelocityGeneric<S> = SafeVelocity<S>;
+
+// ============================================================
+// 注意：泛型 Generic 后缀类型别名已删除
+// 请直接使用：ConservedState<S>, NumericalParams<S>, SafeVelocity<S>
+// ============================================================
 
 // ============================================================
 // 状态访问 Trait (泛型版本)
@@ -377,19 +376,9 @@ pub struct StateStatistics<S> {
 impl<T: StateAccess + ?Sized> StateAccessExt for T {}
 
 // ============================================================
-// 向后兼容类型别名（Legacy f64 版本）
+// 注意：Legacy 类型别名已删除
+// 请直接使用泛型版本：ConservedState<S>, NumericalParams<S>, SafeVelocity<S>
 // ============================================================
-
-/// f64 版本的 ConservedState（向后兼容）
-pub type ConservedStateF64 = ConservedState<f64>;
-/// f64 版本的 NumericalParams（向后兼容）
-pub type NumericalParamsF64 = NumericalParams<f64>;
-/// f64 版本的 SafeVelocity（向后兼容）
-pub type SafeVelocityF64 = SafeVelocity<f64>;
-
-// 旧版 StateAccess trait 别名（如果外部代码依赖）
-pub use crate::StateAccess as StateAccessLegacy;
-pub use crate::StateAccessMut as StateAccessMutLegacy;
 
 // ============================================================
 // 测试

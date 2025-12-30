@@ -98,8 +98,8 @@ impl MeshTopology<CpuBackend<f64>> for UnstructuredMeshAdapter<CpuBackend<f64>> 
     
     #[allow(deprecated)]
     fn cell_center(&self, cell: usize) -> [f64; 2] {
-        let c = self.mesh.cell_center(cell);
-        [c.x, c.y]
+        let c = self.mesh.cell_center_tuple(cell);
+        [c.0, c.1]
     }
     
     fn cell_area(&self, cell: usize) -> f64 {
@@ -108,8 +108,8 @@ impl MeshTopology<CpuBackend<f64>> for UnstructuredMeshAdapter<CpuBackend<f64>> 
     
     #[allow(deprecated)]
     fn face_normal(&self, face: usize) -> [f64; 2] {
-        let n = self.mesh.face_normal(face);
-        [n.x, n.y]
+        let n = self.mesh.face_normal_2d_tuple(face);
+        [n.0, n.1]
     }
     
     fn face_length(&self, face: usize) -> f64 {
@@ -118,8 +118,8 @@ impl MeshTopology<CpuBackend<f64>> for UnstructuredMeshAdapter<CpuBackend<f64>> 
     
     #[allow(deprecated)]
     fn face_center(&self, face: usize) -> [f64; 2] {
-        let c = self.mesh.face_center(face);
-        [c.x, c.y]
+        let c = self.mesh.face_center_tuple(face);
+        [c.0, c.1]
     }
     
     fn face_owner(&self, face: usize) -> usize {

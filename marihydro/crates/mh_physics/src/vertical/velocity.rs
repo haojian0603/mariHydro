@@ -7,8 +7,9 @@
 //! w(σ) = -∫[σ,-1] h × ∇·u dσ
 
 use super::sigma::SigmaCoordinate;
-use crate::state::ShallowWaterStateF64;
+use crate::state::ShallowWaterState;
 use mh_foundation::AlignedVec;
+use mh_runtime::CpuBackend;
 
 /// 垂向速度计算器
 pub struct VerticalVelocity {
@@ -43,7 +44,7 @@ impl VerticalVelocity {
     pub fn compute_from_divergence(
         &mut self,
         div_hu: &[f64],
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
     ) {
         let n_layers = self.sigma.n_layers();
 
@@ -81,7 +82,7 @@ impl VerticalVelocity {
         v_layers: &[&[f64]],
         du_dx: &[&[f64]],
         dv_dy: &[&[f64]],
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
     ) {
         let n_layers = self.sigma.n_layers();
 
@@ -147,10 +148,11 @@ impl VerticalVelocity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ShallowWaterStateF64;
+    use crate::state::ShallowWaterState;
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterStateF64 {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
         }

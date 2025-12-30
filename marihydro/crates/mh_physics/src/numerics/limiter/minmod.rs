@@ -34,10 +34,6 @@
 use mh_runtime::RuntimeScalar;
 use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
 
-// Re-export for tests
-#[cfg(test)]
-use super::traits::LimiterContext;
-
 /// 泛型 Minmod 限制器
 ///
 /// 最耗散的限制器，提供最大稳定性。
@@ -118,19 +114,16 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for MinmodGeneric<S> {
     }
 }
 
-// =============================================================================
-// Type alias for f64 version
-// =============================================================================
-
-/// f64 特化版本 (默认)
-pub type Minmod = MinmodGeneric<f64>;
-
 /// 扩展的 Minmod 限制器 (Superbee 变体的基础)
 ///
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    // 测试用类型别名
+    type Minmod = MinmodGeneric<f64>;
+    type LimiterContext = LimiterContextGeneric<f64>;
     
     #[test]
     fn test_minmod_creation() {
@@ -261,7 +254,7 @@ mod tests {
         // Minmod 应该和 Barth-Jespersen 给出相同结果（在基本情况下）
         // 因为两者都是严格 TVD 限制器
         let minmod = Minmod::new();
-        let bj = super::super::BarthJespersen::new();
+        let bj = super::super::BarthJespersenGeneric::<f64>::new();
         
         let ctx = LimiterContext::new(1.0, 0.8, 0.5, 1.5, 0.1);
         let alpha_minmod = minmod.compute_limiter(&ctx);

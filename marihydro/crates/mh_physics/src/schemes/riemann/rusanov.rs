@@ -367,35 +367,25 @@ impl<B: Backend> RiemannSolver for RusanovSolver<B> {
 }
 
 // ============================================================================
-// 向后兼容类型别名
-// ============================================================================
-
-/// f64 版本的 RusanovSolver
-pub type RusanovSolverF64 = RusanovSolver<CpuBackend<f64>>;
-
-/// f32 版本的 RusanovSolver
-pub type RusanovSolverF32 = RusanovSolver<CpuBackend<f32>>;
-
-// ============================================================================
 // 辅助函数
 // ============================================================================
 
 /// 创建默认 Rusanov 求解器 (f64)
-pub fn create_rusanov_solver(gravity: f64) -> RusanovSolverF64 {
+pub fn create_rusanov_solver(gravity: f64) -> RusanovSolver<CpuBackend<f64>> {
     let params = SolverParams::<f64> {
         gravity,
         ..Default::default()
     };
-    RusanovSolverF64::from_params(params)
+    RusanovSolver::<CpuBackend<f64>>::from_params(params)
 }
 
 /// 创建鲁棒 Rusanov 求解器 (f64)
-pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolverF64 {
+pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolver<CpuBackend<f64>> {
     let params = SolverParams::<f64> {
         gravity,
         ..Default::default()
     };
-    RusanovSolverF64::from_params_with_config(params, RusanovConfig::robust())
+    RusanovSolver::<CpuBackend<f64>>::from_params_with_config(params, RusanovConfig::robust())
 }
 
 // ============================================================================
@@ -406,16 +396,16 @@ pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolverF64 {
 mod tests {
     use super::*;
 
-    fn create_test_solver_f64() -> RusanovSolverF64 {
+    fn create_test_solver_f64() -> RusanovSolver<f64> {
         create_rusanov_solver(9.81)
     }
 
-    fn create_test_solver_f32() -> RusanovSolverF32 {
+    fn create_test_solver_f32() -> RusanovSolver<f32> {
         let params = SolverParams::<f32> {
             gravity: 9.81f32,
             ..Default::default()
         };
-        RusanovSolverF32::from_params(params)
+        RusanovSolver::from_params(params)
     }
 
     #[test]
@@ -503,7 +493,7 @@ mod tests {
     #[test]
     fn test_robust_config() {
         let params = SolverParams::<f64>::default();
-        let solver = RusanovSolverF64::from_params_with_config(params, RusanovConfig::robust());
+        let solver = RusanovSolver::from_params_with_config(params, RusanovConfig::robust());
 
         assert!(solver.config().wave_speed_factor > 1.0);
         assert!(solver.config().use_weighted_average);

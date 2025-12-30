@@ -7,11 +7,9 @@
 //! - GhostMomentumMode: 动量镜像模式
 
 
-use glam::DVec2;
-
 use super::types::{BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
-use crate::types::NumericalParamsF64;
+use crate::types::NumericalParams;
 
 /// f64 版本的 ConservedState 类型别名
 type ConservedStateF64 = ConservedState<f64>;
@@ -73,11 +71,10 @@ impl GhostMomentumMode {
 /// ```ignore
 /// use mh_physics::boundary::{GhostStateCalculator, BoundaryKind, BoundaryParams};
 /// use mh_physics::state::ConservedState;
-/// use glam::DVec2;
 ///
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
 /// let interior = ConservedStateF64::from_primitive(1.0, 0.5, 0.0);
-/// let normal = DVec2::new(1.0, 0.0);
+/// let normal = (1.0, 0.0);  // 使用元组而非 DVec2
 /// let z_bed = 0.0; // 底床高程
 ///
 /// let ghost = calculator.compute_ghost(
@@ -99,7 +96,7 @@ impl GhostStateCalculator {
     }
 
     /// 从数值参数创建
-    pub fn from_numerical_params(params: &NumericalParamsF64) -> Self {
+    pub fn from_numerical_params(params: &NumericalParams<f64>) -> Self {
         Self::new(BoundaryParams::from_numerical_params(params))
     }
 
@@ -108,20 +105,20 @@ impl GhostStateCalculator {
     /// # 参数
     /// - `interior`: 内部单元状态
     /// - `kind`: 边界类型
-    /// - `normal`: 面外法向量（单位向量）
+    /// - `normal`: 面外法向量（单位向量）(nx, ny)
     /// - `external`: 外部强迫数据（用于开边界）
     /// - `z_bed`: 内部单元底床高程（用于计算水位）
     ///
     /// # 返回
     /// 幽灵单元的守恒量状态
-    // ALLOW_F64: 与 ConservedState 和 DVec2 配合使用
+    // ALLOW_F64: 与 ConservedState 和速度元组配合使用
     pub fn compute_ghost(
         &self,
         interior: ConservedStateF64,
         kind: BoundaryKind,
-        normal: DVec2,
+        normal: (f64, f64),
         external: Option<&ExternalForcing>,
-        z_bed: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+        z_bed: f64, 
     ) -> ConservedStateF64 {
         match kind {
             BoundaryKind::Wall => self.compute_wall_ghost(interior, normal),
@@ -144,32 +141,34 @@ impl GhostStateCalculator {
     /// 计算固壁边界的幽灵状态
     ///
     /// 实现无穿透条件：法向速度反向。
-    fn compute_wall_ghost(&self, interior: ConservedStateF64, normal: DVec2) -> ConservedStateF64 {
+    fn compute_wall_ghost(&self, interior: ConservedStateF64, normal: (f64, f64)) -> ConservedStateF64 {
         let h = interior.h.max(self.params.h_min);
 
         // 计算速度
         let u = interior.hu / h;
         let v = interior.hv / h;
-        let velocity = DVec2::new(u, v);
 
-        // 分解为法向和切向分量
-        let un = velocity.dot(normal);
-        let ut = velocity - normal * un;
+        // 分解为法向和切向分量 (dot product)
+        let un = u * normal.0 + v * normal.1;
+        // 切向分量: ut = velocity - normal * un
+        let ut_x = u - normal.0 * un;
+        let ut_y = v - normal.1 * un;
 
         // 幽灵速度：法向反转，切向保持
-        let ghost_velocity = ut - normal * un;
+        let ghost_u = ut_x - normal.0 * un;
+        let ghost_v = ut_y - normal.1 * un;
 
         ConservedStateF64 {
             h,
-            hu: h * ghost_velocity.x,
-            hv: h * ghost_velocity.y,
+            hu: h * ghost_u,
+            hv: h * ghost_v,
         }
     }
 
     /// 计算对称边界的幽灵状态
     ///
     /// 与固壁类似，但可能有不同的动量处理。
-    fn compute_symmetry_ghost(&self, interior: ConservedStateF64, normal: DVec2) -> ConservedStateF64 {
+    fn compute_symmetry_ghost(&self, interior: ConservedStateF64, normal: (f64, f64)) -> ConservedStateF64 {
         // 对称边界与固壁类似，法向速度反向
         self.compute_wall_ghost(interior, normal)
     }
@@ -181,13 +180,12 @@ impl GhostStateCalculator {
     /// Flather 条件基于特征分解：
     /// un* = un_ext + (c/h)(η_int - η_ext)
     /// 其中 η = h + z_bed 是水位
-    // ALLOW_F64: 与 ConservedState、ExternalForcing 和 DVec2 配合使用
     fn compute_open_sea_ghost(
         &self,
         interior: ConservedStateF64,
-        normal: DVec2,
+        normal: (f64, f64),
         external: &ExternalForcing,
-        z_bed: f64, // ALLOW_F64: 与 ConservedState 和 DVec2 配合
+        z_bed: f64,
     ) -> ConservedStateF64 {
         let h_int = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h_int);
@@ -195,11 +193,10 @@ impl GhostStateCalculator {
         // 内部速度
         let u_int = interior.hu / h_int;
         let v_int = interior.hv / h_int;
-        let velocity_int = DVec2::new(u_int, v_int);
 
-        // 法向速度
-        let un_int = velocity_int.dot(normal);
-        let un_ext = external.velocity.dot(normal);
+        // 法向速度 (dot product)
+        let un_int = u_int * normal.0 + v_int * normal.1;
+        let un_ext = external.velocity.0 * normal.0 + external.velocity.1 * normal.1;
 
         // Flather 条件修正法向速度
         // 正确使用水位 η = h + z_bed
@@ -208,9 +205,12 @@ impl GhostStateCalculator {
         let eta_diff = eta_int - eta_ext;
         let un_ghost = un_ext - (c / h_int) * eta_diff;
 
-        // 切向速度保持
-        let ut = velocity_int - normal * un_int;
-        let ghost_velocity = ut + normal * un_ghost;
+        // 切向速度保持: ut = velocity - normal * un
+        let ut_x = u_int - normal.0 * un_int;
+        let ut_y = v_int - normal.1 * un_int;
+        // ghost_velocity = ut + normal * un_ghost
+        let ghost_u = ut_x + normal.0 * un_ghost;
+        let ghost_v = ut_y + normal.1 * un_ghost;
 
         // 幽灵水深：从外部水位减去底床高程
         // h_ghost = max(0, eta_ext - z_bed)
@@ -218,8 +218,8 @@ impl GhostStateCalculator {
 
         ConservedStateF64 {
             h: h_ghost,
-            hu: h_ghost * ghost_velocity.x,
-            hv: h_ghost * ghost_velocity.y,
+            hu: h_ghost * ghost_u,
+            hv: h_ghost * ghost_v,
         }
     }
 
@@ -241,8 +241,8 @@ impl GhostStateCalculator {
         let h = external.eta.max(self.params.h_min);
         ConservedStateF64 {
             h,
-            hu: h * external.velocity.x,
-            hv: h * external.velocity.y,
+            hu: h * external.velocity.0,
+            hv: h * external.velocity.1,
         }
     }
 
@@ -252,7 +252,7 @@ impl GhostStateCalculator {
     ///
     /// # 参数
     /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量
+    /// - `normal`: 面外法向量 (nx, ny)
     /// - `mode`: 动量镜像模式
     ///
     /// # 返回
@@ -260,28 +260,36 @@ impl GhostStateCalculator {
     pub fn compute_ghost_with_mode(
         &self,
         interior: ConservedStateF64,
-        normal: DVec2,
+        normal: (f64, f64),
         mode: GhostMomentumMode,
     ) -> ConservedStateF64 {
         let h = interior.h.max(self.params.h_min);
         let u = interior.hu / h;
         let v = interior.hv / h;
-        let velocity = DVec2::new(u, v);
 
-        let un = velocity.dot(normal);
-        let ut = velocity - normal * un;
+        // dot product
+        let un = u * normal.0 + v * normal.1;
+        // ut = velocity - normal * un
+        let ut_x = u - normal.0 * un;
+        let ut_y = v - normal.1 * un;
 
-        let ghost_velocity = match mode {
-            GhostMomentumMode::FullReflect => ut - normal * un,
-            GhostMomentumMode::FreeSlip => ut - normal * (un * 0.5),
-            GhostMomentumMode::NoReflect => velocity,
-            GhostMomentumMode::FullCancel => -velocity,
+        let (ghost_u, ghost_v) = match mode {
+            GhostMomentumMode::FullReflect => {
+                // ut - normal * un
+                (ut_x - normal.0 * un, ut_y - normal.1 * un)
+            }
+            GhostMomentumMode::FreeSlip => {
+                // ut - normal * (un * 0.5)
+                (ut_x - normal.0 * (un * 0.5), ut_y - normal.1 * (un * 0.5))
+            }
+            GhostMomentumMode::NoReflect => (u, v),
+            GhostMomentumMode::FullCancel => (-u, -v),
         };
 
         ConservedStateF64 {
             h,
-            hu: h * ghost_velocity.x,
-            hv: h * ghost_velocity.y,
+            hu: h * ghost_u,
+            hv: h * ghost_v,
         }
     }
 
@@ -292,7 +300,7 @@ impl GhostStateCalculator {
     /// # 参数
     /// - `interiors`: 内部单元状态数组
     /// - `kinds`: 边界类型数组
-    /// - `normals`: 法向量数组
+    /// - `normals`: 法向量数组 (nx, ny)
     /// - `externals`: 外部强迫数组（可选）
     /// - `z_beds`: 底床高程数组
     /// - `output`: 输出数组
@@ -300,7 +308,7 @@ impl GhostStateCalculator {
         &self,
         interiors: &[ConservedStateF64],
         kinds: &[BoundaryKind],
-        normals: &[DVec2],
+        normals: &[(f64, f64)],
         externals: Option<&[ExternalForcing]>,
         z_beds: &[f64],
         output: &mut [ConservedStateF64],
@@ -339,29 +347,33 @@ impl Default for GhostStateCalculator {
 /// 将速度向量关于法向量反射。
 ///
 /// # 参数
-/// - `velocity`: 原始速度
-/// - `normal`: 反射面法向量（单位向量）
+/// - `velocity`: 原始速度 (u, v)
+/// - `normal`: 反射面法向量（单位向量）(nx, ny)
 ///
 /// # 返回
-/// 反射后的速度
+/// 反射后的速度 (u, v)
 #[inline]
-pub fn reflect_velocity(velocity: DVec2, normal: DVec2) -> DVec2 {
-    let un = velocity.dot(normal);
-    velocity - 2.0 * un * normal
+pub fn reflect_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, f64) {
+    // dot product
+    let un = velocity.0 * normal.0 + velocity.1 * normal.1;
+    // velocity - 2.0 * un * normal
+    (velocity.0 - 2.0 * un * normal.0, velocity.1 - 2.0 * un * normal.1)
 }
 
 /// 分解速度为法向和切向分量
 ///
 /// # 参数
-/// - `velocity`: 速度向量
-/// - `normal`: 法向量（单位向量）
+/// - `velocity`: 速度向量 (u, v)
+/// - `normal`: 法向量（单位向量）(nx, ny)
 ///
 /// # 返回
-/// (法向分量标量, 切向分量向量)
+/// (法向分量标量, 切向分量向量 (ut_x, ut_y))
 #[inline]
-pub fn decompose_velocity(velocity: DVec2, normal: DVec2) -> (f64, DVec2) {
-    let un = velocity.dot(normal);
-    let ut = velocity - normal * un;
+pub fn decompose_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, (f64, f64)) {
+    // dot product
+    let un = velocity.0 * normal.0 + velocity.1 * normal.1;
+    // ut = velocity - normal * un
+    let ut = (velocity.0 - normal.0 * un, velocity.1 - normal.1 * un);
     (un, ut)
 }
 
@@ -381,7 +393,7 @@ mod tests {
     fn test_wall_ghost_no_penetration() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedStateF64::from_primitive(1.0, 1.0, 0.0);
-        let normal = DVec2::new(1.0, 0.0);
+        let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
@@ -397,7 +409,7 @@ mod tests {
     fn test_wall_ghost_oblique() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedStateF64::from_primitive(1.0, 1.0, 1.0);
-        let normal = DVec2::new(1.0, 0.0);
+        let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
@@ -410,7 +422,7 @@ mod tests {
     fn test_outflow_ghost() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedStateF64::from_primitive(1.5, 0.5, 0.3);
-        let normal = DVec2::new(1.0, 0.0);
+        let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None, 0.0);
 
@@ -424,7 +436,7 @@ mod tests {
     fn test_inflow_ghost() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedStateF64::from_primitive(1.0, 0.0, 0.0);
-        let normal = DVec2::new(-1.0, 0.0);
+        let normal = (-1.0, 0.0);
         let external = ExternalForcing::new(2.0, 1.0, 0.0);
 
         let ghost = calculator.compute_ghost(
@@ -448,7 +460,7 @@ mod tests {
         
         // 内部单元: h=1.0, z_bed=0.5, 所以 η_int = 1.5
         let interior = ConservedStateF64::from_primitive(1.0, 0.0, 0.0);
-        let normal = DVec2::new(1.0, 0.0);
+        let normal = (1.0, 0.0);
         let z_bed = 0.5;
         
         // 外部强迫: η_ext = 1.5 (与内部相同)
@@ -472,7 +484,7 @@ mod tests {
     fn test_ghost_momentum_modes() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedStateF64::from_primitive(1.0, 1.0, 0.0);
-        let normal = DVec2::new(1.0, 0.0);
+        let normal = (1.0, 0.0);
 
         // FullReflect
         let ghost = calculator.compute_ghost_with_mode(interior, normal, GhostMomentumMode::FullReflect);
@@ -490,28 +502,28 @@ mod tests {
 
     #[test]
     fn test_reflect_velocity() {
-        let v = DVec2::new(1.0, 0.0);
-        let n = DVec2::new(1.0, 0.0);
+        let v = (1.0, 0.0);
+        let n = (1.0, 0.0);
         let reflected = reflect_velocity(v, n);
-        assert!(approx_eq(reflected.x, -1.0));
-        assert!(approx_eq(reflected.y, 0.0));
+        assert!(approx_eq(reflected.0, -1.0));
+        assert!(approx_eq(reflected.1, 0.0));
 
         // 斜向入射
-        let v = DVec2::new(1.0, 1.0);
-        let n = DVec2::new(1.0, 0.0);
+        let v = (1.0, 1.0);
+        let n = (1.0, 0.0);
         let reflected = reflect_velocity(v, n);
-        assert!(approx_eq(reflected.x, -1.0));
-        assert!(approx_eq(reflected.y, 1.0));
+        assert!(approx_eq(reflected.0, -1.0));
+        assert!(approx_eq(reflected.1, 1.0));
     }
 
     #[test]
     fn test_decompose_velocity() {
-        let v = DVec2::new(3.0, 4.0);
-        let n = DVec2::new(1.0, 0.0);
+        let v = (3.0, 4.0);
+        let n = (1.0, 0.0);
         let (un, ut) = decompose_velocity(v, n);
         assert!(approx_eq(un, 3.0));
-        assert!(approx_eq(ut.x, 0.0));
-        assert!(approx_eq(ut.y, 4.0));
+        assert!(approx_eq(ut.0, 0.0));
+        assert!(approx_eq(ut.1, 4.0));
     }
 
     #[test]
@@ -523,7 +535,7 @@ mod tests {
             ConservedStateF64::from_primitive(2.0, 0.0, 1.0),
         ];
         let kinds = vec![BoundaryKind::Wall, BoundaryKind::Outflow];
-        let normals = vec![DVec2::new(1.0, 0.0), DVec2::new(0.0, 1.0)];
+        let normals = vec![(1.0, 0.0), (0.0, 1.0)];
         let z_beds = vec![0.0, 0.0];
 
         let mut output = vec![ConservedStateF64::default(); 2];

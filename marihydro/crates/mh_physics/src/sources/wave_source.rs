@@ -25,9 +25,10 @@ use crate::sources::traits::{
     SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
+use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 use crate::waves::radiation_stress::{RadiationStressCalculator, RadiationStressTensor, WaveField};
 use crate::core::CpuBackend;
+use mh_runtime::Backend;
 
 /// 波浪辐射应力源项
 ///
@@ -165,7 +166,7 @@ impl SourceTerm for WaveRadiationSource {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {

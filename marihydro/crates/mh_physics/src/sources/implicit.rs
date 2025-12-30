@@ -18,8 +18,6 @@
 //! - **Crank-Nicolson**: u_new = u * (1 - dt*γ/2) / (1 + dt*γ/2)
 //! - **解析衰减**: u_new = u * exp(-γ*dt)
 
-use glam::DVec2;
-
 /// 隐式处理方法
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImplicitMethod {
@@ -253,10 +251,9 @@ impl ImplicitMomentumDecay {
     }
 
     /// 应用隐式衰减到向量
-    // ALLOW_F64: 与 DVec2 配合
-    pub fn apply_vec(&self, momentum: DVec2, gamma: f64, dt: f64) -> DVec2 {
-        let (hu, hv) = self.apply(momentum.x, momentum.y, gamma, dt);
-        DVec2::new(hu, hv)
+    // ALLOW_F64: 与速度元组配合
+    pub fn apply_vec(&self, momentum: (f64, f64), gamma: f64, dt: f64) -> (f64, f64) {
+        self.apply(momentum.0, momentum.1, gamma, dt)
     }
 
     /// 批量应用隐式衰减
@@ -447,11 +444,11 @@ mod tests {
     #[test]
     fn test_implicit_momentum_decay_apply_vec() {
         let solver = ImplicitMomentumDecay::default();
-        let momentum = DVec2::new(1.0, 0.5);
+        let momentum = (1.0, 0.5);
         let result = solver.apply_vec(momentum, 1.0, 1.0);
 
-        assert!((result.x - 0.5).abs() < 1e-10);
-        assert!((result.y - 0.25).abs() < 1e-10);
+        assert!((result.0 - 0.5).abs() < 1e-10);
+        assert!((result.1 - 0.25).abs() < 1e-10);
     }
 
     #[test]

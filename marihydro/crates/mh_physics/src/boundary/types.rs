@@ -7,18 +7,11 @@
 //! - BoundaryCondition: 边界条件配置
 //! - ExternalForcing: 外部强迫数据
 //! - BoundaryParams: 边界计算参数
-//!
-//! # 迁移说明
-//!
-//! 从 legacy_src/domain/boundary/types.rs 迁移，适配新架构：
-//! - 使用 glam::DVec2 代替 (f64, f64) 表示速度
-//! - 使用 serde 支持配置文件
-//! - 使用 repr(u8) 支持 GPU 传输
 
-use glam::DVec2;
+
 use serde::{Deserialize, Serialize};
 
-use crate::types::NumericalParamsF64;
+use crate::types::NumericalParams;
 
 // ============================================================
 // 边界类型枚举
@@ -254,21 +247,18 @@ impl BoundaryCondition {
     }
 
     /// 设置固定水位
-    // ALLOW_F64: Layer 4 配置 API
     pub fn with_fixed_eta(mut self, eta: f64) -> Self {
         self.fixed_eta = Some(eta);
         self
     }
 
     /// 设置固定流量
-    // ALLOW_F64: Layer 4 配置 API
     pub fn with_fixed_discharge(mut self, discharge: f64) -> Self {
         self.fixed_discharge = Some(discharge);
         self
     }
 
     /// 设置曼宁粗糙度
-    // ALLOW_F64: Layer 4 配置 API
     pub fn with_manning_n(mut self, n: f64) -> Self {
         self.manning_n = Some(n);
         self
@@ -288,21 +278,21 @@ impl Default for BoundaryCondition {
 /// 外部强迫数据
 ///
 /// 边界处的水位和速度数据，用于 OpenSea、RiverInflow 等边界条件。
-// ALLOW_F64: 边界强迫数据与 DVec2 配合使用
+// ALLOW_F64: 边界强迫数据与速度元组配合使用
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ExternalForcing {
     /// 水位 [m]
     pub eta: f64, // ALLOW_F64: 边界数据结构
 
-    /// 速度向量 [m/s]
-    pub velocity: DVec2,
+    /// 速度向量 (u, v) [m/s]
+    pub velocity: (f64, f64),
 }
 
 impl ExternalForcing {
     /// 零强迫常量
     pub const ZERO: Self = Self {
         eta: 0.0,
-        velocity: DVec2::ZERO,
+        velocity: (0.0, 0.0),
     };
 
     /// 创建完整的强迫数据
@@ -312,47 +302,47 @@ impl ExternalForcing {
     /// - `u`: x 方向速度 [m/s]
     /// - `v`: y 方向速度 [m/s]
     #[inline]
-    pub fn new(eta: f64, u: f64, v: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
+    pub fn new(eta: f64, u: f64, v: f64) -> Self {
         Self {
             eta,
-            velocity: DVec2::new(u, v),
+            velocity: (u, v),
         }
     }
 
     /// 创建仅水位的强迫数据
     #[inline]
-    pub fn with_eta(eta: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
+    pub fn with_eta(eta: f64) -> Self {
         Self {
             eta,
-            velocity: DVec2::ZERO,
+            velocity: (0.0, 0.0),
         }
     }
 
     /// 创建仅速度的强迫数据
     #[inline]
-    pub fn with_velocity(u: f64, v: f64) -> Self { // ALLOW_F64: 边界数据与 DVec2 配合
+    pub fn with_velocity(u: f64, v: f64) -> Self {
         Self {
             eta: 0.0,
-            velocity: DVec2::new(u, v),
+            velocity: (u, v),
         }
     }
 
     /// 获取 x 方向速度
     #[inline]
     pub fn u(&self) -> f64 {
-        self.velocity.x
+        self.velocity.0
     }
 
     /// 获取 y 方向速度
     #[inline]
     pub fn v(&self) -> f64 {
-        self.velocity.y
+        self.velocity.1
     }
 
     /// 检查数据是否有效
     #[inline]
     pub fn is_valid(&self) -> bool {
-        self.eta.is_finite() && self.velocity.is_finite()
+        self.eta.is_finite() && self.velocity.0.is_finite() && self.velocity.1.is_finite()
     }
 }
 
@@ -363,15 +353,14 @@ impl ExternalForcing {
 /// 边界计算参数
 ///
 /// 边界通量计算所需的物理参数和预计算常量。
-// ALLOW_F64: Layer 4 边界计算参数配置
 #[derive(Debug, Clone, Copy)]
 pub struct BoundaryParams {
     /// 重力加速度 [m/s²]
-    pub gravity: f64, // ALLOW_F64: Layer 4 配置参数
+    pub gravity: f64,
     /// 最小水深阈值 [m]
-    pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
+    pub h_min: f64,
     /// sqrt(g) - 预计算以提高性能
-    pub sqrt_g: f64, // ALLOW_F64: Layer 4 配置参数
+    pub sqrt_g: f64,
 }
 
 impl BoundaryParams {
@@ -380,7 +369,7 @@ impl BoundaryParams {
     /// # 参数
     /// - `gravity`: 重力加速度 [m/s²]
     /// - `h_min`: 最小水深阈值 [m]
-    pub fn new(gravity: f64, h_min: f64) -> Self { // ALLOW_F64: Layer 4 配置 API
+    pub fn new(gravity: f64, h_min: f64) -> Self {
         Self {
             gravity,
             h_min,
@@ -392,12 +381,12 @@ impl BoundaryParams {
     ///
     /// 使用默认重力加速度 (9.81 m/s²)。
     /// 如果需要自定义重力，请使用 `new` 方法。
-    pub fn from_numerical_params(params: &NumericalParamsF64) -> Self {
+    pub fn from_numerical_params(params: &NumericalParams<f64>) -> Self {
         Self::new(9.81, params.h_min)
     }
 
     /// 从数值参数和物理常数创建
-    pub fn from_params(numerical: &NumericalParamsF64, physics: &crate::types::PhysicalConstants) -> Self {
+    pub fn from_params(numerical: &NumericalParams<f64>, physics: &crate::types::PhysicalConstants) -> Self {
         Self::new(physics.g, numerical.h_min)
     }
 
@@ -405,7 +394,7 @@ impl BoundaryParams {
     ///
     /// c = sqrt(g * h)
     #[inline]
-    pub fn wave_speed(&self, h: f64) -> f64 { // ALLOW_F64: 与 BoundaryParams 配合使用
+    pub fn wave_speed(&self, h: f64) -> f64 {
         self.sqrt_g * h.max(self.h_min).sqrt()
     }
 
@@ -413,7 +402,7 @@ impl BoundaryParams {
     ///
     /// p = 0.5 * g * h²
     #[inline]
-    pub fn hydrostatic_pressure(&self, h: f64) -> f64 { // ALLOW_F64: 与 BoundaryParams 配合使用
+    pub fn hydrostatic_pressure(&self, h: f64) -> f64 {
         0.5 * self.gravity * h * h
     }
 }

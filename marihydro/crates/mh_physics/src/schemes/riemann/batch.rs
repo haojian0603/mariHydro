@@ -29,13 +29,13 @@
 //! # 使用示例
 //!
 //! ```ignore
-//! use mh_physics::schemes::riemann::{BatchRiemannSolver, HllcSolverF64};
+//! use mh_physics::schemes::riemann::{BatchRiemannSolver, HllcSolver, RiemannFlux};
 //!
-//! let solver = HllcSolverF64::default();
+//! let solver = HllcSolver::<f64>::default();
 //! let left_states = vec![...];
 //! let right_states = vec![...];
 //! let normals = vec![...];
-//! let mut fluxes = vec![RiemannFluxF64::zero(); n_faces];
+//! let mut fluxes = vec![RiemannFlux::<f64>::zero(); n_faces];
 //!
 //! solver.solve_batch(&left_states, &right_states, &normals, &mut fluxes);
 //! ```

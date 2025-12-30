@@ -40,7 +40,6 @@ fn test_timeseries_extrapolation_modes() {
 
 #[test]
 fn test_spatial_timeseries() {
-    use glam::DVec2;
     use mh_physics::forcing::spatial::SpatialTimeSeries;
     use mh_physics::forcing::timeseries::TimeSeries;
 
@@ -48,12 +47,12 @@ fn test_spatial_timeseries() {
     let ts2 = TimeSeries::from_points(vec![(0.0, 30.0), (1.0, 40.0)]);
 
     let mut spatial = SpatialTimeSeries::new(vec![
-        (DVec2::new(0.0, 0.0), ts1),
+        ((0.0, 0.0), ts1),
     ]);
-    spatial.add_station(DVec2::new(10.0, 0.0), ts2);
+    spatial.add_station((10.0, 0.0), ts2);
 
     // 在两站点中间插值
-    let v = spatial.get_value_at(DVec2::new(5.0, 0.0), 0.5);
+    let v = spatial.get_value_at((5.0, 0.0), 0.5);
     // IDW 权重相等时取平均
     let expected = (15.0 + 35.0) / 2.0;
     assert!((v - expected).abs() < 1e-10);

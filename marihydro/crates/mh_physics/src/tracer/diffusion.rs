@@ -461,9 +461,9 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
             let neighbor = mesh.face_neighbor(face);
 
             let flux = if let Some(neigh) = neighbor {
-                let normal = mesh.face_normal(face_idx);
-                let normal_x = S::from_f64(normal.x).unwrap_or(S::ZERO);
-                let normal_y = S::from_f64(normal.y).unwrap_or(S::ZERO);
+                let (nx, ny) = mesh.face_normal_2d_tuple(face_idx);
+                let normal_x = S::from_f64(nx).unwrap_or(S::ZERO);
+                let normal_y = S::from_f64(ny).unwrap_or(S::ZERO);
                 let length = S::from_f64(mesh.face_length(face)).unwrap_or(S::ZERO);
                 let dist = S::from_f64(mesh.face_dist_o2n(face)).unwrap_or(S::ZERO);
 

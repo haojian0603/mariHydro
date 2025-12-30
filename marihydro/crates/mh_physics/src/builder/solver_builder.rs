@@ -6,7 +6,7 @@
 
 use super::config::{ConfigError, SolverConfig};
 use super::dyn_solver::{DynSolver, DynState, DynStepResult, SolverStats};
-use mh_config::Precision;
+use crate::builder::config::Precision;
 use mh_runtime::{RuntimeScalar, Tolerance};
 use std::time::Instant;
 

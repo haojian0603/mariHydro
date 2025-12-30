@@ -6,7 +6,7 @@
 
 use mh_runtime::{CpuBackend, KahanSum};
 use mh_physics::forcing::timeseries::{ExtrapolationMode, TimeSeries};
-use mh_physics::state::ShallowWaterStateF64;
+use mh_physics::state::ShallowWaterState;
 use std::f64::consts::PI;
 use std::time::Instant;
 
@@ -28,7 +28,7 @@ fn test_cproperty_static_water() {
 
     // 创建碗形地形
     let dx = 1.0 / n_cells as f64;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
 
     // 设置碗形地形和静水状态
     let water_level = 1.0;
@@ -112,7 +112,7 @@ fn test_mass_conservation_semi_implicit() {
     let start = Instant::now();
 
     // 溃坝初始条件
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     let dx = 10.0 / n_cells as f64;
 
     for i in 0..n_cells {
@@ -312,7 +312,7 @@ fn test_wet_dry_mass_conservation() {
     let start = Instant::now();
 
     // 创建包含干湿过渡的状态
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
 
     for i in 0..n_cells {
         state.z[i] = 0.0;

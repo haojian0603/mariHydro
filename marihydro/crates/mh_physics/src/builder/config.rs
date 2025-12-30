@@ -1,102 +1,98 @@
 // crates/mh_physics/src/builder/config.rs
 
-//! 求解器配置（无泛型）
+//! 求解器配置（无泛型入口层）
 //!
-//! App层直接使用的配置类型，完全不包含泛型参数。
+//! 提供应用层直接使用的配置结构，所有参数使用 f64 存储，在构建时转换到引擎层泛型类型。
+//! 这是架构分层的关键边界：Layer 4（配置层）→ Layer 3（引擎层）。
 
-use mh_config::Precision;
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+pub use mh_config::Precision;
 
-/// 黎曼求解器类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[derive(Serialize, Deserialize)]
+/// 黎曼求解器类型枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RiemannSolverType {
-    /// HLLC求解器（推荐）
+    /// HLLC 求解器（推荐，鲁棒性与精度平衡）
     #[default]
     Hllc,
-    /// Roe求解器
+    /// Roe 求解器（需熵修正）
     Roe,
-    /// Rusanov求解器
+    /// Rusanov 求解器（最稳定，耗散性较强）
     Rusanov,
-    /// 简单中心格式
+    /// 中心差分格式（仅用于测试）
     Central,
 }
 
-/// 时间积分方法
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[derive(Serialize, Deserialize)]
+/// 时间积分方法枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TimeIntegrationMethod {
-    /// 前向欧拉（一阶）
+    /// 前向欧拉格式（一阶精度）
     ForwardEuler,
-    /// SSP-RK2（二阶）
+    /// SSP-RK2 格式（二阶强稳定保持）
     #[default]
     SspRk2,
-    /// SSP-RK3（三阶）
+    /// SSP-RK3 格式（三阶强稳定保持）
     SspRk3,
 }
 
-/// 限制器类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[derive(Serialize, Deserialize)]
+/// 限制器类型枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LimiterType {
-    /// 无限制器（一阶精度）
+    /// 无限制器（退化为一阶精度）
     None,
-    /// Minmod限制器
+    /// Minmod 限制器（最鲁棒，耗散性最强）
     #[default]
     Minmod,
-    /// Van Leer限制器
+    /// Van Leer 限制器（二阶精度）
     VanLeer,
-    /// Superbee限制器
+    /// Superbee 限制器（最激进，可能产生振荡）
     Superbee,
-    /// MC限制器
+    /// MC 限制器（单调中心格式）
     Mc,
 }
 
 /// 求解器配置（完全无泛型）
 ///
-/// 这是App层唯一需要接触的配置类型。所有数值参数使用f64存储，
-/// 在构建求解器时会根据选择的精度进行转换。
+/// 这是应用层唯一需要接触的配置类型。所有数值参数使用 f64 存储，
+/// 在构建求解器时会根据选择的精度转换为 Layer 3 的泛型类型。
+/// 使得 CLI/Editor 层完全无泛型语法，提升易用性。
 ///
-/// # 示例
+/// # 使用示例
 ///
 /// ```ignore
 /// use mh_physics::builder::{SolverConfig, Precision};
 ///
-/// let config = SolverConfig {
-///     precision: Precision::F32,
-///     cfl: 0.5,
-///     ..Default::default()
-/// };
-///
-/// // 保存到文件
-/// config.save("config.yaml")?;
+/// // 创建高精度配置
+/// let config = SolverConfig::high_precision();
+/// config.save("simulation.yaml")?;
 ///
 /// // 从文件加载
-/// let loaded = SolverConfig::load("config.yaml")?;
+/// let loaded = SolverConfig::load("simulation.yaml")?;
+/// let layer3: Layer3Config<f64> = Layer3Config::from_builder(&loaded).unwrap();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {
-    // ========== 精度选择 ==========
-    
-    /// 计算精度（运行时决定）
+    // ========== 精度与性能参数 ==========
+
+    /// 计算精度选择（运行时决定标量类型）
     #[serde(default)]
     pub precision: Precision,
 
-    // ========== 数值参数 ==========
-    
-    /// CFL数（库朗数）
+    /// CFL 数（库朗数，控制时间步稳定性）
     #[serde(default = "default_cfl")]
     pub cfl: f64,
 
-    /// 最大速度限制 [m/s]
+    /// 最大速度限制 [m/s]，防止数值爆炸
     #[serde(default = "default_max_velocity")]
     pub max_velocity: f64,
 
-    /// 最小水深 [m]
+    // ========== 数值阈值参数 ==========
+
+    /// 最小水深 [m]，用于除法保护
     #[serde(default = "default_h_min")]
     pub h_min: f64,
 
@@ -108,57 +104,55 @@ pub struct SolverConfig {
     #[serde(default = "default_gravity")]
     pub gravity: f64,
 
-    // ========== 物理选项 ==========
-    
-    /// 黎曼求解器类型
+    // ========== 物理模块开关 ==========
+
+    /// 黎曼求解器类型选择
     #[serde(default)]
     pub riemann_solver: RiemannSolverType,
 
-    /// 时间积分方法
+    /// 时间积分方法选择
     #[serde(default)]
     pub time_integration: TimeIntegrationMethod,
 
-    /// 限制器类型
+    /// 梯度限制器类型
     #[serde(default)]
     pub limiter: LimiterType,
 
-    // ========== 特性开关 ==========
-    
-    /// 启用干湿边界处理
+    /// 是否启用干湿边界处理
     #[serde(default = "default_true")]
     pub wetting_drying: bool,
 
-    /// 启用底摩擦
+    /// 是否启用底摩擦
     #[serde(default)]
     pub friction: bool,
 
-    /// 曼宁系数 [s/m^(1/3)]
+    /// 曼宁粗糙系数 [s/m^(1/3)]
     #[serde(default = "default_manning")]
     pub manning_coefficient: f64,
 
-    /// 启用科氏力
+    /// 是否启用科里奥利力
     #[serde(default)]
     pub coriolis: bool,
 
-    /// 科氏参数 [1/s]
+    /// 科里奥利参数 [1/s]（通常由纬度计算）
     #[serde(default)]
     pub coriolis_parameter: f64,
 
-    /// 启用风应力
+    /// 是否启用风应力
     #[serde(default)]
     pub wind_forcing: bool,
 
-    /// 风阻系数
+    /// 风拖曳系数
     #[serde(default = "default_wind_drag")]
     pub wind_drag_coefficient: f64,
 
-    // ========== 输出选项 ==========
-    
-    /// 启用详细日志
+    // ========== 输出与诊断 ==========
+
+    /// 启用详细日志输出
     #[serde(default)]
     pub verbose: bool,
 
-    /// 每N步输出统计
+    /// 统计信息输出间隔步数
     #[serde(default = "default_stats_interval")]
     pub stats_interval: usize,
 }
@@ -206,7 +200,7 @@ impl SolverConfig {
         Self::default()
     }
 
-    /// 创建高精度配置
+    /// 创建高精度配置（严格阈值）
     pub fn high_precision() -> Self {
         Self {
             precision: Precision::F64,
@@ -217,7 +211,7 @@ impl SolverConfig {
         }
     }
 
-    /// 创建快速计算配置
+    /// 创建快速计算配置（宽松阈值，一阶格式）
     pub fn fast() -> Self {
         Self {
             precision: Precision::F32,
@@ -230,7 +224,7 @@ impl SolverConfig {
         }
     }
 
-    /// 从YAML文件加载
+    /// 从 YAML 文件加载配置
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::IoError(e.to_string()))?;
@@ -238,7 +232,7 @@ impl SolverConfig {
             .map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 
-    /// 保存到YAML文件
+    /// 保存配置到 YAML 文件
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ConfigError> {
         let content = serde_yaml::to_string(self)
             .map_err(|e| ConfigError::SerializeError(e.to_string()))?;
@@ -246,20 +240,21 @@ impl SolverConfig {
             .map_err(|e| ConfigError::IoError(e.to_string()))
     }
 
-    /// 从JSON字符串解析
+    /// 从 JSON 字符串解析配置
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
         serde_json::from_str(json)
             .map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 
-    /// 转换为JSON字符串
+    /// 将配置序列化为 JSON 字符串
     pub fn to_json(&self) -> Result<String, ConfigError> {
         serde_json::to_string_pretty(self)
             .map_err(|e| ConfigError::SerializeError(e.to_string()))
     }
 
-    /// 验证配置有效性
+    /// 验证配置参数的有效性
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // 验证 CFL 数范围
         if self.cfl <= 0.0 || self.cfl > 1.0 {
             return Err(ConfigError::InvalidValue(
                 "cfl".to_string(),
@@ -267,20 +262,19 @@ impl SolverConfig {
             ));
         }
 
+        // 验证水深阈值合理性
         if self.h_min <= 0.0 {
             return Err(ConfigError::InvalidValue(
                 "h_min".to_string(),
                 "必须大于 0".to_string(),
             ));
         }
-
         if self.h_dry <= 0.0 {
             return Err(ConfigError::InvalidValue(
                 "h_dry".to_string(),
                 "必须大于 0".to_string(),
             ));
         }
-
         if self.h_min > self.h_dry {
             return Err(ConfigError::InvalidValue(
                 "h_min".to_string(),
@@ -288,6 +282,7 @@ impl SolverConfig {
             ));
         }
 
+        // 验证物理常数
         if self.gravity <= 0.0 {
             return Err(ConfigError::InvalidValue(
                 "gravity".to_string(),
@@ -295,6 +290,7 @@ impl SolverConfig {
             ));
         }
 
+        // 验证摩擦系数（如果启用摩擦）
         if self.friction && self.manning_coefficient <= 0.0 {
             return Err(ConfigError::InvalidValue(
                 "manning_coefficient".to_string(),
@@ -305,38 +301,42 @@ impl SolverConfig {
         Ok(())
     }
 
-    /// 根据精度调整容差值
+    /// 根据精度自动调整容差值
     pub fn adjust_for_precision(&mut self) {
         match self.precision {
             Precision::F32 => {
-                // F32需要更宽松的容差
+                // F32 需要更宽松的阈值以避免下溢
                 if self.h_min < 1e-4 {
                     self.h_min = 1e-4;
                 }
                 if self.h_dry < 1e-3 {
                     self.h_dry = 1e-3;
                 }
+                // F32 相对容差也应适当放宽
+                if self.cfl > 0.8 {
+                    self.cfl = 0.8;
+                }
             }
             Precision::F64 => {
-                // F64可以使用更严格的容差
+                // F64 可以使用更严格的阈值
+                // 保持用户设置不变
             }
         }
     }
 }
 
-/// 配置错误
+
+/// 配置错误类型
 #[derive(Debug, Clone)]
 pub enum ConfigError {
-    /// IO错误
+    /// IO 错误（文件读写失败）
     IoError(String),
-    /// 解析错误
+    /// 解析错误（格式无效）
     ParseError(String),
-    /// 序列化错误
+    /// 序列化错误（结构不匹配）
     SerializeError(String),
-    /// 无效值
+    /// 参数值无效（范围或约束违反）
     InvalidValue(String, String),
-    /// 缺少必需字段
-    MissingField(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -346,7 +346,6 @@ impl std::fmt::Display for ConfigError {
             ConfigError::ParseError(msg) => write!(f, "解析错误: {}", msg),
             ConfigError::SerializeError(msg) => write!(f, "序列化错误: {}", msg),
             ConfigError::InvalidValue(field, msg) => write!(f, "无效值 '{}': {}", field, msg),
-            ConfigError::MissingField(field) => write!(f, "缺少必需字段: {}", field),
         }
     }
 }
@@ -361,12 +360,14 @@ mod tests {
     fn test_default_config() {
         let config = SolverConfig::default();
         assert!(config.validate().is_ok());
+        assert_eq!(config.precision, Precision::F64);
     }
 
     #[test]
     fn test_high_precision_config() {
         let config = SolverConfig::high_precision();
         assert_eq!(config.precision, Precision::F64);
+        assert_eq!(config.cfl, 0.4);
         assert!(config.validate().is_ok());
     }
 
@@ -374,6 +375,7 @@ mod tests {
     fn test_fast_config() {
         let config = SolverConfig::fast();
         assert_eq!(config.precision, Precision::F32);
+        assert_eq!(config.limiter, LimiterType::None);
         assert!(config.validate().is_ok());
     }
 
@@ -387,10 +389,21 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_h_min() {
+        let config = SolverConfig {
+            h_min: 1e-3,
+            h_dry: 1e-6,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn test_serde_json() {
         let config = SolverConfig::default();
         let json = config.to_json().unwrap();
         let parsed = SolverConfig::from_json(&json).unwrap();
         assert_eq!(config.cfl, parsed.cfl);
+        assert_eq!(config.h_min, parsed.h_min);
     }
 }

@@ -26,7 +26,7 @@ use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
 use mh_physics::NumericalScheme;
 use mh_physics::Layer3Config;
-use mh_physics::state::ShallowWaterStateF64;
+use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
 use mh_geo::{Point2D, Point3D};
 use mh_runtime::{CpuBackend, CellIndex};
@@ -322,7 +322,7 @@ fn create_rectangular_mesh(
 }
 
 /// 计算总质量 (h * area) [m³]
-fn compute_total_mass(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> f64 {
+fn compute_total_mass(state: &ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(CellIndex::new(i)) {
@@ -333,7 +333,7 @@ fn compute_total_mass(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> f64 {
 }
 
 /// 计算总动量 (hu * area, hv * area) [m³/s]
-fn compute_total_momentum(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> (f64, f64) {
+fn compute_total_momentum(state: &ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh) -> (f64, f64) {
     let mut total_hu = 0.0;
     let mut total_hv = 0.0;
     for i in 0..state.n_cells() {
@@ -346,7 +346,7 @@ fn compute_total_momentum(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> (
 }
 
 /// 计算总能量 (势能 + 动能) [J/m²]
-fn compute_total_energy(state: &ShallowWaterStateF64, mesh: &PhysicsMesh, g: f64) -> f64 {
+fn compute_total_energy(state: &ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh, g: f64) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(CellIndex::new(i)) {
@@ -367,7 +367,7 @@ fn compute_total_energy(state: &ShallowWaterStateF64, mesh: &PhysicsMesh, g: f64
 }
 
 /// 验证状态有效性（检查NaN、无穷、负水深）
-fn validate_state(state: &ShallowWaterStateF64, step: usize) -> Result<(), String> {
+fn validate_state(state: &ShallowWaterState<CpuBackend<f64>>, step: usize) -> Result<(), String> {
     for (i, &h) in state.h.iter().enumerate() {
         if h < 0.0 {
             return Err(format!("步骤 {} 单元 {} 负水深: {}", step, i, h));
@@ -401,13 +401,13 @@ struct SimulationResult {
     mass_error: f64,
     relative_error: f64,
     max_velocity: f64,
-    final_state: ShallowWaterStateF64,
+    final_state: ShallowWaterState<CpuBackend<f64>>,
 }
 
 /// 执行模拟并返回统计结果
 fn run_simulation(
     solver: &mut ShallowWaterSolver<CpuBackend<f64>>,
-    state: &mut ShallowWaterStateF64,
+    state: &mut ShallowWaterState<CpuBackend<f64>>,
     mesh: &PhysicsMesh,
     dt: f64,
     n_steps: usize,
@@ -461,7 +461,7 @@ fn test_mass_conservation_wetting_drying() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 部分干湿初始条件
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![0.1, 0.1, 0.0, 0.0];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -484,7 +484,7 @@ fn test_mass_conservation_all_wet() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 全湿状态
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 1.0, 1.0, 1.0];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -504,7 +504,7 @@ fn test_mass_conservation_all_dry() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 全干状态
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![0.0, 0.0, 0.0, 0.0];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -527,7 +527,7 @@ fn test_mass_conservation_single_wet_cell() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 仅一个单元有水
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![0.5, 0.0, 0.0, 0.0];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -555,7 +555,7 @@ fn test_lake_at_rest_flat_bed() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 平底静水状态
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0; 4];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -594,7 +594,7 @@ fn test_lake_at_rest_sloped_bed() {
     // 常数水位 η = 1.0
     let eta = 1.0;
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     for i in 0..n_cells {
         let z = mesh.cell_z_bed(CellIndex::new(i));
@@ -642,7 +642,7 @@ fn test_lake_at_rest_bump() {
     
     let eta = 0.5;
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     for i in 0..n_cells {
         let z = mesh.cell_z_bed(CellIndex::new(i));
@@ -678,7 +678,7 @@ fn test_dam_break_mass_conservation() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 溃坝初始条件（左高右低）
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 0.1, 1.0, 0.1];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -705,7 +705,7 @@ fn test_wetting_drying_cycle() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 中心有水向外扩散
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![0.2, 0.2, 0.0, 0.0];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -726,7 +726,7 @@ fn test_uniform_flow_conservation() {
     
     // 均匀流状态
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     let h0 = 1.0;
     let u0 = 0.1;
     
@@ -757,7 +757,7 @@ fn test_extreme_depth_ratio() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 极端水深比 (100:1)
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 0.01, 1.0, 0.01];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -781,7 +781,7 @@ fn test_thin_film_stability() {
     
     // 极薄水层 (200微米)
     let thin_h = 2e-4;
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![thin_h; 4];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -803,7 +803,7 @@ fn test_high_velocity_wet_dry_interface() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 高速流冲击干区
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 0.0, 1.0, 0.0];
     state.z = vec![0.0; 4];
     state.hu = vec![1.0, 0.0, 1.0, 0.0];  // 高速向右流动
@@ -823,7 +823,7 @@ fn test_very_deep_water() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     // 深水 (100m)
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![100.0; 4];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -846,7 +846,7 @@ fn test_long_time_integration() {
     let config = Layer3Config::default();
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0; 4];
     state.z = vec![0.0; 4];
     state.hu = vec![0.1; 4];  // 小速度
@@ -880,7 +880,7 @@ fn test_error_growth_rate() {
     let mesh = Arc::new(create_simple_mesh());
     let config = Layer3Config::default();
     
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 0.5, 1.0, 0.5];
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -924,7 +924,7 @@ fn test_serial_parallel_consistency() {
     
     // 创建相同的初始状态
     let create_state = || {
-        let mut state = ShallowWaterStateF64::new(n_cells);
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
         for i in 0..n_cells {
             state.h[i] = 0.5 + 0.1 * ((i as f64).sin());
             state.hu[i] = 0.0;
@@ -993,7 +993,7 @@ fn test_first_vs_second_order_conservation() {
             .build();
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
         
-        let mut state = ShallowWaterStateF64::new(4);
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
         state.h = vec![0.1, 0.1, 0.0, 0.0];
         state.z = vec![0.0; 4];
         state.hu = vec![0.0; 4];
@@ -1038,7 +1038,7 @@ fn test_conservation_various_thresholds() {
         
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
         
-        let mut state = ShallowWaterStateF64::new(4);
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
         state.h = vec![0.1, 0.1, 0.0, 0.0];
         state.z = vec![0.0; 4];
         state.hu = vec![0.0; 4];
@@ -1073,7 +1073,7 @@ fn test_conservation_various_cfl() {
         
         let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
         
-        let mut state = ShallowWaterStateF64::new(4);
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
         state.h = vec![1.0, 0.5, 1.0, 0.5];
         state.z = vec![0.0; 4];
         state.hu = vec![0.0; 4];
@@ -1107,7 +1107,7 @@ fn test_isolated_wet_region() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 9;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 仅中心单元有水
     for i in 0..n_cells {
@@ -1136,7 +1136,7 @@ fn test_isolated_dry_region() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 9;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 仅中心干
     for i in 0..n_cells {
@@ -1165,7 +1165,7 @@ fn test_checkerboard_pattern() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     for j in 0..4 {
         for i in 0..4 {
@@ -1198,7 +1198,7 @@ fn test_momentum_conservation_no_boundaries() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 初始均匀速度场
     for i in 0..n_cells {
@@ -1234,7 +1234,7 @@ fn test_energy_dissipation() {
     let config = Layer3Config::default();
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
-    let mut state = ShallowWaterStateF64::new(4);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(4);
     state.h = vec![1.0, 0.5, 1.0, 0.5];  // 初始势能差
     state.z = vec![0.0; 4];
     state.hu = vec![0.0; 4];
@@ -1275,7 +1275,7 @@ fn test_reflective_boundary_symmetry() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 16;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 关于中心对称的初始条件
     for j in 0..4 {
@@ -1317,7 +1317,7 @@ fn test_regression_known_solution() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 10;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // Ritter溃坝初始条件
     let h_l = 1.0;
@@ -1365,7 +1365,7 @@ fn test_large_mesh_conservation() {
     let mut solver = ShallowWaterSolver::new(mesh.clone(), config, CpuBackend::<f64>::new());
     
     let n_cells = 100;
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 随机初始条件
     for i in 0..n_cells {

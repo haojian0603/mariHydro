@@ -307,16 +307,6 @@ impl<B: Backend> WettingDryingHandler<B> {
 }
 
 // ============================================================================
-// 类型别名（向后兼容）
-// ============================================================================
-
-/// f64 精度的处理器类型别名
-pub type WettingDryingHandlerF64 = WettingDryingHandler<mh_runtime::CpuBackend<f64>>;
-
-/// f32 精度的处理器类型别名
-pub type WettingDryingHandlerF32 = WettingDryingHandler<mh_runtime::CpuBackend<f32>>;
-
-// ============================================================================
 // 单元测试
 // ============================================================================
 
@@ -473,10 +463,10 @@ mod tests {
 
     #[test]
     fn test_type_aliases() {
-        let handler_f64 = WettingDryingHandlerF64::from_params(
+        let handler_f64 = WettingDryingHandler::<CpuBackend<f64>>::from_params(
             &NumericalParams::<f64>::default()
         );
-        let handler_f32 = WettingDryingHandlerF32::from_params(
+        let handler_f32 = WettingDryingHandler::<CpuBackend<f32>>::from_params(
             &NumericalParams::<f32>::default()
         );
 

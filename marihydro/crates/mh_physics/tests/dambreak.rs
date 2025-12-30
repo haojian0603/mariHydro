@@ -11,7 +11,8 @@ use mh_mesh::io::GmshLoader;
 use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
 use mh_physics::Layer3Config;
-use mh_physics::state::ShallowWaterStateF64;
+use mh_physics::state::ShallowWaterState;
+use mh_runtime::CpuBackend;
 use mh_physics::types::NumericalParams;
 use mh_runtime::{CpuBackend, CellIndex};
 
@@ -70,9 +71,9 @@ fn setup_dambreak_initial_condition(
     h_left: f64,
     h_right: f64,
     dam_x: f64,
-) -> ShallowWaterStateF64 {
+) -> ShallowWaterState<CpuBackend<f64>> {
     let n_cells = mesh.n_cells();
-    let mut state = ShallowWaterStateF64::new(n_cells);
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
     
     // 设置底床高程（平底）
     for i in 0..n_cells {
@@ -81,8 +82,8 @@ fn setup_dambreak_initial_condition(
     
     // 设置初始水深
     for i in 0..n_cells {
-        let center = mesh.cell_center(i);
-        if center.x < dam_x {
+        let (cx, _cy) = mesh.cell_center_tuple(i);
+        if cx < dam_x {
             state.h[i] = h_left;
         } else {
             state.h[i] = h_right;
@@ -96,7 +97,7 @@ fn setup_dambreak_initial_condition(
 }
 
 /// 计算总质量
-fn compute_total_mass(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> f64 {
+fn compute_total_mass(state: &ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh) -> f64 {
     let mut total = 0.0;
     for i in 0..state.n_cells() {
         if let Some(area) = mesh.cell_area(CellIndex::new(i)) {
@@ -107,12 +108,12 @@ fn compute_total_mass(state: &ShallowWaterStateF64, mesh: &PhysicsMesh) -> f64 {
 }
 
 /// 计算最大水深
-fn compute_max_depth(state: &ShallowWaterStateF64) -> f64 {
+fn compute_max_depth(state: &ShallowWaterState<CpuBackend<f64>>) -> f64 {
     state.h.iter().cloned().fold(0.0, f64::max)
 }
 
 /// 计算最大速度
-fn compute_max_velocity(state: &ShallowWaterStateF64) -> f64 {
+fn compute_max_velocity(state: &ShallowWaterState<CpuBackend<f64>>) -> f64 {
     let h_min = 1e-6;
     let mut max_vel: f64 = 0.0;
     for i in 0..state.n_cells() {
@@ -127,7 +128,7 @@ fn compute_max_velocity(state: &ShallowWaterStateF64) -> f64 {
 }
 
 /// 验证状态有效性
-fn validate_state(state: &ShallowWaterStateF64) -> Result<(), String> {
+fn validate_state(state: &ShallowWaterState<CpuBackend<f64>>) -> Result<(), String> {
     for (i, &h) in state.h.iter().enumerate() {
         if h.is_nan() {
             return Err(format!("单元 {} 水深为 NaN", i));

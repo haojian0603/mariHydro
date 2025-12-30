@@ -26,8 +26,8 @@ use crate::sources::traits::{
     SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::{ShallowWaterStateF64, ShallowWaterStateGeneric};
-use crate::core::CpuBackend;
+use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
+use mh_runtime::CpuBackend;
 
 /// 风场强迫适配器
 ///
@@ -107,7 +107,7 @@ impl SourceTerm for WindForcingAdapter {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterStateF64,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
