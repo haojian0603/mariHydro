@@ -11,9 +11,6 @@ use super::types::{BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
 use crate::types::NumericalParams;
 
-/// f64 版本的 ConservedState 类型别名
-type ConservedStateF64 = ConservedState<f64>;
-
 // ============================================================
 // 动量镜像模式
 // ============================================================
@@ -73,7 +70,7 @@ impl GhostMomentumMode {
 /// use mh_physics::state::ConservedState;
 ///
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
-/// let interior = ConservedStateF64::from_primitive(1.0, 0.5, 0.0);
+/// let interior = ConservedState::<f64>::from_primitive(1.0, 0.5, 0.0);
 /// let normal = (1.0, 0.0);  // 使用元组而非 DVec2
 /// let z_bed = 0.0; // 底床高程
 ///
@@ -114,12 +111,12 @@ impl GhostStateCalculator {
     // ALLOW_F64: 与 ConservedState 和速度元组配合使用
     pub fn compute_ghost(
         &self,
-        interior: ConservedStateF64,
+        interior: ConservedState<f64>,
         kind: BoundaryKind,
         normal: (f64, f64),
         external: Option<&ExternalForcing>,
         z_bed: f64, 
-    ) -> ConservedStateF64 {
+    ) -> ConservedState::<f64> {
         match kind {
             BoundaryKind::Wall => self.compute_wall_ghost(interior, normal),
             BoundaryKind::Symmetry => self.compute_symmetry_ghost(interior, normal),
@@ -141,7 +138,7 @@ impl GhostStateCalculator {
     /// 计算固壁边界的幽灵状态
     ///
     /// 实现无穿透条件：法向速度反向。
-    fn compute_wall_ghost(&self, interior: ConservedStateF64, normal: (f64, f64)) -> ConservedStateF64 {
+    fn compute_wall_ghost(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> ConservedState::<f64> {
         let h = interior.h.max(self.params.h_min);
 
         // 计算速度
@@ -158,7 +155,7 @@ impl GhostStateCalculator {
         let ghost_u = ut_x - normal.0 * un;
         let ghost_v = ut_y - normal.1 * un;
 
-        ConservedStateF64 {
+        ConservedState::<f64> {
             h,
             hu: h * ghost_u,
             hv: h * ghost_v,
@@ -168,7 +165,7 @@ impl GhostStateCalculator {
     /// 计算对称边界的幽灵状态
     ///
     /// 与固壁类似，但可能有不同的动量处理。
-    fn compute_symmetry_ghost(&self, interior: ConservedStateF64, normal: (f64, f64)) -> ConservedStateF64 {
+    fn compute_symmetry_ghost(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> ConservedState::<f64> {
         // 对称边界与固壁类似，法向速度反向
         self.compute_wall_ghost(interior, normal)
     }
@@ -182,11 +179,11 @@ impl GhostStateCalculator {
     /// 其中 η = h + z_bed 是水位
     fn compute_open_sea_ghost(
         &self,
-        interior: ConservedStateF64,
+        interior: ConservedState<f64>,
         normal: (f64, f64),
         external: &ExternalForcing,
         z_bed: f64,
-    ) -> ConservedStateF64 {
+    ) -> ConservedState::<f64> {
         let h_int = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h_int);
 
@@ -216,7 +213,7 @@ impl GhostStateCalculator {
         // h_ghost = max(0, eta_ext - z_bed)
         let h_ghost = (external.eta - z_bed).max(self.params.h_min);
 
-        ConservedStateF64 {
+        ConservedState::<f64> {
             h: h_ghost,
             hu: h_ghost * ghost_u,
             hv: h_ghost * ghost_v,
@@ -226,7 +223,7 @@ impl GhostStateCalculator {
     /// 计算出流边界的幽灵状态
     ///
     /// 零梯度外推：直接复制内部状态。
-    fn compute_outflow_ghost(&self, interior: ConservedStateF64) -> ConservedStateF64 {
+    fn compute_outflow_ghost(&self, interior: ConservedState<f64>) -> ConservedState::<f64> {
         interior
     }
 
@@ -235,11 +232,11 @@ impl GhostStateCalculator {
     /// 使用外部强迫的速度和水深。
     fn compute_inflow_ghost(
         &self,
-        _interior: ConservedStateF64,
+        _interior: ConservedState<f64>,
         external: &ExternalForcing,
-    ) -> ConservedStateF64 {
+    ) -> ConservedState::<f64> {
         let h = external.eta.max(self.params.h_min);
-        ConservedStateF64 {
+        ConservedState::<f64> {
             h,
             hu: h * external.velocity.0,
             hv: h * external.velocity.1,
@@ -259,10 +256,10 @@ impl GhostStateCalculator {
     /// 幽灵单元状态
     pub fn compute_ghost_with_mode(
         &self,
-        interior: ConservedStateF64,
+        interior: ConservedState<f64>,
         normal: (f64, f64),
         mode: GhostMomentumMode,
-    ) -> ConservedStateF64 {
+    ) -> ConservedState::<f64> {
         let h = interior.h.max(self.params.h_min);
         let u = interior.hu / h;
         let v = interior.hv / h;
@@ -286,7 +283,7 @@ impl GhostStateCalculator {
             GhostMomentumMode::FullCancel => (-u, -v),
         };
 
-        ConservedStateF64 {
+        ConservedState::<f64> {
             h,
             hu: h * ghost_u,
             hv: h * ghost_v,
@@ -306,12 +303,12 @@ impl GhostStateCalculator {
     /// - `output`: 输出数组
     pub fn compute_ghost_batch(
         &self,
-        interiors: &[ConservedStateF64],
+        interiors: &[ConservedState<f64>],
         kinds: &[BoundaryKind],
         normals: &[(f64, f64)],
         externals: Option<&[ExternalForcing]>,
         z_beds: &[f64],
-        output: &mut [ConservedStateF64],
+        output: &mut [ConservedState<f64>],
     ) {
         debug_assert_eq!(interiors.len(), kinds.len());
         debug_assert_eq!(interiors.len(), normals.len());
@@ -392,7 +389,7 @@ mod tests {
     #[test]
     fn test_wall_ghost_no_penetration() {
         let calculator = GhostStateCalculator::default();
-        let interior = ConservedStateF64::from_primitive(1.0, 1.0, 0.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
         let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
@@ -408,7 +405,7 @@ mod tests {
     #[test]
     fn test_wall_ghost_oblique() {
         let calculator = GhostStateCalculator::default();
-        let interior = ConservedStateF64::from_primitive(1.0, 1.0, 1.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 1.0);
         let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
@@ -421,7 +418,7 @@ mod tests {
     #[test]
     fn test_outflow_ghost() {
         let calculator = GhostStateCalculator::default();
-        let interior = ConservedStateF64::from_primitive(1.5, 0.5, 0.3);
+        let interior = ConservedState::<f64>::from_primitive(1.5, 0.5, 0.3);
         let normal = (1.0, 0.0);
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None, 0.0);
@@ -435,7 +432,7 @@ mod tests {
     #[test]
     fn test_inflow_ghost() {
         let calculator = GhostStateCalculator::default();
-        let interior = ConservedStateF64::from_primitive(1.0, 0.0, 0.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 0.0, 0.0);
         let normal = (-1.0, 0.0);
         let external = ExternalForcing::new(2.0, 1.0, 0.0);
 
@@ -459,7 +456,7 @@ mod tests {
         let calculator = GhostStateCalculator::default();
         
         // 内部单元: h=1.0, z_bed=0.5, 所以 η_int = 1.5
-        let interior = ConservedStateF64::from_primitive(1.0, 0.0, 0.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 0.0, 0.0);
         let normal = (1.0, 0.0);
         let z_bed = 0.5;
         
@@ -483,7 +480,7 @@ mod tests {
     #[test]
     fn test_ghost_momentum_modes() {
         let calculator = GhostStateCalculator::default();
-        let interior = ConservedStateF64::from_primitive(1.0, 1.0, 0.0);
+        let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
         let normal = (1.0, 0.0);
 
         // FullReflect
@@ -531,14 +528,14 @@ mod tests {
         let calculator = GhostStateCalculator::default();
 
         let interiors = vec![
-            ConservedStateF64::from_primitive(1.0, 1.0, 0.0),
-            ConservedStateF64::from_primitive(2.0, 0.0, 1.0),
+            ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0),
+            ConservedState::<f64>::from_primitive(2.0, 0.0, 1.0),
         ];
         let kinds = vec![BoundaryKind::Wall, BoundaryKind::Outflow];
         let normals = vec![(1.0, 0.0), (0.0, 1.0)];
         let z_beds = vec![0.0, 0.0];
 
-        let mut output = vec![ConservedStateF64::default(); 2];
+        let mut output = vec![ConservedState::<f64>::default(); 2];
         calculator.compute_ghost_batch(&interiors, &kinds, &normals, None, &z_beds, &mut output);
 
         // 固壁：法向反转

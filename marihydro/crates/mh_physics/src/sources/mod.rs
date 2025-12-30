@@ -100,10 +100,6 @@ pub use traits::{
     SourceStiffness, SourceRegistryGeneric,
 };
 
-// 向后兼容别名（已废弃）
-#[allow(deprecated)]
-pub use traits::SourceTermF64;
-
 pub use registry::SourceRegistry;
 
 // ==================== 摩擦模块导出 ====================

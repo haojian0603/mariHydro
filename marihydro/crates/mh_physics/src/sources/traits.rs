@@ -549,10 +549,6 @@ impl SourceRegistryGeneric<CpuBackend<f64>> {
     }
 }
 
-/// 向后兼容别名
-#[deprecated(since = "0.4.0", note = "Use SourceTermGeneric<CpuBackend<f64>> instead")]
-pub type SourceTermF64 = dyn SourceTermGeneric<CpuBackend<f64>>;
-
 #[cfg(test)]
 mod tests {
     use crate::NumericalParams;

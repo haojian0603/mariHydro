@@ -16,7 +16,7 @@
 use crate::schemes::riemann::traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar, Vector2D};
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use num_traits::{Float, FromPrimitive};
 
 /// HLLC 求解器（Backend 泛型化）

@@ -255,7 +255,8 @@ fn test_ill_conditioned_matrix_stability() {
 #[test]
 fn test_nan_propagation_blocking() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(10);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10);
 
     // 注入NaN到关键守恒量
     state.h[5] = f64::NAN;
@@ -288,7 +289,8 @@ fn test_nan_propagation_blocking() {
 #[test]
 fn test_negative_depth_recovery() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(5);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 5);
 
     // 注入非法负水深
     state.h = vec![1.0, -0.5, 2.0, -1e-5, 0.0];
@@ -324,7 +326,8 @@ fn test_negative_depth_recovery() {
 #[test]
 fn test_velocity_clamping_extreme() {
     let mesh = Arc::new(PhysicsMesh::empty(1));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(1);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 1);
 
     // 极小水深 + 有限动量 = 极大速度
     state.h[0] = 1e-10;
@@ -383,7 +386,8 @@ fn test_near_zero_depth_velocity() {
 #[test]
 fn test_wet_dry_oscillation_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(100));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(100);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 100);
 
     // 初始化干湿交替模式
     for i in 0..100 {
@@ -429,12 +433,13 @@ fn test_wet_dry_oscillation_stability() {
 fn test_concurrent_state_read() {
     use std::thread;
     
-    let state = Arc::new(ShallowWaterState::<CpuBackend<f64>>::new(10));
+    let backend = CpuBackend::<f64>::new();
+    let state = Arc::new(ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10));
     let params = Arc::new(NumericalParams::default());
     
     let handles: Vec<_> = (0..3)
         .map(|_| {
-            let state = Arc::clone(&state);
+            let state: Arc<ShallowWaterState<CpuBackend<f64>>> = Arc::clone(&state);
             let params = Arc::clone(&params);
             thread::spawn(move || {
                 for i in 0..10 {
@@ -552,7 +557,8 @@ fn test_catastrophic_cancellation_prevention() {
 #[test]
 fn test_boundary_extreme_values() {
     let mesh = Arc::new(PhysicsMesh::empty(10));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(10);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 10);
 
     // 注入边界值：极大水深、极小水深交替
     for i in 0..10 {
@@ -586,7 +592,8 @@ fn test_boundary_extreme_values() {
 #[test]
 fn test_long_term_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(5);
+    let backend = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, 5);
 
     // 初始静水
     state.h = vec![10.0, 10.0, 10.0, 10.0, 10.0];
@@ -748,7 +755,8 @@ fn test_nan_detection_integration() {
         .build();
     
     let mut solver = ShallowWaterSolver::new(mesh, config, backend);
-    let mut state = ShallowWaterState::<CpuBackend<f64>>::new(20);
+    let backend2 = CpuBackend::<f64>::new();
+    let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend2, 20);
     
     // 在随机位置注入NaN
     state.h[5] = f64::NAN;

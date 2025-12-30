@@ -345,6 +345,85 @@ impl<B: Backend> TracerField<B> {
         self.conserved.fill(B::Scalar::ZERO);
         self.rhs.fill(B::Scalar::ZERO);
     }
+    
+    // ========== 通用访问方法（所有 Backend 可用） ==========
+    
+    /// 获取浓度切片（通用）
+    #[inline]
+    pub fn concentration_slice(&self) -> &[B::Scalar] {
+        self.concentration.as_slice()
+    }
+    
+    /// 获取浓度可变切片（通用）
+    #[inline]
+    pub fn concentration_slice_mut(&mut self) -> &mut [B::Scalar] {
+        self.concentration.as_slice_mut()
+    }
+    
+    /// 获取守恒量切片（通用）
+    #[inline]
+    pub fn conserved_slice(&self) -> &[B::Scalar] {
+        self.conserved.as_slice()
+    }
+    
+    /// 获取守恒量可变切片（通用）
+    #[inline]
+    pub fn conserved_slice_mut(&mut self) -> &mut [B::Scalar] {
+        self.conserved.as_slice_mut()
+    }
+    
+    /// 获取 RHS 切片（通用）
+    #[inline]
+    pub fn rhs_slice(&self) -> &[B::Scalar] {
+        self.rhs.as_slice()
+    }
+    
+    /// 获取 RHS 可变切片（通用）
+    #[inline]
+    pub fn rhs_slice_mut(&mut self) -> &mut [B::Scalar] {
+        self.rhs.as_slice_mut()
+    }
+    
+    /// 累加值到 RHS（通用）
+    #[inline]
+    pub fn add_rhs(&mut self, cell_idx: usize, value: B::Scalar) {
+        self.rhs.as_slice_mut()[cell_idx] = self.rhs.as_slice()[cell_idx] + value;
+    }
+    
+    /// 从守恒量更新浓度（通用）
+    pub fn update_concentration_from_conserved(&mut self, water_depths: &[B::Scalar], h_min: B::Scalar) {
+        debug_assert_eq!(water_depths.len(), self.n_cells);
+        let concentration = self.concentration.as_slice_mut();
+        let conserved = self.conserved.as_slice();
+        for i in 0..self.n_cells {
+            let h = if water_depths[i] > h_min { water_depths[i] } else { h_min };
+            concentration[i] = conserved[i] / h;
+        }
+    }
+    
+    /// 使用显式欧拉格式更新守恒量（通用）
+    pub fn apply_euler_update(&mut self, dt: B::Scalar) {
+        let conserved = self.conserved.as_slice_mut();
+        let rhs = self.rhs.as_slice();
+        for i in 0..self.n_cells {
+            conserved[i] = conserved[i] + dt * rhs[i];
+        }
+    }
+    
+    /// 限制浓度在物理范围内（通用）
+    pub fn clamp_concentration(&mut self, c_min: B::Scalar, c_max: Option<B::Scalar>) {
+        let concentration = self.concentration.as_slice_mut();
+        for c in concentration.iter_mut() {
+            if *c < c_min {
+                *c = c_min;
+            }
+            if let Some(max_val) = c_max {
+                if *c > max_val {
+                    *c = max_val;
+                }
+            }
+        }
+    }
 }
 
 /// CPU f64 后端的便捷方法
@@ -354,57 +433,11 @@ impl TracerField<CpuBackend<f64>> {
         Self::new_with_backend(CpuBackend::<f64>::new(), properties, n_cells)
     }
     
-    /// 获取浓度切片（仅 CPU 后端）
-    pub fn concentration_slice(&self) -> &[f64] {
-        &self.concentration
-    }
-    
-    /// 获取浓度可变切片（仅 CPU 后端）
-    pub fn concentration_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.concentration
-    }
-    
-    /// 获取守恒量切片（仅 CPU 后端）
-    pub fn conserved_slice(&self) -> &[f64] {
-        &self.conserved
-    }
-    
-    /// 获取守恒量可变切片（仅 CPU 后端）
-    pub fn conserved_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.conserved
-    }
-    
-    /// 获取 RHS 切片（仅 CPU 后端）
-    pub fn rhs_slice(&self) -> &[f64] {
-        &self.rhs
-    }
-    
-    /// 获取 RHS 可变切片（仅 CPU 后端）
-    pub fn rhs_slice_mut(&mut self) -> &mut [f64] {
-        &mut self.rhs
-    }
-    
     /// 从水深更新守恒量
     pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
         debug_assert_eq!(water_depths.len(), self.n_cells);
         for i in 0..self.n_cells {
             self.conserved[i] = water_depths[i] * self.concentration[i];
-        }
-    }
-    
-    /// 从守恒量更新浓度
-    pub fn update_concentration_from_conserved(&mut self, water_depths: &[f64], h_min: f64) {
-        debug_assert_eq!(water_depths.len(), self.n_cells);
-        for i in 0..self.n_cells {
-            let h = water_depths[i].max(h_min);
-            self.concentration[i] = self.conserved[i] / h;
-        }
-    }
-    
-    /// 使用显式欧拉格式更新守恒量
-    pub fn apply_euler_update(&mut self, dt: f64) {
-        for i in 0..self.n_cells {
-            self.conserved[i] += dt * self.rhs[i];
         }
     }
     
@@ -442,16 +475,6 @@ impl TracerField<CpuBackend<f64>> {
             min,
             max,
             mean: sum / self.n_cells as f64,
-        }
-    }
-    
-    /// 限制浓度在物理范围内
-    pub fn clamp_concentration(&mut self, c_min: f64, c_max: Option<f64>) {
-        for c in self.concentration.iter_mut() {
-            *c = c.max(c_min);
-            if let Some(max_val) = c_max {
-                *c = c.min(max_val);
-            }
         }
     }
 }

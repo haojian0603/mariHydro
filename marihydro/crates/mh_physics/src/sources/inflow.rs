@@ -27,6 +27,8 @@ use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
 use mh_runtime::CpuBackend;
 
+// 注意：CpuBackend 已在上方导入
+
 /// 入流类型
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[derive(Default)]
@@ -471,7 +473,8 @@ mod tests {
     use crate::types::NumericalParams;
 
     fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = 0.0;

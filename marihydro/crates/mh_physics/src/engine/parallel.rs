@@ -1,32 +1,62 @@
 // crates/mh_physics/src/engine/parallel.rs
 
-//! 并行通量计算模块
+//! 并行通量计算模块（Backend泛型化版本）
 //!
-//! 提供多种并行策略用于加速通量计算：
+//! 提供多种并行策略用于加速通量计算，支持任意Backend（CPU f32/f64, GPU）。
+//!
+//! # 并行策略
 //! - 串行计算（小规模问题）
 //! - 收集后累加（先并行计算通量，后串行累加到单元）
-//! - 着色并行（使用图着色实现真正无锁并行，TODO）
+//! - 着色并行（使用图着色实现真正无锁并行）
 //!
-//! 当前实现的"并行"是伪并行：通量计算并行，但累加阶段串行。
-//! 对于大规模网格，需要实现真正的着色并行以避免累加瓶颈。
-//!
-//! # Safety
-//!
-//! 本模块使用 unsafe 代码进行性能优化的原子操作，安全性由图着色算法保证。
+//! # Backend泛型化
+//! 整个模块完全Backend化，所有计算数据使用`B::Buffer<B::Scalar>`存储，
+//! 几何数据使用`B::Vector2D`，支持运行时精度切换。
+
 #![allow(unsafe_code)]
 
 use crate::adapter::PhysicsMesh;
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
-use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 
-use mh_runtime::{Backend, CpuBackend, FaceIndex, RuntimeScalar};
+use mh_runtime::{Backend, CellIndex, DeviceBuffer, FaceIndex, RuntimeScalar};
+use num_traits::{Float, FromPrimitive, ToPrimitive};
 use rayon::prelude::*;
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+// 线程安全指针包装器
+
+/// 用于并行计算的可发送原始指针包装器
+/// 
+/// SAFETY: 调用者必须确保：
+/// 1. 指针在整个并行操作期间有效
+/// 2. 不同线程不会写入同一内存位置
+#[derive(Clone, Copy)]
+struct SendPtr<T>(*mut T);
+
+// SAFETY: SendPtr 可以安全地在线程间发送，因为我们保证：
+// 1. 着色算法确保同一颜色的面不共享单元
+// 2. 不同线程写入不同的数组位置
+unsafe impl<T> Send for SendPtr<T> {}
+unsafe impl<T> Sync for SendPtr<T> {}
+
+impl<T: Copy> SendPtr<T> {
+    /// 读取指定偏移位置的值
+    #[inline]
+    unsafe fn read_at(&self, offset: usize) -> T {
+        self.0.add(offset).read()
+    }
+    
+    /// 写入指定偏移位置的值
+    #[inline]
+    unsafe fn write_at(&self, offset: usize, value: T) {
+        self.0.add(offset).write(value);
+    }
+}
 
 // 简单的日志宏替代 tracing
 macro_rules! debug {
@@ -57,34 +87,21 @@ macro_rules! info {
 // ============================================================
 
 /// 并行策略
-///
-/// # 策略说明
-///
-/// - `Sequential`: 完全串行执行，适用于小规模问题
-/// - `CollectThenAccumulate`: 先并行计算各面通量(真正并行)，
-///   然后串行累加到单元(瓶颈)。对于中等规模问题有效。
-/// - `Colored`: 使用图着色实现真正的无锁并行累加
-/// - `Auto`: 根据面数自动选择策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]
 pub enum ParallelStrategy {
     /// 串行执行
     Sequential,
     /// 收集后累加：并行计算通量 → 收集结果 → 串行累加
-    ///
-    /// 注意：累加阶段是串行的，对于大规模网格可能成为瓶颈
     CollectThenAccumulate,
     /// 着色并行：使用图着色分组面，同一颜色的面可安全并行处理
-    ///
-    /// 这是推荐的大规模并行策略，需要预先计算面着色
     Colored,
     /// 自动选择（根据问题规模）
     #[default]
     Auto,
 }
 
-
-/// 并行计算配置
+/// 并行计算配置（Backend泛型化）
 #[derive(Debug, Clone)]
 pub struct ParallelFluxConfig<S: RuntimeScalar> {
     /// 数值参数
@@ -183,7 +200,6 @@ pub struct FluxComputeMetrics {
 
 impl FluxComputeMetrics {
     /// 记录一次计算
-    // TODO(phase5): 添加策略选择的详细日志（如 legacy 的 StrategySelector）
     pub fn record(&mut self, n_faces: usize, is_parallel: bool, duration: Duration) {
         self.total_calls += 1;
         self.total_faces += n_faces;
@@ -211,12 +227,12 @@ impl FluxComputeMetrics {
 }
 
 // ============================================================
-// 并行通量计算器
+// 并行通量计算器（Backend泛型化版本）
 // ============================================================
 
-/// 并行通量计算器
+/// 并行通量计算器（Backend泛型化）
 ///
-/// 封装通量计算的并行执行逻辑。
+/// 封装通量计算的并行执行逻辑，支持任意Backend。
 /// 
 /// # 类型参数
 /// 
@@ -225,8 +241,7 @@ pub struct ParallelFluxCalculator<B: Backend> {
     config: ParallelFluxConfig<B::Scalar>,
     /// 黎曼求解器
     riemann: HllcSolver<B>,
-    /// 干湿处理器（预留用于未来扩展）
-    #[allow(dead_code)]
+    /// 干湿处理器
     wetting_drying: WettingDryingHandler<B>,
     /// 静水重构
     hydrostatic: HydrostaticReconstruction<B>,
@@ -242,7 +257,7 @@ pub struct ParallelFluxCalculator<B: Backend> {
 impl<B: Backend> ParallelFluxCalculator<B> {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig<B::Scalar>, backend: B) -> Self {
-        let riemann_params = SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
+        let riemann_params = crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
         Self {
             riemann: HllcSolver::<B>::new(&riemann_params, config.g),
             wetting_drying: WettingDryingHandler::<B>::from_params(&config.params),
@@ -255,18 +270,6 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     }
 
     /// 为网格设置面着色（用于 Colored 策略）
-    /// 
-    /// 面着色将面分成若干组，同一组内的面不共享单元，
-    /// 因此可以安全地并行更新这些面关联的单元。
-    /// 
-    /// 使用贪心图着色算法，按照度数降序处理节点以减少颜色数量。
-    /// 
-    /// # 参数
-    /// - `mesh`: 网格
-    /// 
-    /// # 性能说明
-    /// 着色计算是 O(|F| + |E|) 复杂度，其中 |F| 是面数，|E| 是邻接边数。
-    /// 对于典型的二维非结构化网格，每个面平均约有 6-10 个邻居。
     pub fn setup_face_coloring(&mut self, mesh: &PhysicsMesh) {
         let start = Instant::now();
         let n_faces = mesh.n_faces();
@@ -295,26 +298,15 @@ impl<B: Backend> ParallelFluxCalculator<B> {
 
         let _duration = start.elapsed();
         
-        // 计算着色质量指标
-        let _avg_group_size = if num_colors > 0 { 
-            n_faces / num_colors 
-        } else { 
-            0 
-        };
-        let _max_group_size = color_faces.iter().map(|g| g.len()).max().unwrap_or(0);
-        let _min_group_size = color_faces.iter().map(|g| g.len()).min().unwrap_or(0);
-        
         info!(
-            "Face coloring complete: {} faces, {} colors, avg/min/max group size = {}/{}/{}, took {:?}",
-            n_faces, num_colors, _avg_group_size, _min_group_size, _max_group_size, _duration
+            "Face coloring complete: {} faces, {} colors, took {:?}",
+            n_faces, num_colors, _duration
         );
 
         self.face_colors = Some(color_faces);
     }
     
     /// 构建面邻接关系
-    /// 
-    /// 两个面相邻 <=> 它们共享一个单元
     fn build_face_adjacency(&self, mesh: &PhysicsMesh) -> Vec<std::collections::HashSet<usize>> {
         use std::collections::{HashMap, HashSet};
         
@@ -323,10 +315,10 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         // 构建单元到面的映射
         let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
-            cell_to_faces.entry(owner.into()).or_default().push(face_idx);
-            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
-                cell_to_faces.entry(neigh.into()).or_default().push(face_idx);
+            let owner = mesh.face_owner(FaceIndex(face_idx));
+            cell_to_faces.entry(owner.get()).or_default().push(face_idx);
+            if let Some(neigh) = mesh.face_neighbor(FaceIndex(face_idx)) {
+                cell_to_faces.entry(neigh.get()).or_default().push(face_idx);
             }
         }
         
@@ -346,9 +338,6 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     }
     
     /// 贪心图着色算法
-    /// 
-    /// 返回 (face_color, num_colors) 元组
-    /// face_color[i] 表示面 i 的颜色（0-indexed）
     fn greedy_coloring(
         &self, 
         face_neighbors: &[std::collections::HashSet<usize>], 
@@ -404,11 +393,11 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         &mut self,
         state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [B::Scalar],
-        flux_hu: &mut [B::Scalar],
-        flux_hv: &mut [B::Scalar],
-        source_hu: &mut [B::Scalar],
-        source_hv: &mut [B::Scalar],
+        flux_h: &mut B::Buffer<B::Scalar>,
+        flux_hu: &mut B::Buffer<B::Scalar>,
+        flux_hv: &mut B::Buffer<B::Scalar>,
+        source_hu: &mut B::Buffer<B::Scalar>,
+        source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
         let n_faces = mesh.n_faces();
         let start = Instant::now();
@@ -451,18 +440,18 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         &self,
         state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [B::Scalar],
-        flux_hu: &mut [B::Scalar],
-        flux_hv: &mut [B::Scalar],
-        source_hu: &mut [B::Scalar],
-        source_hv: &mut [B::Scalar],
+        flux_h: &mut B::Buffer<B::Scalar>,
+        flux_hu: &mut B::Buffer<B::Scalar>,
+        flux_hv: &mut B::Buffer<B::Scalar>,
+        source_hu: &mut B::Buffer<B::Scalar>,
+        source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
         // 重置
-        for v in flux_h.iter_mut() { *v = B::Scalar::ZERO; }
-        for v in flux_hu.iter_mut() { *v = B::Scalar::ZERO; }
-        for v in flux_hv.iter_mut() { *v = B::Scalar::ZERO; }
-        for v in source_hu.iter_mut() { *v = B::Scalar::ZERO; }
-        for v in source_hv.iter_mut() { *v = B::Scalar::ZERO; }
+        flux_h.fill(B::Scalar::ZERO);
+        flux_hu.fill(B::Scalar::ZERO);
+        flux_hv.fill(B::Scalar::ZERO);
+        source_hu.fill(B::Scalar::ZERO);
+        source_hv.fill(B::Scalar::ZERO);
 
         let n_faces = mesh.n_faces();
         let mut max_speed = B::Scalar::ZERO;
@@ -479,18 +468,20 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             let fhu = flux.momentum_x * length;
             let fhv = flux.momentum_y * length;
 
-            flux_h[owner] = flux_h[owner] - fh;
-            flux_hu[owner] = flux_hu[owner] - fhu;
-            flux_hv[owner] = flux_hv[owner] - fhv;
-            source_hu[owner] = source_hu[owner] + bed_src.source_left_x;
-            source_hv[owner] = source_hv[owner] + bed_src.source_left_y;
+            let owner_idx = owner.get();
+            flux_h[owner_idx] = flux_h[owner_idx] - fh;
+            flux_hu[owner_idx] = flux_hu[owner_idx] - fhu;
+            flux_hv[owner_idx] = flux_hv[owner_idx] - fhv;
+            source_hu[owner_idx] = source_hu[owner_idx] + bed_src.source_left_x;
+            source_hv[owner_idx] = source_hv[owner_idx] + bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
-                flux_h[neigh] = flux_h[neigh] + fh;
-                flux_hu[neigh] = flux_hu[neigh] + fhu;
-                flux_hv[neigh] = flux_hv[neigh] + fhv;
-                source_hu[neigh] = source_hu[neigh] + bed_src.source_right_x;
-                source_hv[neigh] = source_hv[neigh] + bed_src.source_right_y;
+                let neigh_idx = neigh.get();
+                flux_h[neigh_idx] = flux_h[neigh_idx] + fh;
+                flux_hu[neigh_idx] = flux_hu[neigh_idx] + fhu;
+                flux_hv[neigh_idx] = flux_hv[neigh_idx] + fhv;
+                source_hu[neigh_idx] = source_hu[neigh_idx] + bed_src.source_right_x;
+                source_hv[neigh_idx] = source_hv[neigh_idx] + bed_src.source_right_y;
             }
         }
 
@@ -500,15 +491,17 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     /// 并行计算（先并行计算，后串行累加）
     fn compute_parallel(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [f64],
-        flux_hu: &mut [f64],
-        flux_hv: &mut [f64],
-        source_hu: &mut [f64],
-        source_hv: &mut [f64],
-    ) -> f64 {
+        flux_h: &mut B::Buffer<B::Scalar>,
+        flux_hu: &mut B::Buffer<B::Scalar>,
+        flux_hv: &mut B::Buffer<B::Scalar>,
+        source_hu: &mut B::Buffer<B::Scalar>,
+        source_hv: &mut B::Buffer<B::Scalar>,
+    ) -> B::Scalar {
         let n_faces = mesh.n_faces();
+        
+        // 使用f64 atomic作为临时方案（后续在RuntimeScalar trait中添加Atomic关联类型）
         let max_speed_atomic = AtomicU64::new(0u64);
 
         // 并行计算所有面
@@ -518,83 +511,74 @@ impl<B: Backend> ParallelFluxCalculator<B> {
                 let (flux, bed_src, length, owner, neighbor) = 
                     self.compute_face(state, mesh, FaceIndex(face_idx));
 
-                max_speed_atomic.fetch_max(flux.max_wave_speed.to_bits(), Ordering::Relaxed);
+                // 临时方案：转换为f64进行atomic操作
+                let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
+                max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
 
                 (flux, bed_src, length, owner, neighbor)
             })
             .collect();
 
         // 串行累加
-        flux_h.fill(0.0);
-        flux_hu.fill(0.0);
-        flux_hv.fill(0.0);
-        source_hu.fill(0.0);
-        source_hv.fill(0.0);
+        flux_h.fill(B::Scalar::ZERO);
+        flux_hu.fill(B::Scalar::ZERO);
+        flux_hv.fill(B::Scalar::ZERO);
+        source_hu.fill(B::Scalar::ZERO);
+        source_hv.fill(B::Scalar::ZERO);
 
         for (flux, bed_src, length, owner, neighbor) in face_results {
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
             let fhv = flux.momentum_y * length;
 
-            flux_h[owner] -= fh;
-            flux_hu[owner] -= fhu;
-            flux_hv[owner] -= fhv;
-            source_hu[owner] += bed_src.source_left_x;
-            source_hv[owner] += bed_src.source_left_y;
+            let owner_idx = owner.get();
+            flux_h[owner_idx] = flux_h[owner_idx] - fh;
+            flux_hu[owner_idx] = flux_hu[owner_idx] - fhu;
+            flux_hv[owner_idx] = flux_hv[owner_idx] - fhv;
+            source_hu[owner_idx] = source_hu[owner_idx] + bed_src.source_left_x;
+            source_hv[owner_idx] = source_hv[owner_idx] + bed_src.source_left_y;
 
             if let Some(neigh) = neighbor {
-                flux_h[neigh] += fh;
-                flux_hu[neigh] += fhu;
-                flux_hv[neigh] += fhv;
-                source_hu[neigh] += bed_src.source_right_x;
-                source_hv[neigh] += bed_src.source_right_y;
+                let neigh_idx = neigh.get();
+                flux_h[neigh_idx] = flux_h[neigh_idx] + fh;
+                flux_hu[neigh_idx] = flux_hu[neigh_idx] + fhu;
+                flux_hv[neigh_idx] = flux_hv[neigh_idx] + fhv;
+                source_hu[neigh_idx] = source_hu[neigh_idx] + bed_src.source_right_x;
+                source_hv[neigh_idx] = source_hv[neigh_idx] + bed_src.source_right_y;
             }
         }
 
-        f64::from_bits(max_speed_atomic.load(Ordering::Relaxed))
+        // 临时方案：从atomic加载并转换回B::Scalar
+        let max_speed_bits = max_speed_atomic.load(Ordering::Relaxed);
+        B::Scalar::from_f64(f64::from_bits(max_speed_bits)).unwrap_or(B::Scalar::ZERO)
     }
 
     /// 着色并行计算（真正无锁并行）
-    /// 
-    /// 使用预计算的面着色，同一颜色的面可以并行计算和累加
-    /// 因为它们不共享单元，不存在数据竞争。
-    /// 
-    /// # 算法说明
-    /// 
-    /// 1. 按颜色分批处理面
-    /// 2. 同一颜色内的面完全独立，可以并行计算并直接写入结果
-    /// 3. 不同颜色之间串行处理以保证累加正确性
-    /// 
-    /// # 性能优势
-    /// 
-    /// 相比 CollectThenAccumulate 策略：
-    /// - 无需分配中间结果向量
-    /// - 累加阶段也是并行的（每个颜色批次内）
-    /// - 对于 N 个颜色，有 N-1 次同步点，但每个批次内完全并行
     fn compute_colored(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        flux_h: &mut [f64],
-        flux_hu: &mut [f64],
-        flux_hv: &mut [f64],
-        source_hu: &mut [f64],
-        source_hv: &mut [f64],
-    ) -> f64 {
+        flux_h: &mut B::Buffer<B::Scalar>,
+        flux_hu: &mut B::Buffer<B::Scalar>,
+        flux_hv: &mut B::Buffer<B::Scalar>,
+        source_hu: &mut B::Buffer<B::Scalar>,
+        source_hv: &mut B::Buffer<B::Scalar>,
+    ) -> B::Scalar {
         // 重置
-        flux_h.fill(0.0);
-        flux_hu.fill(0.0);
-        flux_hv.fill(0.0);
-        source_hu.fill(0.0);
-        source_hv.fill(0.0);
+        flux_h.fill(B::Scalar::ZERO);
+        flux_hu.fill(B::Scalar::ZERO);
+        flux_hv.fill(B::Scalar::ZERO);
+        source_hu.fill(B::Scalar::ZERO);
+        source_hv.fill(B::Scalar::ZERO);
 
+        // 临时方案：使用f64 atomic
         let max_speed_atomic = AtomicU64::new(0u64);
 
         let color_faces = match &self.face_colors {
             Some(cf) => cf,
             None => {
                 debug!("compute_colored: no face coloring available, returning 0.0");
-                return 0.0;
+                return B::Scalar::ZERO;
             }
         };
 
@@ -605,49 +589,49 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         for (_color_idx, faces_in_color) in color_faces.iter().enumerate() {
             trace!("  color {}: {} faces", _color_idx, faces_in_color.len());
             
-            // 使用 UnsafeCell 或指针技巧实现真正的并行写入
-            // 由于着色保证了同一颜色的面不共享单元，这是安全的
-            
             // 创建原子计数器用于统计处理的面数（调试用）
             #[cfg(debug_assertions)]
             let processed_count = std::sync::atomic::AtomicUsize::new(0);
             
-            // 并行计算并累加当前颜色的所有面
             // SAFETY: 由于着色算法保证同一颜色的面不共享任何单元，
             // 因此不同线程写入的数组位置不会重叠，没有数据竞争。
+            // 使用 SendPtr 包装原始指针以满足 Sync 要求。
+            let flux_h_ptr = SendPtr(flux_h.as_slice_mut().as_mut_ptr());
+            let flux_hu_ptr = SendPtr(flux_hu.as_slice_mut().as_mut_ptr());
+            let flux_hv_ptr = SendPtr(flux_hv.as_slice_mut().as_mut_ptr());
+            let source_hu_ptr = SendPtr(source_hu.as_slice_mut().as_mut_ptr());
+            let source_hv_ptr = SendPtr(source_hv.as_slice_mut().as_mut_ptr());
+            
+            // 并行计算并累加当前颜色的所有面
             faces_in_color.par_iter().for_each(|&face_idx| {
                 let (flux, bed_src, length, owner, neighbor) = 
                     self.compute_face(state, mesh, FaceIndex(face_idx));
                 
-                max_speed_atomic.fetch_max(flux.max_wave_speed.to_bits(), Ordering::Relaxed);
+                // 临时方案：转换为f64进行atomic操作
+                let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
+                max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
                 
                 let fh = flux.mass * length;
                 let fhu = flux.momentum_x * length;
                 let fhv = flux.momentum_y * length;
 
-                // SAFETY: owner 和 neighbor 是由着色算法保证互不冲突的
-                // 同一颜色的任意两个面不会有相同的 owner 或 neighbor
+                // 安全累加（不同线程不会冲突）
+                // SAFETY: 着色保证同一颜色的面不共享单元
                 unsafe {
-                    // 使用 get_unchecked_mut 避免边界检查开销
-                    // 这里的安全性由网格拓扑和着色算法保证
-                    let flux_h_ptr = flux_h.as_ptr() as *mut f64;
-                    let flux_hu_ptr = flux_hu.as_ptr() as *mut f64;
-                    let flux_hv_ptr = flux_hv.as_ptr() as *mut f64;
-                    let source_hu_ptr = source_hu.as_ptr() as *mut f64;
-                    let source_hv_ptr = source_hv.as_ptr() as *mut f64;
+                    let owner_idx = owner.get();
+                    flux_h_ptr.write_at(owner_idx, flux_h_ptr.read_at(owner_idx) - fh);
+                    flux_hu_ptr.write_at(owner_idx, flux_hu_ptr.read_at(owner_idx) - fhu);
+                    flux_hv_ptr.write_at(owner_idx, flux_hv_ptr.read_at(owner_idx) - fhv);
+                    source_hu_ptr.write_at(owner_idx, source_hu_ptr.read_at(owner_idx) + bed_src.source_left_x);
+                    source_hv_ptr.write_at(owner_idx, source_hv_ptr.read_at(owner_idx) + bed_src.source_left_y);
                     
-                    *flux_h_ptr.add(owner) -= fh;
-                    *flux_hu_ptr.add(owner) -= fhu;
-                    *flux_hv_ptr.add(owner) -= fhv;
-                    *source_hu_ptr.add(owner) += bed_src.source_left_x;
-                    *source_hv_ptr.add(owner) += bed_src.source_left_y;
-
                     if let Some(neigh) = neighbor {
-                        *flux_h_ptr.add(neigh) += fh;
-                        *flux_hu_ptr.add(neigh) += fhu;
-                        *flux_hv_ptr.add(neigh) += fhv;
-                        *source_hu_ptr.add(neigh) += bed_src.source_right_x;
-                        *source_hv_ptr.add(neigh) += bed_src.source_right_y;
+                        let neigh_idx = neigh.get();
+                        flux_h_ptr.write_at(neigh_idx, flux_h_ptr.read_at(neigh_idx) + fh);
+                        flux_hu_ptr.write_at(neigh_idx, flux_hu_ptr.read_at(neigh_idx) + fhu);
+                        flux_hv_ptr.write_at(neigh_idx, flux_hv_ptr.read_at(neigh_idx) + fhv);
+                        source_hu_ptr.write_at(neigh_idx, source_hu_ptr.read_at(neigh_idx) + bed_src.source_right_x);
+                        source_hv_ptr.write_at(neigh_idx, source_hv_ptr.read_at(neigh_idx) + bed_src.source_right_y);
                     }
                 }
                 
@@ -663,33 +647,34 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             );
         }
 
-        f64::from_bits(max_speed_atomic.load(Ordering::Relaxed))
+        // 临时方案：从atomic加载并转换回B::Scalar
+        let max_speed_bits = max_speed_atomic.load(Ordering::Relaxed);
+        B::Scalar::from_f64(f64::from_bits(max_speed_bits)).unwrap_or(B::Scalar::ZERO)
     }
 
     /// 计算单个面的通量
-    #[allow(deprecated)]
     fn compute_face(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
+        state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
         face_idx: FaceIndex,
-    ) -> (RiemannFlux<f64>, BedSlopeCorrection<CpuBackend<f64>>, f64, usize, Option<usize>) {
-        let (nx, ny) = mesh.face_normal_2d_tuple(face_idx.get());
-        let normal = (nx, ny);
-        let length = mesh.face_length(face_idx);
+    ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
+        let normal = mesh.face_normal_generic::<B>(face_idx);
+        let length_f64 = mesh.face_length(face_idx);
+        let length = B::Scalar::from_f64(length_f64).unwrap_or(B::Scalar::ZERO);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
-        
+
         let owner_idx = owner.get();
         let neighbor_idx = neighbor.map(|c| c.get());
 
         // 左侧状态
         let h_l = state.h[owner_idx];
-        let z_l = state.z[owner_idx];
+        let z_l = B::Scalar::from_f64(mesh.cell_z_bed(owner)).unwrap_or(B::Scalar::ZERO);
         let (u_l, v_l) = self.config.params.safe_velocity_components(
             state.hu[owner_idx], state.hv[owner_idx], h_l
         );
-        let vel_l = (u_l, v_l);
+        let vel_l = B::vec2_new(u_l, v_l);
 
         // 右侧状态
         let (h_r, vel_r, z_r) = if let Some(neigh_idx) = neighbor_idx {
@@ -697,64 +682,75 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             let (u, v) = self.config.params.safe_velocity_components(
                 state.hu[neigh_idx], state.hv[neigh_idx], h
             );
-            (h, (u, v), state.z[neigh_idx])
+            (h, B::vec2_new(u, v), B::Scalar::from_f64(mesh.cell_z_bed(CellIndex(neigh_idx))).unwrap_or(B::Scalar::ZERO))
         } else {
             // 边界处理: vn = vel_l · normal, vel_r = vel_l - 2 * vn * normal
-            let vn = vel_l.0 * normal.0 + vel_l.1 * normal.1;
-            let vel_r = (vel_l.0 - 2.0 * vn * normal.0, vel_l.1 - 2.0 * vn * normal.1);
+            let vn = B::vec2_dot(&vel_l, &normal);
+            let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
+            let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
             (h_l, vel_r, z_l)
         };
 
         // 静水重构
         let recon = if self.config.use_hydrostatic_reconstruction {
-            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, [vel_l.0, vel_l.1], [vel_r.0, vel_r.1])
+            self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
         } else {
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
-                vel_left: [vel_l.0, vel_l.1],
-                vel_right: [vel_r.0, vel_r.1],
-                z_face: 0.5 * (z_l + z_r),
+                vel_left: vel_l,
+                vel_right: vel_r,
+                z_face: (z_l + z_r) * B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF),
             }
         };
 
         // 干湿限制
-        let wet_l = WetState::from_depth(recon.h_left, self.config.params.h_dry, self.config.params.h_wet);
-        let wet_r = WetState::from_depth(recon.h_right, self.config.params.h_dry, self.config.params.h_wet);
+        let wet_l = self.wetting_drying.get_state(recon.h_left);
+        let wet_r = self.wetting_drying.get_state(recon.h_right);
         let flux_limiter = match (wet_l, wet_r) {
-            (WetState::Dry, WetState::Dry) => 0.0,
+            (WetState::Dry, WetState::Dry) => B::Scalar::ZERO,
             (WetState::Dry, _) | (_, WetState::Dry) => {
                 let h_min = recon.h_left.min(recon.h_right);
-                (h_min / self.config.params.h_wet).min(1.0)
+                let h_wet = self.config.params.h_wet;
+                if h_min > h_wet {
+                    B::Scalar::ONE
+                } else {
+                    h_min / h_wet
+                }
             }
             (WetState::PartiallyWet, _) | (_, WetState::PartiallyWet) => {
                 let h_min = recon.h_left.min(recon.h_right);
-                ((h_min - self.config.params.h_dry)
-                    / (self.config.params.h_wet - self.config.params.h_dry)).clamp(0.0, 1.0)
+                let h_dry = self.config.params.h_dry;
+                let h_wet = self.config.params.h_wet;
+                let fraction = (h_min - h_dry) / (h_wet - h_dry);
+                let one = B::Scalar::ONE;
+                let zero = B::Scalar::ZERO;
+                if fraction > one {
+                    one
+                } else if fraction < zero {
+                    zero
+                } else {
+                    fraction
+                }
             }
-            _ => 1.0,
+            _ => B::Scalar::ONE,
         };
 
         // 黎曼通量
-        let vel_l_arr = [recon.vel_left[0], recon.vel_left[1]];
-        let vel_r_arr = [recon.vel_right[0], recon.vel_right[1]];
-        let normal_arr = [normal.0, normal.1];
         let flux = self.riemann.solve(
-            recon.h_left, recon.h_right,
-            vel_l_arr, vel_r_arr,
-            normal_arr,
-        ).unwrap_or(RiemannFlux::<f64>::zero());
+            recon.h_left,
+            recon.h_right,
+            recon.vel_left,
+            recon.vel_right,
+            normal,
+        ).unwrap_or_else(|_| RiemannFlux::zero());
 
-        let limited_flux = if flux_limiter < 1.0 {
-            flux.scaled(flux_limiter)
-        } else {
-            flux
-        };
+        let limited_flux = flux.scaled(flux_limiter);
 
         // 床坡源项
-        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal_arr, length);
+        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal, length);
 
-        (limited_flux, bed_src, length, owner_idx, neighbor_idx)
+        (limited_flux, bed_src, length, owner, neighbor)
     }
 
     // =========================================================================
@@ -762,7 +758,7 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     // =========================================================================
 
     /// 获取配置
-    pub fn config(&self) -> &ParallelFluxConfig {
+    pub fn config(&self) -> &ParallelFluxConfig<B::Scalar> {
         &self.config
     }
 
@@ -781,29 +777,31 @@ impl<B: Backend> ParallelFluxCalculator<B> {
 // 构建器
 // ============================================================
 
-/// 并行计算器构建器
-pub struct ParallelFluxCalculatorBuilder {
-    config: ParallelFluxConfig,
+/// 并行计算器构建器（Backend泛型化）
+pub struct ParallelFluxCalculatorBuilder<B: Backend> {
+    config: ParallelFluxConfig<B::Scalar>,
+    backend: B,
 }
 
-impl ParallelFluxCalculatorBuilder {
-    pub fn new() -> Self {
+impl<B: Backend> ParallelFluxCalculatorBuilder<B> {
+    pub fn new(backend: B) -> Self {
         Self {
             config: ParallelFluxConfig::default(),
+            backend,
         }
     }
 
-    pub fn config(mut self, config: ParallelFluxConfig) -> Self {
+    pub fn config(mut self, config: ParallelFluxConfig<B::Scalar>) -> Self {
         self.config = config;
         self
     }
 
-    pub fn params(mut self, params: NumericalParams<f64>) -> Self {
+    pub fn params(mut self, params: NumericalParams<B::Scalar>) -> Self {
         self.config.params = params;
         self
     }
 
-    pub fn gravity(mut self, g: f64) -> Self { 
+    pub fn gravity(mut self, g: B::Scalar) -> Self { 
         self.config.g = g;
         self
     }
@@ -813,14 +811,17 @@ impl ParallelFluxCalculatorBuilder {
         self
     }
 
-    pub fn build(self) -> ParallelFluxCalculator {
-        ParallelFluxCalculator::new(self.config)
+    pub fn build(self) -> ParallelFluxCalculator<B> {
+        ParallelFluxCalculator::new(self.config, self.backend)
     }
 }
 
-impl Default for ParallelFluxCalculatorBuilder {
+impl<B: Backend> Default for ParallelFluxCalculatorBuilder<B> 
+where
+    B: Default,
+{
     fn default() -> Self {
-        Self::new()
+        Self::new(B::default())
     }
 }
     
@@ -831,10 +832,12 @@ impl Default for ParallelFluxCalculatorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_config_default() {
-        let config = ParallelFluxConfig::default();
+        let config = ParallelFluxConfig::<f64>::default();
         assert!((config.g - 9.81).abs() < 1e-10);
         assert_eq!(config.min_parallel_size, 1000);
         assert_eq!(config.strategy, ParallelStrategy::Auto);
@@ -842,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = ParallelFluxConfig::builder()
+        let config = ParallelFluxConfig::<f64>::builder()
             .gravity(10.0)
             .min_parallel_size(500)
             .strategy(ParallelStrategy::Sequential)
@@ -855,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_colored_strategy() {
-        let config = ParallelFluxConfig::builder()
+        let config = ParallelFluxConfig::<f64>::builder()
             .strategy(ParallelStrategy::Colored)
             .build();
         
@@ -876,12 +879,24 @@ mod tests {
 
     #[test]
     fn test_calculator_builder() {
-        let calc = ParallelFluxCalculatorBuilder::new()
+        let backend = CpuBackend::<f64>::new();
+        let calc = ParallelFluxCalculatorBuilder::new(backend)
             .gravity(10.0)
             .strategy(ParallelStrategy::CollectThenAccumulate)
             .build();
 
         assert!((calc.config().g - 10.0).abs() < 1e-10);
         assert_eq!(calc.config().strategy, ParallelStrategy::CollectThenAccumulate);
+    }
+
+    #[test]
+    fn test_f32_backend() {
+        let backend = CpuBackend::<f32>::new();
+        let config = ParallelFluxConfig::<f32>::builder()
+            .gravity(10.0f32)
+            .build();
+        
+        let calc = ParallelFluxCalculator::<CpuBackend<f32>>::new(config, backend);
+        assert!((calc.config().g - 10.0f32).abs() < 1e-6);
     }
 }

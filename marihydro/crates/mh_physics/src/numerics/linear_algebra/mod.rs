@@ -56,10 +56,6 @@ pub use preconditioner::{
     SsorParams,
     // 预条件器实现
     IdentityPreconditioner, JacobiPreconditioner, SsorPreconditioner, Ilu0Preconditioner,
-    // 类型别名（Backend 特化）
-    JacobiPreconditionerF64, JacobiPreconditionerF32,
-    SsorPreconditionerF64, SsorPreconditionerF32,
-    Ilu0PreconditionerF64, Ilu0PreconditionerF32,
 };
 
 // 迭代求解器
@@ -152,7 +148,7 @@ mod tests {
         // 验证所有类型可访问
         let _builder: CsrBuilder<f64> = CsrBuilder::new(3, 3);
         let backend = CpuBackend::<f64>::new();
-        let _precond: JacobiPreconditionerF64 = JacobiPreconditionerF64::new(&backend);
+        let _precond: JacobiPreconditioner<CpuBackend<f64>> = JacobiPreconditioner::new(&backend);
         let config = SolverConfig::new(1e-8, 100); // 先创建 config
         let _solver: ConjugateGradient<f64> = ConjugateGradient::new(config); // 再传入 config
     }

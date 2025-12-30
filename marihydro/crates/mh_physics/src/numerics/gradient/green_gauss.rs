@@ -473,7 +473,7 @@ mod tests {
             .with_threshold(500)
             .with_distance_weighted();
 
-        assert!(!gg.supports_parallel());
+        assert!(!<GreenGaussGradient as GradientMethodGeneric<f64>>::supports_parallel(&gg));
         assert_eq!(gg.config.parallel_threshold, 500);
         assert_eq!(gg.config.face_interpolation, FaceInterpolation::DistanceWeighted);
     }

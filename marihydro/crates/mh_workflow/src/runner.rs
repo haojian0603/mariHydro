@@ -21,8 +21,8 @@ use crate::manager::{WorkflowError, WorkflowManager};
 use crate::scheduler::{DeviceSelection, HybridScheduler};
 use crate::storage::Storage;
 use mh_physics::{
-    engine::{ShallowWaterSolverF64, SolverStats, StabilityStatus,},
-    state::ShallowWaterStateF64,
+    engine::{ShallowWaterSolver, SolverStats, StabilityStatus,},
+    state::ShallowWaterState,
     adapter::PhysicsMesh,
     Layer3Config,
 };
@@ -160,9 +160,9 @@ pub struct RunContext {
     /// 网格引用
     pub mesh: Arc<PhysicsMesh>,
     /// 求解器实例（内部可变）
-    pub solver: Arc<RwLock<ShallowWaterSolverF64>>,
+    pub solver: Arc<RwLock<ShallowWaterSolver<CpuBackend<f64>>>>,
     /// 状态实例（内部可变）
-    pub state: Arc<RwLock<ShallowWaterStateF64>>,
+    pub state: Arc<RwLock<ShallowWaterState<CpuBackend<f64>>>>,
     /// 上次输出时间
     last_output_time: RwLock<f64>,
     /// 输出文件计数器
@@ -181,7 +181,7 @@ impl RunContext {
     /// - 初始状态创建失败返回 Initialization 错误
     pub fn new(
         job: &SimulationJob,
-        runner_config: &RunnerConfig,
+        _runner_config: &RunnerConfig,
     ) -> Result<Self, RunnerError> {
         // 1. 加载项目网格
         let mesh = load_mesh_from_project(&job.config.project_path)
@@ -198,7 +198,7 @@ impl RunContext {
         // 3. 创建求解器
         let backend = CpuBackend::<f64>::new();
         let solver = Arc::new(RwLock::new(
-            ShallowWaterSolverF64::new(mesh.clone(), layer3_config, backend)
+            ShallowWaterSolver::<CpuBackend<f64>>::new(mesh.clone(), layer3_config, backend)
         ));
 
         // 4. 创建初始状态
@@ -805,7 +805,7 @@ fn load_layer4_config(project_path: &Path) -> Result<mh_config::SolverConfig, Bo
 fn create_initial_state(
     mesh: &PhysicsMesh,
     config: &SimulationConfig,
-) -> Result<ShallowWaterStateF64, Box<dyn std::error::Error>> {
+) -> Result<ShallowWaterState<CpuBackend<f64>>, Box<dyn std::error::Error>> {
     let backend = CpuBackend::<f64>::new();
     
     let initial_file = config.project_path.join("initial_state.json");
@@ -828,7 +828,7 @@ fn create_initial_state(
             .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
             .collect();
         
-        Ok(ShallowWaterStateF64::from_data(
+        Ok(ShallowWaterState::<CpuBackend<f64>>::from_data(
             backend,
             h,
             hu,
@@ -841,7 +841,7 @@ fn create_initial_state(
         let z_bed: Vec<f64> = (0..mesh.n_cells())
             .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
             .collect();
-        Ok(ShallowWaterStateF64::cold_start(backend, 1.0, &z_bed))
+        Ok(ShallowWaterState::<CpuBackend<f64>>::cold_start(backend, 1.0, &z_bed))
     }
 }
 
@@ -858,7 +858,7 @@ fn parse_f64_array(value: &serde_json::Value) -> Result<Vec<f64>, Box<dyn std::e
 }
 
 /// 计算配置哈希
-fn compute_config_hash(solver: &ShallowWaterSolverF64) -> u64 {
+fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>>) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     

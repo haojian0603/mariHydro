@@ -26,6 +26,8 @@ use mh_runtime::CpuBackend;
 // ALLOW_F64: 数学常数
 use std::f64::consts::PI;
 
+// 注意：CpuBackend 已在上方导入
+
 /// 地球角速度 [rad/s]
 // ALLOW_F64: 物理常数
 pub const EARTH_ANGULAR_VELOCITY: f64 = 7.2921e-5;
@@ -310,7 +312,8 @@ mod tests {
     use crate::types::NumericalParams;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

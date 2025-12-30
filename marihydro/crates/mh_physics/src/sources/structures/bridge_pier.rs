@@ -16,6 +16,8 @@ use mh_foundation::AlignedVec;
 use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
 
+// 注意：CpuBackend 已在上方导入
+
 /// 桥墩拖曳力配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgePierConfig {
@@ -166,7 +168,8 @@ mod tests {
     use crate::types::NumericalParams;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new(n_cells);
+        let backend = CpuBackend::<f64>::new();
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;

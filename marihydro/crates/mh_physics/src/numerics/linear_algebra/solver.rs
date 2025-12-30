@@ -285,9 +285,6 @@ pub struct ConjugateGradient<S: RuntimeScalar> {
     ap: Vec<S>,
 }
 
-/// Legacy 类型别名，保持向后兼容
-pub type ConjugateGradientF64 = ConjugateGradient<f64>;
-
 impl<S: RuntimeScalar> ConjugateGradient<S> {
     /// 创建共轭梯度求解器
     pub fn new(config: SolverConfig) -> Self {
@@ -428,9 +425,6 @@ pub struct PcgSolver<S: RuntimeScalar> {
     p: Vec<S>,
     ap: Vec<S>,
 }
-
-/// Legacy 类型别名，保持向后兼容
-pub type PcgSolverF64 = PcgSolver<f64>;
 
 impl<S: RuntimeScalar> PcgSolver<S> {
     /// 创建 PCG 求解器
@@ -718,9 +712,6 @@ pub struct BiCgStabSolver<S: RuntimeScalar> {
     t: Vec<S>,
     z: Vec<S>,
 }
-
-/// Legacy 类型别名，保持向后兼容
-pub type BiCgStabSolverF64 = BiCgStabSolver<f64>;
 
 impl<S: RuntimeScalar> BiCgStabSolver<S> {
     /// 创建 BiCGStab 求解器

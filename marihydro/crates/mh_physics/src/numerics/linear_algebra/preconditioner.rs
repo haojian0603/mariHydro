@@ -17,7 +17,7 @@
 
 use crate::numerics::linear_algebra::{AlignedVec64, aligned_vec};
 use crate::numerics::linear_algebra::csr::CsrMatrix;
-use mh_runtime::{Backend, RuntimeScalar, CpuBackend, DeviceBuffer};
+use mh_runtime::{Backend, RuntimeScalar, DeviceBuffer};
 use num_traits::{FromPrimitive, Zero, One};
 use std::sync::Arc;
 
@@ -263,10 +263,6 @@ impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {
     }
 }
 
-/// 类型别名
-pub type JacobiPreconditionerF64 = JacobiPreconditioner<CpuBackend<f64>>;
-pub type JacobiPreconditionerF32 = JacobiPreconditioner<CpuBackend<f32>>;
-
 // 为 JacobiPreconditioner 实现 ScalarPreconditioner
 impl<B: Backend> ScalarPreconditioner<B::Scalar> for JacobiPreconditioner<B> {
     fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
@@ -381,10 +377,6 @@ impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
     }
 }
 
-/// 类型别名
-pub type SsorPreconditionerF64 = SsorPreconditioner<CpuBackend<f64>>;
-pub type SsorPreconditionerF32 = SsorPreconditioner<CpuBackend<f32>>;
-
 // 为 SsorPreconditioner 实现 ScalarPreconditioner
 impl<B: Backend> ScalarPreconditioner<B::Scalar> for SsorPreconditioner<B> {
     fn apply(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
@@ -471,10 +463,6 @@ impl<B: Backend> Preconditioner<B> for Ilu0Preconditioner<B> {
         self.stats = PreconditionerStats::default();
     }
 }
-
-/// 类型别名
-pub type Ilu0PreconditionerF64 = Ilu0Preconditioner<CpuBackend<f64>>;
-pub type Ilu0PreconditionerF32 = Ilu0Preconditioner<CpuBackend<f32>>;
 
 // 为 Ilu0Preconditioner 实现 ScalarPreconditioner
 impl<B: Backend> ScalarPreconditioner<B::Scalar> for Ilu0Preconditioner<B> {

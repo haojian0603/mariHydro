@@ -17,13 +17,14 @@ use crate::types::PhysicalConstants;
 use super::resuspension::ResuspensionSource;
 use super::settling::SettlingVelocity;
 use mh_foundation::AlignedVec;
+use mh_runtime::CpuBackend;
 
 /// 悬移质输运求解器
 ///
 /// 结合通用 tracer 输运和泥沙特有的床面源项。
 pub struct SuspendedTransport {
     /// 通用输运求解器（对流-扩散）
-    transport_solver: TracerTransportSolver,
+    transport_solver: TracerTransportSolver<CpuBackend<f64>>,
     /// 床面交换源项
     source: ResuspensionSource<f64>,
     /// 沉降速度信息
@@ -195,7 +196,7 @@ impl SuspendedTransport {
     }
     
     /// 获取 tracer 求解器配置的引用
-    pub fn transport_config(&self) -> &crate::tracer::TracerTransportConfig {
+    pub fn transport_config(&self) -> &crate::tracer::TracerTransportConfig<f64> {
         self.transport_solver.config()
     }
 }

@@ -1,59 +1,50 @@
 // crates/mh_physics/src/boundary/manager.rs
 
-//! 边界条件管理器
+//! 边界条件管理器（Backend泛型化版本）
 //!
 //! 本模块提供边界条件的管理和边界通量计算功能：
 //! - BoundaryManager: 边界条件管理器
 //! - BoundaryFaceInfo: 边界面信息
 //! - BoundaryDataProvider: 边界数据提供者接口
 //!
-//! # 设计思路
+//! # Backend泛型化
 //!
-//! 1. 边界条件与边界面分离：条件是定义，面是几何实体
-//! 2. 通过名称关联条件和面
-//! 3. 按边界类型分类存储面信息，便于批量处理
-//! 4. 支持与外部强迫数据源集成
-
+//! 所有几何数据使用`B::Vector2D`和`B::Scalar`，支持任意Backend精度切换。
 
 use std::collections::HashMap;
-
 use thiserror::Error;
+use num_traits::{Float, FromPrimitive, ToPrimitive};
 
 use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 
 // ============================================================
-// 边界面信息
+// 边界面信息（Backend泛型化）
 // ============================================================
 
-/// 边界面信息
-///
-/// 描述单个边界面的几何和拓扑信息。
+/// 边界面信息（Backend泛型化）
 #[derive(Debug, Clone, Copy)]
-pub struct BoundaryFaceInfo {
+pub struct BoundaryFaceInfo<B: Backend> {
     /// 面索引（在网格中的索引）
     pub face_id: usize,
-
     /// 所属单元索引
     pub cell_id: usize,
-
-    /// 面外法向量（单位向量）(nx, ny)
-    pub normal: (f64, f64),
-
+    /// 面外法向量（单位向量）
+    pub normal: B::Vector2D,
     /// 面长度 [m]
-    pub length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
-
+    pub length: B::Scalar,
     /// 所属边界条件的索引
     pub boundary_idx: usize,
 }
 
-impl BoundaryFaceInfo {
+impl<B: Backend> BoundaryFaceInfo<B> {
     /// 创建新的边界面信息
     pub fn new(
         face_id: usize,
         cell_id: usize,
-        normal: (f64, f64),
-        length: f64, // ALLOW_F64: 来自 PhysicsMesh 的几何数据
+        normal: B::Vector2D,
+        length: B::Scalar,
         boundary_idx: usize,
     ) -> Self {
         Self {
@@ -71,22 +62,11 @@ impl BoundaryFaceInfo {
 // ============================================================
 
 /// 边界数据提供者接口
-///
-/// 用于从外部数据源获取边界强迫数据（水位、流速等）。
 pub trait BoundaryDataProvider: Send + Sync {
     /// 获取指定面在给定时间的强迫数据
-    ///
-    /// # 参数
-    /// - `face_id`: 边界面索引
-    /// - `time`: 模拟时间 [s]
-    ///
-    /// # 返回
-    /// 强迫数据，若无数据返回 None
     fn get_forcing(&self, face_id: usize, time: f64) -> Option<ExternalForcing>;
 
     /// 批量获取强迫数据
-    ///
-    /// 默认实现逐个调用 `get_forcing`，可重写以优化性能。
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
@@ -101,8 +81,6 @@ pub trait BoundaryDataProvider: Send + Sync {
 }
 
 /// 恒定强迫数据提供者
-///
-/// 用于测试和简单场景，返回恒定的强迫数据。
 pub struct ConstantForcingProvider {
     forcing: ExternalForcing,
 }
@@ -135,39 +113,11 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 }
 
 // ============================================================
-// 边界条件管理器
+// 边界条件管理器（Backend泛型化）
 // ============================================================
 
-/// 边界条件管理器
-///
-/// 负责：
-/// 1. 管理边界条件定义
-/// 2. 注册边界面与条件的映射
-/// 3. 提供边界通量计算方法
-///
-/// # 使用流程
-///
-/// 1. 创建管理器
-/// 2. 添加边界条件定义 (add_condition)
-/// 3. 注册边界面 (register_face)
-/// 4. 计算边界通量 (compute_*_flux)
-///
-/// # 示例
-///
-/// ```ignore
-/// use mh_physics::boundary::{BoundaryManager, BoundaryCondition, BoundaryParams};
-///
-/// let mut manager = BoundaryManager::new(BoundaryParams::default());
-///
-/// // 添加边界条件
-/// manager.add_condition(BoundaryCondition::wall("north"));
-/// manager.add_condition(BoundaryCondition::open_sea("south"));
-///
-/// // 注册边界面 (normal 使用元组 (nx, ny))
-/// manager.register_face(0, 0, (0.0, 1.0), 1.0, "north").unwrap();
-/// manager.register_face(1, 1, (0.0, -1.0), 1.0, "south").unwrap();
-/// ```
-pub struct BoundaryManager {
+/// 边界条件管理器（Backend泛型化）
+pub struct BoundaryManager<B: Backend> {
     /// 边界条件定义（按名称索引）
     conditions: HashMap<String, BoundaryCondition>,
 
@@ -178,27 +128,30 @@ pub struct BoundaryManager {
     condition_list: Vec<BoundaryCondition>,
 
     /// 固壁边界面
-    wall_faces: Vec<BoundaryFaceInfo>,
+    wall_faces: Vec<BoundaryFaceInfo<B>>,
 
     /// 开边界面（Flather）
-    open_faces: Vec<BoundaryFaceInfo>,
+    open_faces: Vec<BoundaryFaceInfo<B>>,
 
     /// 入流边界面
-    inflow_faces: Vec<BoundaryFaceInfo>,
+    inflow_faces: Vec<BoundaryFaceInfo<B>>,
 
     /// 出流边界面
-    outflow_faces: Vec<BoundaryFaceInfo>,
+    outflow_faces: Vec<BoundaryFaceInfo<B>>,
 
     /// 周期边界面
-    periodic_faces: Vec<BoundaryFaceInfo>,
+    periodic_faces: Vec<BoundaryFaceInfo<B>>,
 
     /// 计算参数
     params: BoundaryParams,
+
+    /// 后端实例
+    backend: B,
 }
 
-impl BoundaryManager {
+impl<B: Backend> BoundaryManager<B> {
     /// 创建新的边界管理器
-    pub fn new(params: BoundaryParams) -> Self {
+    pub fn new_with_backend(backend: B, params: BoundaryParams) -> Self {
         Self {
             conditions: HashMap::new(),
             condition_indices: HashMap::new(),
@@ -209,26 +162,23 @@ impl BoundaryManager {
             outflow_faces: Vec::new(),
             periodic_faces: Vec::new(),
             params,
+            backend,
         }
     }
 
     /// 从数值参数创建
-    pub fn from_numerical_params(params: &crate::types::NumericalParams<f64>) -> Self {
-        Self::new(BoundaryParams::from_numerical_params(params))
+    pub fn from_numerical_params(backend: B, params: &crate::types::NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
+        // 转换参数到 f64（因为 ExternalForcing 使用 f64）
+        let gravity_f64 = gravity.to_f64().unwrap_or(9.81);
+        let h_min = params.h_min.to_f64().unwrap_or(1e-6);
+        Self::new_with_backend(backend, BoundaryParams::new(gravity_f64, h_min))
     }
 
     /// 添加边界条件定义
-    ///
-    /// # 参数
-    /// - `condition`: 边界条件配置
-    ///
-    /// # 返回
-    /// 条件在列表中的索引
     pub fn add_condition(&mut self, condition: BoundaryCondition) -> usize {
         let idx = self.condition_list.len();
         self.condition_indices.insert(condition.name.clone(), idx);
-        self.conditions
-            .insert(condition.name.clone(), condition.clone());
+        self.conditions.insert(condition.name.clone(), condition.clone());
         self.condition_list.push(condition);
         idx
     }
@@ -244,22 +194,12 @@ impl BoundaryManager {
     }
 
     /// 注册边界面
-    ///
-    /// # 参数
-    /// - `face_id`: 面索引
-    /// - `cell_id`: 所属单元索引
-    /// - `normal`: 面外法向量（应为单位向量）(nx, ny)
-    /// - `length`: 面长度 [m]
-    /// - `boundary_name`: 边界条件名称
-    ///
-    /// # 错误
-    /// - 边界条件未找到
     pub fn register_face(
         &mut self,
         face_id: usize,
         cell_id: usize,
-        normal: (f64, f64),
-        length: f64,
+        normal: B::Vector2D,
+        length: B::Scalar,
         boundary_name: &str,
     ) -> Result<(), BoundaryError> {
         let boundary_idx = *self
@@ -281,123 +221,102 @@ impl BoundaryManager {
         Ok(())
     }
 
-    // ========== 通量计算方法 ==========
+    // ========== 通量计算方法（Backend泛型化） ==========
 
-    /// 计算固壁边界通量
-    ///
-    /// 固壁边界：无穿透，只有压力作用
-    ///
-    /// # 参数
-    /// - `h_interior`: 内部单元水深 [m]
-    /// - `normal`: 面外法向量 (nx, ny)
-    ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
-    pub fn compute_wall_flux(&self, h_interior: f64, normal: (f64, f64)) -> (f64, (f64, f64)) {
+    /// 计算固壁边界通量（Backend泛型化）
+    pub fn compute_wall_flux(
+        &self,
+        h_interior: B::Scalar,
+        normal: B::Vector2D,
+    ) -> (B::Scalar, B::Vector2D) {
         // 质量通量为零（无穿透）
-        let mass_flux = 0.0;
+        let mass_flux = B::Scalar::ZERO;
 
         // 动量通量仅有压力项
-        let p = self.params.hydrostatic_pressure(h_interior);
-        let momentum_flux = (normal.0 * p, normal.1 * p);
+        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let pressure = B::Scalar::HALF * g * h_interior * h_interior;
+        let momentum_flux = B::vec2_scale(&normal, pressure);
 
         (mass_flux, momentum_flux)
     }
 
-    /// 计算 Flather 辐射边界通量
-    ///
-    /// Flather 边界条件使用特征关系结合外部强迫。
-    /// 适用于开海边界，允许波动自由传出。
-    ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `z_interior`: 内部单元底高程 [m]
-    /// - `external`: 外部强迫数据
-    /// - `normal`: 面外法向量 (nx, ny)
-    ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// 计算 Flather 辐射边界通量（Backend泛型化）
     pub fn compute_flather_flux(
         &self,
-        interior: ConservedState<f64>,
-        z_interior: f64,
+        interior: ConservedState<B::Scalar>,
+        z_interior: B::Scalar,
         external: &ExternalForcing,
-        normal: (f64, f64),
-    ) -> (f64, (f64, f64)) {
-        let h = interior.h.max(self.params.h_min);
-        let c = self.params.wave_speed(h);
+        normal: B::Vector2D,
+    ) -> (B::Scalar, B::Vector2D) {
+        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
 
         // 内部速度
         let u = interior.hu / h;
         let v = interior.hv / h;
+        let vel_int = B::vec2_new(u, v);
 
         // 法向速度 (dot product)
-        let un_int = u * normal.0 + v * normal.1;
-        let un_ext = external.velocity.0 * normal.0 + external.velocity.1 * normal.1;
+        let un_int = B::vec2_dot(&vel_int, &normal);
+        let un_ext = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO) * normal.x()
+            + B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO) * normal.y();
 
         // 内部水位
         let eta_int = h + z_interior;
+        let eta_ext = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO);
 
         // Flather 条件: un* = un_ext + (c/h)(eta_int - eta_ext)
-        let un_star = un_ext + (c / h) * (eta_int - external.eta);
+        let c = (g * h).sqrt();
+        let un_star = un_ext + (c / h) * (eta_int - eta_ext);
 
         // 通量计算
         let mass_flux = h * un_star;
-        let p = self.params.hydrostatic_pressure(h);
-        let momentum_flux = (normal.0 * (mass_flux * un_int + p), normal.1 * (mass_flux * un_int + p));
+        let pressure = B::Scalar::HALF * g * h * h;
+        let momentum_dot = mass_flux * un_int + pressure;
+        let momentum_flux = B::vec2_scale(&normal, momentum_dot);
 
         (mass_flux, momentum_flux)
     }
 
-    /// 计算自由出流通量
-    ///
-    /// 零梯度外推，直接使用内部状态计算通量。
-    ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量 (nx, ny)
-    ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
-    pub fn compute_outflow_flux(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> (f64, (f64, f64)) {
-        let h = interior.h.max(self.params.h_min);
+    /// 计算自由出流通量（Backend泛型化）
+    pub fn compute_outflow_flux(
+        &self,
+        interior: ConservedState<B::Scalar>,
+        normal: B::Vector2D,
+    ) -> (B::Scalar, B::Vector2D) {
+        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
         let u = interior.hu / h;
         let v = interior.hv / h;
+        let vel = B::vec2_new(u, v);
 
-        // dot product
-        let un = u * normal.0 + v * normal.1;
+        // 法向速度
+        let un = B::vec2_dot(&vel, &normal);
         let mass_flux = h * un;
-        let p = self.params.hydrostatic_pressure(h);
-        let momentum_flux = (normal.0 * (mass_flux * un + p), normal.1 * (mass_flux * un + p));
+        let pressure = B::Scalar::HALF * g * h * h;
+        let momentum_dot = mass_flux * un + pressure;
+        let momentum_flux = B::vec2_scale(&normal, momentum_dot);
 
         (mass_flux, momentum_flux)
     }
 
-    /// 计算入流边界通量
-    ///
-    /// 根据给定的流量或速度计算通量。
-    ///
-    /// # 参数
-    /// - `h_interior`: 内部单元水深 [m]
-    /// - `discharge`: 入流流量 [m³/s]
-    /// - `face_length`: 面长度 [m]
-    /// - `normal`: 面外法向量 (nx, ny)
-    ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// 计算入流边界通量（Backend泛型化）
     pub fn compute_inflow_flux(
         &self,
-        h_interior: f64,
-        discharge: f64,
-        face_length: f64,
-        normal: (f64, f64),
-    ) -> (f64, (f64, f64)) {
+        h_interior: B::Scalar,
+        discharge: B::Scalar,
+        face_length: B::Scalar,
+        normal: B::Vector2D,
+    ) -> (B::Scalar, B::Vector2D) {
+        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        
         // 入流流量（负号因为入流方向与法向相反）
-        let qn = -discharge / face_length.max(1e-10);
+        let qn = -discharge / face_length.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
 
-        let p = self.params.hydrostatic_pressure(h_interior);
-        let u_in = qn / h_interior.max(self.params.h_min);
-        let momentum_flux = (normal.0 * (qn * u_in + p), normal.1 * (qn * u_in + p));
+        let pressure = B::Scalar::HALF * g * h_interior * h_interior;
+        let u_in = qn / h_interior.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let momentum_dot = qn * u_in + pressure;
+        let momentum_flux = B::vec2_scale(&normal, momentum_dot);
 
         (qn, momentum_flux)
     }
@@ -405,32 +324,32 @@ impl BoundaryManager {
     // ========== 访问方法 ==========
 
     /// 获取固壁边界面列表
-    pub fn wall_faces(&self) -> &[BoundaryFaceInfo] {
+    pub fn wall_faces(&self) -> &[BoundaryFaceInfo<B>] {
         &self.wall_faces
     }
 
     /// 获取开边界面列表
-    pub fn open_faces(&self) -> &[BoundaryFaceInfo] {
+    pub fn open_faces(&self) -> &[BoundaryFaceInfo<B>] {
         &self.open_faces
     }
 
     /// 获取入流边界面列表
-    pub fn inflow_faces(&self) -> &[BoundaryFaceInfo] {
+    pub fn inflow_faces(&self) -> &[BoundaryFaceInfo<B>] {
         &self.inflow_faces
     }
 
     /// 获取出流边界面列表
-    pub fn outflow_faces(&self) -> &[BoundaryFaceInfo] {
+    pub fn outflow_faces(&self) -> &[BoundaryFaceInfo<B>] {
         &self.outflow_faces
     }
 
     /// 获取周期边界面列表
-    pub fn periodic_faces(&self) -> &[BoundaryFaceInfo] {
+    pub fn periodic_faces(&self) -> &[BoundaryFaceInfo<B>] {
         &self.periodic_faces
     }
 
     /// 获取所有边界面的迭代器
-    pub fn all_faces(&self) -> impl Iterator<Item = &BoundaryFaceInfo> {
+    pub fn all_faces(&self) -> impl Iterator<Item = &BoundaryFaceInfo<B>> {
         self.wall_faces
             .iter()
             .chain(&self.open_faces)
@@ -468,21 +387,19 @@ impl BoundaryManager {
     }
 
     /// 验证边界条件设置
-    ///
-    /// 检查：
-    /// 1. 法向量是否单位化
-    /// 2. 是否有重复的边界面
     pub fn validate(&self) -> Result<(), BoundaryError> {
         use std::collections::HashSet;
         let mut seen_faces = HashSet::new();
 
         for face in self.all_faces() {
             // 检查法向量是否单位化
-            let mag_sq = face.normal.0 * face.normal.0 + face.normal.1 * face.normal.1;
-            if (mag_sq - 1.0).abs() > 1e-6 {
+            let mag_sq = B::vec2_dot(&face.normal, &face.normal);
+            let one = B::Scalar::ONE;
+            let eps = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
+            if (mag_sq - one).abs() > eps {
                 return Err(BoundaryError::InvalidNormal {
                     face_id: face.face_id,
-                    magnitude: mag_sq.sqrt(),
+                    magnitude: mag_sq.to_f64().unwrap_or(0.0),
                 });
             }
 
@@ -496,9 +413,12 @@ impl BoundaryManager {
     }
 }
 
-impl Default for BoundaryManager {
+impl<B: Backend> Default for BoundaryManager<B>
+where
+    B: Default,
+{
     fn default() -> Self {
-        Self::new(BoundaryParams::default())
+        Self::new_with_backend(B::default(), BoundaryParams::default())
     }
 }
 
@@ -536,17 +456,20 @@ pub enum BoundaryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_boundary_manager_creation() {
-        let manager = BoundaryManager::default();
+        let backend = CpuBackend::<f64>::new();
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
         assert_eq!(manager.total_boundary_faces(), 0);
         assert_eq!(manager.condition_count(), 0);
     }
 
     #[test]
     fn test_add_condition() {
-        let mut manager = BoundaryManager::default();
+        let backend = CpuBackend::<f64>::new();
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
 
         let idx1 = manager.add_condition(BoundaryCondition::wall("north"));
         let idx2 = manager.add_condition(BoundaryCondition::open_sea("south"));
@@ -561,16 +484,17 @@ mod tests {
     }
 
     #[test]
-    fn test_register_face() {
-        let mut manager = BoundaryManager::default();
+    fn test_register_face_f64() {
+        let backend = CpuBackend::<f64>::new();
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
         manager.add_condition(BoundaryCondition::wall("north"));
         manager.add_condition(BoundaryCondition::open_sea("south"));
 
         manager
-            .register_face(0, 0, (0.0, 1.0), 1.0, "north")
+            .register_face(0, 0, CpuBackend::<f64>::vec2_new(0.0, 1.0), 1.0, "north")
             .unwrap();
         manager
-            .register_face(1, 1, (0.0, -1.0), 1.0, "south")
+            .register_face(1, 1, CpuBackend::<f64>::vec2_new(0.0, -1.0), 1.0, "south")
             .unwrap();
 
         assert_eq!(manager.wall_faces().len(), 1);
@@ -580,8 +504,9 @@ mod tests {
 
     #[test]
     fn test_register_unknown_condition() {
-        let mut manager = BoundaryManager::default();
-        let result = manager.register_face(0, 0, (0.0, 1.0), 1.0, "unknown");
+        let backend = CpuBackend::<f64>::new();
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let result = manager.register_face(0, 0, CpuBackend::<f64>::vec2_new(0.0, 1.0), 1.0, "unknown");
 
         assert!(result.is_err());
         if let Err(BoundaryError::ConditionNotFound(name)) = result {
@@ -592,39 +517,52 @@ mod tests {
     }
 
     #[test]
-    fn test_wall_flux() {
-        let manager = BoundaryManager::default();
-        let (mass, momentum) = manager.compute_wall_flux(1.0, (1.0, 0.0));
+    fn test_wall_flux_f64() {
+        let backend = CpuBackend::<f64>::new();
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let (mass, momentum) = manager.compute_wall_flux(1.0, CpuBackend::<f64>::vec2_new(1.0, 0.0));
 
         assert_eq!(mass, 0.0);
-        assert!(momentum.0 > 0.0); // 压力向外
-        assert!((momentum.1).abs() < 1e-10);
+        assert!(momentum.x() > 0.0); // 压力向外
+        assert!(momentum.y().abs() < 1e-10);
     }
 
     #[test]
-    fn test_outflow_flux() {
-        let manager = BoundaryManager::default();
+    fn test_wall_flux_f32() {
+        let backend = CpuBackend::<f32>::new();
+        let manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(backend, BoundaryParams::default());
+        let (mass, momentum) = manager.compute_wall_flux(1.0f32, CpuBackend::<f32>::vec2_new(1.0, 0.0));
+
+        assert_eq!(mass, 0.0f32);
+        assert!(momentum.x() > 0.0f32);
+    }
+
+    #[test]
+    fn test_outflow_flux_f64() {
+        let backend = CpuBackend::<f64>::new();
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
-        let (mass, _) = manager.compute_outflow_flux(interior, (1.0, 0.0));
+        let (mass, _) = manager.compute_outflow_flux(interior, CpuBackend::<f64>::vec2_new(1.0, 0.0));
 
         assert!((mass - 1.0).abs() < 1e-10); // h * u * normal = 1 * 1 * 1
     }
 
     #[test]
-    fn test_validate() {
-        let mut manager = BoundaryManager::default();
+    fn test_validate_normalization() {
+        let backend = CpuBackend::<f64>::new();
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
         manager.add_condition(BoundaryCondition::wall("test"));
 
         // 单位向量应该通过
         manager
-            .register_face(0, 0, (1.0, 0.0), 1.0, "test")
+            .register_face(0, 0, CpuBackend::<f64>::vec2_new(1.0, 0.0), 1.0, "test")
             .unwrap();
         assert!(manager.validate().is_ok());
 
         // 清空并添加非单位向量
         manager.clear_faces();
         manager
-            .register_face(1, 0, (2.0, 0.0), 1.0, "test")
+            .register_face(1, 0, CpuBackend::<f64>::vec2_new(2.0, 0.0), 1.0, "test")
             .unwrap();
         assert!(manager.validate().is_err());
     }
@@ -642,5 +580,19 @@ mod tests {
         for f in &output {
             assert!((f.eta - 1.5).abs() < 1e-10);
         }
+    }
+
+    #[test]
+    fn test_f32_backend_full() {
+        let backend = CpuBackend::<f32>::new();
+        let mut manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(backend, BoundaryParams::default());
+        
+        manager.add_condition(BoundaryCondition::wall("test"));
+        manager.register_face(0, 0, CpuBackend::<f32>::vec2_new(1.0, 0.0), 1.0f32, "test").unwrap();
+        
+        assert_eq!(manager.total_boundary_faces(), 1);
+        let (mass, momentum) = manager.compute_wall_flux(1.0f32, CpuBackend::<f32>::vec2_new(1.0, 0.0));
+        assert_eq!(std::mem::size_of_val(&mass), 4); // f32验证
+        assert_eq!(std::mem::size_of_val(&momentum.x()), 4);
     }
 }

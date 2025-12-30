@@ -507,15 +507,13 @@ impl SemiImplicitStrategy {
         let mut grad_x = 0.0;
         let mut grad_y = 0.0;
 
-        let cell_faces = self.topo.cell_faces(cell_idx);
         let area = mesh.cell_area_unchecked(CellIndex(cell_idx));
 
         if area < 1e-14 {
             return (0.0, 0.0);
         }
 
-        for &face_idx in cell_faces {
-            let face = self.topo.face(face_idx);
+        for face in self.topo.cell_faces(cell_idx) {
             let owner = face.owner;
 
             // 面上的值（算术平均）

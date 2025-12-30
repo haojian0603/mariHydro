@@ -87,8 +87,10 @@ impl PressureMatrixAssembler {
             // 对角元素
             builder.set(cell_idx, cell_idx, 1.0);
             // 非对角元素（邻居）
-            for neighbor in topo.cell_neighbor_indices(cell_idx) {
-                builder.set(cell_idx, neighbor, 0.0);
+            for neighbor_info in topo.cell_neighbors(cell_idx) {
+                if let Some(neighbor_idx) = neighbor_info.cell_idx {
+                    builder.set(cell_idx, neighbor_idx, 0.0);
+                }
             }
         }
 
@@ -341,8 +343,10 @@ impl ImplicitMomentumAssembler {
         let mut builder = CsrBuilder::new_square(n);
         for cell_idx in 0..n {
             builder.set(cell_idx, cell_idx, 1.0);
-            for neighbor in topo.cell_neighbor_indices(cell_idx) {
-                builder.set(cell_idx, neighbor, 0.0);
+            for neighbor_info in topo.cell_neighbors(cell_idx) {
+                if let Some(neighbor_idx) = neighbor_info.cell_idx {
+                    builder.set(cell_idx, neighbor_idx, 0.0);
+                }
             }
         }
 

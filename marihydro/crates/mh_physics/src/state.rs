@@ -8,7 +8,7 @@
 use crate::fields::{FieldMeta, FieldRegistry};
 use crate::traits::{StateAccess, StateAccessMut};
 use crate::types::{NumericalParams, SafeVelocity};
-use mh_runtime::{Backend, CpuBackend};
+use mh_runtime::Backend;
 use num_traits::{Float, Zero};
 use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
@@ -1288,6 +1288,7 @@ where
 mod tests {
     use super::*;
     use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_state_creation_f64() {

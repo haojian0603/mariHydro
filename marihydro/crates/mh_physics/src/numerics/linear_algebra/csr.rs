@@ -149,9 +149,6 @@ pub struct CsrMatrix<S: RuntimeScalar> {
     values: Vec<S>,
 }
 
-/// f64 版本的类型别名（向后兼容）
-pub type CsrMatrixF64 = CsrMatrix<f64>;
-
 impl<S: RuntimeScalar> CsrMatrix<S> {
     /// 从原始 CSR 数据创建矩阵
     ///
@@ -687,9 +684,6 @@ pub struct CsrBuilder<S: RuntimeScalar> {
     rows: Vec<BTreeMap<usize, S>>,
     _marker: PhantomData<S>,
 }
-
-/// f64 构建器类型别名
-pub type CsrBuilderF64 = CsrBuilder<f64>;
 
 impl<S: RuntimeScalar> CsrBuilder<S> {
     /// 创建方阵构建器

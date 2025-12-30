@@ -375,12 +375,12 @@ pub struct ShallowWaterSolver<B: Backend> {
     timestep_ctrl: TimeStepController<B>,
     /// 运行统计信息
     stats: SolverStats,
-    /// 水位重构器（MUSCL）
-    muscl_eta: MusclReconstructorGeneric<B::Scalar>,
-    /// x 速度重构器
-    muscl_u: MusclReconstructorGeneric<B::Scalar>,
-    /// y 速度重构器
-    muscl_v: MusclReconstructorGeneric<B::Scalar>,
+    /// 水位重构器（MUSCL，使用 f64 内部计算）
+    muscl_eta: MusclReconstructorGeneric<f64>,
+    /// x 速度重构器（MUSCL，使用 f64 内部计算）
+    muscl_u: MusclReconstructorGeneric<f64>,
+    /// y 速度重构器（MUSCL，使用 f64 内部计算）
+    muscl_v: MusclReconstructorGeneric<f64>,
 }
 
 impl<B: Backend> ShallowWaterSolver<B> {
@@ -411,9 +411,9 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let riemann = HllcSolver::<B>::new(&solver_params, gravity);
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
         let hydrostatic = HydrostaticReconstruction::<B>::new(&params, gravity);
-        let muscl_eta = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
-        let muscl_u = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
-        let muscl_v = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config, mesh.clone());
+        let muscl_eta = MusclReconstructorGeneric::<f64>::new(muscl_config.clone(), mesh.clone());
+        let muscl_u = MusclReconstructorGeneric::<f64>::new(muscl_config.clone(), mesh.clone());
+        let muscl_v = MusclReconstructorGeneric::<f64>::new(muscl_config, mesh.clone());
 
         Self {
             mesh,
