@@ -28,6 +28,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
+use mh_runtime::Backend;
 
 /// 邻居信息
 #[derive(Debug, Clone, Copy)]
@@ -375,6 +376,25 @@ impl CellFaceTopology {
         } else {
             0.0
         }
+    }
+
+    /// 将面法向转换为后端标量类型
+    pub fn face_normal_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> (B::Scalar, B::Scalar) {
+        let n = self.face_info[face_idx].normal;
+        (
+            backend.scalar_from_f64(n.0),
+            backend.scalar_from_f64(n.1),
+        )
+    }
+
+    /// 将面长度转换为后端标量类型
+    pub fn face_length_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> B::Scalar {
+        backend.scalar_from_f64(self.face_info[face_idx].length)
+    }
+
+    /// 将面距转换为后端标量类型
+    pub fn face_dist_o2n_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> B::Scalar {
+        backend.scalar_from_f64(self.face_info[face_idx].dist_o2n)
     }
 }
 

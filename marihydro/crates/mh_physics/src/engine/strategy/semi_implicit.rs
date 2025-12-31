@@ -21,10 +21,13 @@
 
 use super::{SemiImplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
-use crate::core::{Backend, CpuBackend};
-use crate::engine::pcg::{PcgSolver, PcgConfig, DiagonalMatrix, PreconditionerType};
+use crate::core::Backend;
+use crate::engine::pcg::{PcgSolver, PcgConfig, PreconditionerType, PoissonMatrixBuilder};
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
+use num_traits::FromPrimitive;
+use mh_runtime::{DeviceBuffer, RuntimeScalar};
+use num_traits::Float;
 
 /// 泛型半隐式策略
 /// 
@@ -149,213 +152,189 @@ impl<B: Backend> SemiImplicitStrategyGeneric<B> {
     }
 }
 
-impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<CpuBackend<f64>> {
+impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGeneric<B> {
     fn name(&self) -> &'static str {
         "半隐式压力校正法"
     }
     
     fn step(
         &mut self,
-        state: &mut ShallowWaterStateGeneric<CpuBackend<f64>>,
-        mesh: &dyn MeshTopology<CpuBackend<f64>>,
-        _workspace: &mut SolverWorkspaceGeneric<CpuBackend<f64>>,
-        dt: f64, // ALLOW_F64: 时间步长
-    ) -> StepResult<f64> {
+        state: &mut ShallowWaterStateGeneric<B>,
+        mesh: &dyn MeshTopology<B>,
+        _workspace: &mut SolverWorkspaceGeneric<B>,
+        dt: B::Scalar,
+    ) -> StepResult<B::Scalar> {
         let n_cells = mesh.n_cells();
         self.ensure_capacity(n_cells);
-        
-        let gravity = self.config.gravity;
-        let h_min = self.config.h_min;
-        let theta = self.config.theta;
-        
-        // 获取状态引用（只读）
-        let h: &[f64] = &state.h;
-        let hu: &[f64] = &state.hu;
-        let hv: &[f64] = &state.hv;
-        let _z: &[f64] = &state.z;
-        
-        // 获取工作缓冲区（可写）
-        let u_star: &mut [f64] = &mut self.u_star;
-        let v_star: &mut [f64] = &mut self.v_star;
-        let eta_prime: &mut [f64] = &mut self.eta_prime;
-        let rhs: &mut [f64] = &mut self.rhs;
-        let diag: &mut [f64] = &mut self.diag;
-        let grad_eta_x: &mut [f64] = &mut self.grad_eta_x;
-        let grad_eta_y: &mut [f64] = &mut self.grad_eta_y;
-        
-        // ========== 第1步：预测步 ==========
-        // 计算预测速度 u* = u^n + dt * (显式项)
-        // 显式项包括：对流、扩散、床底坡度、摩擦等
-        // 这里使用简化实现：直接从当前动量计算速度
+
+        let gravity = B::Scalar::from_f64(self.config.gravity).unwrap_or(B::Scalar::ZERO);
+        let h_min = B::Scalar::from_f64(self.config.h_min).unwrap_or(B::Scalar::ZERO);
+        let theta = B::Scalar::from_f64(self.config.theta).unwrap_or(B::Scalar::HALF);
+        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+
+        let h: &[B::Scalar] = &state.h;
+        let hu: &[B::Scalar] = &state.hu;
+        let hv: &[B::Scalar] = &state.hv;
+
+        let u_star: &mut [B::Scalar] = &mut self.u_star;
+        let v_star: &mut [B::Scalar] = &mut self.v_star;
+        let eta_prime: &mut [B::Scalar] = &mut self.eta_prime;
+        let rhs: &mut [B::Scalar] = &mut self.rhs;
+        let grad_eta_x: &mut [B::Scalar] = &mut self.grad_eta_x;
+        let grad_eta_y: &mut [B::Scalar] = &mut self.grad_eta_y;
+
         for i in 0..n_cells {
             if h[i] > h_min {
                 u_star[i] = hu[i] / h[i];
                 v_star[i] = hv[i] / h[i];
             } else {
-                u_star[i] = 0.0;
-                v_star[i] = 0.0;
+                u_star[i] = B::Scalar::ZERO;
+                v_star[i] = B::Scalar::ZERO;
             }
         }
-        
-        // ========== 第2步：组装压力泊松方程 ==========
-        // 离散形式：A * η' = b
-        // 其中 A 是拉普拉斯算子的离散化，b 是速度散度
-        //
-        // 对于简化的对角近似：
-        // A_ii ≈ Σ_f (H_f * L_f / d_f)
-        // 这里使用更简单的形式：A_ii = Area_i / (g * θ * dt² * H_i)
-        
+
+        let mut cell_areas: Vec<B::Scalar> = Vec::with_capacity(n_cells);
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
-            let h_eff = h[i].max(h_min);
-            
-            // 对角项：来自压力泊松方程的离散化
-            // 系数与时间步长、重力和水深相关
-            diag[i] = area / (gravity * theta * dt * dt * h_eff);
+            cell_areas.push(area);
         }
-        
-        // 计算右端项：预测速度的散度
-        // b_i = -∫∫ ∇·(H u*) dA ≈ -Σ_f (H_f * u*_f · n_f) * L_f
-        rhs.fill(0.0);
+
+        let diag_matrix = PoissonMatrixBuilder::new(n_cells).build_diagonal(
+            &self.backend,
+            &cell_areas,
+            dt,
+            gravity,
+            theta,
+            h,
+            h_min,
+        );
+
+        self.diag = diag_matrix.diag.clone();
+        let diag: &[B::Scalar] = &self.diag;
+
+        rhs.fill(B::Scalar::ZERO);
         for face in mesh.interior_faces() {
             let owner = mesh.face_owner(*face);
             let neighbor = mesh.face_neighbor(*face).unwrap();
-            
+
             let normal = mesh.face_normal(*face);
             let length = mesh.face_length(*face);
-            
-            // 界面处的水深（算术平均）
-            let h_face = 0.5 * (h[owner] + h[neighbor]).max(h_min);
-            
-            // 界面处的预测速度（算术平均）
-            let u_face = 0.5 * (u_star[owner] + u_star[neighbor]);
-            let v_face = 0.5 * (v_star[owner] + v_star[neighbor]);
-            
-            // 通过界面的体积通量
+
+            let h_face = half * (h[owner] + h[neighbor]).max(h_min);
+
+            let u_face = half * (u_star[owner] + u_star[neighbor]);
+            let v_face = half * (v_star[owner] + v_star[neighbor]);
+
             let flux = h_face * (u_face * normal[0] + v_face * normal[1]) * length;
-            
-            // 累加到相邻单元（守恒形式）
-            rhs[owner] -= flux;
-            rhs[neighbor] += flux;
+
+            rhs[owner] = rhs[owner] - flux;
+            rhs[neighbor] = rhs[neighbor] + flux;
         }
-        
-        // ========== 第3步：求解压力校正方程 ==========
-        // 使用 PCG 求解器或简单的 Jacobi 迭代
-        eta_prime.fill(0.0);
+
+        eta_prime.fill(B::Scalar::ZERO);
         let mut converged = true;
         let mut iterations = 0;
-        
+
         if let Some(ref mut pcg_solver) = self.pcg_solver {
-            // 使用 PCG 求解器
-            let diag_matrix = DiagonalMatrix::new(diag.to_vec(), n_cells);
-            let mut eta_vec = eta_prime.to_vec();
-            let rhs_vec = rhs.to_vec();
-            
-            let result = pcg_solver.solve(&diag_matrix, &mut eta_vec, &rhs_vec, Some(&diag_matrix));
-            
+            let mut eta_buf = self.backend.alloc(eta_prime.len());
+            eta_buf.copy_from_slice(eta_prime);
+            let mut rhs_buf = self.backend.alloc(rhs.len());
+            rhs_buf.copy_from_slice(rhs);
+
+            let result = pcg_solver.solve(&diag_matrix, &mut eta_buf, &rhs_buf, Some(&diag_matrix));
+
             converged = result.converged;
             iterations = result.iterations;
-            
-            // 复制结果回缓冲区
-            for i in 0..n_cells {
-                eta_prime[i] = eta_vec[i];
-            }
+
+            eta_prime.copy_from_slice(eta_buf.as_slice());
         } else {
-            // 回退到简单的 Jacobi 迭代
+            let eps = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON);
+            let rtol = B::Scalar::from_f64(self.config.solver_rtol).unwrap_or(B::Scalar::EPSILON);
             for iter in 0..self.config.solver_max_iter {
-                let mut max_residual = 0.0f64;
-                
+                let mut max_residual = B::Scalar::ZERO;
+
                 for i in 0..n_cells {
-                    if diag[i].abs() > 1e-14 {
+                    if diag[i].abs() > eps {
                         let new_eta = rhs[i] / diag[i];
                         let residual = (new_eta - eta_prime[i]).abs();
-                        max_residual = max_residual.max(residual);
+                        if residual > max_residual {
+                            max_residual = residual;
+                        }
                         eta_prime[i] = new_eta;
                     }
                 }
-                
+
                 iterations = iter + 1;
-                if max_residual < self.config.solver_rtol {
+                if max_residual < rtol {
                     break;
                 }
-                
+
                 if iter == self.config.solver_max_iter - 1 {
                     converged = false;
                 }
             }
         }
-        
-        // ========== 第4步：计算压力梯度 ==========
-        // ∇η' 通过 Green-Gauss 公式计算
-        grad_eta_x.fill(0.0);
-        grad_eta_y.fill(0.0);
-        
+
+        grad_eta_x.fill(B::Scalar::ZERO);
+        grad_eta_y.fill(B::Scalar::ZERO);
+
         for face in mesh.interior_faces() {
             let owner = mesh.face_owner(*face);
             let neighbor = mesh.face_neighbor(*face).unwrap();
-            
+
             let normal = mesh.face_normal(*face);
             let length = mesh.face_length(*face);
-            
-            // 界面处的水位校正（算术平均）
-            let eta_face = 0.5 * (eta_prime[owner] + eta_prime[neighbor]);
-            
-            // 梯度贡献（Green-Gauss 定理）
+
+            let eta_face = half * (eta_prime[owner] + eta_prime[neighbor]);
+
             let contrib_x = eta_face * normal[0] * length;
             let contrib_y = eta_face * normal[1] * length;
-            
-            grad_eta_x[owner] += contrib_x;
-            grad_eta_x[neighbor] -= contrib_x;
-            grad_eta_y[owner] += contrib_y;
-            grad_eta_y[neighbor] -= contrib_y;
+
+            grad_eta_x[owner] = grad_eta_x[owner] + contrib_x;
+            grad_eta_x[neighbor] = grad_eta_x[neighbor] - contrib_x;
+            grad_eta_y[owner] = grad_eta_y[owner] + contrib_y;
+            grad_eta_y[neighbor] = grad_eta_y[neighbor] - contrib_y;
         }
-        
-        // 除以单元面积得到梯度
+
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
-            if area > 1e-14 {
-                let inv_area = 1.0 / area;
-                grad_eta_x[i] *= inv_area;
-                grad_eta_y[i] *= inv_area;
+            if area > eps_zero::<B::Scalar>() {
+                let inv_area = B::Scalar::ONE / area;
+                grad_eta_x[i] = grad_eta_x[i] * inv_area;
+                grad_eta_y[i] = grad_eta_y[i] * inv_area;
             }
         }
-        
-        // ========== 第5步：校正速度和水位 ==========
-        // u^{n+1} = u* - g * θ * dt * ∇η'
-        // η^{n+1} = η^n + η'
-        let h_mut: &mut [f64] = &mut state.h;
-        let hu_mut: &mut [f64] = &mut state.hu;
-        let hv_mut: &mut [f64] = &mut state.hv;
-        
-        let mut max_wave_speed = 0.0f64;
+
+        let h_mut: &mut [B::Scalar] = &mut state.h;
+        let hu_mut: &mut [B::Scalar] = &mut state.hu;
+        let hv_mut: &mut [B::Scalar] = &mut state.hv;
+
+        let mut max_wave_speed = B::Scalar::ZERO;
         let mut dry_cells = 0usize;
-        
+
         for i in 0..n_cells {
-            // 更新水位
-            h_mut[i] += eta_prime[i];
-            
+            h_mut[i] = h_mut[i] + eta_prime[i];
+
             if h_mut[i] < h_min {
-                // 干单元处理
-                h_mut[i] = 0.0;
-                hu_mut[i] = 0.0;
-                hv_mut[i] = 0.0;
+                h_mut[i] = B::Scalar::ZERO;
+                hu_mut[i] = B::Scalar::ZERO;
+                hv_mut[i] = B::Scalar::ZERO;
                 dry_cells += 1;
             } else {
-                // 速度校正
                 let u_new = u_star[i] - gravity * theta * dt * grad_eta_x[i];
                 let v_new = v_star[i] - gravity * theta * dt * grad_eta_y[i];
-                
-                // 更新动量
+
                 hu_mut[i] = h_mut[i] * u_new;
                 hv_mut[i] = h_mut[i] * v_new;
-                
-                // 计算最大波速
+
                 let c = (gravity * h_mut[i]).sqrt();
                 let speed = (u_new * u_new + v_new * v_new).sqrt() + c;
-                max_wave_speed = max_wave_speed.max(speed);
+                if speed > max_wave_speed {
+                    max_wave_speed = speed;
+                }
             }
         }
-        
+
         StepResult {
             dt_used: dt,
             max_wave_speed,
@@ -365,64 +344,61 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             iterations,
         }
     }
-    
-    /// 计算稳定时间步长
-    /// 
-    /// 半隐式方法可以使用比显式方法更大的 CFL 数，
-    /// 因为重力波是隐式处理的。
+
     fn compute_stable_dt(
         &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        mesh: &dyn MeshTopology<CpuBackend<f64>>,
-        cfl: f64, // ALLOW_F64: 物理参数
-    ) -> f64 {
-        let h: &[f64] = &state.h;
-        let hu: &[f64] = &state.hu;
-        let hv: &[f64] = &state.hv;
-        
-        let h_min = self.config.h_min;
-        let gravity = self.config.gravity;
-        
-        let mut dt_min = f64::MAX;
-        
+        state: &ShallowWaterStateGeneric<B>,
+        mesh: &dyn MeshTopology<B>,
+        cfl: B::Scalar,
+    ) -> B::Scalar {
+        let h: &[B::Scalar] = &state.h;
+        let hu: &[B::Scalar] = &state.hu;
+        let hv: &[B::Scalar] = &state.hv;
+
+        let h_min = B::Scalar::from_f64(self.config.h_min).unwrap_or(B::Scalar::ZERO);
+        let gravity = B::Scalar::from_f64(self.config.gravity).unwrap_or(B::Scalar::ZERO);
+
+        let mut dt_min = B::Scalar::MAX;
+
         for i in 0..mesh.n_cells() {
-            // 跳过干单元
             if h[i] <= h_min {
                 continue;
             }
-            
+
             let u = hu[i] / h[i];
             let v = hv[i] / h[i];
             let c = (gravity * h[i]).sqrt();
-            
-            // 对于半隐式方法，时间步长主要受对流速度限制
-            // 重力波速度的影响较小
             let speed = (u * u + v * v).sqrt() + c;
-            
-            if speed > 1e-10 {
+
+            let speed_eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::EPSILON);
+            if speed > speed_eps {
                 let area = mesh.cell_area(i);
                 let dx = area.sqrt();
                 let dt_local = cfl * dx / speed;
-                dt_min = dt_min.min(dt_local);
+                if dt_local < dt_min {
+                    dt_min = dt_local;
+                }
             }
         }
-        
-        if dt_min == f64::MAX {
-            dt_min = 1e-6;
+
+        if dt_min == B::Scalar::MAX {
+            dt_min = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         }
-        
-        // 半隐式方法允许更大的 CFL 数（通常可以是显式的 2-5 倍）
-        dt_min * 2.0
+
+        let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
+        dt_min * two
     }
-    
-    /// 半隐式方法支持大 CFL 数
+
     fn supports_large_cfl(&self) -> bool {
         true
     }
-    
-    /// 推荐的 CFL 数
-    fn recommended_cfl(&self) -> f64 {
-        // 半隐式方法推荐使用 CFL ≈ 2.0
-        2.0
+
+    fn recommended_cfl(&self) -> B::Scalar {
+        B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO)
     }
+}
+
+#[inline]
+fn eps_zero<S: mh_runtime::RuntimeScalar>() -> S {
+    S::from_f64(1e-14).unwrap_or(S::MIN_POSITIVE)
 }

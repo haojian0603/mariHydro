@@ -30,9 +30,10 @@
 //! ```
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
+use crate::core::Backend;
 use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
-use mh_foundation::AlignedVec;
+use mh_runtime::{DeviceBuffer, RuntimeScalar};
+use num_traits::{Float, FromPrimitive};
 use serde::{Deserialize, Serialize};
 
 /// 河床演变配置
@@ -102,48 +103,76 @@ impl MorphologyConfig {
 }
 
 /// 河床演变统计
-#[derive(Debug, Clone, Default)]
-pub struct MorphologyStats {
+#[derive(Debug, Clone)]
+pub struct MorphologyStats<S> {
     /// 最大侵蚀深度 [m]
-    pub max_erosion: f64,
+    pub max_erosion: S,
     /// 最大淤积深度 [m]
-    pub max_deposition: f64,
+    pub max_deposition: S,
     /// 总侵蚀量 [m³]
-    pub total_erosion: f64,
+    pub total_erosion: S,
     /// 总淤积量 [m³]
-    pub total_deposition: f64,
+    pub total_deposition: S,
     /// 崩塌迭代次数
     pub avalanche_iterations: usize,
     /// 发生崩塌的面数
     pub avalanche_faces: usize,
 }
 
+impl<S: RuntimeScalar> Default for MorphologyStats<S> {
+    fn default() -> Self {
+        Self {
+            max_erosion: S::ZERO,
+            max_deposition: S::ZERO,
+            total_erosion: S::ZERO,
+            total_deposition: S::ZERO,
+            avalanche_iterations: 0,
+            avalanche_faces: 0,
+        }
+    }
+}
+
 /// 河床演变求解器
-pub struct MorphodynamicsSolver {
+pub struct MorphodynamicsSolver<B: Backend> {
     /// 配置
     config: MorphologyConfig,
     /// 河床变化率 dz/dt [m/s]
-    dz_dt: AlignedVec<f64>,
+    dz_dt: B::Buffer<B::Scalar>,
     /// 临时存储：通量散度
-    flux_divergence: AlignedVec<f64>,
+    flux_divergence: B::Buffer<B::Scalar>,
     /// 最新统计
-    stats: MorphologyStats,
+    stats: MorphologyStats<B::Scalar>,
+    /// 后端（保留以支持后续缓冲区分配）
+    _backend: B,
 }
 
-impl MorphodynamicsSolver {
+impl<B> MorphodynamicsSolver<B>
+where
+    B: Backend + Clone,
+    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+{
     /// 创建新的河床演变求解器
     ///
     /// # 参数
     ///
     /// - `n_cells`: 单元数量
     /// - `config`: 配置
-    pub fn new(n_cells: usize, config: MorphologyConfig) -> Self {
+    pub fn new_with_backend(backend: B, n_cells: usize, config: MorphologyConfig) -> Self {
         Self {
             config,
-            dz_dt: AlignedVec::zeros(n_cells),
-            flux_divergence: AlignedVec::zeros(n_cells),
+            dz_dt: backend.alloc_init(n_cells, B::Scalar::ZERO),
+            flux_divergence: backend.alloc_init(n_cells, B::Scalar::ZERO),
             stats: MorphologyStats::default(),
+            _backend: backend,
         }
+    }
+
+    /// 便捷构造（使用默认后端）
+    pub fn new(n_cells: usize, config: MorphologyConfig) -> Self
+    where
+        B: Default,
+    {
+        Self::new_with_backend(B::default(), n_cells, config)
     }
 
     /// 获取配置引用
@@ -157,7 +186,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 获取最新统计
-    pub fn stats(&self) -> &MorphologyStats {
+    pub fn stats(&self) -> &MorphologyStats<B::Scalar> {
         &self.stats
     }
 
@@ -172,11 +201,11 @@ impl MorphodynamicsSolver {
     /// - `dt`: 时间步长 [s]
     pub fn step(
         &mut self,
-        state: &mut ShallowWaterState<CpuBackend<f64>>,
+        state: &mut ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        qb_x: &[f64],
-        qb_y: &[f64],
-        dt: f64,
+        qb_x: &B::Buffer<B::Scalar>,
+        qb_y: &B::Buffer<B::Scalar>,
+        dt: B::Scalar,
     ) {
         // 重置统计
         self.stats = MorphologyStats::default();
@@ -207,21 +236,21 @@ impl MorphodynamicsSolver {
     /// - `tol`: 收敛容差
     pub fn step_semi_implicit<F>(
         &mut self,
-        state: &mut ShallowWaterState<CpuBackend<f64>>,
+        state: &mut ShallowWaterState<B>,
         mesh: &PhysicsMesh,
         compute_transport: F,
-        dt: f64,
+        dt: B::Scalar,
         max_iter: usize,
-        tol: f64,
+        tol: B::Scalar,
     ) -> usize
     where
-        F: Fn(&ShallowWaterState<CpuBackend<f64>>) -> (Vec<f64>, Vec<f64>),
+        F: Fn(&ShallowWaterState<B>) -> (B::Buffer<B::Scalar>, B::Buffer<B::Scalar>),
     {
         // 重置统计
         self.stats = MorphologyStats::default();
 
         // 保存初始河床
-        let z_old: Vec<f64> = state.z.to_vec();
+        let z_old: Vec<B::Scalar> = state.z.as_slice().to_vec();
         let mut z_prev = z_old.clone();
         let mut iterations = 0;
 
@@ -233,10 +262,10 @@ impl MorphodynamicsSolver {
             self.compute_divergence_upwind(mesh, state, &qb_x, &qb_y);
 
             // 临时更新河床
-            let factor = 1.0 / (1.0 - self.config.porosity);
-            let max_dz = self.config.max_dz_rate * dt;
+            let factor = B::Scalar::from_f64(1.0 / (1.0 - self.config.porosity)).unwrap_or(B::Scalar::ZERO);
+            let max_dz = B::Scalar::from_f64(self.config.max_dz_rate).unwrap_or(B::Scalar::ONE) * dt;
 
-            let mut max_change = 0.0_f64;
+            let mut max_change = B::Scalar::ZERO;
 
             for i in 0..state.n_cells() {
                 // Picard: z^{n+1} = z^n - dt * div(q^{k})
@@ -247,13 +276,14 @@ impl MorphodynamicsSolver {
 
                 // 干湿边界约束
                 let eta = z_old[i] + state.h[i];
-                if z_new > eta && state.h[i] > self.config.h_dry {
+                let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+                if z_new > eta && state.h[i] > h_dry {
                     // 不能高于水面
                     state.z[i] = eta;
-                    state.h[i] = 0.0;
+                    state.h[i] = B::Scalar::ZERO;
                 } else {
                     state.z[i] = z_new;
-                    state.h[i] = (eta - z_new).max(0.0);
+                    state.h[i] = (eta - z_new).max(B::Scalar::ZERO);
                 }
 
                 // 检查收敛
@@ -272,42 +302,39 @@ impl MorphodynamicsSolver {
 
         // 崩塌处理
         if self.config.avalanche_enabled {
-            self.apply_avalanche_with_convergence(state, mesh, tol);
+            self.apply_avalanche(state, mesh);
         }
 
         iterations
     }
 
     /// 计算输沙率雅可比矩阵对角元（用于隐式求解）
-    ///
-    /// 返回 ∂q/∂z 的近似值
     pub fn compute_jacobian_diagonal(
         &self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        qb_x: &[f64],
-        qb_y: &[f64],
-    ) -> Vec<f64> {
+        state: &ShallowWaterState<B>,
+        qb_x: &B::Buffer<B::Scalar>,
+        qb_y: &B::Buffer<B::Scalar>,
+    ) -> B::Buffer<B::Scalar> {
         let n = state.n_cells();
-        let mut jacobian = vec![0.0; n];
-        let _eps = 1e-6;
+        let mut jacobian = self._backend.alloc_init(n, B::Scalar::ZERO);
+        let _eps = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
 
         for i in 0..n {
-            // 中心差分近似
             let q_mag = (qb_x[i] * qb_x[i] + qb_y[i] * qb_y[i]).sqrt();
-            if q_mag < 1e-14 {
+            if q_mag < _eps {
                 continue;
             }
 
-            // 使用有限差分估计
             let h = state.h[i];
-            if h > self.config.h_dry {
-                // 假设 q ∝ τ^1.5 ∝ (h^{-4/3})
-                jacobian[i] = -1.5 * q_mag / h;
+            let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+            if h > h_dry {
+                let coeff = B::Scalar::from_f64(-1.5).unwrap_or(B::Scalar::ZERO);
+                jacobian[i] = coeff * q_mag / h;
             }
         }
 
-        let _ = mesh.n_cells(); // 使用 mesh 避免警告
+        let _ = mesh.n_cells();
         jacobian
     }
 
@@ -315,10 +342,10 @@ impl MorphodynamicsSolver {
     pub fn compute_divergence(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        qb_x: &[f64],
-        qb_y: &[f64],
-    ) -> &[f64] {
+        state: &ShallowWaterState<B>,
+        qb_x: &[B::Scalar],
+        qb_y: &[B::Scalar],
+    ) -> &[B::Scalar] {
         self.compute_divergence_upwind(mesh, state, qb_x, qb_y);
         self.dz_dt.as_slice()
     }
@@ -327,15 +354,19 @@ impl MorphodynamicsSolver {
     fn compute_divergence_upwind(
         &mut self,
         mesh: &PhysicsMesh,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        qb_x: &[f64],
-        qb_y: &[f64],
+        state: &ShallowWaterState<B>,
+        qb_x: &[B::Scalar],
+        qb_y: &[B::Scalar],
     ) {
-        let factor = 1.0 / (1.0 - self.config.porosity);
+        let factor = B::Scalar::from_f64(1.0 / (1.0 - self.config.porosity)).unwrap_or(B::Scalar::ONE);
 
         // 清零
-        self.dz_dt.as_mut_slice().fill(0.0);
-        self.flux_divergence.as_mut_slice().fill(0.0);
+        for v in self.dz_dt.as_slice_mut() {
+            *v = B::Scalar::ZERO;
+        }
+        for v in self.flux_divergence.as_slice_mut() {
+            *v = B::Scalar::ZERO;
+        }
 
         for face_idx in 0..mesh.n_faces() {
             let fi = FaceIndex::new(face_idx);
@@ -345,8 +376,10 @@ impl MorphodynamicsSolver {
             let owner: usize = owner_ci.get();
             let neighbor = neighbor_ci.map(|c| c.get());
 
-            let (nx, ny) = mesh.face_normal_2d_tuple(face_idx);
-            let length = mesh.face_length(fi);
+            let (nx_f64, ny_f64) = mesh.face_normal_2d_tuple(face_idx);
+            let nx = B::Scalar::from_f64(nx_f64).unwrap_or(B::Scalar::ZERO);
+            let ny = B::Scalar::from_f64(ny_f64).unwrap_or(B::Scalar::ZERO);
+            let length = B::Scalar::from_f64(mesh.face_length(fi)).unwrap_or(B::Scalar::ZERO);
 
             // Owner 的法向通量
             let q_n_owner = qb_x[owner] * nx + qb_y[owner] * ny;
@@ -354,26 +387,24 @@ impl MorphodynamicsSolver {
             // 迎风选择通量
             let q_n = if let Some(neigh) = neighbor {
                 let q_n_neigh = qb_x[neigh] * nx + qb_y[neigh] * ny;
-                // 选择上游值
-                if q_n_owner + q_n_neigh >= 0.0 {
+                if q_n_owner + q_n_neigh >= B::Scalar::ZERO {
                     q_n_owner
                 } else {
                     q_n_neigh
                 }
             } else {
-                // 边界面：使用内部值（假设零梯度）
                 q_n_owner
             };
 
             let flux = q_n * length * factor;
 
             // 累加到通量散度
-            let area_o = mesh.cell_area_unchecked(owner_ci);
+            let area_o = B::Scalar::from_f64(mesh.cell_area_unchecked(owner_ci)).unwrap_or(B::Scalar::ONE);
             self.flux_divergence[owner] += flux / area_o;
 
             if let Some(neigh) = neighbor_ci {
                 let neigh_idx: usize = neigh.get();
-                let area_n = mesh.cell_area_unchecked(neigh);
+                let area_n = B::Scalar::from_f64(mesh.cell_area_unchecked(neigh)).unwrap_or(B::Scalar::ONE);
                 self.flux_divergence[neigh_idx] -= flux / area_n;
             }
         }
@@ -385,8 +416,8 @@ impl MorphodynamicsSolver {
     }
 
     /// 强耦合更新河床和水深
-    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh, dt: f64) {
-        let max_dz = self.config.max_dz_rate * dt;
+    fn update_bed_coupled(&mut self, state: &mut ShallowWaterState<B>, mesh: &PhysicsMesh, dt: B::Scalar) {
+        let max_dz = B::Scalar::from_f64(self.config.max_dz_rate).unwrap_or(B::Scalar::ONE) * dt;
 
         for i in 0..state.n_cells() {
             let mut dz = self.dz_dt[i] * dt;
@@ -394,39 +425,30 @@ impl MorphodynamicsSolver {
             // 限制变化率
             dz = dz.clamp(-max_dz, max_dz);
 
-            if dz.abs() < 1e-14 {
+            let eps = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::ZERO);
+            if dz.abs() < eps {
                 continue;
             }
 
             let z_old = state.z[i];
             let h_old = state.h[i];
-            let eta = z_old + h_old; // 水位
+            let eta = z_old + h_old;
 
-            // 更新河床
             let z_new = z_old + dz;
+            let h_new = (eta - z_new).max(B::Scalar::ZERO);
 
-            // 保持水位不变，调整水深
-            let h_new = (eta - z_new).max(0.0);
-
-            // 淤积超过水深时的限制处理
-            if dz > h_old && h_old > self.config.h_dry {
-                // 河床升至水面
+            let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+            if dz > h_old && h_old > h_dry {
                 state.z[i] = eta;
-                state.h[i] = 0.0;
-                log::trace!(
-                    "Cell {} deposition limited: dz={:.4}, h={:.4}",
-                    i,
-                    dz,
-                    h_old
-                );
+                state.h[i] = B::Scalar::ZERO;
             } else {
                 state.z[i] = z_new;
                 state.h[i] = h_new;
             }
 
             // 更新统计
-            let area = mesh.cell_area_unchecked(CellIndex::new(i));
-            if dz < 0.0 {
+            let area = B::Scalar::from_f64(mesh.cell_area_unchecked(CellIndex::new(i))).unwrap_or(B::Scalar::ONE);
+            if dz < B::Scalar::ZERO {
                 self.stats.max_erosion = self.stats.max_erosion.max(-dz);
                 self.stats.total_erosion += -dz * area;
             } else {
@@ -437,9 +459,7 @@ impl MorphodynamicsSolver {
     }
 
     /// 应用崩塌处理
-    ///
-    /// 当相邻单元间坡度超过安息角时，进行泥沙重分布
-    fn apply_avalanche(&mut self, state: &mut ShallowWaterState<CpuBackend<f64>>, mesh: &PhysicsMesh) {
+    fn apply_avalanche(&mut self, state: &mut ShallowWaterState<B>, mesh: &PhysicsMesh) {
         let mut total_faces = 0;
 
         for iter in 0..self.config.max_avalanche_iter {
@@ -448,7 +468,6 @@ impl MorphodynamicsSolver {
             for face_idx in mesh.interior_faces() {
                 let fi = FaceIndex::new(face_idx);
                 let owner_ci = mesh.face_owner(fi);
-                // SAFETY: interior_faces() guarantees neighbor exists
                 let neigh_ci = mesh
                     .face_neighbor(fi)
                     .expect("interior face must have neighbor");
@@ -457,41 +476,38 @@ impl MorphodynamicsSolver {
                 let neigh = neigh_ci.get();
 
                 let dist = mesh.face_dist_o2n(fi);
-                if dist < 1e-10 {
+                let dist_s = B::Scalar::from_f64(dist).unwrap_or(B::Scalar::ZERO);
+                if dist_s <= B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO) {
                     continue;
                 }
 
                 let dz = state.z[neigh] - state.z[owner];
-                let slope = dz.abs() / dist;
+                let slope = dz.abs() / dist_s;
 
-                // 根据干湿选择安息角
-                let is_wet =
-                    state.h[owner] > self.config.h_dry || state.h[neigh] > self.config.h_dry;
+                let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+                let is_wet = state.h[owner] > h_dry || state.h[neigh] > h_dry;
                 let max_slope = if is_wet {
-                    self.config.angle_repose_wet.tan()
+                    B::Scalar::from_f64(self.config.angle_repose_wet.tan()).unwrap_or(B::Scalar::ONE)
                 } else {
-                    self.config.angle_repose_dry.tan()
+                    B::Scalar::from_f64(self.config.angle_repose_dry.tan()).unwrap_or(B::Scalar::ONE)
                 };
 
                 if slope > max_slope {
-                    let target_dz = max_slope * dist * dz.signum();
-                    let correction = (dz - target_dz) * self.config.avalanche_relaxation;
+                    let target_dz = max_slope * dist_s * dz.signum();
+                    let correction = (dz - target_dz) * B::Scalar::from_f64(self.config.avalanche_relaxation).unwrap_or(B::Scalar::ONE);
 
-                    // 质量守恒的重分布
-                    let area_owner = mesh.cell_area_unchecked(owner_ci);
-                    let area_neigh = mesh.cell_area_unchecked(neigh_ci);
+                    let area_owner = B::Scalar::from_f64(mesh.cell_area_unchecked(owner_ci)).unwrap_or(B::Scalar::ONE);
+                    let area_neigh = B::Scalar::from_f64(mesh.cell_area_unchecked(neigh_ci)).unwrap_or(B::Scalar::ONE);
                     let total_area = area_owner + area_neigh;
 
-                    // 按面积加权分配
                     let dz_owner = correction * area_neigh / total_area;
                     let dz_neigh = -correction * area_owner / total_area;
 
                     state.z[owner] += dz_owner;
                     state.z[neigh] += dz_neigh;
 
-                    // 保持水位，调整水深
-                    state.h[owner] = (state.h[owner] - dz_owner).max(0.0);
-                    state.h[neigh] = (state.h[neigh] - dz_neigh).max(0.0);
+                    state.h[owner] = (state.h[owner] - dz_owner).max(B::Scalar::ZERO);
+                    state.h[neigh] = (state.h[neigh] - dz_neigh).max(B::Scalar::ZERO);
 
                     changed = true;
                     total_faces += 1;
@@ -508,78 +524,8 @@ impl MorphodynamicsSolver {
         self.stats.avalanche_faces = total_faces;
     }
 
-    /// 应用崩塌处理（带绝对收敛准则）
-    fn apply_avalanche_with_convergence(
-        &mut self,
-        state: &mut ShallowWaterState<CpuBackend<f64>>,
-        mesh: &PhysicsMesh,
-        tol: f64,
-    ) {
-        let mut total_faces = 0;
-
-        for iter in 0..self.config.max_avalanche_iter {
-            let mut max_correction = 0.0_f64;
-
-            for face_idx in mesh.interior_faces() {
-                let fi = FaceIndex::new(face_idx);
-                let owner_ci = mesh.face_owner(fi);
-                let neigh_ci = mesh
-                    .face_neighbor(fi)
-                    .expect("interior face must have neighbor");
-
-                let owner = owner_ci.get();
-                let neigh = neigh_ci.get();
-
-                let dist = mesh.face_dist_o2n(fi);
-                if dist < 1e-10 {
-                    continue;
-                }
-
-                let dz = state.z[neigh] - state.z[owner];
-                let slope = dz.abs() / dist;
-
-                let is_wet =
-                    state.h[owner] > self.config.h_dry || state.h[neigh] > self.config.h_dry;
-                let max_slope = if is_wet {
-                    self.config.angle_repose_wet.tan()
-                } else {
-                    self.config.angle_repose_dry.tan()
-                };
-
-                if slope > max_slope {
-                    let target_dz = max_slope * dist * dz.signum();
-                    let correction = (dz - target_dz) * self.config.avalanche_relaxation;
-
-                    let area_owner = mesh.cell_area_unchecked(owner_ci);
-                    let area_neigh = mesh.cell_area_unchecked(neigh_ci);
-                    let total_area = area_owner + area_neigh;
-
-                    let dz_owner = correction * area_neigh / total_area;
-                    let dz_neigh = -correction * area_owner / total_area;
-
-                    state.z[owner] += dz_owner;
-                    state.z[neigh] += dz_neigh;
-                    state.h[owner] = (state.h[owner] - dz_owner).max(0.0);
-                    state.h[neigh] = (state.h[neigh] - dz_neigh).max(0.0);
-
-                    max_correction = max_correction.max(correction.abs());
-                    total_faces += 1;
-                }
-            }
-
-            self.stats.avalanche_iterations = iter + 1;
-
-            // 绝对收敛准则
-            if max_correction < tol {
-                break;
-            }
-        }
-
-        self.stats.avalanche_faces = total_faces;
-    }
-
     /// 获取河床变化率场引用
-    pub fn dz_dt(&self) -> &[f64] {
+    pub fn dz_dt(&self) -> &[B::Scalar] {
         self.dz_dt.as_slice()
     }
 }

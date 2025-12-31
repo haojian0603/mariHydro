@@ -12,16 +12,14 @@
 //!
 //! # 原子操作说明
 //!
-//! 当前 `AtomicFluxAccumulator` 使用 `AtomicU64` 作为临时方案，
-//! 仅支持 f64 精度。完整的 f32/f64 统一原子操作接口将在
-//! `RuntimeScalar` trait 中添加 `Atomic` 关联类型后实现。
+//! 当前 `AtomicFluxAccumulator` 使用 RuntimeScalar 的原子抽象，
+//! 直接支持 f32/f64 精度并与 Backend 对齐。
 
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use mh_runtime::{AtomicScalar, Backend, RuntimeScalar};
 use crate::adapter::PhysicsMesh;
 use crate::schemes::RiemannFlux;
 use mh_runtime::FaceIndex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use num_traits::FromPrimitive;
+use std::sync::atomic::Ordering;
 
 /// 单线程通量累加器
 ///
@@ -168,30 +166,35 @@ impl<B: Backend + Clone> FluxAccumulator<B> {
 /// 适用于大规模问题的并行计算。
 pub struct AtomicFluxAccumulator<B: Backend> {
     n_cells: usize,
-    delta_h: Vec<AtomicU64>,
-    delta_hu: Vec<AtomicU64>,
-    delta_hv: Vec<AtomicU64>,
-    _marker: std::marker::PhantomData<B>,
+    delta_h: Vec<<B::Scalar as RuntimeScalar>::Atomic>,
+    delta_hu: Vec<<B::Scalar as RuntimeScalar>::Atomic>,
+    delta_hv: Vec<<B::Scalar as RuntimeScalar>::Atomic>,
+    backend: B,
 }
 
-impl<B: Backend> AtomicFluxAccumulator<B> {
+impl<B> AtomicFluxAccumulator<B>
+where
+    B: Backend + Clone,
+{
     /// 创建新的原子通量累加器
-    pub fn new(_backend: &B, n_cells: usize) -> Self {
+    pub fn new(backend: &B, n_cells: usize) -> Self {
+        let zero = B::Scalar::ZERO;
         Self {
             n_cells,
-            delta_h: (0..n_cells).map(|_| AtomicU64::new(0)).collect(),
-            delta_hu: (0..n_cells).map(|_| AtomicU64::new(0)).collect(),
-            delta_hv: (0..n_cells).map(|_| AtomicU64::new(0)).collect(),
-            _marker: std::marker::PhantomData,
+            delta_h: (0..n_cells).map(|_| <B::Scalar as RuntimeScalar>::Atomic::new(zero)).collect(),
+            delta_hu: (0..n_cells).map(|_| <B::Scalar as RuntimeScalar>::Atomic::new(zero)).collect(),
+            delta_hv: (0..n_cells).map(|_| <B::Scalar as RuntimeScalar>::Atomic::new(zero)).collect(),
+            backend: backend.clone(),
         }
     }
 
     /// 重置所有累加值为零
     pub fn reset(&self) {
+        let zero = B::Scalar::ZERO;
         for i in 0..self.n_cells {
-            self.delta_h[i].store(0, Ordering::Relaxed);
-            self.delta_hu[i].store(0, Ordering::Relaxed);
-            self.delta_hv[i].store(0, Ordering::Relaxed);
+            self.delta_h[i].store(zero, Ordering::Relaxed);
+            self.delta_hu[i].store(zero, Ordering::Relaxed);
+            self.delta_hv[i].store(zero, Ordering::Relaxed);
         }
     }
 
@@ -200,39 +203,18 @@ impl<B: Backend> AtomicFluxAccumulator<B> {
         self.n_cells
     }
 
-    /// 原子加法操作
-    ///
-    /// 使用 compare-exchange 循环实现浮点数的原子加法
-    #[inline]
-    fn atomic_add(atomic: &AtomicU64, val: f64) {
-        let mut old = atomic.load(Ordering::Relaxed);
-        loop {
-            let old_f = f64::from_bits(old);
-            let new_f = old_f + val;
-            match atomic.compare_exchange_weak(
-                old,
-                new_f.to_bits(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(x) => old = x,
-            }
-        }
-    }
-
     /// 累加通量到指定单元（线程安全）
     #[inline]
-    pub fn accumulate(&self, cell_idx: usize, dh: f64, dhu: f64, dhv: f64) {
-        Self::atomic_add(&self.delta_h[cell_idx], dh);
-        Self::atomic_add(&self.delta_hu[cell_idx], dhu);
-        Self::atomic_add(&self.delta_hv[cell_idx], dhv);
+    pub fn accumulate(&self, cell_idx: usize, dh: B::Scalar, dhu: B::Scalar, dhv: B::Scalar) {
+        self.delta_h[cell_idx].fetch_add(dh, Ordering::Relaxed);
+        self.delta_hu[cell_idx].fetch_add(dhu, Ordering::Relaxed);
+        self.delta_hv[cell_idx].fetch_add(dhv, Ordering::Relaxed);
     }
 
     /// 累加面通量（线程安全）
     ///
     /// 同时更新 owner 和 neighbor 单元
-    pub fn accumulate_flux(&self, owner: usize, neighbor: Option<usize>, fh: f64, fhu: f64, fhv: f64) {
+    pub fn accumulate_flux(&self, owner: usize, neighbor: Option<usize>, fh: B::Scalar, fhu: B::Scalar, fhv: B::Scalar) {
         // 所有者单元（通量流出为负）
         self.accumulate(owner, -fh, -fhu, -fhv);
 
@@ -245,19 +227,29 @@ impl<B: Backend> AtomicFluxAccumulator<B> {
     /// 收集累加结果
     ///
     /// 返回 (delta_h, delta_hu, delta_hv) 的非原子副本
-    pub fn collect(&self) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-        let h: Vec<f64> = self.delta_h
-            .iter()
-            .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
-            .collect();
-        let hu: Vec<f64> = self.delta_hu
-            .iter()
-            .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
-            .collect();
-        let hv: Vec<f64> = self.delta_hv
-            .iter()
-            .map(|a| f64::from_bits(a.load(Ordering::Relaxed)))
-            .collect();
+    pub fn collect(&self) -> (Vec<B::Scalar>, Vec<B::Scalar>, Vec<B::Scalar>) {
+        let load = |a: &<B::Scalar as RuntimeScalar>::Atomic| B::Scalar::from_atomic(a, Ordering::Relaxed);
+        let h: Vec<B::Scalar> = self.delta_h.iter().map(load).collect();
+        let hu: Vec<B::Scalar> = self.delta_hu.iter().map(load).collect();
+        let hv: Vec<B::Scalar> = self.delta_hv.iter().map(load).collect();
+        (h, hu, hv)
+    }
+
+    /// 将原子结果写入 Backend 缓冲区，避免额外分配
+    pub fn collect_into_buffers(
+        &self,
+    ) -> (B::Buffer<B::Scalar>, B::Buffer<B::Scalar>, B::Buffer<B::Scalar>) {
+        let zero = B::Scalar::ZERO;
+        let mut h = self.backend.alloc_init(self.n_cells, zero);
+        let mut hu = self.backend.alloc_init(self.n_cells, zero);
+        let mut hv = self.backend.alloc_init(self.n_cells, zero);
+
+        for i in 0..self.n_cells {
+            h[i] = B::Scalar::from_atomic(&self.delta_h[i], Ordering::Relaxed);
+            hu[i] = B::Scalar::from_atomic(&self.delta_hu[i], Ordering::Relaxed);
+            hv[i] = B::Scalar::from_atomic(&self.delta_hv[i], Ordering::Relaxed);
+        }
+
         (h, hu, hv)
     }
 
@@ -270,14 +262,12 @@ impl<B: Backend> AtomicFluxAccumulator<B> {
         areas: &[B::Scalar],
         dt: B::Scalar,
     ) {
-        let (delta_h, delta_hu, delta_hv) = self.collect();
         for i in 0..self.n_cells {
             let inv_area = B::Scalar::ONE / areas[i];
             let dt_inv = dt * inv_area;
-            let dh = B::Scalar::from_f64(delta_h[i]).unwrap_or(B::Scalar::ZERO);
-            let dhu = B::Scalar::from_f64(delta_hu[i]).unwrap_or(B::Scalar::ZERO);
-            let dhv = B::Scalar::from_f64(delta_hv[i]).unwrap_or(B::Scalar::ZERO);
-
+            let dh = B::Scalar::from_atomic(&self.delta_h[i], Ordering::Relaxed);
+            let dhu = B::Scalar::from_atomic(&self.delta_hu[i], Ordering::Relaxed);
+            let dhv = B::Scalar::from_atomic(&self.delta_hv[i], Ordering::Relaxed);
             h[i] = h[i] + dt_inv * dh;
             hu[i] = hu[i] + dt_inv * dhu;
             hv[i] = hv[i] + dt_inv * dhv;

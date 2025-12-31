@@ -17,11 +17,11 @@
 //! # 使用示例
 //!
 //! ```ignore
-//! use mh_physics::sediment::formulas::{get_formula_f64, TransportFormula};
+//! use mh_physics::sediment::formulas::{TransportFormulaBuilder, TransportFormula};
 //! use mh_physics::sediment::SedimentProperties;
 //!
 //! let props = SedimentProperties::from_d50_mm(0.5);
-//! let formula = get_formula_f64("mpm");
+//! let formula = TransportFormulaBuilder::<f64>::new("mpm").build();
 //!
 //! let theta = 0.1;  // Shields 参数
 //! let phi = formula.compute_phi(theta, props.critical_shields, &props);
@@ -69,11 +69,9 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         let s = S::from_f64(props.relative_density).unwrap_or(S::ZERO);
         let g = S::from_f64(physics.g).unwrap_or(S::ZERO);
         let scale = ((s - S::ONE) * g * d * d * d).sqrt();
-
         phi * scale
     }
 
-    /// 从床面剪切应力计算输沙率
     fn compute_from_shear_stress(&self, tau_b: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
         let theta = S::from_f64(props.shields_number(tau_b.to_f64().unwrap_or(0.0), physics)).unwrap_or(S::ZERO);
         self.compute_dimensional(theta, props, physics)
@@ -304,7 +302,8 @@ impl<S: Scalar> EinsteinFormula<S> {
 
     /// Chebyshev 多项式近似 Einstein 曲线
     ///
-    /// 使用 8 阶 Chebyshev 多项式近似 Φ*(ψ) 关系
+    /// 使用 8 阶 Chebyshev 多项式近似 Φ*(ψ) 关系，拟合区间 ψ ∈ [0.5, 40]，
+    /// 最大相对误差约 1e-4。
     fn chebyshev_approximation(psi: S) -> S {
         // Chebyshev 系数（预计算）
         // 在 ψ ∈ [0.5, 40] 区间拟合
@@ -434,40 +433,34 @@ impl<S: Scalar> TransportFormula<S> for EngelundHansenFormula<S> {
     }
 }
 
-// 公式注册表（TODO: Phase 4迁移到SolverBuilder）
-
-/// 根据名称获取输沙公式（f64版本）
-///
-/// # TODO
-/// 此函数将在Phase 4迁移到SolverBuilder
-pub fn get_formula_f64(name: &str) -> Box<dyn TransportFormula<f64>> {
-    match name.to_lowercase().replace(['_', ' '], "-").as_str() {
-        "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<f64>::default()),
-        "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<f64>::wong_parker()),
-        "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<f64>::default()),
-        "einstein" | "ein" => Box::new(EinsteinFormula::<f64>::new()),
-        "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<f64>::default()),
-        _ => {
-            log::warn!("未知输沙公式 '{}', 使用 Meyer-Peter-Müller", name);
-            Box::new(MeyerPeterMullerFormula::<f64>::default())
-        }
-    }
+/// 输沙公式构建器（单轨泛型）
+#[derive(Debug, Clone)]
+pub struct TransportFormulaBuilder<S: Scalar> {
+    formula_id: String,
+    _marker: PhantomData<S>,
 }
 
-/// 根据名称获取输沙公式（f32版本）
-///
-/// # TODO
-/// 此函数将在Phase 4迁移到SolverBuilder
-pub fn get_formula_f32(name: &str) -> Box<dyn TransportFormula<f32>> {
-    match name.to_lowercase().replace(['_', ' '], "-").as_str() {
-        "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<f32>::default()),
-        "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<f32>::wong_parker()),
-        "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<f32>::default()),
-        "einstein" | "ein" => Box::new(EinsteinFormula::<f32>::new()),
-        "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<f32>::default()),
-        _ => {
-            log::warn!("未知输沙公式 '{}', 使用 Meyer-Peter-Müller", name);
-            Box::new(MeyerPeterMullerFormula::<f32>::default())
+impl<S: Scalar> TransportFormulaBuilder<S> {
+    /// 创建构建器
+    pub fn new(formula_id: impl AsRef<str>) -> Self {
+        Self {
+            formula_id: formula_id.as_ref().to_string(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// 根据配置构建公式实例
+    pub fn build(self) -> Box<dyn TransportFormula<S>> {
+        match self.formula_id.to_lowercase().replace(['_', ' '], "-").as_str() {
+            "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<S>::default()),
+            "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<S>::wong_parker()),
+            "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<S>::default()),
+            "einstein" | "ein" => Box::new(EinsteinFormula::<S>::new()),
+            "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<S>::default()),
+            _ => {
+                log::warn!("未知输沙公式 '{}'，使用 Meyer-Peter-Müller", self.formula_id);
+                Box::new(MeyerPeterMullerFormula::<S>::default())
+            }
         }
     }
 }
@@ -536,13 +529,13 @@ mod tests {
 
     #[test]
     fn test_get_formula() {
-        let mpm = get_formula_f64("mpm");
+        let mpm = TransportFormulaBuilder::<f64>::new("mpm").build();
         assert_eq!(mpm.id(), "mpm");
 
-        let vr = get_formula_f64("VanRijn");
+        let vr = TransportFormulaBuilder::<f64>::new("VanRijn").build();
         assert_eq!(vr.id(), "vanrijn");
 
-        let ein = get_formula_f64("EINSTEIN");
+        let ein = TransportFormulaBuilder::<f64>::new("EINSTEIN").build();
         assert_eq!(ein.id(), "einstein");
     }
 

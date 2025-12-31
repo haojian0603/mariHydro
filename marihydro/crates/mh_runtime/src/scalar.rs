@@ -27,6 +27,11 @@
 use std::fmt::{Debug, Display};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+// 目标平台必须具备基础原子指令，否则并行模块无法安全工作
+#[cfg(not(any(target_has_atomic = "32", target_has_atomic = "64")))]
+compile_error!("目标平台缺少 32/64 位原子支持，无法构建并行运行时");
 
 use bytemuck::Pod;
 use num_traits::{Float, FromPrimitive, NumAssign};
@@ -37,6 +42,38 @@ mod private {
     pub trait Sealed {}
     impl Sealed for f32 {}
     impl Sealed for f64 {}
+}
+
+/// f32 对应的原子封装（基于 AtomicU32 按位存储）
+#[cfg(target_has_atomic = "32")]
+pub struct AtomicF32(AtomicU32);
+
+/// f64 对应的原子封装（基于 AtomicU64 按位存储）
+#[cfg(target_has_atomic = "64")]
+pub struct AtomicF64(AtomicU64);
+
+/// 浮点原子封装
+///
+/// 为运行时标量提供与精度一致的原子操作封装，
+/// 通过位模式在 `AtomicU32/AtomicU64` 上实现无锁加法与最大值更新。
+pub trait AtomicScalar<S: RuntimeScalar>: Send + Sync + 'static {
+    /// 创建新原子值
+    fn new(value: S) -> Self;
+
+    /// 加载当前值
+    fn load(&self, order: Ordering) -> S;
+
+    /// 存储值
+    fn store(&self, value: S, order: Ordering);
+
+    /// 原子加法，返回旧值
+    fn fetch_add(&self, value: S, order: Ordering) -> S;
+
+    /// 原子最大值更新，返回旧值
+    fn fetch_max(&self, value: S, order: Ordering) -> S;
+
+    /// 提取内部值（用于测试或调试）
+    fn into_inner(self) -> S;
 }
 
 /// 运行时标量类型（密封，仅 f32/f64 可实现）
@@ -79,6 +116,8 @@ pub trait RuntimeScalar:
     + MulAssign
     + DivAssign
 {
+    /// 与标量对应的原子类型
+    type Atomic: AtomicScalar<Self>;
     /// 零值
     const ZERO: Self;
     /// 一
@@ -231,13 +270,27 @@ pub trait RuntimeScalar:
         }
         Ok(())
     }
+
+    /// 将标量包装为原子值（默认使用 Relaxed，不跨线程同步时可替换）
+    #[inline]
+    fn to_atomic(self) -> Self::Atomic {
+        <Self::Atomic as AtomicScalar<Self>>::new(self)
+    }
+
+    /// 从原子值读取（默认 Relaxed，需更严格顺序时由调用方指定）
+    #[inline]
+    fn from_atomic(atomic: &Self::Atomic, order: Ordering) -> Self {
+        atomic.load(order)
+    }
 }
 
 // =============================================================================
 // f32 实现
 // =============================================================================
 
+#[cfg(target_has_atomic = "32")]
 impl RuntimeScalar for f32 {
+    type Atomic = AtomicF32;
     const ZERO: f32 = 0.0;
     const ONE: f32 = 1.0;
     const TWO: f32 = 2.0;
@@ -248,11 +301,16 @@ impl RuntimeScalar for f32 {
     const MIN: f32 = f32::MIN;
 }
 
+#[cfg(not(target_has_atomic = "32"))]
+compile_error!("目标平台缺少 32 位原子支持，无法启用 f32 并行标量");
+
 // =============================================================================
 // f64 实现
 // =============================================================================
 
+#[cfg(target_has_atomic = "64")]
 impl RuntimeScalar for f64 {
+    type Atomic = AtomicF64;
     const ZERO: f64 = 0.0;
     const ONE: f64 = 1.0;
     const TWO: f64 = 2.0;
@@ -262,6 +320,9 @@ impl RuntimeScalar for f64 {
     const MAX: f64 = f64::MAX;
     const MIN: f64 = f64::MIN;
 }
+
+#[cfg(not(target_has_atomic = "64"))]
+compile_error!("目标平台缺少 64 位原子支持，无法启用 f64 并行标量");
 
 #[cfg(test)]
 mod tests {
@@ -343,5 +404,171 @@ mod tests {
         let b = 1.0 + 1e-15;
         assert!(a.approx_eq(b, 1e-14));
         assert!(!a.approx_eq(b, 1e-16));
+    }
+}
+
+fn atomic_fetch_add_float<T, F>(atomic: &T, value: F, order: Ordering, to_bits: fn(F) -> u64, from_bits: fn(u64) -> F) -> F
+where
+    T: AtomicInteger,
+    F: Copy + Add<Output = F>,
+{
+    let mut old = atomic.load(order);
+    loop {
+        let old_val = from_bits(old);
+        let new_val = to_bits(old_val + value);
+        match atomic.compare_exchange_weak(old, new_val, order, order) {
+            Ok(prev) => return from_bits(prev),
+            Err(next) => old = next,
+        }
+    }
+}
+
+fn atomic_fetch_max_float<T, F>(atomic: &T, value: F, order: Ordering, to_bits: fn(F) -> u64, from_bits: fn(u64) -> F) -> F
+where
+    T: AtomicInteger,
+    F: PartialOrd + Copy,
+{
+    let mut old = atomic.load(order);
+    loop {
+        let old_val = from_bits(old);
+        if let Some(ord) = value.partial_cmp(&old_val) {
+            match ord {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => return old_val,
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+
+        let new_val = to_bits(value);
+        match atomic.compare_exchange_weak(old, new_val, order, order) {
+            Ok(prev) => return from_bits(prev),
+            Err(next) => old = next,
+        }
+    }
+}
+
+/// 内部统一的整数原子接口
+trait AtomicInteger {
+    fn load(&self, order: Ordering) -> u64;
+    fn store(&self, value: u64, order: Ordering);
+    fn compare_exchange_weak(
+        &self,
+        current: u64,
+        new: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<u64, u64>;
+}
+
+impl AtomicInteger for AtomicU32 {
+    #[inline]
+    fn load(&self, order: Ordering) -> u64 {
+        u64::from(AtomicU32::load(self, order))
+    }
+
+    #[inline]
+    fn store(&self, value: u64, order: Ordering) {
+        AtomicU32::store(self, value as u32, order);
+    }
+
+    #[inline]
+    fn compare_exchange_weak(
+        &self,
+        current: u64,
+        new: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<u64, u64> {
+        AtomicU32::compare_exchange_weak(self, current as u32, new as u32, success, failure)
+            .map(u64::from)
+            .map_err(u64::from)
+    }
+}
+
+impl AtomicInteger for AtomicU64 {
+    #[inline]
+    fn load(&self, order: Ordering) -> u64 {
+        AtomicU64::load(self, order)
+    }
+
+    #[inline]
+    fn store(&self, value: u64, order: Ordering) {
+        AtomicU64::store(self, value, order);
+    }
+
+    #[inline]
+    fn compare_exchange_weak(
+        &self,
+        current: u64,
+        new: u64,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<u64, u64> {
+        AtomicU64::compare_exchange_weak(self, current, new, success, failure)
+    }
+}
+
+#[cfg(target_has_atomic = "32")]
+impl AtomicScalar<f32> for AtomicF32 {
+    #[inline]
+    fn new(value: f32) -> Self {
+        Self(AtomicU32::new(value.to_bits()))
+    }
+
+    #[inline]
+    fn load(&self, order: Ordering) -> f32 {
+        f32::from_bits(AtomicInteger::load(&self.0, order) as u32)
+    }
+
+    #[inline]
+    fn store(&self, value: f32, order: Ordering) {
+        AtomicInteger::store(&self.0, value.to_bits() as u64, order);
+    }
+
+    #[inline]
+    fn fetch_add(&self, value: f32, order: Ordering) -> f32 {
+        atomic_fetch_add_float(&self.0, value, order, |v| u64::from(v.to_bits()), |b| f32::from_bits(b as u32))
+    }
+
+    #[inline]
+    fn fetch_max(&self, value: f32, order: Ordering) -> f32 {
+        atomic_fetch_max_float(&self.0, value, order, |v| u64::from(v.to_bits()), |b| f32::from_bits(b as u32))
+    }
+
+    #[inline]
+    fn into_inner(self) -> f32 {
+        f32::from_bits(self.0.into_inner())
+    }
+}
+
+#[cfg(target_has_atomic = "64")]
+impl AtomicScalar<f64> for AtomicF64 {
+    #[inline]
+    fn new(value: f64) -> Self {
+        Self(AtomicU64::new(value.to_bits()))
+    }
+
+    #[inline]
+    fn load(&self, order: Ordering) -> f64 {
+        f64::from_bits(AtomicInteger::load(&self.0, order))
+    }
+
+    #[inline]
+    fn store(&self, value: f64, order: Ordering) {
+        AtomicInteger::store(&self.0, value.to_bits(), order);
+    }
+
+    #[inline]
+    fn fetch_add(&self, value: f64, order: Ordering) -> f64 {
+        atomic_fetch_add_float(&self.0, value, order, f64::to_bits, f64::from_bits)
+    }
+
+    #[inline]
+    fn fetch_max(&self, value: f64, order: Ordering) -> f64 {
+        atomic_fetch_max_float(&self.0, value, order, f64::to_bits, f64::from_bits)
+    }
+
+    #[inline]
+    fn into_inner(self) -> f64 {
+        f64::from_bits(self.0.into_inner())
     }
 }

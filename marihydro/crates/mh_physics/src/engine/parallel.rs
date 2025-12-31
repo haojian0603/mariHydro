@@ -14,10 +14,8 @@
 //!
 //! # 线程安全
 //!
-//! `Colored`策略使用图着色确保同一颜色的面不共享单元，结合`SendPtr`实现
-//! 无锁并行写入。此方案在编译期保证线程安全，无数据竞争风险。
-
-#![allow(unsafe_code)]
+//! `Colored`策略使用图着色确保同一颜色的面不共享单元，并通过原子累加
+//! 保证并行写入无数据竞争。
 
 use crate::adapter::{CellIndex, PhysicsMesh};
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
@@ -27,41 +25,11 @@ use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 
 use log::info;
-use mh_runtime::{Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
-use num_traits::{Float, FromPrimitive, ToPrimitive};
+use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
+use num_traits::{Float, FromPrimitive};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-
-/// 线程安全指针包装器
-///
-/// 用于在并行计算中安全传递可变指针。着色算法保证同一颜色的面不共享单元，
-/// 因此不同线程写入的数组位置不会重叠。
-///
-/// # 安全性
-///
-/// 调用者必须确保：
-/// 1. 指针在并行操作期间始终有效
-/// 2. 不同线程不会写入同一内存位置（由面着色保证）
-#[derive(Clone, Copy)]
-struct SendPtr<T>(*mut T);
-
-unsafe impl<T> Send for SendPtr<T> {}
-unsafe impl<T> Sync for SendPtr<T> {}
-
-impl<T: Copy> SendPtr<T> {
-    /// 读取指定偏移位置的值
-    #[inline]
-    unsafe fn read_at(&self, offset: usize) -> T {
-        self.0.add(offset).read()
-    }
-
-    /// 写入指定偏移位置的值
-    #[inline]
-    unsafe fn write_at(&self, offset: usize, value: T) {
-        self.0.add(offset).write(value);
-    }
-}
 
 /// 并行策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -208,6 +176,11 @@ impl FluxComputeMetrics {
             Duration::ZERO
         }
     }
+}
+
+fn create_atomic_buffer<S: RuntimeScalar>(len: usize) -> Vec<S::Atomic> {
+    let zero = S::ZERO;
+    (0..len).map(|_| S::Atomic::new(zero)).collect()
 }
 
 /// 并行通量计算器
@@ -492,60 +465,59 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     ) -> B::Scalar {
         let zero = B::Scalar::ZERO;
         let n_faces = mesh.n_faces();
+        let n_cells = mesh.n_cells();
 
-        // 临时方案：使用f64 atomic作为桥接
-        // 未来将通过RuntimeScalar::Atomic关联类型实现泛型原子操作
-        let max_speed_atomic = AtomicU64::new(zero.to_f64().unwrap_or(0.0).to_bits());
+        let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(zero);
+        let flux_h_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let flux_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let flux_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let source_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let source_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
 
-        let face_results: Vec<_> = (0..n_faces)
+        (0..n_faces)
             .into_par_iter()
-            .map(|face_idx| {
+            .for_each(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) =
                     self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
 
-                let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
-                max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
+                max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
-                (flux, bed_src, length, owner, neighbor)
-            })
-            .collect();
+                let fh = flux.mass * length;
+                let fhu = flux.momentum_x * length;
+                let fhv = flux.momentum_y * length;
 
-        flux_h.fill(zero);
-        flux_hu.fill(zero);
-        flux_hv.fill(zero);
-        source_hu.fill(zero);
-        source_hv.fill(zero);
+                let owner_idx = owner.get();
+                flux_h_atomic[owner_idx].fetch_add(-fh, Ordering::Relaxed);
+                flux_hu_atomic[owner_idx].fetch_add(-fhu, Ordering::Relaxed);
+                flux_hv_atomic[owner_idx].fetch_add(-fhv, Ordering::Relaxed);
+                source_hu_atomic[owner_idx].fetch_add(bed_src.source_left_x, Ordering::Relaxed);
+                source_hv_atomic[owner_idx].fetch_add(bed_src.source_left_y, Ordering::Relaxed);
 
-        for (flux, bed_src, length, owner, neighbor) in face_results {
-            let fh = flux.mass * length;
-            let fhu = flux.momentum_x * length;
-            let fhv = flux.momentum_y * length;
+                if let Some(neigh) = neighbor {
+                    let neigh_idx = neigh.get();
+                    flux_h_atomic[neigh_idx].fetch_add(fh, Ordering::Relaxed);
+                    flux_hu_atomic[neigh_idx].fetch_add(fhu, Ordering::Relaxed);
+                    flux_hv_atomic[neigh_idx].fetch_add(fhv, Ordering::Relaxed);
+                    source_hu_atomic[neigh_idx].fetch_add(bed_src.source_right_x, Ordering::Relaxed);
+                    source_hv_atomic[neigh_idx].fetch_add(bed_src.source_right_y, Ordering::Relaxed);
+                }
+            });
 
-            let owner_idx = owner.get();
-            flux_h[owner_idx] = flux_h[owner_idx] - fh;
-            flux_hu[owner_idx] = flux_hu[owner_idx] - fhu;
-            flux_hv[owner_idx] = flux_hv[owner_idx] - fhv;
-            source_hu[owner_idx] = source_hu[owner_idx] + bed_src.source_left_x;
-            source_hv[owner_idx] = source_hv[owner_idx] + bed_src.source_left_y;
-
-            if let Some(neigh) = neighbor {
-                let neigh_idx = neigh.get();
-                flux_h[neigh_idx] = flux_h[neigh_idx] + fh;
-                flux_hu[neigh_idx] = flux_hu[neigh_idx] + fhu;
-                flux_hv[neigh_idx] = flux_hv[neigh_idx] + fhv;
-                source_hu[neigh_idx] = source_hu[neigh_idx] + bed_src.source_right_x;
-                source_hv[neigh_idx] = source_hv[neigh_idx] + bed_src.source_right_y;
-            }
+        for i in 0..n_cells {
+            flux_h[i] = flux_h_atomic[i].load(Ordering::Relaxed);
+            flux_hu[i] = flux_hu_atomic[i].load(Ordering::Relaxed);
+            flux_hv[i] = flux_hv_atomic[i].load(Ordering::Relaxed);
+            source_hu[i] = source_hu_atomic[i].load(Ordering::Relaxed);
+            source_hv[i] = source_hv_atomic[i].load(Ordering::Relaxed);
         }
 
-        let bits = max_speed_atomic.load(Ordering::Relaxed);
-        B::Scalar::from_f64(f64::from_bits(bits)).unwrap_or(zero)
+        max_speed_atomic.load(Ordering::Relaxed)
     }
 
     /// 基于图着色的无锁并行累加
     ///
     /// 通过贪心着色算法将面分组，确保同组面不共享单元，实现无锁并行写入。
-    /// 使用`SendPtr`绕过Rust借用检查，安全性由着色算法保证。
+    /// 使用原子累加绕过可变别名冲突，安全性由着色算法保证。
     fn compute_colored(
         &self,
         state: &ShallowWaterState<B>,
@@ -557,58 +529,57 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
         let zero = B::Scalar::ZERO;
-        flux_h.fill(zero);
-        flux_hu.fill(zero);
-        flux_hv.fill(zero);
-        source_hu.fill(zero);
-        source_hv.fill(zero);
-
-        let max_speed_atomic = AtomicU64::new(zero.to_f64().unwrap_or(0.0).to_bits());
+        let n_cells = mesh.n_cells();
         let color_faces = match &self.face_colors {
             Some(cf) => cf,
             None => return zero,
         };
 
-        let flux_h_ptr = SendPtr(flux_h.as_slice_mut().as_mut_ptr());
-        let flux_hu_ptr = SendPtr(flux_hu.as_slice_mut().as_mut_ptr());
-        let flux_hv_ptr = SendPtr(flux_hv.as_slice_mut().as_mut_ptr());
-        let source_hu_ptr = SendPtr(source_hu.as_slice_mut().as_mut_ptr());
-        let source_hv_ptr = SendPtr(source_hv.as_slice_mut().as_mut_ptr());
+        let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(zero);
+        let flux_h_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let flux_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let flux_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let source_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
+        let source_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
 
         for faces_in_color in color_faces {
             faces_in_color.par_iter().for_each(|&face_idx| {
                 let (flux, bed_src, length, owner, neighbor) =
                     self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
 
-                let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
-                max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
+                max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
                 let fh = flux.mass * length;
                 let fhu = flux.momentum_x * length;
                 let fhv = flux.momentum_y * length;
 
-                unsafe {
-                    let owner_idx = owner.get();
-                    flux_h_ptr.write_at(owner_idx, flux_h_ptr.read_at(owner_idx) - fh);
-                    flux_hu_ptr.write_at(owner_idx, flux_hu_ptr.read_at(owner_idx) - fhu);
-                    flux_hv_ptr.write_at(owner_idx, flux_hv_ptr.read_at(owner_idx) - fhv);
-                    source_hu_ptr.write_at(owner_idx, source_hu_ptr.read_at(owner_idx) + bed_src.source_left_x);
-                    source_hv_ptr.write_at(owner_idx, source_hv_ptr.read_at(owner_idx) + bed_src.source_left_y);
+                let owner_idx = owner.get();
+                flux_h_atomic[owner_idx].fetch_add(-fh, Ordering::Relaxed);
+                flux_hu_atomic[owner_idx].fetch_add(-fhu, Ordering::Relaxed);
+                flux_hv_atomic[owner_idx].fetch_add(-fhv, Ordering::Relaxed);
+                source_hu_atomic[owner_idx].fetch_add(bed_src.source_left_x, Ordering::Relaxed);
+                source_hv_atomic[owner_idx].fetch_add(bed_src.source_left_y, Ordering::Relaxed);
 
-                    if let Some(neigh) = neighbor {
-                        let neigh_idx = neigh.get();
-                        flux_h_ptr.write_at(neigh_idx, flux_h_ptr.read_at(neigh_idx) + fh);
-                        flux_hu_ptr.write_at(neigh_idx, flux_hu_ptr.read_at(neigh_idx) + fhu);
-                        flux_hv_ptr.write_at(neigh_idx, flux_hv_ptr.read_at(neigh_idx) + fhv);
-                        source_hu_ptr.write_at(neigh_idx, source_hu_ptr.read_at(neigh_idx) + bed_src.source_right_x);
-                        source_hv_ptr.write_at(neigh_idx, source_hv_ptr.read_at(neigh_idx) + bed_src.source_right_y);
-                    }
+                if let Some(neigh) = neighbor {
+                    let neigh_idx = neigh.get();
+                    flux_h_atomic[neigh_idx].fetch_add(fh, Ordering::Relaxed);
+                    flux_hu_atomic[neigh_idx].fetch_add(fhu, Ordering::Relaxed);
+                    flux_hv_atomic[neigh_idx].fetch_add(fhv, Ordering::Relaxed);
+                    source_hu_atomic[neigh_idx].fetch_add(bed_src.source_right_x, Ordering::Relaxed);
+                    source_hv_atomic[neigh_idx].fetch_add(bed_src.source_right_y, Ordering::Relaxed);
                 }
             });
         }
 
-        let bits = max_speed_atomic.load(Ordering::Relaxed);
-        B::Scalar::from_f64(f64::from_bits(bits)).unwrap_or(zero)
+        for i in 0..n_cells {
+            flux_h[i] = flux_h_atomic[i].load(Ordering::Relaxed);
+            flux_hu[i] = flux_hu_atomic[i].load(Ordering::Relaxed);
+            flux_hv[i] = flux_hv_atomic[i].load(Ordering::Relaxed);
+            source_hu[i] = source_hu_atomic[i].load(Ordering::Relaxed);
+            source_hv[i] = source_hv_atomic[i].load(Ordering::Relaxed);
+        }
+
+        max_speed_atomic.load(Ordering::Relaxed)
     }
 
     /// 计算单个面的通量和源项

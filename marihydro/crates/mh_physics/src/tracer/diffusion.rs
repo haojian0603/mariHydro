@@ -518,11 +518,11 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
 /// 计算调和平均
 #[inline]
 fn harmonic_mean<S: Scalar>(a: S, b: S) -> S {
-    if a.abs() < S::from_f64(1e-14).unwrap_or(S::ZERO) || b.abs() < S::from_f64(1e-14).unwrap_or(S::ZERO) {
-        S::ZERO
-    } else {
-        S::from_f64(2.0).unwrap_or(S::ZERO) * a * b / (a + b)
-    }
+    let eps = S::from_f64(1e-14).unwrap_or(S::ZERO);
+    let two = S::from_f64(2.0).unwrap_or(S::ZERO);
+    let denom = a + b;
+    let mask = (a.abs() > eps) && (b.abs() > eps) && (denom.abs() > eps);
+    if mask { two * a * b / denom } else { S::ZERO }
 }
 
 #[cfg(test)]

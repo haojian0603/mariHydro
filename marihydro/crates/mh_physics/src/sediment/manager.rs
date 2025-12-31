@@ -13,9 +13,10 @@
 //! 2. **质量守恒**: 严格保证泥沙质量守恒
 //! 3. **可扩展**: 支持多种泥沙粒径和分层
 
-use crate::core::{Backend, CpuBackend};
-use mh_runtime::RuntimeScalar as Scalar;
+use crate::core::Backend;
 use crate::state::ShallowWaterStateGeneric;
+use mh_runtime::RuntimeScalar as Scalar;
+use num_traits::{Float, FromPrimitive, ToPrimitive};
 use std::marker::PhantomData;
 
 /// 泥沙系统错误
@@ -175,7 +176,11 @@ pub struct SedimentManagerGeneric<B: Backend> {
     backend: B,
 }
 
-impl<B: Backend + Clone> SedimentManagerGeneric<B> {
+impl<B> SedimentManagerGeneric<B>
+where
+    B: Backend + Clone,
+    B::Scalar: Float + FromPrimitive + ToPrimitive,
+{
     /// 创建新的泥沙管理器
     pub fn new_with_backend(backend: B, n_cells: usize, config: SedimentConfigGeneric<B::Scalar>) -> Self {
         Self {
@@ -215,190 +220,182 @@ impl<B: Backend + Clone> SedimentManagerGeneric<B> {
     }
 }
 
-/// CPU f64 后端的泥沙管理器实现
-impl SedimentManagerGeneric<CpuBackend<f64>> {
-    /// 使用默认后端创建
-    pub fn new(n_cells: usize, config: SedimentConfigGeneric<f64>) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, config)
+/// 泛型实现
+impl<B> SedimentManagerGeneric<B>
+where
+    B: Backend + Clone,
+    B::Scalar: Float + FromPrimitive + ToPrimitive,
+{
+    /// 使用默认后端创建（便捷）
+    pub fn new(n_cells: usize, config: SedimentConfigGeneric<B::Scalar>) -> Self where B: Default {
+        Self::new_with_backend(B::default(), n_cells, config)
     }
-    
-    /// 设置初始床面质量
-    pub fn set_initial_bed_mass(&mut self, mass: &[f64]) {
+
+    /// 设置初始床面质量（泛型）
+    pub fn set_initial_bed_mass_from_slice(&mut self, mass: &[B::Scalar]) {
         if mass.len() != self.state.n_cells {
+            log::warn!("初始床面质量长度不匹配，期望 {}，得到 {}", self.state.n_cells, mass.len());
             return;
         }
-        for (i, &m) in mass.iter().enumerate() {
-            self.state.bed_mass[i] = m;
-        }
+        self.state.bed_mass.copy_from_slice(mass);
         self.compute_initial_mass();
     }
-    
+
+    /// 便捷方法：从切片设置床面质量
+    pub fn set_initial_bed_mass(&mut self, mass: &[B::Scalar]) {
+        self.set_initial_bed_mass_from_slice(mass);
+    }
+
     /// 设置初始悬沙浓度
-    pub fn set_initial_concentration(&mut self, conc: &[f64]) {
+    pub fn set_initial_concentration_from_slice(&mut self, conc: &[B::Scalar]) {
         if conc.len() != self.state.n_cells {
+            log::warn!("初始浓度长度不匹配，期望 {}，得到 {}", self.state.n_cells, conc.len());
             return;
         }
-        for (i, &c) in conc.iter().enumerate() {
-            self.state.concentration[i] = c;
-        }
+        self.state.concentration.copy_from_slice(conc);
     }
-    
+
+    /// 便捷方法：从切片设置悬沙浓度
+    pub fn set_initial_concentration(&mut self, conc: &[B::Scalar]) {
+        self.set_initial_concentration_from_slice(conc);
+    }
+
     /// 从水动力状态更新守恒量
-    pub fn update_conserved(&mut self, state: &ShallowWaterStateGeneric<CpuBackend<f64>>) {
+    pub fn update_conserved(&mut self, state: &ShallowWaterStateGeneric<B>) {
         let n_cells = self.state.n_cells;
         for i in 0..n_cells {
             self.state.conserved[i] = state.h[i] * self.state.concentration[i];
         }
     }
-    
+
     /// 计算初始总质量
     fn compute_initial_mass(&mut self) {
-        let mut total = 0.0;
+        // Kahan 求和减轻大数吃小数
+        let mut total = B::Scalar::ZERO;
+        let mut c = B::Scalar::ZERO;
         for i in 0..self.state.n_cells {
-            total += self.state.bed_mass[i];
+            let y = self.state.bed_mass[i] - c;
+            let t = total + y;
+            c = (t - total) - y;
+            total = t;
         }
         self.initial_total_mass = total;
         self.initialized = true;
     }
-    
-    /// 计算床面剪切应力
-    /// 
-    /// 使用 Manning 公式：τ_b = ρ g n² |u|² / h^(1/3)
-    /// 
-    /// # 参数
-    /// 
-    /// - `state`: 水动力状态
-    /// - `manning_n`: Manning 系数数组
+
+    /// 计算床面剪切应力（Manning）
     pub fn compute_bed_shear_stress(
         &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        manning_n: &[f64],
+        state: &ShallowWaterStateGeneric<B>,
+        manning_n: &[B::Scalar],
     ) {
         let n_cells = self.state.n_cells;
-        let g = self.config.water_density * 9.81;  // ρg
+        let g = self.config.water_density * B::Scalar::from_f64(9.81).unwrap_or(B::Scalar::ONE);
         let h_min = self.config.min_depth;
-        
+
         for i in 0..n_cells {
             let h = state.h[i];
             if h < h_min {
-                self.tau_bed[i] = 0.0;
+                self.tau_bed[i] = B::Scalar::ZERO;
                 continue;
             }
-            
+
             let hu = state.hu[i];
             let hv = state.hv[i];
             let u = hu / h;
             let v = hv / h;
             let speed_sq = u * u + v * v;
-            
-            let n = if i < manning_n.len() { manning_n[i] } else { 0.03 };
-            let h_pow = h.powf(1.0 / 3.0);
-            
+
+            let n = if i < manning_n.len() { manning_n[i] } else { B::Scalar::from_f64(0.03).unwrap_or(B::Scalar::ZERO) };
+            let h_pow = h.powf(B::Scalar::from_f64(1.0 / 3.0).unwrap_or(B::Scalar::ONE));
+
             // τ = ρ g n² |u|² / h^(1/3)
             self.tau_bed[i] = g * n * n * speed_sq / h_pow;
         }
     }
-    
+
     /// 计算侵蚀/沉降交换通量
-    /// 
-    /// 侵蚀：E = M (τ - τ_c) / τ_c  当 τ > τ_c
-    /// 沉降：D = w_s * C
-    /// 净通量：F = E - D
-    /// 
-    /// # 参数
-    /// 
-    /// - `state`: 水动力状态
     pub fn compute_exchange_flux(
         &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterStateGeneric<B>,
     ) {
         let n_cells = self.state.n_cells;
         let tau_c = self.config.tau_critical;
         let m = self.config.erosion_rate;
         let ws = self.config.settling_velocity;
         let h_min = self.config.min_depth;
-        
+
         for i in 0..n_cells {
             let h = state.h[i];
             if h < h_min {
-                self.exchange_flux[i] = 0.0;
+                self.exchange_flux[i] = B::Scalar::ZERO;
                 continue;
             }
-            
+
             let tau = self.tau_bed[i];
             let c = self.state.concentration[i];
-            
+
             // 侵蚀
-            let erosion = if tau > tau_c && self.state.bed_mass[i] > 0.0 {
+            let erosion = if tau > tau_c && self.state.bed_mass[i] > B::Scalar::ZERO {
                 m * (tau - tau_c) / tau_c
             } else {
-                0.0
+                B::Scalar::ZERO
             };
-            
+
             // 沉降
             let deposition = ws * c;
-            
+
             // 净通量：正值表示侵蚀，负值表示沉降
             self.exchange_flux[i] = erosion - deposition;
         }
     }
-    
+
     /// 单步更新泥沙系统
-    /// 
-    /// # 参数
-    /// 
-    /// - `state`: 水动力状态
-    /// - `cell_areas`: 单元面积数组
-    /// - `dt`: 时间步长
-    /// 
-    /// # 返回
-    /// 
-    /// 返回交换通量统计和可能的错误
     pub fn step(
         &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        cell_areas: &[f64],
-        dt: f64,
-    ) -> Result<SedimentFluxStats<f64>, SedimentError> {
+        state: &ShallowWaterStateGeneric<B>,
+        cell_areas: &[B::Scalar],
+        dt: B::Scalar,
+    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
         let n_cells = self.state.n_cells;
         let h_min = self.config.min_depth;
-        
+
         let mut stats = SedimentFluxStats::default();
-        let mut max_erosion = 0.0f64;
-        let mut max_deposition = 0.0f64;
-        
+        let mut max_erosion = B::Scalar::ZERO;
+        let mut max_deposition = B::Scalar::ZERO;
+
         for i in 0..n_cells {
             let h = state.h[i];
-            let area = if i < cell_areas.len() { cell_areas[i] } else { 1.0 };
+            let area = if i < cell_areas.len() { cell_areas[i] } else { B::Scalar::ONE };
             let flux = self.exchange_flux[i];
-            
+
             // 质量变化 [kg/m²]
             let delta_mass = flux * dt;
-            
+
             // 更新床面质量
             let new_bed = self.state.bed_mass[i] - delta_mass;
-            
+
             // 检查负质量
-            if new_bed < 0.0 {
+            if new_bed < B::Scalar::ZERO {
                 // 限制侵蚀量，不能超过床面存量
                 let max_erosion_flux = self.state.bed_mass[i] / dt;
                 self.exchange_flux[i] = self.exchange_flux[i].min(max_erosion_flux);
-                self.state.bed_mass[i] = 0.0;
+                self.state.bed_mass[i] = B::Scalar::ZERO;
             } else {
                 self.state.bed_mass[i] = new_bed;
             }
-            
+
             // 更新悬沙浓度
             if h > h_min {
                 // dC/dt = F/h（简化，忽略对流扩散）
                 let dc = self.exchange_flux[i] / h;
-                let new_c = (self.state.concentration[i] + dc * dt).max(0.0);
+                let new_c = (self.state.concentration[i] + dc * dt).max(B::Scalar::ZERO);
                 self.state.concentration[i] = new_c;
             }
-            
+
             // 统计
             let mass_change = self.exchange_flux[i] * area;
-            if mass_change > 0.0 {
+            if mass_change > B::Scalar::ZERO {
                 stats.total_erosion += mass_change;
                 if mass_change > max_erosion {
                     max_erosion = mass_change;
@@ -412,123 +409,104 @@ impl SedimentManagerGeneric<CpuBackend<f64>> {
                 }
             }
         }
-        
+
         stats.net_exchange = stats.total_erosion - stats.total_deposition;
-        
+
         // 更新守恒量
         self.update_conserved(state);
-        
+
         Ok(stats)
     }
-    
+
     /// 验证质量守恒
     pub fn verify_conservation(
         &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        cell_areas: &[f64],
+        state: &ShallowWaterStateGeneric<B>,
+        cell_areas: &[B::Scalar],
     ) -> Result<(), SedimentError> {
         if !self.initialized {
             return Ok(());
         }
-        
+
         let n_cells = self.state.n_cells;
-        let mut total_bed = 0.0;
-        let mut total_suspended = 0.0;
-        
+        let mut total_bed = B::Scalar::ZERO;
+        let mut total_suspended = B::Scalar::ZERO;
+
         for i in 0..n_cells {
-            let area = if i < cell_areas.len() { cell_areas[i] } else { 1.0 };
+            let area = if i < cell_areas.len() { cell_areas[i] } else { B::Scalar::ONE };
             total_bed += self.state.bed_mass[i] * area;
             total_suspended += state.h[i] * self.state.concentration[i] * area;
         }
-        
+
         let total_current = total_bed + total_suspended;
         let error = (total_current - self.initial_total_mass).abs();
-        let relative_error = if self.initial_total_mass.abs() > 1e-14 {
-            error / self.initial_total_mass
-        } else {
-            error
-        };
-        
-        if relative_error > self.config.conservation_tolerance {
+        let abs_tol = B::Scalar::from_f64(1e-6).unwrap_or(self.config.conservation_tolerance);
+        let rel_tol = self.config.conservation_tolerance;
+        let baseline = self.initial_total_mass.abs().max(abs_tol);
+        let relative_error = error / baseline;
+
+        if relative_error > rel_tol && error > abs_tol {
             return Err(SedimentError::ConservationViolation {
-                expected: self.initial_total_mass,
-                actual: total_current,
-                relative_error,
+                expected: self.initial_total_mass.to_f64().unwrap_or(0.0),
+                actual: total_current.to_f64().unwrap_or(0.0),
+                relative_error: relative_error.to_f64().unwrap_or(0.0),
             });
         }
-        
+
         Ok(())
     }
-    
+
     /// 完整的悬移质步进（包含对流-扩散输运）
-    /// 
-    /// 包含：
-    /// 1. 计算沉降通量
-    /// 2. 计算再悬浮通量（基于床面剪应力）
-    /// 3. 创建源项场
-    /// 4. 调用 TracerTransportSolver 进行对流-扩散输运
-    /// 5. 更新床面交换
-    /// 
-    /// # 参数
-    /// 
-    /// - `state`: 水动力状态
-    /// - `cell_areas`: 单元面积
-    /// - `tracer_rhs`: 用于 tracer 输运的源项缓冲区
-    /// - `dt`: 时间步长
-    /// 
-    /// # 返回
-    /// 
-    /// 返回泥沙通量统计
     pub fn step_suspended_transport(
         &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        cell_areas: &[f64],
-        tracer_rhs: &mut [f64],
-        _dt: f64,
-    ) -> Result<SedimentFluxStats<f64>, SedimentError> {
+        state: &ShallowWaterStateGeneric<B>,
+        cell_areas: &[B::Scalar],
+        tracer_rhs: &mut [B::Scalar],
+        _dt: B::Scalar,
+    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
         let n_cells = self.state.n_cells;
         let h_min = self.config.min_depth;
         let ws = self.config.settling_velocity;
         let tau_c = self.config.tau_critical;
         let m = self.config.erosion_rate;
-        
+
         let mut stats = SedimentFluxStats::default();
-        let mut max_erosion = 0.0f64;
-        let mut max_deposition = 0.0f64;
-        
+        let mut max_erosion = B::Scalar::ZERO;
+        let mut max_deposition = B::Scalar::ZERO;
+
         // 步骤 1-2: 计算沉降通量和再悬浮通量
         for i in 0..n_cells {
             let h = state.h[i];
             let tau = self.tau_bed[i];
             let c = self.state.concentration[i];
-            
+
             if h < h_min {
-                tracer_rhs[i] = 0.0;
-                self.exchange_flux[i] = 0.0;
+                tracer_rhs[i] = B::Scalar::ZERO;
+                self.exchange_flux[i] = B::Scalar::ZERO;
                 continue;
             }
-            
+
             // 沉降通量 [kg/m²/s]
             let settling = ws * c;
-            
+
             // 再悬浮通量 [kg/m²/s]
-            let resuspension = if tau > tau_c && self.state.bed_mass[i] > 0.0 {
+            let resuspension = if tau > tau_c && self.state.bed_mass[i] > B::Scalar::ZERO {
                 m * (tau - tau_c) / tau_c
             } else {
-                0.0
+                B::Scalar::ZERO
             };
-            
+
             // 净交换通量（正值=侵蚀）
             let net_flux = resuspension - settling;
             self.exchange_flux[i] = net_flux;
-            
+
             // 步骤 3: 创建源项场（转换为浓度变化率）
             // dC/dt = F/h
             tracer_rhs[i] = net_flux / h;
-            
+
             // 收集统计
-            let area = cell_areas.get(i).copied().unwrap_or(1.0);
-            if net_flux > 0.0 {
+            let area = cell_areas.get(i).copied().unwrap_or(B::Scalar::ONE);
+            if net_flux > B::Scalar::ZERO {
                 stats.total_erosion += net_flux * area;
                 if net_flux > max_erosion {
                     max_erosion = net_flux;
@@ -542,65 +520,55 @@ impl SedimentManagerGeneric<CpuBackend<f64>> {
                 }
             }
         }
-        
+
         stats.net_exchange = stats.total_erosion - stats.total_deposition;
-        
+
         Ok(stats)
     }
-    
+
     /// 应用对流-扩散后更新床面交换
-    /// 
-    /// 在 TracerTransportSolver 完成对流-扩散后调用此方法
-    /// 
-    /// # 参数
-    /// 
-    /// - `advected_concentration`: 对流后的浓度场
-    /// - `dt`: 时间步长
     pub fn apply_bed_exchange(
         &mut self,
-        advected_concentration: &[f64],
-        dt: f64,
+        advected_concentration: &[B::Scalar],
+        dt: B::Scalar,
     ) {
         let n_cells = self.state.n_cells;
-        
+
         for i in 0..n_cells {
             // 更新浓度
             if i < advected_concentration.len() {
-                self.state.concentration[i] = advected_concentration[i].max(0.0);
+                let updated = advected_concentration[i];
+                self.state.concentration[i] = updated.max(B::Scalar::ZERO);
             }
-            
+
             // 更新床面质量
             let delta_mass = -self.exchange_flux[i] * dt; // 负交换通量增加床面
-            let new_bed = (self.state.bed_mass[i] + delta_mass).max(0.0);
+            let new_bed = (self.state.bed_mass[i] + delta_mass).max(B::Scalar::ZERO);
             self.state.bed_mass[i] = new_bed;
         }
     }
-    
+
     /// 计算床面高程变化率
-    /// 
-    /// 基于 Exner 方程: ∂z_b/∂t = -1/((1-p)ρ_s) * (E - D)
-    /// 
-    /// # 参数
-    /// 
-    /// - `cell`: 单元索引
-    pub fn bed_elevation_change_rate(&self, cell: usize) -> f64 {
-        let flux = self.exchange_flux.get(cell).copied().unwrap_or(0.0);
+    pub fn bed_elevation_change_rate(&self, cell: usize) -> B::Scalar {
+        let flux = self.exchange_flux.get(cell).copied().unwrap_or(B::Scalar::ZERO);
         let rho_s = self.config.sediment_density;
         let p = self.config.porosity;
-        
+
         // 侵蚀（正通量）降低床面高程
-        -flux / ((1.0 - p) * rho_s)
+        -flux / ((B::Scalar::ONE - p) * rho_s)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
     
     #[test]
     fn test_sediment_manager_creation() {
-        let config = SedimentConfigGeneric::default();
-        let manager = SedimentManagerGeneric::new(100, config);
+        let config: SedimentConfigGeneric<f64> = SedimentConfigGeneric::default();
+        let manager: SedimentManagerGeneric<CpuBackend<f64>> =
+            SedimentManagerGeneric::new(100, config);
         
         assert_eq!(manager.state().n_cells(), 100);
     }

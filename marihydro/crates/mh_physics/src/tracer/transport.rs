@@ -197,11 +197,11 @@ impl<B: Backend> SmagorinskyData<B> {
     /// 从速度梯度初始化
     pub fn from_velocity_gradients(
         backend: &B,
-        cell_areas: &[B::Scalar],
-        du_dx: &[B::Scalar],
-        du_dy: &[B::Scalar],
-        dv_dx: &[B::Scalar],
-        dv_dy: &[B::Scalar],
+        cell_areas: &B::Buffer<B::Scalar>,
+        du_dx: &B::Buffer<B::Scalar>,
+        du_dy: &B::Buffer<B::Scalar>,
+        dv_dx: &B::Buffer<B::Scalar>,
+        dv_dy: &B::Buffer<B::Scalar>,
     ) -> Self {
         let n_cells = cell_areas.len();
         let mut data = Self::new(backend, n_cells);

@@ -50,7 +50,7 @@ pub mod arena_ext;
 pub mod error;
 
 // 核心类型导出
-pub use scalar::RuntimeScalar;
+pub use scalar::{RuntimeScalar, AtomicScalar};
 pub use backend::{Backend, CpuBackend, MemoryLocation, Vector2D};
 pub use buffer::{
     DeviceBuffer, BufferState, BufferUsage, GpuBufferDescriptor,

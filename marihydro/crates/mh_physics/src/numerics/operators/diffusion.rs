@@ -29,43 +29,43 @@
 //! 使用 `estimate_stable_dt()` 或 `apply_diffusion_auto_substeps()` 自动处理。
 
 use rayon::prelude::*;
-use mh_runtime::{FaceIndex, CellIndex};
+use mh_runtime::{Backend, CellIndex, DeviceBuffer, FaceIndex, RuntimeScalar};
+use num_traits::{Float, FromPrimitive, ToPrimitive};
 use crate::adapter::PhysicsMesh;
 
 /// 扩散边界条件类型
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[derive(Default)]
-pub enum DiffusionBC {
+pub enum DiffusionBC<S: RuntimeScalar> {
     /// 零通量 (Neumann): ∂φ/∂n = 0
     #[default]
     ZeroFlux,
     /// 固定值 (Dirichlet): φ = value
-    FixedValue(f64),
+    FixedValue(S),
     /// 辐射边界: flux = α*(φ - φ_∞)
     Radiation {
         /// 传递系数 [1/s 或 m/s 取决于场类型]
-        alpha: f64,
+        alpha: S,
         /// 远场值
-        phi_inf: f64,
+        phi_inf: S,
     },
     /// 指定通量: flux = value
-    SpecifiedFlux(f64),
+    SpecifiedFlux(S),
 }
 
-
-impl DiffusionBC {
+impl<S: RuntimeScalar> DiffusionBC<S> {
     /// 创建 Dirichlet 边界条件
-    pub fn dirichlet(value: f64) -> Self {
+    pub fn dirichlet(value: S) -> Self {
         Self::FixedValue(value)
     }
 
     /// 创建辐射边界条件
-    pub fn radiation(alpha: f64, phi_inf: f64) -> Self {
+    pub fn radiation(alpha: S, phi_inf: S) -> Self {
         Self::Radiation { alpha, phi_inf }
     }
 
     /// 创建指定通量边界条件
-    pub fn specified_flux(flux: f64) -> Self {
+    pub fn specified_flux(flux: S) -> Self {
         Self::SpecifiedFlux(flux)
     }
 
@@ -80,9 +80,9 @@ impl DiffusionBC {
     /// # 返回
     /// 边界通量（正值表示进入单元）
     #[inline]
-    pub fn compute_flux(&self, phi_cell: f64, nu: f64, d: f64, length: f64) -> f64 {
+    pub fn compute_flux(&self, phi_cell: S, nu: S, d: S, length: S) -> S {
         match *self {
-            Self::ZeroFlux => 0.0,
+            Self::ZeroFlux => S::ZERO,
             Self::FixedValue(phi_bc) => {
                 // Dirichlet: F = -ν * (φ_cell - φ_bc) / d * L
                 // 使用单侧差分
@@ -100,30 +100,45 @@ impl DiffusionBC {
     }
 }
 
-/// 扩散求解器配置
-#[derive(Debug, Clone)]
-pub struct DiffusionConfig {
-    /// 扩散系数 [m²/s]
-    pub nu: f64,
-    /// 边界条件（按边界索引）
-    pub boundary_conditions: Vec<DiffusionBC>,
-    /// CFL 安全系数
-    pub cfl_safety: f64,
-}
-
-impl Default for DiffusionConfig {
-    fn default() -> Self {
-        Self {
-            nu: 1.0,
-            boundary_conditions: Vec::new(),
-            cfl_safety: 0.25,
+impl DiffusionBC<f64> {
+    /// 将 f64 边界条件转换为后端标量类型
+    pub fn to_backend<B: Backend>(&self, backend: &B) -> DiffusionBC<B::Scalar> {
+        match *self {
+            DiffusionBC::ZeroFlux => DiffusionBC::ZeroFlux,
+            DiffusionBC::FixedValue(v) => DiffusionBC::FixedValue(backend.scalar_from_f64(v)),
+            DiffusionBC::Radiation { alpha, phi_inf } => DiffusionBC::Radiation {
+                alpha: backend.scalar_from_f64(alpha),
+                phi_inf: backend.scalar_from_f64(phi_inf),
+            },
+            DiffusionBC::SpecifiedFlux(f) => DiffusionBC::SpecifiedFlux(backend.scalar_from_f64(f)),
         }
     }
 }
 
-impl DiffusionConfig {
+/// 扩散求解器配置
+#[derive(Debug, Clone)]
+pub struct DiffusionConfig<S: RuntimeScalar> {
+    /// 扩散系数 [m²/s]
+    pub nu: S,
+    /// 边界条件（按边界索引）
+    pub boundary_conditions: Vec<DiffusionBC<S>>,
+    /// CFL 安全系数
+    pub cfl_safety: S,
+}
+
+impl<S: RuntimeScalar> Default for DiffusionConfig<S> {
+    fn default() -> Self {
+        Self {
+            nu: S::ONE,
+            boundary_conditions: Vec::new(),
+            cfl_safety: S::from_f64(0.25).unwrap_or(S::HALF),
+        }
+    }
+}
+
+impl<S: RuntimeScalar> DiffusionConfig<S> {
     /// 创建新配置
-    pub fn new(nu: f64) -> Self {
+    pub fn new(nu: S) -> Self {
         Self {
             nu,
             ..Default::default()
@@ -131,48 +146,77 @@ impl DiffusionConfig {
     }
 
     /// 设置边界条件
-    pub fn with_boundary_conditions(mut self, bcs: Vec<DiffusionBC>) -> Self {
+    pub fn with_boundary_conditions(mut self, bcs: Vec<DiffusionBC<S>>) -> Self {
         self.boundary_conditions = bcs;
         self
     }
 
     /// 设置 CFL 安全系数
-    pub fn with_cfl_safety(mut self, safety: f64) -> Self {
-        self.cfl_safety = safety.clamp(0.1, 0.5);
+    pub fn with_cfl_safety(mut self, safety: S) -> Self {
+        let min = S::from_f64(0.1).unwrap_or(S::HALF * S::from_f64(0.2).unwrap_or(S::HALF));
+        let max = S::from_f64(0.5).unwrap_or(S::HALF + S::HALF);
+        self.cfl_safety = if safety < min { min } else if safety > max { max } else { safety };
         self
     }
 }
 
-/// 扩散求解器
-pub struct DiffusionSolver<'a> {
-    mesh: &'a PhysicsMesh,
-    config: DiffusionConfig,
-    /// 缓存的面距离最小值平方
-    min_dist_sq: f64,
+impl DiffusionConfig<f64> {
+    /// 将 f64 配置转换为后端标量配置
+    pub fn to_backend<B: Backend>(&self, backend: &B) -> DiffusionConfig<B::Scalar> {
+        DiffusionConfig {
+            nu: backend.scalar_from_f64(self.nu),
+            boundary_conditions: self
+                .boundary_conditions
+                .iter()
+                .map(|bc| bc.to_backend(backend))
+                .collect(),
+            cfl_safety: backend.scalar_from_f64(self.cfl_safety),
+        }
+    }
 }
 
-impl<'a> DiffusionSolver<'a> {
-    /// 创建求解器
-    pub fn new(mesh: &'a PhysicsMesh, config: DiffusionConfig) -> Self {
-        // 预计算最小面距离
-        let min_dist_sq = Self::compute_min_dist_sq(mesh);
+/// 扩散求解器（Backend 泛型）
+pub struct DiffusionSolver<'a, B: Backend> {
+    mesh: &'a PhysicsMesh,
+    config: DiffusionConfig<B::Scalar>,
+    /// 缓存的面距离最小值平方
+    min_dist_sq: B::Scalar,
+    backend: B,
+}
+
+impl<'a, B: Backend> DiffusionSolver<'a, B>
+where
+    B::Scalar: RuntimeScalar + Float + FromPrimitive + ToPrimitive,
+{
+    /// 创建求解器（已是泛型配置）
+    pub fn new(mesh: &'a PhysicsMesh, backend: B, config: DiffusionConfig<B::Scalar>) -> Self {
+        let min_dist_sq = Self::compute_min_dist_sq(mesh, &backend);
 
         Self {
             mesh,
             config,
             min_dist_sq,
+            backend,
         }
     }
 
+    /// 从 f64 配置创建求解器
+    pub fn from_f64_config(mesh: &'a PhysicsMesh, backend: B, config: DiffusionConfig<f64>) -> Self {
+        let cfg = config.to_backend(&backend);
+        Self::new(mesh, backend, cfg)
+    }
+
     /// 计算最小面距离平方
-    fn compute_min_dist_sq(mesh: &PhysicsMesh) -> f64 {
+    fn compute_min_dist_sq(mesh: &PhysicsMesh, backend: &B) -> B::Scalar {
         let n_faces = mesh.n_faces();
-        let mut min_sq = f64::MAX;
+        let mut min_sq = B::Scalar::MAX;
+        let eps = backend.scalar_from_f64(1e-14);
 
         for face in 0..n_faces {
             if let Some(dist) = mesh.face_distance(FaceIndex(face)) {
-                if dist > 1e-14 {
-                    min_sq = min_sq.min(dist * dist);
+                let dist_s = backend.scalar_from_f64(dist);
+                if dist_s > eps {
+                    min_sq = min_sq.min(dist_s * dist_s);
                 }
             }
         }
@@ -183,35 +227,37 @@ impl<'a> DiffusionSolver<'a> {
     /// 估计稳定时间步长
     ///
     /// 对于显式扩散，CFL 条件: dt < α * d_min² / ν
-    pub fn estimate_stable_dt(&self) -> f64 {
-        if self.config.nu < 1e-14 {
-            return f64::MAX;
+    pub fn estimate_stable_dt(&self) -> B::Scalar {
+        let eps = self.backend.scalar_from_f64(1e-14);
+        if self.config.nu < eps {
+            return B::Scalar::MAX;
         }
 
-        if self.min_dist_sq >= f64::MAX {
-            return 1.0;
+        if self.min_dist_sq >= B::Scalar::MAX {
+            return B::Scalar::ONE;
         }
 
         self.config.cfl_safety * self.min_dist_sq / self.config.nu
     }
 
     /// 计算所需子步数以保证稳定性
-    pub fn required_substeps(&self, dt: f64) -> usize {
+    pub fn required_substeps(&self, dt: B::Scalar) -> usize {
         let stable_dt = self.estimate_stable_dt();
         if stable_dt >= dt {
             1
         } else {
-            (dt / stable_dt).ceil() as usize
+            (dt / stable_dt).ceil().to_usize().unwrap_or(1)
         }
     }
 
     /// 计算扩散通量
-    fn compute_fluxes(&self, field: &[f64]) -> Vec<f64> {
+    fn compute_fluxes(&self, field: &[B::Scalar]) -> B::Buffer<B::Scalar> {
         let n_cells = self.mesh.n_cells();
         let n_faces = self.mesh.n_faces();
         let nu = self.config.nu;
 
-        let mut flux_sum = vec![0.0; n_cells];
+        let mut flux_sum = self.backend.alloc_init(n_cells, B::Scalar::ZERO);
+        let eps = self.backend.scalar_from_f64(1e-14);
 
         // 内部面
         for face in 0..n_faces {
@@ -220,12 +266,16 @@ impl<'a> DiffusionSolver<'a> {
 
             if let Some(neighbor) = neighbor_opt {
                 // 内部面
-                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14);
-                if dist < 1e-14 {
+                let dist = self
+                    .mesh
+                    .face_distance(FaceIndex(face))
+                    .map(|d| self.backend.scalar_from_f64(d))
+                    .unwrap_or(eps);
+                if dist < eps {
                     continue;
                 }
 
-                let length = self.mesh.face_length(FaceIndex(face));
+                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
                 let phi_o = field[owner.get()];
                 let phi_n = field[neighbor.get()];
 
@@ -237,8 +287,13 @@ impl<'a> DiffusionSolver<'a> {
             } else {
                 // 边界面
                 let bc = self.get_boundary_condition(face);
-                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14).max(1e-14);
-                let length = self.mesh.face_length(FaceIndex(face));
+                let dist = self
+                    .mesh
+                    .face_distance(FaceIndex(face))
+                    .map(|d| self.backend.scalar_from_f64(d))
+                    .unwrap_or(eps)
+                    .max(eps);
+                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
                 let phi_cell = field[owner.get()];
 
                 let flux = bc.compute_flux(phi_cell, nu, dist, length);
@@ -260,7 +315,7 @@ impl<'a> DiffusionSolver<'a> {
     /// # 返回
     /// 该面对应的扩散边界条件。如果未找到映射或配置中
     /// 没有对应条件，则返回默认的零通量边界条件。
-    fn get_boundary_condition(&self, face: usize) -> DiffusionBC {
+    fn get_boundary_condition(&self, face: usize) -> DiffusionBC<B::Scalar> {
         // 获取面的边界 ID（边界条件索引）
         if let Some(boundary_id) = self.mesh.face_boundary_id(FaceIndex(face)) {
             // 根据边界 ID 查找对应的边界条件
@@ -283,9 +338,9 @@ impl<'a> DiffusionSolver<'a> {
     /// - `dt`: 时间步长
     pub fn apply_explicit(
         &self,
-        field: &[f64],
-        field_out: &mut [f64],
-        dt: f64,
+        field: &B::Buffer<B::Scalar>,
+        field_out: &mut B::Buffer<B::Scalar>,
+        dt: B::Scalar,
     ) -> Result<(), DiffusionError> {
         self.validate_params(dt)?;
 
@@ -298,14 +353,21 @@ impl<'a> DiffusionSolver<'a> {
             });
         }
 
-        let flux_sum = self.compute_fluxes(field);
+        let flux_sum = self.compute_fluxes(field.as_slice());
+
+        let eps = self.backend.scalar_from_f64(1e-14);
 
         field_out
+            .as_slice_mut()
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, phi_out)| {
-                let area = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0);
-                if area > 1e-14 {
+                let area = self
+                    .mesh
+                    .cell_area(CellIndex(i))
+                    .map(|a| self.backend.scalar_from_f64(a))
+                    .unwrap_or(B::Scalar::ONE);
+                if area > eps {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
                 } else {
                     *phi_out = field[i];
@@ -316,26 +378,26 @@ impl<'a> DiffusionSolver<'a> {
     }
 
     /// 原地扩散
-    pub fn apply_inplace(&self, field: &mut [f64], dt: f64) -> Result<(), DiffusionError> {
-        let mut temp = vec![0.0; field.len()];
+    pub fn apply_inplace(&self, field: &mut B::Buffer<B::Scalar>, dt: B::Scalar) -> Result<(), DiffusionError> {
+        let mut temp = self.backend.alloc(field.len());
         self.apply_explicit(field, &mut temp, dt)?;
-        field.copy_from_slice(&temp);
+        field.copy_from_slice(temp.as_slice());
         Ok(())
     }
 
     /// 多子步扩散
     pub fn apply_substeps(
         &self,
-        field: &mut [f64],
-        dt: f64,
+        field: &mut B::Buffer<B::Scalar>,
+        dt: B::Scalar,
         n_substeps: usize,
     ) -> Result<(), DiffusionError> {
         if n_substeps == 0 {
             return Ok(());
         }
 
-        let sub_dt = dt / n_substeps as f64;
-        let mut buffer = vec![0.0; field.len()];
+        let sub_dt = dt / self.backend.scalar_from_f64(n_substeps as f64);
+        let mut buffer = self.backend.alloc(field.len());
 
         for step in 0..n_substeps {
             if step % 2 == 0 {
@@ -347,7 +409,7 @@ impl<'a> DiffusionSolver<'a> {
 
         // 如果子步数是奇数，最终结果在 buffer 中
         if n_substeps % 2 == 1 {
-            field.copy_from_slice(&buffer);
+            field.copy_from_slice(buffer.as_slice());
         }
 
         Ok(())
@@ -356,7 +418,7 @@ impl<'a> DiffusionSolver<'a> {
     /// 自动子步扩散
     ///
     /// 自动计算所需子步数以保证稳定性
-    pub fn apply_auto_substeps(&self, field: &mut [f64], dt: f64) -> Result<usize, DiffusionError> {
+    pub fn apply_auto_substeps(&self, field: &mut B::Buffer<B::Scalar>, dt: B::Scalar) -> Result<usize, DiffusionError> {
         let n_substeps = self.required_substeps(dt);
 
         if n_substeps > 1 {
@@ -364,8 +426,8 @@ impl<'a> DiffusionSolver<'a> {
             log::debug!(
                 "扩散需要 {} 个子步以保证稳定性 (ν={:.2e}, dt={:.2e})",
                 n_substeps,
-                self.config.nu,
-                dt
+                self.config.nu.to_f64().unwrap_or(0.0),
+                dt.to_f64().unwrap_or(0.0)
             );
         }
 
@@ -374,19 +436,19 @@ impl<'a> DiffusionSolver<'a> {
     }
 
     /// 验证参数
-    fn validate_params(&self, dt: f64) -> Result<(), DiffusionError> {
-        if self.config.nu < 0.0 {
+    fn validate_params(&self, dt: B::Scalar) -> Result<(), DiffusionError> {
+        if self.config.nu < B::Scalar::ZERO {
             return Err(DiffusionError::InvalidParameter {
                 name: "nu",
-                value: self.config.nu,
+                value: self.config.nu.to_f64().unwrap_or(0.0),
                 reason: "扩散系数不能为负".to_string(),
             });
         }
 
-        if dt <= 0.0 {
+        if dt <= B::Scalar::ZERO {
             return Err(DiffusionError::InvalidParameter {
                 name: "dt",
-                value: dt,
+                value: dt.to_f64().unwrap_or(0.0),
                 reason: "时间步长必须为正".to_string(),
             });
         }
@@ -396,14 +458,15 @@ impl<'a> DiffusionSolver<'a> {
 }
 
 /// 可变扩散系数求解器
-pub struct VariableDiffusionSolver<'a> {
+pub struct VariableDiffusionSolver<'a, B: Backend> {
     mesh: &'a PhysicsMesh,
+    backend: B,
 }
 
-impl<'a> VariableDiffusionSolver<'a> {
+impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
     /// 创建求解器
-    pub fn new(mesh: &'a PhysicsMesh) -> Self {
-        Self { mesh }
+    pub fn new(mesh: &'a PhysicsMesh, backend: B) -> Self {
+        Self { mesh, backend }
     }
 
     /// 显式扩散求解（空间变化扩散系数）
@@ -415,10 +478,10 @@ impl<'a> VariableDiffusionSolver<'a> {
     /// - `dt`: 时间步长
     pub fn apply_explicit(
         &self,
-        field: &[f64],
-        field_out: &mut [f64],
-        nu: &[f64],
-        dt: f64,
+        field: &B::Buffer<B::Scalar>,
+        field_out: &mut B::Buffer<B::Scalar>,
+        nu: &B::Buffer<B::Scalar>,
+        dt: B::Scalar,
     ) -> Result<(), DiffusionError> {
         let n_cells = self.mesh.n_cells();
         let n_faces = self.mesh.n_faces();
@@ -431,27 +494,36 @@ impl<'a> VariableDiffusionSolver<'a> {
             });
         }
 
-        let mut flux_sum = vec![0.0; n_cells];
+        let mut flux_sum = self.backend.alloc_init(n_cells, B::Scalar::ZERO);
+        let eps = self.backend.scalar_from_f64(1e-14);
 
         for face in 0..n_faces {
             let owner = self.mesh.face_owner(FaceIndex(face));
             let neighbor_opt = self.mesh.face_neighbor(FaceIndex(face));
 
             if let Some(neighbor) = neighbor_opt {
-                let dist = self.mesh.face_distance(FaceIndex(face)).unwrap_or(1e-14);
-                if dist < 1e-14 {
+                let dist = self
+                    .mesh
+                    .face_distance(FaceIndex(face))
+                    .map(|d| self.backend.scalar_from_f64(d))
+                    .unwrap_or(eps);
+                if dist < eps {
                     continue;
                 }
 
-                let length = self.mesh.face_length(FaceIndex(face));
+                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
 
                 // 调和平均扩散系数 (保证正定性)
                 let nu_o = nu[owner.get()];
                 let nu_n = nu[neighbor.get()];
-                let nu_face = if nu_o + nu_n > 1e-14 {
-                    2.0 * nu_o * nu_n / (nu_o + nu_n)
+                let nu_face = if nu_o + nu_n > eps {
+                    (B::Scalar::TWO * nu_o * nu_n).safe_div_eps(
+                        nu_o + nu_n,
+                        B::Scalar::MIN_POSITIVE,
+                        B::Scalar::ZERO,
+                    )
                 } else {
-                    0.0
+                    B::Scalar::ZERO
                 };
 
                 let phi_o = field[owner.get()];
@@ -464,11 +536,16 @@ impl<'a> VariableDiffusionSolver<'a> {
         }
 
         field_out
+            .as_slice_mut()
             .par_iter_mut()
             .enumerate()
             .for_each(|(i, phi_out)| {
-                let area = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0);
-                if area > 1e-14 {
+                let area = self
+                    .mesh
+                    .cell_area(CellIndex(i))
+                    .map(|a| self.backend.scalar_from_f64(a))
+                    .unwrap_or(B::Scalar::ONE);
+                if area > eps {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
                 } else {
                     *phi_out = field[i];
@@ -524,23 +601,24 @@ impl std::error::Error for DiffusionError {}
 // ============================================================================
 
 /// 估计稳定时间步长
-pub fn estimate_stable_dt(mesh: &PhysicsMesh, nu: f64) -> f64 {
-    let config = DiffusionConfig::new(nu);
-    let solver = DiffusionSolver::new(mesh, config);
+pub fn estimate_stable_dt<B: Backend + Clone>(mesh: &PhysicsMesh, backend: &B, nu: f64) -> B::Scalar {
+    let config = DiffusionConfig::new(backend.scalar_from_f64(nu));
+    let solver = DiffusionSolver::new(mesh, backend.clone(), config);
     solver.estimate_stable_dt()
 }
 
 /// 计算所需子步数
-pub fn required_substeps(mesh: &PhysicsMesh, nu: f64, dt: f64) -> usize {
-    let config = DiffusionConfig::new(nu);
-    let solver = DiffusionSolver::new(mesh, config);
-    solver.required_substeps(dt)
+pub fn required_substeps<B: Backend + Clone>(mesh: &PhysicsMesh, backend: &B, nu: f64, dt: f64) -> usize {
+    let config = DiffusionConfig::new(backend.scalar_from_f64(nu));
+    let solver = DiffusionSolver::new(mesh, backend.clone(), config);
+    solver.required_substeps(backend.scalar_from_f64(dt))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::PhysicsMesh;
+    use mh_runtime::CpuBackend;
 
     fn create_test_mesh(n_cells: usize) -> PhysicsMesh {
         // 创建简单测试网格
@@ -549,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_diffusion_bc_default() {
-        let bc = DiffusionBC::default();
+        let bc: DiffusionBC<f64> = DiffusionBC::default();
         assert_eq!(bc, DiffusionBC::ZeroFlux);
     }
 
@@ -601,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_diffusion_config_default() {
-        let config = DiffusionConfig::default();
+        let config: DiffusionConfig<f64> = DiffusionConfig::default();
         assert_eq!(config.nu, 1.0);
         assert!(config.boundary_conditions.is_empty());
         assert!((config.cfl_safety - 0.25).abs() < 1e-10);
@@ -621,15 +699,17 @@ mod tests {
     #[test]
     fn test_estimate_stable_dt_zero_nu() {
         let mesh = create_test_mesh(10);
-        let dt = estimate_stable_dt(&mesh, 0.0);
+        let backend = CpuBackend::<f64>::default();
+        let dt = estimate_stable_dt(&mesh, &backend, 0.0);
         assert_eq!(dt, f64::MAX);
     }
 
     #[test]
     fn test_required_substeps_small_dt() {
         let mesh = create_test_mesh(10);
+        let backend = CpuBackend::<f64>::default();
         // 小时间步应该不需要子步
-        let n = required_substeps(&mesh, 1.0, 0.001);
+        let n = required_substeps(&mesh, &backend, 1.0, 0.001);
         assert_eq!(n, 1);
     }
 
@@ -637,7 +717,8 @@ mod tests {
     fn test_diffusion_solver_creation() {
         let mesh = create_test_mesh(10);
         let config = DiffusionConfig::new(1.0);
-        let _solver = DiffusionSolver::new(&mesh, config);
+        let backend = CpuBackend::<f64>::default();
+        let _solver = DiffusionSolver::new(&mesh, backend, config);
     }
 
     #[test]

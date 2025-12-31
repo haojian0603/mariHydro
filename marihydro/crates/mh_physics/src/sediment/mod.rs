@@ -46,7 +46,7 @@ pub use properties::{SedimentClass, SedimentProperties, SedimentType};
 // 输沙公式（全部泛型化）
 pub use formulas::{
     EinsteinFormula, EngelundHansenFormula, MeyerPeterMullerFormula, TransportFormula,
-    VanRijn1984Formula, available_formulas, get_formula_f64, get_formula_f32,
+    TransportFormulaBuilder, VanRijn1984Formula, available_formulas,
 };
 
 // 形态动力学
@@ -67,8 +67,8 @@ pub use manager::{
 
 // 剪切应力
 pub use shear_stress::{
-    ShearStress, ShearStressCalculator, ManningCoeff,
-    shields_parameter, critical_shields,
+    ShearStress, ShearStressCalculator, ManningCoeff, ChezyCoeff,
+    shields_parameter, shields_critical_soulsby, shields_from_tau,
 };
 
 // 交换

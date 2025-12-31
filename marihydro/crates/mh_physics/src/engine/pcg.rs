@@ -3,8 +3,8 @@
 //! 实现泛型PCG算法，支持任意Backend（f32/f64/GPU），用于求解稀疏对称正定线性系统。
 //! 主要用于半隐式时间积分中的压力泊松方程求解。
 
-use crate::core::{Backend, CpuBackend};
-use mh_runtime::{RuntimeScalar, DeviceBuffer};
+use crate::core::Backend;
+use mh_runtime::{DeviceBuffer, RuntimeScalar};
 use num_traits::{FromPrimitive, Float};
 use std::marker::PhantomData;
 
@@ -77,6 +77,18 @@ where
 
     pub fn dimension(&self) -> usize {
         self.n
+    }
+
+    /// 使用闭包批量生成对角线元素
+    pub fn from_fn<F>(backend: &B, n: usize, mut f: F) -> Self
+    where
+        F: FnMut(usize) -> B::Scalar,
+    {
+        let mut diag = backend.alloc(n);
+        for i in 0..n {
+            diag[i] = f(i);
+        }
+        Self::new(diag, n)
     }
 }
 
@@ -329,25 +341,46 @@ impl PoissonMatrixBuilder {
         Self { n_cells }
     }
 
-    pub fn build_diagonal(
+    pub fn build_diagonal<B: Backend>(
         &self,
-        backend: &CpuBackend<f64>,
-        cell_areas: &[f64],
-        dt: f64,
-        gravity: f64,
-        h: &[f64],
-        h_min: f64,
-    ) -> DiagonalMatrix<CpuBackend<f64>> {
-        let mut diag = backend.alloc(self.n_cells);
+        backend: &B,
+        cell_areas: &[B::Scalar],
+        dt: B::Scalar,
+        gravity: B::Scalar,
+        theta: B::Scalar,
+        h: &[B::Scalar],
+        h_min: B::Scalar,
+    ) -> DiagonalMatrix<B>
+    where
+        B::Buffer<B::Scalar>: Send + Sync,
+        B::Scalar: RuntimeScalar + FromPrimitive + Float,
+    {
+        assert_eq!(cell_areas.len(), self.n_cells, "cell_areas 长度不匹配");
+        assert_eq!(h.len(), self.n_cells, "h 长度不匹配");
 
-        for i in 0..self.n_cells {
-            let area = cell_areas[i];
-            let h_eff = h[i].max(h_min);
-            let theta = 0.5;
-            diag[i] = area / (gravity * theta * dt * dt * h_eff);
+        if let Err((idx, val)) = B::Scalar::validate_slice(cell_areas) {
+            panic!("cell_areas 第 {} 项为非法值: {:?}", idx, val);
+        }
+        if let Err((idx, val)) = B::Scalar::validate_slice(h) {
+            panic!("h 第 {} 项为非法值: {:?}", idx, val);
         }
 
-        DiagonalMatrix::new(diag, self.n_cells)
+        let g_min = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        assert!(gravity > g_min, "重力加速度过小，可能导致数值不稳定");
+
+        let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
+
+        DiagonalMatrix::from_fn(backend, self.n_cells, |i| {
+            let area = cell_areas[i];
+            let h_eff = h[i].max(h_min);
+            let denom = gravity * theta_safe * dt * dt * h_eff;
+            if denom.abs() > eps {
+                area / denom
+            } else {
+                B::Scalar::ZERO
+            }
+        })
     }
 }
 

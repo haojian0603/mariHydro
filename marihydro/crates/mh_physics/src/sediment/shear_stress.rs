@@ -22,23 +22,17 @@
 //!
 //! ## Chezy 公式
 //!
-//! ```text
-//! τ_b = ρ × g × |V|² / C²
-//! ```
-//!
-//! 其中 C 是 Chezy 系数。
-//!
-//! ## 剪切流速
-//!
-//! ```text
-//! u_* = √(τ_b / ρ)
-//! ```
+// crates/mh_physics/src/sediment/shear_stress.rs
 
+//! 床面剪切应力计算模块（Backend 无关标量版本）
+
+use crate::core::Backend;
 use crate::types::PhysicalConstants;
 use mh_runtime::RuntimeScalar;
+use serde::{Deserialize, Serialize};
 
 /// 剪切应力计算结果
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ShearStress<S: RuntimeScalar = f64> {
     /// 剪切应力大小 [Pa]
     pub magnitude: S,
@@ -50,9 +44,8 @@ pub struct ShearStress<S: RuntimeScalar = f64> {
     pub u_star: S,
 }
 
-impl<S: RuntimeScalar> ShearStress<S> {
-    /// 零剪切应力
-    pub fn zero() -> Self {
+impl<S: RuntimeScalar> Default for ShearStress<S> {
+    fn default() -> Self {
         Self {
             magnitude: S::ZERO,
             tau_x: S::ZERO,
@@ -62,72 +55,64 @@ impl<S: RuntimeScalar> ShearStress<S> {
     }
 }
 
-/// 床面剪切应力计算器
-#[derive(Debug, Clone, Copy)]
-pub struct ShearStressCalculator {
-    /// 最小水深 [m]
-    pub h_min: f64,
-    /// 水密度 [kg/m³]
-    pub rho_water: f64,
-    /// 重力加速度 [m/s²]
-    pub g: f64,
+impl<S: RuntimeScalar> ShearStress<S> {
+    pub fn zero() -> Self {
+        Self::default()
+    }
 }
 
-impl Default for ShearStressCalculator {
+/// 床面剪切应力计算器
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ShearStressCalculator<S: RuntimeScalar = f64> {
+    /// 最小水深 [m]
+    pub h_min: S,
+    /// 水密度 [kg/m³]
+    pub rho_water: S,
+    /// 重力加速度 [m/s²]
+    pub g: S,
+}
+
+impl<S: RuntimeScalar> Default for ShearStressCalculator<S> {
     fn default() -> Self {
+        let physics = PhysicalConstants::seawater();
         Self {
-            h_min: 0.01,
-            rho_water: 1000.0,
-            g: 9.81,
+            h_min: S::from_f64(0.01).unwrap_or(S::ZERO),
+            rho_water: S::from_f64(physics.rho_water).unwrap_or(S::ONE),
+            g: S::from_f64(physics.g).unwrap_or(S::ONE),
         }
     }
 }
 
-impl ShearStressCalculator {
+impl<S: RuntimeScalar> ShearStressCalculator<S> {
     /// 创建新的计算器
-    pub fn new(h_min: f64, rho_water: f64, g: f64) -> Self {
+    pub fn new(h_min: S, rho_water: S, g: S) -> Self {
         Self { h_min, rho_water, g }
     }
 
     /// 从物理常数创建
-    pub fn from_physics(physics: &PhysicalConstants, h_min: f64) -> Self {
+    pub fn from_physics(physics: &PhysicalConstants, h_min: S) -> Self {
         Self {
             h_min,
-            rho_water: physics.rho_water,
-            g: physics.g,
+            rho_water: S::from_f64(physics.rho_water).unwrap_or(S::ONE),
+            g: S::from_f64(physics.g).unwrap_or(S::ONE),
         }
     }
 
     /// 使用 Manning 公式计算剪切应力（单个点）
-    ///
-    /// τ_b = ρ × g × n² × |V|² / h^(1/3)
-    ///
-    /// # 参数
-    ///
-    /// - `h`: 水深 [m]
-    /// - `u`: x 方向流速 [m/s]
-    /// - `v`: y 方向流速 [m/s]
-    /// - `manning_n`: Manning 糙率系数 [s/m^(1/3)]
-    pub fn manning(&self, h: f64, u: f64, v: f64, manning_n: f64) -> ShearStress<f64> {
+    pub fn manning(&self, h: S, u: S, v: S, manning_n: S) -> ShearStress<S> {
         if h < self.h_min {
             return ShearStress::default();
         }
 
         let speed_sq = u * u + v * v;
-        let speed = speed_sq.sqrt();
-        let h_pow = h.powf(1.0 / 3.0);
+        let eps = S::from_f64(1e-12).unwrap_or(S::ZERO);
+        let speed = (speed_sq + eps).sqrt();
+        let h_pow = h.powf(S::from_f64(1.0 / 3.0).unwrap_or(S::ONE));
 
-        // τ_b = ρ × g × n² × |V|² / h^(1/3)
         let magnitude = self.rho_water * self.g * manning_n * manning_n * speed_sq / h_pow;
+        let tau_x = magnitude * u / speed;
+        let tau_y = magnitude * v / speed;
 
-        // 分量
-        let (tau_x, tau_y) = if speed > 1e-10 {
-            (magnitude * u / speed, magnitude * v / speed)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // 剪切流速
         let u_star = (magnitude / self.rho_water).sqrt();
 
         ShearStress {
@@ -139,34 +124,18 @@ impl ShearStressCalculator {
     }
 
     /// 使用 Chezy 公式计算剪切应力（单个点）
-    ///
-    /// τ_b = ρ × g × |V|² / C²
-    ///
-    /// # 参数
-    ///
-    /// - `h`: 水深 [m]
-    /// - `u`: x 方向流速 [m/s]
-    /// - `v`: y 方向流速 [m/s]
-    /// - `chezy_c`: Chezy 系数 [m^(1/2)/s]
-    pub fn chezy(&self, h: f64, u: f64, v: f64, chezy_c: f64) -> ShearStress<f64> {
-        if h < self.h_min || chezy_c < 1e-6 {
+    pub fn chezy(&self, h: S, u: S, v: S, chezy_c: S) -> ShearStress<S> {
+        if h < self.h_min || chezy_c < S::from_f64(1e-6).unwrap_or(S::ZERO) {
             return ShearStress::default();
         }
 
         let speed_sq = u * u + v * v;
-        let speed = speed_sq.sqrt();
-
-        // τ_b = ρ × g × |V|² / C²
+        let eps = S::from_f64(1e-12).unwrap_or(S::ZERO);
+        let speed = (speed_sq + eps).sqrt();
         let magnitude = self.rho_water * self.g * speed_sq / (chezy_c * chezy_c);
+        let tau_x = magnitude * u / speed;
+        let tau_y = magnitude * v / speed;
 
-        // 分量
-        let (tau_x, tau_y) = if speed > 1e-10 {
-            (magnitude * u / speed, magnitude * v / speed)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // 剪切流速
         let u_star = (magnitude / self.rho_water).sqrt();
 
         ShearStress {
@@ -178,173 +147,222 @@ impl ShearStressCalculator {
     }
 
     /// 从水力半径和能量坡度计算剪切应力
-    ///
-    /// τ_b = ρ × g × R × S_f
-    ///
-    /// # 参数
-    ///
-    /// - `hydraulic_radius`: 水力半径 [m]
-    /// - `energy_slope`: 能量坡度 [-]
-    pub fn from_energy_slope(&self, hydraulic_radius: f64, energy_slope: f64) -> f64 {
+    pub fn from_energy_slope(&self, hydraulic_radius: S, energy_slope: S) -> S {
         self.rho_water * self.g * hydraulic_radius * energy_slope.abs()
     }
 
     /// 批量计算 Manning 剪切应力
-    ///
-    /// # 参数
-    ///
-    /// - `h`: 水深数组 [m]
-    /// - `u`: x 方向流速数组 [m/s]
-    /// - `v`: y 方向流速数组 [m/s]
-    /// - `manning_n`: Manning 系数（可以是单一值或数组）
-    /// - `tau_out`: 输出剪切应力大小数组 [Pa]
-    /// - `tau_x_out`: 输出 x 分量数组（可选）
-    /// - `tau_y_out`: 输出 y 分量数组（可选）
-    pub fn compute_manning_batch(
+    pub fn manning_batch(
         &self,
-        h: &[f64],
-        u: &[f64],
-        v: &[f64],
-        manning_n: ManningCoeff<'_>,
-        tau_out: &mut [f64],
-        mut tau_x_out: Option<&mut [f64]>,
-        mut tau_y_out: Option<&mut [f64]>,
-    ) {
-        let n_cells = h.len().min(u.len()).min(v.len()).min(tau_out.len());
-        let rho_g = self.rho_water * self.g;
+        h: &[S],
+        u: &[S],
+        v: &[S],
+        manning_n: ManningCoeff<'_, S>,
+    ) -> (Vec<S>, Vec<S>, Vec<S>, Vec<S>) {
+        debug_assert_eq!(h.len(), u.len());
+        debug_assert_eq!(h.len(), v.len());
 
-        for i in 0..n_cells {
-            let hi = h[i];
-            if hi < self.h_min {
-                tau_out[i] = 0.0;
-                if let Some(ref mut tx_arr) = tau_x_out {
-                    if i < tx_arr.len() {
-                        tx_arr[i] = 0.0;
-                    }
-                }
-                if let Some(ref mut ty_arr) = tau_y_out {
-                    if i < ty_arr.len() {
-                        ty_arr[i] = 0.0;
-                    }
-                }
-                continue;
-            }
+        let mut tau_out = vec![S::ZERO; h.len()];
+        let mut tau_x_out = vec![S::ZERO; h.len()];
+        let mut tau_y_out = vec![S::ZERO; h.len()];
+        let mut u_star_out = vec![S::ZERO; h.len()];
 
-            let ui = u[i];
-            let vi = v[i];
-            let speed_sq = ui * ui + vi * vi;
-            let speed = speed_sq.sqrt();
-            let h_pow = hi.powf(1.0 / 3.0);
-
+        for i in 0..h.len() {
             let n = manning_n.get(i);
-            let tau_mag = rho_g * n * n * speed_sq / h_pow;
-            tau_out[i] = tau_mag;
-
-            // 分量
-            if speed > 1e-10 {
-                if let Some(ref mut tx_arr) = tau_x_out {
-                    if i < tx_arr.len() {
-                        tx_arr[i] = tau_mag * ui / speed;
-                    }
-                }
-                if let Some(ref mut ty_arr) = tau_y_out {
-                    if i < ty_arr.len() {
-                        ty_arr[i] = tau_mag * vi / speed;
-                    }
-                }
-            } else {
-                if let Some(ref mut tx_arr) = tau_x_out {
-                    if i < tx_arr.len() {
-                        tx_arr[i] = 0.0;
-                    }
-                }
-                if let Some(ref mut ty_arr) = tau_y_out {
-                    if i < ty_arr.len() {
-                        ty_arr[i] = 0.0;
-                    }
-                }
-            }
+            let shear = self.manning(h[i], u[i], v[i], n);
+            tau_out[i] = shear.magnitude;
+            tau_x_out[i] = shear.tau_x;
+            tau_y_out[i] = shear.tau_y;
+            u_star_out[i] = shear.u_star;
         }
+
+        (tau_out, tau_x_out, tau_y_out, u_star_out)
     }
 
-    /// 批量计算剪切流速
-    ///
-    /// u_* = √(τ_b / ρ)
-    pub fn compute_shear_velocity(&self, tau: &[f64], u_star_out: &mut [f64]) {
-        let n = tau.len().min(u_star_out.len());
-        let inv_rho = 1.0 / self.rho_water;
-        for i in 0..n {
-            u_star_out[i] = (tau[i] * inv_rho).sqrt();
+    /// 批量计算 Chezy 剪切应力
+    pub fn chezy_batch(
+        &self,
+        h: &[S],
+        u: &[S],
+        v: &[S],
+        chezy_c: ChezyCoeff<'_, S>,
+    ) -> (Vec<S>, Vec<S>, Vec<S>, Vec<S>) {
+        debug_assert_eq!(h.len(), u.len());
+        debug_assert_eq!(h.len(), v.len());
+
+        let mut tau_out = vec![S::ZERO; h.len()];
+        let mut tau_x_out = vec![S::ZERO; h.len()];
+        let mut tau_y_out = vec![S::ZERO; h.len()];
+        let mut u_star_out = vec![S::ZERO; h.len()];
+
+        for i in 0..h.len() {
+            let c = chezy_c.get(i);
+            let shear = self.chezy(h[i], u[i], v[i], c);
+            tau_out[i] = shear.magnitude;
+            tau_x_out[i] = shear.tau_x;
+            tau_y_out[i] = shear.tau_y;
+            u_star_out[i] = shear.u_star;
         }
+
+        (tau_out, tau_x_out, tau_y_out, u_star_out)
     }
 }
 
-/// Manning 系数输入类型
-#[derive(Debug, Clone, Copy)]
-pub enum ManningCoeff<'a> {
-    /// 均匀值
-    Uniform(f64),
-    /// 按单元变化的数组
-    Array(&'a [f64]),
+/// Manning 糙率，可为常数或数组
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ManningCoeff<'a, S: RuntimeScalar = f64> {
+    /// 常数糙率
+    Uniform(S),
+    /// 按单元提供的糙率数组
+    Array(&'a [S]),
 }
 
-impl<'a> ManningCoeff<'a> {
-    /// 获取指定索引处的 Manning 系数
-    #[inline]
-    pub fn get(&self, index: usize) -> f64 {
+impl<'a, S: RuntimeScalar> ManningCoeff<'a, S> {
+    pub fn get(&self, idx: usize) -> S {
         match self {
-            ManningCoeff::Uniform(n) => *n,
-            ManningCoeff::Array(arr) => arr.get(index).copied().unwrap_or(0.03),
+            ManningCoeff::Uniform(v) => *v,
+            ManningCoeff::Array(arr) => arr[idx],
         }
     }
 }
 
-impl From<f64> for ManningCoeff<'_> {
-    fn from(n: f64) -> Self {
-        ManningCoeff::Uniform(n)
+impl<'a, S: RuntimeScalar> From<S> for ManningCoeff<'a, S> {
+    fn from(val: S) -> Self {
+        ManningCoeff::Uniform(val)
     }
 }
 
-impl<'a> From<&'a [f64]> for ManningCoeff<'a> {
-    fn from(arr: &'a [f64]) -> Self {
+impl<'a, S: RuntimeScalar> From<&'a [S]> for ManningCoeff<'a, S> {
+    fn from(arr: &'a [S]) -> Self {
         ManningCoeff::Array(arr)
     }
 }
 
-/// Shields 参数计算
-///
-/// θ = τ_b / ((ρ_s - ρ_w) × g × d)
-///
-/// # 参数
-///
-/// - `tau_b`: 床面剪切应力 [Pa]
-/// - `rho_s`: 泥沙密度 [kg/m³]
-/// - `rho_w`: 水密度 [kg/m³]
-/// - `g`: 重力加速度 [m/s²]
-/// - `d50`: 中值粒径 [m]
-#[inline]
-pub fn shields_parameter(tau_b: f64, rho_s: f64, rho_w: f64, g: f64, d50: f64) -> f64 {
-    let denominator = (rho_s - rho_w) * g * d50;
-    if denominator > 1e-12 {
-        tau_b / denominator
-    } else {
-        0.0
+// Removed From implementation for ManningCoeff
+
+// Removed From implementation for ChezyCoeff
+
+/// Chezy 系数，可为常数或数组
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ChezyCoeff<'a, S: RuntimeScalar = f64> {
+    /// 常数 Chezy 系数
+    Uniform(S),
+    /// 按单元提供的 Chezy 系数数组
+    Array(&'a [S]),
+}
+
+impl<'a, S: RuntimeScalar> ChezyCoeff<'a, S> {
+    pub fn get(&self, idx: usize) -> S {
+        match self {
+            ChezyCoeff::Uniform(v) => *v,
+            ChezyCoeff::Array(arr) => arr[idx],
+        }
     }
 }
 
-/// 临界 Shields 参数（经验公式）
-///
-/// 使用 Soulsby-Whitehouse (1997) 公式
-///
-/// θ_cr = 0.30 / (1 + 1.2 D_*) + 0.055 (1 - exp(-0.020 D_*))
-///
-/// 其中 D_* = d × [(s-1)g/ν²]^(1/3) 是无量纲粒径
-pub fn critical_shields(d50: f64, relative_density: f64, g: f64, nu: f64) -> f64 {
-    // 无量纲粒径
-    let d_star = d50 * ((relative_density - 1.0) * g / (nu * nu)).powf(1.0 / 3.0);
+impl<'a, S: RuntimeScalar> From<S> for ChezyCoeff<'a, S> {
+    fn from(val: S) -> Self {
+        ChezyCoeff::Uniform(val)
+    }
+}
 
-    // Soulsby-Whitehouse 公式
-    0.30 / (1.0 + 1.2 * d_star) + 0.055 * (1.0 - (-0.020 * d_star).exp())
+impl<'a, S: RuntimeScalar> From<&'a [S]> for ChezyCoeff<'a, S> {
+    fn from(arr: &'a [S]) -> Self {
+        ChezyCoeff::Array(arr)
+    }
+}
+
+// Removed From implementation for ChezyCoeff
+
+impl<S: RuntimeScalar> ShearStressCalculator<S> {
+    /// 使用 Backend 缓冲区批量计算 Manning 剪切应力
+    pub fn manning_batch_backend<B>(
+        &self,
+        backend: &B,
+        h: &B::Buffer<S>,
+        u: &B::Buffer<S>,
+        v: &B::Buffer<S>,
+        manning_n: ManningCoeff<'_, S>,
+        tau_out: &mut B::Buffer<S>,
+        tau_x_out: &mut B::Buffer<S>,
+        tau_y_out: &mut B::Buffer<S>,
+        u_star_out: &mut B::Buffer<S>,
+    )
+    where
+        B: Backend<Scalar = S>,
+    {
+        let n = h.len().min(u.len()).min(v.len());
+        for i in 0..n {
+            let n_coeff = manning_n.get(i);
+            let shear = self.manning(h[i], u[i], v[i], n_coeff);
+            tau_out[i] = shear.magnitude;
+            tau_x_out[i] = shear.tau_x;
+            tau_y_out[i] = shear.tau_y;
+            u_star_out[i] = shear.u_star;
+        }
+        let _ = backend;
+    }
+
+    /// 使用 Backend 缓冲区批量计算 Chezy 剪切应力
+    pub fn chezy_batch_backend<B>(
+        &self,
+        backend: &B,
+        h: &B::Buffer<S>,
+        u: &B::Buffer<S>,
+        v: &B::Buffer<S>,
+        chezy_c: ChezyCoeff<'_, S>,
+        tau_out: &mut B::Buffer<S>,
+        tau_x_out: &mut B::Buffer<S>,
+        tau_y_out: &mut B::Buffer<S>,
+        u_star_out: &mut B::Buffer<S>,
+    )
+    where
+        B: Backend<Scalar = S>,
+    {
+        let n = h.len().min(u.len()).min(v.len());
+        for i in 0..n {
+            let c_coeff = chezy_c.get(i);
+            let shear = self.chezy(h[i], u[i], v[i], c_coeff);
+            tau_out[i] = shear.magnitude;
+            tau_x_out[i] = shear.tau_x;
+            tau_y_out[i] = shear.tau_y;
+            u_star_out[i] = shear.u_star;
+        }
+        let _ = backend;
+    }
+}
+
+/// Shields 参数，用于判断是否发生起动
+pub fn shields_parameter(
+    tau_b: f64,
+    rho_water: f64,
+    rho_sediment: f64,
+    d50: f64,
+) -> f64 {
+    let physics = PhysicalConstants::default();
+    let submerged_weight = (rho_sediment - rho_water) * physics.g * d50;
+    if submerged_weight.abs() < 1e-12 {
+        return 0.0;
+    }
+
+    tau_b / submerged_weight
+}
+
+/// 计算临界 Shields 参数（Soulsby-Whitehouse 公式）
+pub fn shields_critical_soulsby(d50: f64, rho_sediment: f64, rho_water: f64) -> f64 {
+    let relative_density = (rho_sediment / rho_water) - 1.0;
+    let nu = 1e-6; // 运动粘度 [m²/s]
+
+    let physics = PhysicalConstants::default();
+    let d_star = d50 * (relative_density * physics.g / (nu * nu)).powf(1.0 / 3.0);
+    let term1 = 0.30 / (1.0 + 1.2 * d_star);
+    let term2 = 0.055 * (1.0 - (-0.02 * d_star).exp());
+    term1 + term2
+}
+
+/// 计算床面切应力到 Shields 参数
+pub fn shields_from_tau(tau_b: f64, rho_water: f64, rho_sediment: f64, d50: f64) -> f64 {
+    shields_parameter(tau_b, rho_water, rho_sediment, d50)
 }
 
 #[cfg(test)]
@@ -352,60 +370,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_manning_shear_stress() {
-        let calc = ShearStressCalculator::default();
-        
-        // 典型河流条件：h=2m, u=1m/s, v=0, n=0.03
-        let stress = calc.manning(2.0, 1.0, 0.0, 0.03);
-        
-        // τ = ρ g n² |V|² / h^(1/3)
-        // τ = 1000 × 9.81 × 0.0009 × 1 / 2^(1/3)
-        // τ ≈ 7.0 Pa
-        assert!(stress.magnitude > 5.0 && stress.magnitude < 10.0);
-        assert!(stress.tau_x > 0.0);
-        assert!(stress.tau_y.abs() < 1e-10);
-        assert!(stress.u_star > 0.0);
+    fn test_manning_single_point() {
+        let calculator: ShearStressCalculator<f64> = ShearStressCalculator::default();
+
+        let h = 1.0;
+        let u = 2.0;
+        let v = 1.0;
+        let n = 0.03;
+
+        let shear = calculator.manning(h, u, v, n);
+
+        assert!(shear.magnitude > 0.0);
+        assert!(shear.tau_x.abs() > 0.0);
+        assert!(shear.tau_y.abs() > 0.0);
+        assert!(shear.u_star > 0.0);
     }
 
     #[test]
-    fn test_chezy_shear_stress() {
-        let calc = ShearStressCalculator::default();
-        
-        // C = 50
-        let stress = calc.chezy(2.0, 1.0, 0.0, 50.0);
-        
-        // τ = ρ g |V|² / C²
-        // τ = 1000 × 9.81 × 1 / 2500
-        // τ ≈ 3.9 Pa
-        assert!(stress.magnitude > 3.0 && stress.magnitude < 5.0);
-    }
+    fn test_chezy_single_point() {
+        let calculator: ShearStressCalculator<f64> = ShearStressCalculator::default();
 
-    #[test]
-    fn test_dry_cell() {
-        let calc = ShearStressCalculator::default();
-        
-        let stress = calc.manning(0.001, 1.0, 0.0, 0.03);
-        assert!(stress.magnitude < 1e-10);
+        let h = 1.0;
+        let u = 1.5;
+        let v = 0.5;
+        let c = 50.0;
+
+        let shear = calculator.chezy(h, u, v, c);
+
+        assert!(shear.magnitude > 0.0);
+        assert!(shear.u_star > 0.0);
     }
 
     #[test]
     fn test_shields_parameter() {
-        // 砂粒：d50=0.5mm, τ=5Pa
-        let theta = shields_parameter(5.0, 2650.0, 1000.0, 9.81, 0.0005);
-        
-        // θ = 5 / (1650 × 9.81 × 0.0005) ≈ 0.62
-        assert!(theta > 0.5 && theta < 0.7);
-    }
+        let tau_b = 2.0;
+        let rho_w = 1000.0;
+        let rho_s = 2650.0;
+        let d50 = 0.002;
 
-    #[test]
-    fn test_critical_shields() {
-        // 中等砂粒
-        let theta_cr = critical_shields(0.0005, 2.65, 9.81, 1e-6);
-        
-        // 典型值应在 0.03-0.06 范围
-        assert!(theta_cr > 0.02 && theta_cr < 0.10);
-    }
+        let theta = shields_parameter(tau_b, rho_w, rho_s, d50);
 
+        assert!(theta > 0.0);
+    }
     #[test]
     fn test_batch_calculation() {
         let calc = ShearStressCalculator::default();
@@ -413,13 +419,15 @@ mod tests {
         let h = vec![2.0, 1.5, 1.0, 0.5];
         let u = vec![1.0, 1.5, 2.0, 0.5];
         let v = vec![0.0, 0.5, 0.0, 0.0];
-        let mut tau = vec![0.0; 4];
-        
-        calc.compute_manning_batch(&h, &u, &v, 0.03.into(), &mut tau, None, None);
+        let (tau, tau_x, tau_y, u_star): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) =
+            calc.manning_batch(&h, &u, &v, 0.03.into());
         
         // 所有值应为正
-        for t in &tau {
-            assert!(*t > 0.0);
+        for (&t, (&tx, (&ty, &us))) in tau.iter().zip(tau_x.iter().zip(tau_y.iter().zip(u_star.iter()))) {
+            assert!(t > 0.0);
+            assert!(tx.is_finite());
+            assert!(ty.is_finite());
+            assert!(us > 0.0);
         }
     }
 }

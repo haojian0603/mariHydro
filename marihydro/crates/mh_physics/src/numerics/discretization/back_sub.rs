@@ -25,31 +25,40 @@
 
 use crate::adapter::PhysicsMesh;
 use super::topology::CellFaceTopology;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use num_traits::{Float, FromPrimitive};
 
 /// 水深校正器
 ///
 /// 根据压力校正量更新水深：h = h* + η'
-pub struct DepthCorrector {
+pub struct DepthCorrector<B: Backend> {
     /// 单元数量
     n_cells: usize,
     /// 最小水深
-    h_min: f64,
+    h_min: B::Scalar,
     /// 是否保证非负
     ensure_positive: bool,
+    /// 后端实例
+    backend: B,
 }
 
-impl DepthCorrector {
+impl<B> DepthCorrector<B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+{
     /// 创建水深校正器
-    pub fn new(n_cells: usize) -> Self {
+    pub fn new(n_cells: usize, backend: B) -> Self {
         Self {
             n_cells,
-            h_min: 0.0,
+            h_min: B::Scalar::ZERO,
             ensure_positive: true,
+            backend,
         }
     }
 
     /// 设置最小水深
-    pub fn with_h_min(mut self, h_min: f64) -> Self {
+    pub fn with_h_min(mut self, h_min: B::Scalar) -> Self {
         self.h_min = h_min;
         self
     }
@@ -66,7 +75,7 @@ impl DepthCorrector {
     ///
     /// - `h`: 水深场（将被修改）
     /// - `eta_prime`: 水位校正量
-    pub fn correct(&self, h: &mut [f64], eta_prime: &[f64]) {
+    pub fn correct(&self, h: &mut B::Buffer<B::Scalar>, eta_prime: &B::Buffer<B::Scalar>) {
         debug_assert_eq!(h.len(), self.n_cells);
         debug_assert_eq!(eta_prime.len(), self.n_cells);
 
@@ -79,11 +88,15 @@ impl DepthCorrector {
     }
 
     /// 校正水深并返回统计
-    pub fn correct_with_stats(&self, h: &mut [f64], eta_prime: &[f64]) -> CorrectionStats {
+    pub fn correct_with_stats(
+        &self,
+        h: &mut B::Buffer<B::Scalar>,
+        eta_prime: &B::Buffer<B::Scalar>,
+    ) -> CorrectionStats<B::Scalar> {
         debug_assert_eq!(h.len(), self.n_cells);
         debug_assert_eq!(eta_prime.len(), self.n_cells);
 
-        let mut stats = CorrectionStats::default();
+        let mut stats: CorrectionStats<B::Scalar> = CorrectionStats::default();
 
         for i in 0..self.n_cells {
             let correction = eta_prime[i];
@@ -98,8 +111,22 @@ impl DepthCorrector {
             }
         }
 
-        stats.mean_correction = stats.sum_correction / self.n_cells as f64;
+        stats.mean_correction = stats.sum_correction
+            / self.backend.scalar_from_f64(self.n_cells as f64);
         stats
+    }
+
+    /// 切片版本，兼容旧路径
+    pub fn correct_slice(&self, h: &mut [B::Scalar], eta_prime: &[B::Scalar]) {
+        debug_assert_eq!(h.len(), self.n_cells);
+        debug_assert_eq!(eta_prime.len(), self.n_cells);
+
+        for i in 0..self.n_cells {
+            h[i] += eta_prime[i];
+            if self.ensure_positive && h[i] < self.h_min {
+                h[i] = self.h_min;
+            }
+        }
     }
 }
 
@@ -107,31 +134,38 @@ impl DepthCorrector {
 ///
 /// 根据压力梯度校正速度：
 /// $$\vec{u}^{n+1} = \vec{u}^* - \Delta t \cdot g \cdot \nabla \eta'$$
-pub struct VelocityCorrector {
+pub struct VelocityCorrector<B: Backend> {
     /// 单元数量
     n_cells: usize,
     /// 梯度 x 分量
-    grad_x: Vec<f64>,
+    grad_x: B::Buffer<B::Scalar>,
     /// 梯度 y 分量
-    grad_y: Vec<f64>,
+    grad_y: B::Buffer<B::Scalar>,
     /// 最小水深
-    h_min: f64,
+    h_min: B::Scalar,
+    /// 后端实例
+    backend: B,
 }
 
-impl VelocityCorrector {
+impl<B> VelocityCorrector<B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+{
     /// 创建速度校正器
-    pub fn new(topo: &CellFaceTopology) -> Self {
+    pub fn new(topo: &CellFaceTopology, backend: B) -> Self {
         let n_cells = topo.n_cells();
         Self {
             n_cells,
-            grad_x: vec![0.0; n_cells],
-            grad_y: vec![0.0; n_cells],
-            h_min: 1e-4,
+            grad_x: backend.alloc(n_cells),
+            grad_y: backend.alloc(n_cells),
+            h_min: backend.scalar_from_f64(1e-4),
+            backend,
         }
     }
 
     /// 设置最小水深
-    pub fn with_h_min(mut self, h_min: f64) -> Self {
+    pub fn with_h_min(mut self, h_min: B::Scalar) -> Self {
         self.h_min = h_min;
         self
     }
@@ -141,11 +175,11 @@ impl VelocityCorrector {
         &mut self,
         topo: &CellFaceTopology,
         mesh: &PhysicsMesh,
-        eta_prime: &[f64],
+        eta_prime: &[B::Scalar],
     ) {
         // 清零
-        self.grad_x.fill(0.0);
-        self.grad_y.fill(0.0);
+        self.grad_x.fill(B::Scalar::ZERO);
+        self.grad_y.fill(B::Scalar::ZERO);
 
         // 使用 Green-Gauss 方法计算梯度
         for &face_idx in topo.interior_faces() {
@@ -154,15 +188,19 @@ impl VelocityCorrector {
             let neighbor = face.neighbor.expect("interior face");
 
             // 面值（算术平均）
-            let eta_f = 0.5 * (eta_prime[owner] + eta_prime[neighbor]);
+            let eta_f = B::Scalar::HALF * (eta_prime[owner] + eta_prime[neighbor]);
 
             // 面通量
-            let flux_x = eta_f * face.normal.0 * face.length;
-            let flux_y = eta_f * face.normal.1 * face.length;
+            let flux_x = eta_f
+                * self.backend.scalar_from_f64(face.normal.0)
+                * self.backend.scalar_from_f64(face.length);
+            let flux_y = eta_f
+                * self.backend.scalar_from_f64(face.normal.1)
+                * self.backend.scalar_from_f64(face.length);
 
             // 累加到梯度
-            let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
-            let area_n = mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor));
+            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)));
+            let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor)));
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;
@@ -178,10 +216,14 @@ impl VelocityCorrector {
 
             let eta_f = eta_prime[owner]; // 零梯度外推
 
-            let flux_x = eta_f * face.normal.0 * face.length;
-            let flux_y = eta_f * face.normal.1 * face.length;
+            let flux_x = eta_f
+                * self.backend.scalar_from_f64(face.normal.0)
+                * self.backend.scalar_from_f64(face.length);
+            let flux_y = eta_f
+                * self.backend.scalar_from_f64(face.normal.1)
+                * self.backend.scalar_from_f64(face.length);
 
-            let area_o = mesh.cell_area_unchecked(mh_runtime::CellIndex(owner));
+            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)));
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;
@@ -202,17 +244,17 @@ impl VelocityCorrector {
     /// - `g`: 重力加速度
     pub fn correct(
         &mut self,
-        u: &mut [f64],
-        v: &mut [f64],
-        h: &[f64],
-        eta_prime: &[f64],
+        u: &mut B::Buffer<B::Scalar>,
+        v: &mut B::Buffer<B::Scalar>,
+        h: &B::Buffer<B::Scalar>,
+        eta_prime: &B::Buffer<B::Scalar>,
         topo: &CellFaceTopology,
         mesh: &PhysicsMesh,
-        dt: f64,
-        g: f64,
+        dt: B::Scalar,
+        g: B::Scalar,
     ) {
         // 计算 η' 的梯度
-        self.compute_gradient(topo, mesh, eta_prime);
+        self.compute_gradient(topo, mesh, eta_prime.as_slice());
 
         // 校正速度
         let coef = -dt * g;
@@ -222,32 +264,32 @@ impl VelocityCorrector {
                 v[i] += coef * self.grad_y[i];
             } else {
                 // 干单元：速度设为零
-                u[i] = 0.0;
-                v[i] = 0.0;
+                u[i] = B::Scalar::ZERO;
+                v[i] = B::Scalar::ZERO;
             }
         }
     }
 
     /// 获取梯度 x 分量
-    pub fn gradient_x(&self) -> &[f64] {
-        &self.grad_x
+    pub fn gradient_x(&self) -> &[B::Scalar] {
+        self.grad_x.as_slice()
     }
 
     /// 获取梯度 y 分量
-    pub fn gradient_y(&self) -> &[f64] {
-        &self.grad_y
+    pub fn gradient_y(&self) -> &[B::Scalar] {
+        self.grad_y.as_slice()
     }
 }
 
 /// 校正统计
 #[derive(Debug, Clone, Default)]
-pub struct CorrectionStats {
+pub struct CorrectionStats<S: RuntimeScalar> {
     /// 最大校正量绝对值
-    pub max_correction: f64,
+    pub max_correction: S,
     /// 平均校正量
-    pub mean_correction: f64,
+    pub mean_correction: S,
     /// 校正量之和
-    pub sum_correction: f64,
+    pub sum_correction: S,
     /// 被裁剪的单元数
     pub clipped_count: usize,
 }
@@ -255,15 +297,17 @@ pub struct CorrectionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_depth_corrector() {
-        let corrector = DepthCorrector::new(3);
+        let backend = CpuBackend::<f64>::new();
+        let corrector = DepthCorrector::new(3, backend);
 
         let mut h = vec![1.0, 2.0, 0.5];
         let eta_prime = vec![0.1, -0.3, -0.6];
 
-        corrector.correct(&mut h, &eta_prime);
+        corrector.correct_slice(&mut h, &eta_prime);
 
         assert!((h[0] - 1.1).abs() < 1e-14);
         assert!((h[1] - 1.7).abs() < 1e-14);
@@ -272,25 +316,29 @@ mod tests {
 
     #[test]
     fn test_depth_corrector_with_stats() {
-        let corrector = DepthCorrector::new(3);
+        let backend = CpuBackend::<f64>::new();
+        let corrector = DepthCorrector::new(3, backend.clone());
 
-        let mut h = vec![1.0, 2.0, 0.1];
-        let eta_prime = vec![0.1, -0.1, -0.2];
+        let mut h = backend.alloc(3);
+        h.copy_from_slice(&[1.0, 2.0, 0.1]);
+        let mut eta_prime = backend.alloc(3);
+        eta_prime.copy_from_slice(&[0.1, -0.1, -0.2]);
 
         let stats = corrector.correct_with_stats(&mut h, &eta_prime);
 
         assert!((stats.max_correction - 0.2).abs() < 1e-14);
-        assert_eq!(stats.clipped_count, 1); // 第三个被裁剪
+        assert_eq!(stats.clipped_count, 1);
     }
 
     #[test]
     fn test_depth_corrector_allow_negative() {
-        let corrector = DepthCorrector::new(2).allow_negative();
+        let backend = CpuBackend::<f64>::new();
+        let corrector = DepthCorrector::new(2, backend).allow_negative();
 
         let mut h = vec![0.5, 0.3];
         let eta_prime = vec![-0.6, -0.1];
 
-        corrector.correct(&mut h, &eta_prime);
+        corrector.correct_slice(&mut h, &eta_prime);
 
         assert!((h[0] - (-0.1)).abs() < 1e-14); // 允许负值
         assert!((h[1] - 0.2).abs() < 1e-14);

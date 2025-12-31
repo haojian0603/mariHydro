@@ -139,81 +139,110 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn backend(&self) -> &B {
         &self.backend
     }
+
+    // 从2D状态恢复垂向剖面（通用后端，按层均匀分配）
+    pub fn restore(
+        &self,
+        state: &ShallowWaterStateGeneric<B>,
+        output: &mut VerticalProfile<B>,
+    ) {
+        // 尽量通过切片访问以兼容 CPU/GPU，失败则直接返回
+        let h = match state.h.try_as_slice() {
+            Some(s) => s,
+            None => return,
+        };
+        let hu = match state.hu.try_as_slice() {
+            Some(s) => s,
+            None => return,
+        };
+        let hv = match state.hv.try_as_slice() {
+            Some(s) => s,
+            None => return,
+        };
+        let z = match state.z.try_as_slice() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let roughness = match self.roughness.try_as_slice() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let u_out = match output.u_layers.try_as_slice_mut() {
+            Some(s) => s,
+            None => return,
+        };
+        let v_out = match output.v_layers.try_as_slice_mut() {
+            Some(s) => s,
+            None => return,
+        };
+        let z_out = match output.z_layers.try_as_slice_mut() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let n_cells = state.n_cells();
+        let n_layers = self.n_layers;
+        let sigma_levels = self.sigma.sigma_centers();
+
+        for cell in 0..n_cells {
+            let h_cell = h[cell];
+            let z_bed = z[cell];
+
+            if h_cell < <B::Scalar as Scalar>::from_config(1e-6).unwrap_or(B::Scalar::ZERO) {
+                for k in 0..n_layers {
+                    let idx = cell * n_layers + k;
+                    u_out[idx] = B::Scalar::ZERO;
+                    v_out[idx] = B::Scalar::ZERO;
+                    z_out[idx] = z_bed;
+                }
+                continue;
+            }
+
+            let u_avg = hu[cell] / h_cell;
+            let v_avg = hv[cell] / h_cell;
+            let z0 = roughness[cell];
+
+            for k in 0..n_layers {
+                let idx = cell * n_layers + k;
+                let sigma = sigma_levels[k];
+                let sigma_s = <B::Scalar as Scalar>::from_config(sigma).unwrap_or(B::Scalar::ZERO);
+                let one = B::Scalar::ONE;
+                let z_layer = z_bed + h_cell * (one + sigma_s);
+                z_out[idx] = z_layer;
+
+                let factor = match self.method {
+                    ProfileMethod::Uniform => one,
+                    ProfileMethod::Parabolic => {
+                        let sigma_sq = sigma_s * sigma_s;
+                        let c = <B::Scalar as Scalar>::from_config(1.5).unwrap_or(one + one / (one + one));
+                        c * (one - sigma_sq)
+                    }
+                    ProfileMethod::Logarithmic => {
+                        let z_rel = h_cell * (one + sigma_s);
+                        if z_rel > z0 {
+                            let ratio = z_rel.safe_div(z0, one);
+                            let top = ratio.safe_ln();
+                            let denom = h_cell.safe_div(z0, one).safe_ln();
+                            let val = top.safe_div(denom, one);
+                            val.clamp_value(B::Scalar::ZERO, <B::Scalar as Scalar>::from_config(2.0).unwrap_or(one + one))
+                        } else {
+                            B::Scalar::ZERO
+                        }
+                    }
+                };
+
+                u_out[idx] = u_avg * factor;
+                v_out[idx] = v_avg * factor;
+            }
+        }
+    }
 }
 
 impl ProfileRestorer<CpuBackend<f64>> {
     /// 使用默认后端创建
     pub fn new(n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, n_layers, method)
-    }
-    
-    /// 从2D状态恢复垂向剖面
-    pub fn restore(
-        &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        output: &mut VerticalProfile<CpuBackend<f64>>,
-    ) {
-        let h: &[f64] = &state.h;
-        let hu: &[f64] = &state.hu;
-        let hv: &[f64] = &state.hv;
-        let z: &[f64] = &state.z;
-        let roughness: &[f64] = &self.roughness;
-        
-        let u_out: &mut [f64] = &mut output.u_layers;
-        let v_out: &mut [f64] = &mut output.v_layers;
-        let z_out: &mut [f64] = &mut output.z_layers;
-        
-        let n_cells = state.n_cells();
-        let n_layers = self.n_layers;
-        let sigma_levels = self.sigma.sigma_centers();
-        
-        for cell in 0..n_cells {
-            let h_cell = h[cell];
-            let z_bed = z[cell];
-            
-            if h_cell < 1e-6 {
-                // 干单元
-                for k in 0..n_layers {
-                    let idx = cell * n_layers + k;
-                    u_out[idx] = 0.0;
-                    v_out[idx] = 0.0;
-                    z_out[idx] = z_bed;
-                }
-                continue;
-            }
-            
-            let u_avg = hu[cell] / h_cell;
-            let v_avg = hv[cell] / h_cell;
-            let _speed_avg = (u_avg * u_avg + v_avg * v_avg).sqrt();
-            let z0 = roughness[cell];
-            
-            for k in 0..n_layers {
-                let idx = cell * n_layers + k;
-                let sigma = sigma_levels[k];
-                let z_layer = z_bed + h_cell * (1.0 + sigma); // σ: 0 at surface, -1 at bottom
-                z_out[idx] = z_layer;
-                
-                let factor = match self.method {
-                    ProfileMethod::Uniform => 1.0,
-                    ProfileMethod::Parabolic => {
-                        // u(σ) = 1.5 * u_avg * (1 - σ²)
-                        1.5 * (1.0 - sigma * sigma)
-                    }
-                    ProfileMethod::Logarithmic => {
-                        // 对数律剖面
-                        let z_rel = h_cell * (1.0 + sigma);
-                        if z_rel > z0 {
-                            let log_factor = (z_rel / z0).ln() / (h_cell / z0).ln();
-                            log_factor.max(0.0).min(2.0)
-                        } else {
-                            0.0
-                        }
-                    }
-                };
-                
-                u_out[idx] = u_avg * factor;
-                v_out[idx] = v_avg * factor;
-            }
-        }
     }
 }

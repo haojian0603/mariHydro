@@ -222,16 +222,18 @@ fn test_pcg_solver_simple() {
 #[test]
 fn test_depth_corrector() {
     use mh_physics::numerics::DepthCorrector;
+    use mh_runtime::CpuBackend;
 
-    let corrector = DepthCorrector::new(3);
+    let backend = CpuBackend::<f64>::new();
+    let corrector = DepthCorrector::new(3, backend);
 
-    let mut h = vec![1.0, 2.0, 0.5];
-    let eta_prime = vec![0.1, -0.3, -0.6];
+    let mut h: Vec<f64> = vec![1.0, 2.0, 0.5];
+    let eta_prime: Vec<f64> = vec![0.1, -0.3, -0.6];
 
     corrector.correct(&mut h, &eta_prime);
 
-    assert!((h[0] - 1.1).abs() < 1e-14);
-    assert!((h[1] - 1.7).abs() < 1e-14);
+    assert!((h[0] - 1.1_f64).abs() < 1e-14);
+    assert!((h[1] - 1.7_f64).abs() < 1e-14);
     assert!(h[2] >= 0.0);
 }
 

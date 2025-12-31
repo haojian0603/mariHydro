@@ -10,16 +10,16 @@
 //! # 使用示例
 //!
 //! ```rust
-//! use mh_runtime::RuntimeScalar as Scalar;
-//! use mh_physics::tracer::boundary::{
-//!     TracerBoundaryManager, TracerBoundaryCondition, TracerBoundaryType
-//! };
+//! use mh_physics::tracer::boundary::{TracerBoundaryManager, TracerBoundaryCondition, TracerBoundaryType};
+//! use mh_runtime::CpuBackend;
+//! use mh_runtime::Backend;
 //!
-//! // 显式指定运行时精度（推荐）
+//! // 推荐方式：通过 Solver/Backend 推导精度
+//! let backend = CpuBackend::<f64>::new();
 //! let mut manager: TracerBoundaryManager<f64> = TracerBoundaryManager::new(100);
 //!
 //! // 设置入口固定浓度（35 psu）
-//! manager.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0));
+//! manager.set_boundary(0, TracerBoundaryCondition::dirichlet(backend.scalar_from_f64(35.0)));
 //!
 //! // 设置出口零梯度
 //! manager.set_boundary(99, TracerBoundaryCondition::zero_gradient());
@@ -29,11 +29,7 @@
 //! manager.update_cache(time);
 //! let bc = manager.get(0, time);
 //! assert_eq!(bc.bc_type, TracerBoundaryType::Dirichlet);
-//! assert!((bc.value - 35.0).abs() < 1e-10);
-//!
-//! // GPU 加速模式（f32）
-//! let mut manager_f32: TracerBoundaryManager<f32> = TracerBoundaryManager::new(50);
-//! manager_f32.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0f32));
+//! assert!((bc.value - backend.scalar_from_f64(35.0)).abs() < backend.scalar_from_f64(1e-10));
 //! ```
 
 use crate::forcing::timeseries::TimeSeries;

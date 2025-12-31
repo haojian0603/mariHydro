@@ -13,10 +13,10 @@ use crate::state::ShallowWaterState;
 use crate::types::{NumericalParams};
 use crate::Layer3Config;
 
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar, Vector2D};
+use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, RuntimeScalar, Vector2D};
 use num_traits::{Float, FromPrimitive, ToPrimitive};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// 静水重构状态（Backend泛型化）
@@ -325,9 +325,9 @@ where
     hydrostatic: HydrostaticReconstruction<B>,
     timestep_ctrl: TimeStepController<B>,
     stats: SolverStats,
-    muscl_eta: MusclReconstructorGeneric<f64>,
-    muscl_u: MusclReconstructorGeneric<f64>,
-    muscl_v: MusclReconstructorGeneric<f64>,
+    muscl_eta: MusclReconstructorGeneric<B::Scalar>,
+    muscl_u: MusclReconstructorGeneric<B::Scalar>,
+    muscl_v: MusclReconstructorGeneric<B::Scalar>,
 }
 
 impl<B: Backend> ShallowWaterSolver<B>
@@ -358,9 +358,9 @@ where
         let riemann = HllcSolver::<B>::new(&solver_params, gravity);
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
         let hydrostatic = HydrostaticReconstruction::<B>::new(&solver_params, gravity);
-        let muscl_eta = MusclReconstructorGeneric::<f64>::new(muscl_config.clone(), mesh.clone());
-        let muscl_u = MusclReconstructorGeneric::<f64>::new(muscl_config.clone(), mesh.clone());
-        let muscl_v = MusclReconstructorGeneric::<f64>::new(muscl_config, mesh.clone());
+        let muscl_eta = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
+        let muscl_u = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
+        let muscl_v = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config, mesh.clone());
 
         Self {
             mesh,
@@ -445,13 +445,9 @@ where
         self.muscl_eta.set_config(cfg.clone());
         self.muscl_u.set_config(cfg.clone());
         self.muscl_v.set_config(cfg);
-
-        let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-        let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-        let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-        self.muscl_eta.compute_gradients(&eta_f64);
-        self.muscl_u.compute_gradients(&vel_u_f64);
-        self.muscl_v.compute_gradients(&vel_v_f64);
+        self.muscl_eta.compute_gradients(&self.workspace.eta);
+        self.muscl_u.compute_gradients(&self.workspace.vel_u);
+        self.muscl_v.compute_gradients(&self.workspace.vel_v);
     }
 
     #[inline]
@@ -483,15 +479,16 @@ where
         }
     }
 
-    fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> f64 {
-        let mut max_wave_speed = 0.0_f64;
+    fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
+        let mut max_wave_speed = B::Scalar::ZERO;
 
         for face_idx in self.mesh.interior_faces() {
             let (flux, bed_src, length, owner, neighbor) = 
                 self.compute_face(state, FaceIndex::new(face_idx));
 
-            let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
-            max_wave_speed = max_wave_speed.max(speed_f64);
+            if flux.max_wave_speed > max_wave_speed {
+                max_wave_speed = flux.max_wave_speed;
+            }
 
             let fh = flux.mass * length;
             let fhu = flux.momentum_x * length;
@@ -518,17 +515,15 @@ where
         max_wave_speed
     }
 
-    fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> f64 {
-        let max_speed_atomic = AtomicU64::new(0u64);
+    fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
+        let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(B::Scalar::ZERO);
         let face_results: Vec<_> = self.mesh.interior_faces()
             .into_par_iter()
             .map(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) = 
                     self.compute_face(state, FaceIndex::new(face_idx));
 
-                let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
-                let bits = speed_f64.to_bits();
-                max_speed_atomic.fetch_max(bits, Ordering::Relaxed);
+                max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
                 (flux, bed_src, length, owner, neighbor)
             })
@@ -557,8 +552,7 @@ where
         }
 
         self.apply_boundary_pressures(state);
-        let bits = max_speed_atomic.load(Ordering::Relaxed);
-        f64::from_bits(bits)
+        max_speed_atomic.load(Ordering::Relaxed)
     }
 
     fn compute_face(
@@ -573,27 +567,20 @@ where
         let neighbor = self.mesh.face_neighbor(face_idx);
 
         let (h_l, vel_l, z_l, h_r, vel_r, z_r) = if self.use_second_order() {
-            let eta_f64: Vec<f64> = self.workspace.eta.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-            let vel_u_f64: Vec<f64> = self.workspace.vel_u.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-            let vel_v_f64: Vec<f64> = self.workspace.vel_v.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-            let eta_rec = self.muscl_eta.reconstruct_scalar(face_idx.get(), &eta_f64);
-            let u_rec = self.muscl_u.reconstruct_scalar(face_idx.get(), &vel_u_f64);
-            let v_rec = self.muscl_v.reconstruct_scalar(face_idx.get(), &vel_v_f64);
+            let eta_rec = self.muscl_eta.reconstruct_scalar(face_idx.get(), &self.workspace.eta);
+            let u_rec = self.muscl_u.reconstruct_scalar(face_idx.get(), &self.workspace.vel_u);
+            let v_rec = self.muscl_v.reconstruct_scalar(face_idx.get(), &self.workspace.vel_v);
 
             if let Some(neigh) = neighbor {
                 let z_owner = state.z[owner.get()];
                 let z_neigh = state.z[neigh.get()];
-                let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
-                let z_neigh_f64 = z_neigh.to_f64().unwrap_or(0.0);
-                let z_face_f64 = z_owner_f64.max(z_neigh_f64);
-                let h_left_f64 = (eta_rec.left - z_face_f64).max(0.0_f64);
-                let h_right_f64 = (eta_rec.right - z_face_f64).max(0.0_f64);
-                let h_left = B::Scalar::from_f64(h_left_f64).unwrap_or(B::Scalar::ZERO);
-                let h_right = B::Scalar::from_f64(h_right_f64).unwrap_or(B::Scalar::ZERO);
-                let u_l = B::Scalar::from_f64(u_rec.left).unwrap_or(B::Scalar::ZERO);
-                let v_l = B::Scalar::from_f64(v_rec.left).unwrap_or(B::Scalar::ZERO);
-                let u_r = B::Scalar::from_f64(u_rec.right).unwrap_or(B::Scalar::ZERO);
-                let v_r = B::Scalar::from_f64(v_rec.right).unwrap_or(B::Scalar::ZERO);
+                let z_face = if z_owner > z_neigh { z_owner } else { z_neigh };
+                let h_left = (eta_rec.left - z_face).max(B::Scalar::ZERO);
+                let h_right = (eta_rec.right - z_face).max(B::Scalar::ZERO);
+                let u_l = u_rec.left;
+                let v_l = v_rec.left;
+                let u_r = u_rec.right;
+                let v_r = v_rec.right;
                 (
                     h_left,
                     B::vec2_new(u_l, v_l),
@@ -604,14 +591,12 @@ where
                 )
             } else {
                 let z_owner = state.z[owner.get()];
-                let z_owner_f64 = z_owner.to_f64().unwrap_or(0.0);
-                let h_left_f64 = (eta_rec.left - z_owner_f64).max(0.0_f64);
-                let h_left = B::Scalar::from_f64(h_left_f64).unwrap_or(B::Scalar::ZERO);
-                let u_l = B::Scalar::from_f64(u_rec.left).unwrap_or(B::Scalar::ZERO);
-                let v_l = B::Scalar::from_f64(v_rec.left).unwrap_or(B::Scalar::ZERO);
+                let h_left = (eta_rec.left - z_owner).max(B::Scalar::ZERO);
+                let u_l = u_rec.left;
+                let v_l = v_rec.left;
                 let vel_left = B::vec2_new(u_l, v_l);
                 let vn = B::vec2_dot(&vel_left, &normal);
-                let two = B::Scalar::from_f64(2.0).unwrap();
+                let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
                 let vel_right = B::vec2_sub(&vel_left, &B::vec2_scale(&normal, vn * two));
                 (h_left, vel_left, z_owner, h_left, vel_right, z_owner)
             }
