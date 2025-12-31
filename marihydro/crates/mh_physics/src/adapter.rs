@@ -31,6 +31,7 @@ use mh_mesh::FrozenMesh;
 use num_traits::FromPrimitive;
 use mh_runtime::Backend;
 use std::sync::Arc;
+use mh_foundation::MhError;
 
 // 从mh_runtime导入统一索引类型
 pub use crate::types::{CellIndex, FaceIndex, NodeIndex, INVALID_INDEX};
@@ -115,15 +116,17 @@ impl PhysicsMesh {
 
     /// 获取单元中心 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn cell_center_generic<B: Backend>(&self, cell: CellIndex) -> B::Vector2D {
+    pub fn cell_center_generic<B: Backend>(&self, cell: CellIndex) -> Result<B::Vector2D, MhError> {
         let idx = cell.get();
-        debug_assert!(idx < self.n_cells(), "CellIndex越界: {}", idx);
+        if idx >= self.n_cells() {
+            return Err(MhError::index_out_of_bounds("Cell", idx, self.n_cells()));
+        }
         let p = self.inner.cell_center[idx];
-        B::vec2_new(
-            B::Scalar::from_f64(p.x as f64).unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
-            B::Scalar::from_f64(p.y as f64)
-                .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
-        )
+        let x = B::Scalar::from_f64(p.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
+        let y = B::Scalar::from_f64(p.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取单元中心坐标（元组版 - usize索引）
@@ -214,16 +217,17 @@ impl PhysicsMesh {
 
     /// 获取面中心 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn face_center_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+    pub fn face_center_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
-        debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
+        if idx >= self.n_faces() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.n_faces()));
+        }
         let p = self.inner.face_center[idx];
-        B::vec2_new(
-            B::Scalar::from_f64(p.x as f64)
-                .unwrap_or_else(|| panic!("坐标x={}转换失败：超出目标类型范围", p.x)),
-            B::Scalar::from_f64(p.y as f64)
-                .unwrap_or_else(|| panic!("坐标y={}转换失败：超出目标类型范围", p.y))
-        )
+        let x = B::Scalar::from_f64(p.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
+        let y = B::Scalar::from_f64(p.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取面中心坐标（元组版 - usize索引）
@@ -235,21 +239,22 @@ impl PhysicsMesh {
 
     /// 获取面法向量 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn face_normal_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+    pub fn face_normal_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
-        debug_assert!(idx < self.n_faces(), "FaceIndex越界: {}", idx);
+        if idx >= self.n_faces() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.n_faces()));
+        }
         let n = self.inner.face_normal[idx];
-        B::vec2_new(
-            B::Scalar::from_f64(n.x as f64)
-                .unwrap_or_else(|| panic!("法向量x={}转换失败：超出目标类型范围", n.x)),
-            B::Scalar::from_f64(n.y as f64)
-                .unwrap_or_else(|| panic!("法向量y={}转换失败：超出目标类型范围", n.y))
-        )
+        let x = B::Scalar::from_f64(n.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("法向量x={}转换失败：超出目标类型范围", n.x)))?;
+        let y = B::Scalar::from_f64(n.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("法向量y={}转换失败：超出目标类型范围", n.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取面法向量 (3D元组 - Legacy接口)
     #[inline]
-    pub fn face_normal_3d(&self, face: FaceIndex) -> (f64, f64, f64) {
+    pub fn face_normal_3d(&self, face: CellIndex) -> (f64, f64, f64) {
         let n = self.inner.face_normal[face.get()];
         (n.x, n.y, n.z)
     }
@@ -319,28 +324,26 @@ impl PhysicsMesh {
 
     /// 获取面到owner的向量 (Backend几何类型 - Layer 3强制使用)
     #[inline]
-    pub fn face_delta_owner_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+    pub fn face_delta_owner_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
         let d = self.inner.face_delta_owner[idx];
-        B::vec2_new(
-            B::Scalar::from_f64(d.x as f64)
-                .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
-            B::Scalar::from_f64(d.y as f64)
-                .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
-        )
+        let x = B::Scalar::from_f64(d.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("向量x={}转换失败：超出目标类型范围", d.x)))?;
+        let y = B::Scalar::from_f64(d.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("向量y={}转换失败：超出目标类型范围", d.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取面到neighbor的向量 (Backend几何类型)
     #[inline]
-    pub fn face_delta_neighbor_generic<B: Backend>(&self, face: FaceIndex) -> B::Vector2D {
+    pub fn face_delta_neighbor_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
         let d = self.inner.face_delta_neighbor[idx];
-        B::vec2_new(
-            B::Scalar::from_f64(d.x as f64)
-                .unwrap_or_else(|| panic!("向量x={}转换失败：超出目标类型范围", d.x)),
-            B::Scalar::from_f64(d.y as f64)
-                .unwrap_or_else(|| panic!("向量y={}转换失败：超出目标类型范围", d.y))
-        )
+        let x = B::Scalar::from_f64(d.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("向量x={}转换失败：超出目标类型范围", d.x)))?;
+        let y = B::Scalar::from_f64(d.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("向量y={}转换失败：超出目标类型范围", d.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取owner到neighbor的距离 [m]
@@ -381,14 +384,13 @@ impl PhysicsMesh {
 
     /// 获取节点坐标 (Backend 几何类型)
     #[inline]
-    pub fn node_xy_generic<B: Backend>(&self, node: NodeIndex) -> B::Vector2D {
+    pub fn node_xy_generic<B: Backend>(&self, node: NodeIndex) -> Result<B::Vector2D, MhError> {
         let p = self.inner.node_coords[node.get()];
-        B::vec2_new(
-            B::Scalar::from_f64(p.x as f64)
-                .unwrap_or_else(|| panic!("坐标x={}转换失败", p.x)),
-            B::Scalar::from_f64(p.y as f64)
-                .unwrap_or_else(|| panic!("坐标y={}转换失败", p.y))
-        )
+        let x = B::Scalar::from_f64(p.x as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败", p.x)))?;
+        let y = B::Scalar::from_f64(p.y as f64)
+            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败", p.y)))?;
+        Ok(B::vec2_new(x, y))
     }
 
     /// 获取节点高程 [m]
@@ -398,7 +400,7 @@ impl PhysicsMesh {
     }
 
     // =========================================================================
-    // 范围迭代 (usize是合理的，因为Range本身就是usize)
+    // 范围迭代器 (usize是合理的，因为Range本身就是usize)
     // =========================================================================
 
     /// 内部面索引范围
@@ -506,7 +508,7 @@ mod tests {
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
         let cell_idx = CellIndex::new(0);
-        let center = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx);
+        let center = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx).unwrap();
         
         assert!((center.x() - 0.5).abs() < 1e-10);
         assert!((center.y() - 0.5).abs() < 1e-10);
@@ -518,7 +520,7 @@ mod tests {
         let mesh = PhysicsMesh::from_frozen(&frozen);
         
         let face_idx = FaceIndex::new(0);
-        let normal = mesh.face_normal_generic::<CpuBackend<f64>>(face_idx);
+        let normal = mesh.face_normal_generic::<CpuBackend<f64>>(face_idx).unwrap();
         
         assert!((normal.x() - 1.0).abs() < 1e-10);
         assert!(normal.y().abs() < 1e-10);
@@ -532,11 +534,11 @@ mod tests {
         let cell_idx = CellIndex::new(0);
         
         // 测试f32接口
-        let center_f32 = mesh.cell_center_generic::<CpuBackend<f32>>(cell_idx);
+        let center_f32 = mesh.cell_center_generic::<CpuBackend<f32>>(cell_idx).unwrap();
         assert_eq!(std::mem::size_of_val(&center_f32.x()), 4);
         
         // 测试f64接口
-        let center_f64 = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx);
+        let center_f64 = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx).unwrap();
         assert_eq!(std::mem::size_of_val(&center_f64.x()), 8);
         
         // 验证结果一致性

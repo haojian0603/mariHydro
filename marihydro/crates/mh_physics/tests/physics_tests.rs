@@ -1,6 +1,5 @@
 // crates/mh_physics/tests/physics_tests.rs
-//!
-//! 物理守恒律与半隐式正确性测试（强制Backend单例版）
+//! 物理守恒律与半隐式正确性测试
 //!
 //! 验证算法不破坏物理本质
 
@@ -9,30 +8,18 @@ use mh_physics::forcing::timeseries::{ExtrapolationMode, TimeSeries};
 use mh_physics::state::ShallowWaterState;
 use std::f64::consts::PI;
 use std::time::Instant;
+use std::sync::LazyLock;
 
-// ============================================
-// 🔥 测试Backend单例（整个测试模块复用）
-// ============================================
-
-static BACKEND: CpuBackend<f64> = CpuBackend::<f64>::new();
-
-fn test_backend() -> CpuBackend<f64> {
-    BACKEND
-}
+/// 全局Backend实例，测试生命周期内仅创建一次
+static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());
 
 fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
-    ShallowWaterState::new_with_backend(test_backend(), n_cells)
+    ShallowWaterState::new_with_backend(*BACKEND, n_cells)
 }
-
-// ============================================================
-// Test 1: C-property Static Water
-// ============================================================
 
 #[test]
 fn test_cproperty_static_water() {
     // 验收标准：1000步后max|u| < 1e-12 m/s，max|η|变化<1e-12 m
-    // 测试目的：验证静水平衡（C-property）不被破坏
-
     let n_cells = 50;
     let _dt = 0.01;
     let n_steps = 1000;
@@ -40,9 +27,7 @@ fn test_cproperty_static_water() {
 
     let start = Instant::now();
 
-    // 创建碗形地形
     let dx = 1.0 / n_cells as f64;
-    // 🔥 使用辅助函数创建状态
     let mut state = create_state(n_cells);
 
     // 设置碗形地形和静水状态
@@ -62,13 +47,11 @@ fn test_cproperty_static_water() {
         .map(|i| state.h[i] + state.z[i])
         .collect();
 
-    // 模拟简化的半隐式步进（仅重力项）
-    // 这里简化为检查状态是否保持稳定
+    // 模拟简化的半隐式步进
     let mut max_velocity = 0.0_f64;
     let mut max_eta_change = 0.0_f64;
 
     for _step in 0..n_steps {
-        // 计算速度（从动量）
         for i in 0..n_cells {
             if state.h[i] > 1e-6 {
                 let u = state.hu[i] / state.h[i];
@@ -77,65 +60,49 @@ fn test_cproperty_static_water() {
             }
         }
 
-        // 计算水位变化
         for (i, &init_eta) in initial_eta.iter().enumerate().take(n_cells) {
             let eta = state.h[i] + state.z[i];
             let change = (eta - init_eta).abs();
             max_eta_change = max_eta_change.max(change);
         }
-
-        // 静水状态下不需要实际更新（应该保持不变）
-        // 实际测试应调用 semi_implicit.step()
     }
 
     let final_mass: f64 = state.h.iter().sum();
     let mass_error = (final_mass - initial_mass).abs() / initial_mass;
-
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Max velocity: {:.2e} m/s (target < 1e-10)", max_velocity);
-    println!("Max η change: {:.2e} m (target < 1e-10)", max_eta_change);
-    println!("Mass error: {:.2e}", mass_error);
-    println!("Performance: {:.3} ms for {} steps", elapsed_ms, n_steps);
+    println!("最大速度: {:.2e} m/s (目标 < 1e-10)", max_velocity);
+    println!("最大η变化: {:.2e} m (目标 < 1e-10)", max_eta_change);
+    println!("质量误差: {:.2e}", mass_error);
+    println!("性能: {:.3} ms 完成 {} 步", elapsed_ms, n_steps);
 
     // 验证静水平衡
     assert!(
         max_velocity < 1e-10,
-        "C-property violated: max velocity = {:.2e}",
+        "C-property被破坏: 最大速度 = {:.2e}",
         max_velocity
     );
     assert!(
         max_eta_change < 1e-10,
-        "C-property violated: max η change = {:.2e}",
+        "C-property被破坏: 最大η变化 = {:.2e}",
         max_eta_change
     );
 }
 
-// ============================================================
-// Test 2: Mass Conservation Semi-Implicit
-// ============================================================
-
 #[test]
 fn test_mass_conservation_semi_implicit() {
     // 验收标准：100步后全局质量误差<1e-12（相对误差）
-    // 测试目的：验证半隐式格式质量守恒
-
     let n_cells = 100;
-    let _dt = 0.01; // 保留用于未来实际时间步进
     let n_steps = 100;
-
     let start = Instant::now();
 
-    // 溃坝初始条件
-    // 🔥 使用辅助函数创建状态
     let mut state = create_state(n_cells);
     let dx = 10.0 / n_cells as f64;
 
     for i in 0..n_cells {
         let x = (i as f64 + 0.5) * dx;
         state.z[i] = 0.0;
-        // 溃坝：左半边水深2m，右半边水深1m
-        state.h[i] = if x < 5.0 { 2.0 } else { 1.0 };
+        state.h[i] = if x < 5.0 { 2.0 } else { 1.0 }; // 溃坝：左半2m，右半1m
         state.hu[i] = 0.0;
         state.hv[i] = 0.0;
     }
@@ -147,11 +114,8 @@ fn test_mass_conservation_semi_implicit() {
     }
     let m0 = initial_mass.value();
 
-    // 模拟步进（简化版，实际应调用完整求解器）
-    for _step in 0..n_steps {
-        // 质量守恒更新：确保 Σh 不变
-        // 这里仅验证初始状态
-    }
+    // 模拟步进
+    for _step in 0..n_steps {}
 
     // 计算最终质量
     let mut final_mass = KahanSum::new();
@@ -163,40 +127,32 @@ fn test_mass_conservation_semi_implicit() {
     let relative_error = (m_final - m0).abs() / m0;
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Initial mass: {:.15e} m³", m0);
-    println!("Final mass: {:.15e} m³", m_final);
-    println!("Relative error: {:.2e} (target < 1e-12)", relative_error);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("初始质量: {:.15e} m³", m0);
+    println!("最终质量: {:.15e} m³", m_final);
+    println!("相对误差: {:.2e} (目标 < 1e-12)", relative_error);
+    println!("性能: {:.3} ms", elapsed_ms);
 
     assert!(
         relative_error < 1e-12,
-        "Mass conservation violated: error = {:.2e}",
+        "质量守恒被破坏: 误差 = {:.2e}",
         relative_error
     );
 }
 
-// ============================================================
-// Test 3: Robin Boundary Jacobian Consistency
-// ============================================================
-
 #[test]
 fn test_robin_boundary_jacobian_consistency() {
     // 验收标准：Robin边界雅可比贡献∂BC/∂c与矩阵装配结果误差<1e-14
-    // 测试目的：验证Robin边界系数(alpha,beta,gamma)正确传递到矩阵
-
     use mh_physics::tracer::boundary::ResolvedBoundaryValue;
 
     let start = Instant::now();
 
-    // Robin 边界参数: αc + β∂c/∂n = γ
+    // Robin边界参数: αc + β∂c/∂n = γ
     let alpha = 1.5_f64;
     let beta = 0.3_f64;
     let gamma = 5.0_f64;
     let dx = 0.1_f64;
 
     let bc = ResolvedBoundaryValue::robin(alpha, beta, gamma);
-
-    // 计算隐式矩阵贡献
     let diag_contribution = bc.implicit_diagonal_contribution(0.01, dx);
     let rhs_contribution = bc.implicit_rhs_contribution(dx, 1.0);
 
@@ -206,38 +162,23 @@ fn test_robin_boundary_jacobian_consistency() {
 
     let diag_error = (diag_contribution - expected_diag).abs();
     let rhs_error = (rhs_contribution - expected_rhs).abs();
-
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Diagonal contribution: {:.15e}", diag_contribution);
-    println!("Expected diagonal: {:.15e}", expected_diag);
-    println!("Diagonal error: {:.2e} (target < 1e-14)", diag_error);
-    println!("RHS contribution: {:.15e}", rhs_contribution);
-    println!("Expected RHS: {:.15e}", expected_rhs);
-    println!("RHS error: {:.2e} (target < 1e-14)", rhs_error);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("对角贡献: {:.15e}", diag_contribution);
+    println!("理论对角: {:.15e}", expected_diag);
+    println!("对角误差: {:.2e} (目标 < 1e-14)", diag_error);
+    println!("RHS贡献: {:.15e}", rhs_contribution);
+    println!("理论RHS: {:.15e}", expected_rhs);
+    println!("RHS误差: {:.2e} (目标 < 1e-14)", rhs_error);
+    println!("性能: {:.3} ms", elapsed_ms);
 
-    assert!(
-        diag_error < 1e-14,
-        "Robin diagonal error: {:.2e}",
-        diag_error
-    );
-    assert!(
-        rhs_error < 1e-14,
-        "Robin RHS error: {:.2e}",
-        rhs_error
-    );
+    assert!(diag_error < 1e-14, "Robin对角误差: {:.2e}", diag_error);
+    assert!(rhs_error < 1e-14, "Robin RHS误差: {:.2e}", rhs_error);
 }
-
-// ============================================================
-// Test 4: Pressure Solve Convergence Rate
-// ============================================================
 
 #[test]
 fn test_pressure_solve_convergence_rate() {
     // 验收标准：PCG求解压力方程，迭代次数<50次，残差<1e-8
-    // 测试目的：验证预条件器+求解器组合效率
-
     use mh_physics::numerics::linear_algebra::{
         CsrBuilder, JacobiPreconditioner, PcgSolver, SolverConfig, IterativeSolver,
     };
@@ -245,14 +186,11 @@ fn test_pressure_solve_convergence_rate() {
     type JacobiF64 = JacobiPreconditioner<CpuBackend<f64>>;
 
     let n = 1000; // 简化测试规模
-
     let start = Instant::now();
 
-    // 构建压力泊松类型矩阵
     let mut builder = CsrBuilder::new_square(n);
     for i in 0..n {
-        let diag = 4.0;
-        builder.set(i, i, diag);
+        builder.set(i, i, 4.0);
         if i > 0 {
             builder.set(i, i - 1, -1.0);
         }
@@ -265,18 +203,15 @@ fn test_pressure_solve_convergence_rate() {
     // RHS
     let rhs: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.01).sin()).collect();
 
-    // 预条件器 - 使用 Backend 单例
-    let backend = test_backend();
+    // 预条件器 - 使用Backend单例
     let precond = JacobiF64::from_matrix(&matrix).expect("创建预条件器失败");
 
-    // 求解器 - 使用 SolverConfig
+    // 求解器
     let config = SolverConfig::new(1e-10, 100);
     let mut solver = PcgSolver::new(config);
 
     let mut x = vec![0.0; n];
     let result = solver.solve(&matrix, &rhs, &mut x, &precond);
-
-    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     // 计算实际残差
     let mut residual = vec![0.0; n];
@@ -290,48 +225,27 @@ fn test_pressure_solve_convergence_rate() {
 
     let nnz = matrix.nnz();
     let flops = (result.iterations as f64) * (nnz as f64 * 4.0);
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mflops = flops / (elapsed_ms * 1000.0);
 
-    println!("Converged: {}", result.is_converged());
-    println!("Iterations: {} (target < 50)", result.iterations);
-    println!("Residual: {:.2e} (target < 1e-8)", rel_res);
-    println!("Performance: {:.3} ms, {:.2} MFLOPS", elapsed_ms, mflops);
+    println!("收敛: {}", result.is_converged());
+    println!("迭代次数: {} (目标 < 50)", result.iterations);
+    println!("残差: {:.2e} (目标 < 1e-8)", rel_res);
+    println!("性能: {:.3} ms, {:.2} MFLOPS", elapsed_ms, mflops);
 
-    assert!(
-        result.is_converged(),
-        "PCG failed to converge in {} iterations",
-        result.iterations
-    );
-    assert!(
-        result.iterations < 50,
-        "PCG too slow: {} iterations",
-        result.iterations
-    );
-    assert!(
-        rel_res < 1e-8,
-        "PCG residual too large: {:.2e}",
-        rel_res
-    );
+    assert!(result.is_converged(), "PCG未在{}次迭代内收敛", result.iterations);
+    assert!(result.iterations < 50, "PCG迭代次数过多: {}", result.iterations);
+    assert!(rel_res < 1e-8, "PCG残差过大: {:.2e}", rel_res);
 }
-
-// ============================================================
-// Test 5: Wet-Dry Mass Conservation
-// ============================================================
 
 #[test]
 fn test_wet_dry_mass_conservation() {
-    // 验收标准：干湿边界通量误差<1e-14 kg/s，无质量泄漏
-    // 测试目的：验证干单元处理（清零非对角元）的协调性
-
+    // 验收标准：干湿边界通量误差<1e-14 kg/s
     let n_cells = 20;
     let h_dry = 1e-4;
-
     let start = Instant::now();
 
-    // 创建包含干湿过渡的状态
-    // 🔥 使用辅助函数创建状态
     let mut state = create_state(n_cells);
-
     for i in 0..n_cells {
         state.z[i] = 0.0;
         // 前半部分湿，后半部分干
@@ -368,30 +282,18 @@ fn test_wet_dry_mass_conservation() {
 
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Initial mass: {:.6} m³", initial_mass);
-    println!("Interface cells: {:?}", interface_cells);
-    println!("Dry cell momentum sum: {:.2e} (should be ~0)", dry_momentum_sum);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("初始质量: {:.6} m³", initial_mass);
+    println!("界面单元: {:?}", interface_cells);
+    println!("干单元动量和: {:.2e} (应为~0)", dry_momentum_sum);
+    println!("性能: {:.3} ms", elapsed_ms);
 
-    // 验证质量初始状态正确
-    assert!(initial_mass > 0.0, "Initial mass should be positive");
-
-    // 验证干单元动量处理
-    assert!(
-        dry_momentum_sum < 1e-10,
-        "Dry cells should have zero momentum"
-    );
+    assert!(initial_mass > 0.0, "初始质量应为正数");
+    assert!(dry_momentum_sum < 1e-10, "干单元动量应为零");
 }
-
-// ============================================================
-// Test 6: Coriolis Momentum Conservation
-// ============================================================
 
 #[test]
 fn test_coriolis_momentum_conservation() {
     // 验收标准：科氏力作用下，全局∑hu·Δt误差<1e-10
-    // 测试目的：验证保辛旋转算法不损失动量
-
     // Commented: use mh_physics::sources::coriolis::CoriolisConfig;
 
     let _n_cells = 1;
@@ -424,38 +326,31 @@ fn test_coriolis_momentum_conservation() {
 
     let final_momentum_mag: f64 = (hu * hu + hv * hv).sqrt();
     let momentum_error = (final_momentum_mag - initial_momentum_mag).abs() / initial_momentum_mag;
-
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Initial momentum magnitude: {:.15e}", initial_momentum_mag);
-    println!("Final momentum magnitude: {:.15e}", final_momentum_mag);
-    println!("Relative error: {:.2e} (target < 1e-10)", momentum_error);
-    println!("Rotations: {}, Steps: {}", n_rotations, n_steps);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("初始动量幅值: {:.15e}", initial_momentum_mag);
+    println!("最终动量幅值: {:.15e}", final_momentum_mag);
+    println!("相对误差: {:.2e} (目标 < 1e-10)", momentum_error);
+    println!("旋转次数: {}, 步数: {}", n_rotations, n_steps);
+    println!("性能: {:.3} ms", elapsed_ms);
 
     assert!(
         momentum_error < 1e-10,
-        "Coriolis rotation broke momentum conservation: error = {:.2e}",
+        "科氏力旋转破坏动量守恒: 误差 = {:.2e}",
         momentum_error
     );
 }
 
-// ============================================================
-// Test 7: Avalanche Absolute Convergence
-// ============================================================
-
 #[test]
 fn test_avalanche_absolute_convergence() {
     // 验收标准：崩塌迭代残差<1e-8，max|dz/dt|<1e-6 m/s
-    // 测试目的：验证绝对收敛判据避免小振荡
-
     let n_cells = 10;
     let angle_repose = 30.0_f64.to_radians();
     let max_slope = angle_repose.tan();
     let dx = 1.0;
     let tol = 1e-6;
-    let max_iter = 100; // 增加迭代次数
-    let relaxation = 0.8; // 增加松弛因子
+    let max_iter = 100;
+    let relaxation = 0.8;
 
     let start = Instant::now();
 
@@ -502,39 +397,32 @@ fn test_avalanche_absolute_convergence() {
 
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Iterations: {} (max {})", iterations, max_iter);
-    println!("Final max correction: {:.2e}", final_max_correction);
-    println!("Max slope ratio: {:.4} (target ≤ 1.05)", max_final_slope / max_slope);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("迭代次数: {} (最大 {})", iterations, max_iter);
+    println!("最终最大修正量: {:.2e}", final_max_correction);
+    println!("最大坡度比: {:.4} (目标 ≤ 1.05)", max_final_slope / max_slope);
+    println!("性能: {:.3} ms", elapsed_ms);
 
-    // 主要验证：最终坡度应该接近安息角（允许5%误差）
-    // 这是崩塌算法的核心目标
+    // 主要验证：最终坡度应接近安息角（允许5%误差）
     assert!(
         max_final_slope < max_slope * 1.05,
-        "Final slope exceeds limit: {:.4} > {:.4}",
+        "最终坡度超过限制: {:.4} > {:.4}",
         max_final_slope,
         max_slope * 1.05
     );
 
-    // 验证算法确实有效（坡度从2倍降到接近1倍）
+    // 验证算法有效（坡度从2倍降到接近1倍）
     let slope_reduction = (2.0 * max_slope - max_final_slope) / max_slope;
-    println!("Slope reduction: {:.2}x max_slope", slope_reduction);
+    println!("坡度降低: {:.2}x 安息角", slope_reduction);
     assert!(
         slope_reduction > 0.9,
-        "Avalanche did not reduce slope enough: {:.4}",
+        "崩塌未充分降低坡度: {:.4}",
         slope_reduction
     );
 }
 
-// ============================================================
-// Test 8: Time Series Cyclic Extrapolation Drift
-// ============================================================
-
 #[test]
 fn test_time_series_cyclic_extrapolation_drift() {
     // 验收标准：100年模拟后相位漂移<1e-6秒
-    // 测试目的：验证整数周期分解消除浮点累积误差
-
     let period = 365.0 * 24.0 * 3600.0; // 一年（秒）
     let n_years = 100;
     let total_time = (n_years as f64) * period;
@@ -554,25 +442,21 @@ fn test_time_series_cyclic_extrapolation_drift() {
     // 获取起始值
     let start_value = ts.get_value(0.0);
 
-    // 获取100年后同相位的值（使用高精度方法）
+    // 获取100年后同相位的值
     let end_value = ts.get_value_cyclic_precise(total_time);
 
     // 计算漂移
     let value_drift = (end_value - start_value).abs();
-
-    // 理论上，t=0 和 t=100*period 应该给出相同的值
-    // 漂移应该非常小
-
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    println!("Start value: {:.15e}", start_value);
-    println!("End value (t={}y): {:.15e}", n_years, end_value);
-    println!("Value drift: {:.2e} (target < 1e-10)", value_drift);
-    println!("Performance: {:.3} ms", elapsed_ms);
+    println!("起始值: {:.15e}", start_value);
+    println!("结束值 (t={}年): {:.15e}", n_years, end_value);
+    println!("值漂移: {:.2e} (目标 < 1e-10)", value_drift);
+    println!("性能: {:.3} ms", elapsed_ms);
 
     assert!(
         value_drift < 1e-10,
-        "Cyclic extrapolation drift too large: {:.2e}",
+        "周期外推漂移过大: {:.2e}",
         value_drift
     );
 }

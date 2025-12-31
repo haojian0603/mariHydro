@@ -35,57 +35,6 @@
 //! // 验证配置转换成功（默认CFL为0.9）
 //! assert_eq!(layer3_config.params.cfl, 0.9);
 //! ```
-//! 
-//! ## 性能模式选择
-//! 
-//! ```no_run
-//! // f32 模式：内存占用减半，适合GPU加速
-//! use mh_config::SolverConfig;
-//! use mh_physics::Layer3Config;
-//! use mh_runtime::CpuBackend;
-//! 
-//! let config = SolverConfig::default();
-//! let layer3: Layer3Config<f32> = Layer3Config::from_layer4(&config).unwrap();
-//! let backend = CpuBackend::<f32>::new();
-//! // let solver_f32 = ShallowWaterSolver::new(mesh, layer3, backend);
-//! ```
-//! 
-//! ## 完整模拟流程
-//! 
-//! ```no_run
-//! //! 这展示了完整的模拟流程（需要外部网格文件）
-//! use mh_config::SolverConfig;
-//! use mh_physics::{
-//!     ShallowWaterSolver, ShallowWaterState,
-//!     forcing::{TimeSeries, WindProvider},
-//!     config_bridge::Layer3Config,
-//! };
-//! use mh_runtime::CpuBackend;
-//! use mh_mesh::FrozenMesh;
-//! 
-//! // 1. 配置
-//! let config = SolverConfig::default();
-//! 
-//! // 2. 求解器（需要网格）
-//! // let mesh = FrozenMesh::default(); // 实际应从文件加载
-//! // let layer3_config: Layer3Config<f64> = Layer3Config::from_layer4(&config).unwrap();
-//! // let mut solver = ShallowWaterSolver::new(mesh, layer3_config, CpuBackend::<f64>::new());
-//! 
-//! // 3. 初始状态（示例）
-//! let n_cells = 100; // 实际应从网格获取
-//! let backend = CpuBackend::<f64>::new();
-//! let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
-//! // state.set_uniform_depth(1.0);  // 假设的方法
-//! 
-//! // 4. 外力
-//! let wind = WindProvider::constant(10.0, 225.0);
-//! 
-//! // 5. 时间循环（示例）
-//! // for step in 0..1000 {
-//! //     let dt = solver.compute_dt(&state);
-//! //     solver.step(&mut state, dt);
-//! // }
-//! ```
 
 // 核心抽象层
 pub mod core;
@@ -127,7 +76,7 @@ pub use mh_runtime::{
 
 // 重导出索引类型（仅此一处，删除所有重复导入）
 pub use mh_runtime::{
-    CellIndex, FaceIndex, NodeIndex, BoundaryIndex,
+    CellIndex, FaceIndex, NodeIndex, INVALID_INDEX
 };
 
 // 重导出核心抽象
@@ -151,7 +100,6 @@ pub use state::{
     ConservedState, Flux, GradientState, RhsBuffers, ShallowWaterState, StateError,
     ShallowWaterStateGeneric,
 };
-pub use traits::{StateAccess, StateAccessExt, StateAccessMut, StateStatistics, StateView, StateViewMut};
 
 // 修复SolverStats路径
 pub use engine::SolverStats;
@@ -190,3 +138,24 @@ pub use error::{PhysicsError, PhysicsResult};
 
 // 重导出配置桥接类型（测试用）
 pub use config_bridge::Layer3Config;
+
+
+// 强制类型别名（Layer 4专用，无泛型）
+/// f64精度浅水状态（Layer 4直接调用，禁止在Layer 3使用）
+pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
+
+/// f32精度浅水状态（GPU测试专用）
+pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
+
+// 验证导出路径正确
+#[cfg(test)]
+mod test_reexports {
+    use super::*;
+    
+    #[test]
+    fn test_f64_alias_available() {
+        let backend = CpuBackend::<f64>::new();
+        let state: ShallowWaterStateF64 = ShallowWaterState::new_with_backend(backend, 100);
+        assert_eq!(state.n_cells(), 100);
+    }
+}

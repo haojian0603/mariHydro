@@ -15,12 +15,10 @@
 //! - `strategy` - 时间积分策略模式
 //! - `pcg` - 预处理共轭梯度法求解器
 
-
 pub mod flux_accumulator;
 pub mod friction;
 pub mod parallel;
 pub mod pcg;
-pub mod semi_implicit;
 pub mod solver;
 pub mod strategy;
 pub mod time_integrator;
@@ -46,7 +44,6 @@ pub use parallel::{
     ParallelStrategy, FluxComputeMetrics,
 };
 pub use friction::{ManningFriction, FrictionConfig};
-pub use semi_implicit::{SemiImplicitConfig, SemiImplicitStats, SemiImplicitStrategy};
 pub use pcg::{
     PcgSolver, PcgConfig, PcgResult, PcgWorkspace,
     PreconditionerType, SparseMvp, DiagonalMatrix, CsrMatrix,

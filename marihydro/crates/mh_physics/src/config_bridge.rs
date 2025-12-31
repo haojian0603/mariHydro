@@ -210,29 +210,44 @@ where
                 value: config.numerical.timestep_reduction_factor,
             })?;
 
-        // 判断是否为二阶格式
-        let _second_order = matches!(
-            config.numerical.riemann_solver,
-            RiemannSolverType::Hllc | RiemannSolverType::Roe
-        );
+        // 转换数值格式
+        let scheme = match config.numerical.riemann_solver {
+            RiemannSolverType::Hllc => NumericalScheme::SecondOrderMuscl,
+            RiemannSolverType::Roe => NumericalScheme::SecondOrderMuscl,
+            RiemannSolverType::Rusanov => NumericalScheme::FirstOrder,
+            RiemannSolverType::Central => NumericalScheme::FirstOrder,
+        };
+
+        // 转换时间积分器
+        let integrator = match config.numerical.time_integration {
+            TimeIntegrationMethod::ForwardEuler => TimeIntegrator::Explicit,
+            TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
+            TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
+        };
+
+        // 转换其他配置
+        let use_hydrostatic_reconstruction = config.numerical.use_hydrostatic_reconstruction;
+        let parallel_threshold = config.parallel.threshold;
+        let implicit_friction = config.numerical.friction;
+        let max_fallback_attempts = config.numerical.max_fallback_attempts;
 
         Ok(Self {
             params,
             gravity,
-            use_hydrostatic_reconstruction: config.numerical.use_hydrostatic_reconstruction,
-            parallel_threshold: config.parallel.threshold,
-            implicit_friction: config.numerical.friction,
-            scheme: config.numerical.riemann_solver.into(),
+            use_hydrostatic_reconstruction,
+            parallel_threshold,
+            implicit_friction,
+            scheme,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),
-            max_fallback_attempts: config.numerical.max_fallback_attempts,
+            max_fallback_attempts,
             timestep_reduction_factor,
-            integrator: config.numerical.time_integration.into(),
+            integrator,
         })
     }
 }
 
-// 转换 trait 实现
+// 转换 trait 实现（Layer 4 → Layer 3）
 impl From<RiemannSolverType> for NumericalScheme {
     fn from(value: RiemannSolverType) -> Self {
         match value {
@@ -251,5 +266,50 @@ impl From<TimeIntegrationMethod> for TimeIntegrator {
             TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
             TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mh_config::SolverConfig;
+    use num_traits::ToPrimitive;
+
+    #[test]
+    fn test_from_layer4_f64() {
+        let layer4 = SolverConfig::default();
+        let layer3: Layer3Config<f64> = Layer3Config::from_layer4(&layer4).unwrap();
+        
+        assert_eq!(layer3.gravity.to_f64().unwrap(), layer4.physics.gravity);
+        assert_eq!(layer3.params.cfl.to_f64().unwrap(), layer4.physics.cfl);
+    }
+
+    #[test]
+    fn test_from_layer4_f32() {
+        let layer4 = SolverConfig::default();
+        let layer3: Layer3Config<f32> = Layer3Config::from_layer4(&layer4).unwrap();
+        
+        assert_eq!(layer3.gravity.to_f64().unwrap(), layer4.physics.gravity);
+        assert_eq!(layer3.params.cfl.to_f64().unwrap(), layer4.physics.cfl);
+    }
+
+    #[test]
+    fn test_riemann_solver_conversion() {
+        assert!(matches!(
+            NumericalScheme::from(RiemannSolverType::Hllc),
+            NumericalScheme::SecondOrderMuscl
+        ));
+        assert!(matches!(
+            NumericalScheme::from(RiemannSolverType::Rusanov),
+            NumericalScheme::FirstOrder
+        ));
+    }
+
+    #[test]
+    fn test_time_integration_conversion() {
+        assert!(matches!(
+            TimeIntegrator::from(TimeIntegrationMethod::SspRk3),
+            TimeIntegrator::Explicit
+        ));
     }
 }

@@ -23,7 +23,7 @@
 //! fn compute_flux<S: RuntimeScalar>(h: S, u: S) -> S { h * u }
 //!
 //! // ❌ 错误：Layer 4/5不应直接使用RuntimeScalar约束
-//! // fn app_level<S: RuntimeScalar>(config: SolverConfig) { ... }
+//! // fn app_level<S: RuntimeScalar>(config: Config) { ... }
 //! ```
 
 use num_traits::FromPrimitive;
@@ -457,22 +457,21 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
     pub fn from_config(config: &crate::builder::SolverConfig) -> Result<Self, ConfigError> {
-        // 先使用默认值填充所有字段
-        let mut params = Self::default();
-        
-        // TODO 仅覆盖 builder::SolverConfig 中存在的字段,其他字段可以后续根据需要补充，当前的任务是将代码测报错解决
-        params.h_min = S::from_f64(config.h_min)
-            .ok_or(ConfigError::Conversion("h_min"))?;
-        params.h_dry = S::from_f64(config.h_dry)
-            .ok_or(ConfigError::Conversion("h_dry"))?;
-        params.cfl = S::from_f64(config.cfl)
-            .ok_or(ConfigError::Conversion("cfl"))?;
-        params.vel_max = S::from_f64(config.max_velocity)
-            .ok_or(ConfigError::Conversion("max_velocity"))?;
-        params.h_friction = S::from_f64(1e-4) // 默认值
-            .ok_or(ConfigError::Conversion("h_friction"))?;
-        
-        // 其他字段保持默认值
+        // 从 Layer4Config 构建 NumericalParams<f64>
+        let params_f64 = NumericalParams::<f64> {
+            h_min: config.h_min,
+            h_dry: config.h_dry,
+            cfl: config.cfl,
+            vel_max: config.max_velocity,
+            h_friction: config.h_dry * 10.0, // 默认值
+            h_wet: config.h_dry * 100.0, // 默认值
+            ..NumericalParams::<f64>::default()
+        };
+
+        // 转换数值参数
+        let params = NumericalParams::<S>::from_f64_params(&params_f64)
+            .map_err(|_| ConfigError::Conversion("numerical_params"))?;
+
         Ok(params)
     }
 

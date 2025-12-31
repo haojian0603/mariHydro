@@ -241,10 +241,10 @@ fn test_depth_corrector() {
 
 #[test]
 fn test_semi_implicit_config() {
-    use mh_physics::engine::SemiImplicitConfig;
+    use mh_physics::engine::strategy::SemiImplicitConfig;
 
     let config = SemiImplicitConfig::default();
-    assert!((config.constants.g - 9.81).abs() < 1e-10);
+    assert!((config.gravity - 9.81).abs() < 1e-10);
     assert!((config.theta - 0.5).abs() < 1e-10);
 
     let conservative = SemiImplicitConfig::conservative();

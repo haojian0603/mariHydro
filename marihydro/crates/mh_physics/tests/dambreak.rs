@@ -1,10 +1,11 @@
-//! 溃堤测试（Backend强制复用版）
+// crates/mh_physics/tests/dambreak.rs
+//! 溃堤测试
 //!
-//! 使用 assets/mesh 目录中的 Gmsh 网格文件测试溃堤场景。
-//! 这是一个经典的浅水方程验证案例。
+//! 使用assets/mesh目录中的Gmsh网格文件测试溃堤场景
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use mh_mesh::halfedge::HalfEdgeMesh;
 use mh_mesh::io::GmshLoader;
@@ -13,48 +14,40 @@ use mh_physics::engine::ShallowWaterSolver;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
-use mh_runtime::{CpuBackend, CellIndex}; // 仅保留一次
+use mh_runtime::{CpuBackend, CellIndex};
 
-// ============================================
-// 🔥 强制Backend单例模块（整个文件复用）
-// ============================================
-
-static BACKEND: CpuBackend<f64> = CpuBackend::<f64>::new();
+/// 全局Backend实例
+static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());
 
 #[cfg(test)]
 mod test_harness {
     use super::*;
 
-    /// Backend 单例
     pub fn get_backend() -> CpuBackend<f64> {
-        BACKEND
+        *BACKEND
     }
 
     pub fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = get_backend();
-        ShallowWaterState::new_with_backend(backend, n_cells)
+        ShallowWaterState::new_with_backend(get_backend(), n_cells)
     }
 
     pub fn create_solver(
         mesh: Arc<PhysicsMesh>,
         config: Layer3Config<f64>,
     ) -> ShallowWaterSolver<CpuBackend<f64>> {
-        let backend = get_backend();
-        ShallowWaterSolver::new(mesh, config, backend)
+        ShallowWaterSolver::new(mesh, config, get_backend())
     }
 }
 
 use test_harness::{create_state, create_solver};
 
-/// 从 Gmsh 文件加载网格并转换为 PhysicsMesh
+/// 从Gmsh文件加载网格并转换为PhysicsMesh
 fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
     let gmsh_data = GmshLoader::load(path).map_err(|e| format!("加载网格失败: {}", e))?;
     
-    // 创建 HalfEdgeMesh
     let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
-    
-    // 添加所有顶点
     let mut vertex_map = Vec::with_capacity(gmsh_data.nodes.len());
+
     for (i, &node) in gmsh_data.nodes.iter().enumerate() {
         let z = if i < gmsh_data.nodes_z.len() {
             gmsh_data.nodes_z[i]
@@ -65,37 +58,36 @@ fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
         vertex_map.push(v);
     }
     
-    // 添加所有单元
     for cell_nodes in &gmsh_data.cells {
         if cell_nodes.len() < 3 {
             continue;
         }
         
-        if cell_nodes.len() == 3 {
-            mesh.add_triangle(
-                vertex_map[cell_nodes[0]],
-                vertex_map[cell_nodes[1]],
-                vertex_map[cell_nodes[2]],
-            );
-        } else if cell_nodes.len() == 4 {
-            mesh.add_quad(
-                vertex_map[cell_nodes[0]],
-                vertex_map[cell_nodes[1]],
-                vertex_map[cell_nodes[2]],
-                vertex_map[cell_nodes[3]],
-            );
+        match cell_nodes.len() {
+            3 => {
+                mesh.add_triangle(
+                    vertex_map[cell_nodes[0]],
+                    vertex_map[cell_nodes[1]],
+                    vertex_map[cell_nodes[2]],
+                );
+            }
+            4 => {
+                mesh.add_quad(
+                    vertex_map[cell_nodes[0]],
+                    vertex_map[cell_nodes[1]],
+                    vertex_map[cell_nodes[2]],
+                    vertex_map[cell_nodes[3]],
+                );
+            }
+            _ => {} // 跳过多边形
         }
-        // 对于多边形，简单地跳过（或者可以做三角化）
     }
     
-    // 冻结并转换
     let frozen = mesh.freeze();
     Ok(PhysicsMesh::from_frozen(&frozen))
 }
 
-/// 溃堤初始条件（强制Backend复用）
-/// 
-/// 设置左侧高水位，右侧低水位的初始状态
+/// 溃堤初始条件
 fn setup_dambreak_initial_condition(
     mesh: &PhysicsMesh,
     h_left: f64,
@@ -103,23 +95,16 @@ fn setup_dambreak_initial_condition(
     dam_x: f64,
 ) -> ShallowWaterState<CpuBackend<f64>> {
     let n_cells = mesh.n_cells();
-    let mut state = create_state(n_cells); // 🔥 强制使用辅助
+    let mut state = create_state(n_cells);
     
-    // 设置底床高程（平底）
     for i in 0..n_cells {
-        state.z[i] = 0.0;
+        state.z[i] = 0.0; // 平底
     }
     
-    // 设置初始水深
     for i in 0..n_cells {
         let (cx, _cy) = mesh.cell_center_tuple(i);
-        if cx < dam_x {
-            state.h[i] = h_left;
-        } else {
-            state.h[i] = h_right;
-        }
-        // 初始静止
-        state.hu[i] = 0.0;
+        state.h[i] = if cx < dam_x { h_left } else { h_right };
+        state.hu[i] = 0.0; // 初始静止
         state.hv[i] = 0.0;
     }
     
@@ -196,17 +181,15 @@ fn run_dambreak_simulation(
     println!("溃堤测试: {}", mesh_path);
     println!("========================================");
     
-    // 加载网格
     let mesh = load_mesh_from_gmsh(mesh_path)?;
     println!("网格加载完成:");
     println!("  - 单元数: {}", mesh.n_cells());
     println!("  - 面数: {}", mesh.n_faces());
     println!("  - 节点数: {}", mesh.n_nodes());
     
-    // 设置初始条件
     let mut state = setup_dambreak_initial_condition(&mesh, h_left, h_right, dam_x);
-    
     let initial_mass = compute_total_mass(&state, &mesh);
+    
     println!("\n初始条件:");
     println!("  - 左侧水深: {:.2} m", h_left);
     println!("  - 右侧水深: {:.2} m", h_right);
@@ -225,10 +208,8 @@ fn run_dambreak_simulation(
         .use_hydrostatic_reconstruction(true)
         .build();
     
-    // 🔥 强制复用Backend
     let mut solver = create_solver(Arc::new(mesh.clone()), config);
     
-    // 模拟
     let mut time = 0.0;
     let mut step = 0;
     let output_interval = max_steps / 10;
@@ -236,7 +217,6 @@ fn run_dambreak_simulation(
     println!("\n开始模拟...");
     
     while time < end_time && step < max_steps {
-        // 时间步进
         let dt = solver.compute_dt(&state);
         if dt < 1e-12 {
             return Err(format!("步骤 {} 时间步太小: {:.6e}", step, dt));
@@ -246,10 +226,8 @@ fn run_dambreak_simulation(
         time += dt;
         step += 1;
         
-        // 验证状态
         validate_state(&state)?;
         
-        // 输出进度
         if step % output_interval == 0 || step == 1 {
             let mass = compute_total_mass(&state, &mesh);
             let mass_error = (mass - initial_mass).abs() / initial_mass;
@@ -275,7 +253,6 @@ fn run_dambreak_simulation(
     println!("  - 最大水深: {:.3} m", compute_max_depth(&state));
     println!("  - 最大速度: {:.3} m/s", compute_max_velocity(&state));
     
-    // 验证质量守恒
     if mass_error > 1e-6 {
         println!("  [警告] 质量误差较大: {:.2e}", mass_error);
     } else {
@@ -285,21 +262,12 @@ fn run_dambreak_simulation(
     Ok(())
 }
 
-// ============================================================
-// 测试用例
-// ============================================================
-
 /// 查找网格文件路径
 fn find_mesh_path(filename: &str) -> Option<std::path::PathBuf> {
-    // 尝试多个可能的路径
     let candidates = [
-        // 从 marihydro 目录运行 cargo test 时
         format!("../../assets/mesh/{}", filename),
-        // 从 mh_physics 目录运行时
         format!("../../../assets/mesh/{}", filename),
-        // 从 workspace 根目录运行时
         format!("assets/mesh/{}", filename),
-        // 从 marihydro/crates/mh_physics 运行时
         format!("../../assets/mesh/{}", filename),
     ];
     
@@ -310,7 +278,6 @@ fn find_mesh_path(filename: &str) -> Option<std::path::PathBuf> {
         }
     }
     
-    // 尝试相对于 CARGO_MANIFEST_DIR
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         let base = std::path::PathBuf::from(manifest_dir);
         let path = base.join("../../assets/mesh").join(filename);
@@ -346,25 +313,21 @@ fn test_dambreak_coarse() {
 
 #[test]
 fn test_dambreak_medium() {
-    // 跳过此测试，因为网格文件可能不存在
     println!("跳过 medium 测试 - 需要文件存在");
 }
 
 #[test]
 fn test_dambreak_dry_bed() {
-    // 跳过此测试
     println!("跳过 dry_bed 测试 - 需要文件存在");
 }
 
 #[test]
 fn test_dambreak_slope() {
-    // 跳过此测试
     println!("跳过 slope 测试 - 需要文件存在");
 }
 
 #[test]
 fn test_mesh_loading() {
-    // 测试网格加载
     let mesh_files = [
         "dambreak_coarse.msh",
         "dambreak_medium.msh",
@@ -376,7 +339,7 @@ fn test_mesh_loading() {
             let mesh = load_mesh_from_gmsh(&path);
             assert!(mesh.is_ok(), "加载网格失败: {}", filename);
             let mesh = mesh.unwrap();
-            assert!(mesh.n_cells() > 0, "网格单元数为 0: {}", filename);
+            assert!(mesh.n_cells() > 0, "网格单元数为零: {}", filename);
             println!("加载 {}: {} 个单元", filename, mesh.n_cells());
         } else {
             println!("跳过不存在的网格: {}", filename);
@@ -384,13 +347,11 @@ fn test_mesh_loading() {
     }
 }
 
-/// 主函数（用于手动运行）
 #[allow(dead_code)]
 fn main() {
     println!("溃堤测试套件");
     println!("============");
     
-    // 运行粗网格测试
     if let Err(e) = run_dambreak_simulation(
         "assets/mesh/dambreak_coarse.msh",
         2.0,

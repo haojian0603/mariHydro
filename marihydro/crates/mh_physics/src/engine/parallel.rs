@@ -660,7 +660,7 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         mesh: &PhysicsMesh,
         face_idx: FaceIndex,
     ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
-        let normal = mesh.face_normal_generic::<B>(face_idx);
+        let normal = mesh.face_normal_generic::<B>(face_idx).expect("面法向量转换失败：坐标超出Backend标量范围");
         let length_f64 = mesh.face_length(face_idx);
         let length = B::Scalar::from_f64(length_f64).unwrap_or(B::Scalar::ZERO);
         let owner = mesh.face_owner(face_idx);

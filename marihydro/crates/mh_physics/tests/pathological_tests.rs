@@ -1,4 +1,6 @@
-//! 病态边缘情况与鲁棒性验证测试（Backend全局单例版）
+// crates/mh_physics/tests/pathological_tests.rs
+
+//! 病态边缘情况与鲁棒性验证测试
 //!
 //! 本模块包含对求解器在极端数值条件下的严格验证，覆盖：
 //! - 近零/负水深处理
@@ -30,53 +32,50 @@ use mh_physics::{
     types::NumericalParams,
     Layer3Config,
 };
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use rand::prelude::*;
 use rayon::prelude::*;
 use mh_physics::NumericalScheme;
 
-
 // 强制 Backend 单例（零大小类型，克隆零成本）
-/// Backend 单例实例（整个测试模块生命周期内只存在一个实例）
-static BACKEND: CpuBackend<f64> = CpuBackend { _marker: std::marker::PhantomData };
+static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| {
+    CpuBackend::<f64>::new()
+});
 
 /// 获取 Backend 引用
 #[inline(always)]
 fn test_backend() -> &'static CpuBackend<f64> {
-    &BACKEND
+    &*BACKEND
 }
 
 /// 统一状态创建入口（禁止在测试函数中直接调用 new_with_backend）
-///
+/// 
 /// # Panics
 /// 如果 n_cells 为 0 会 panic
 #[inline(always)]
 fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
     assert!(n_cells > 0, "单元数量必须为正");
-    ShallowWaterState::new_with_backend(BACKEND.clone(), n_cells)
+    ShallowWaterState::new_with_backend(test_backend().clone(), n_cells)
 }
 
 /// 统一 solver 创建入口（强制 Backend 复用）
-///
+/// 
 /// # 参数
 /// - `mesh`: 网格适配器（Arc 包装）
 /// - `config`: Layer 3 配置（已泛型化）
-///
+/// 
 /// # 返回
 /// 配置好的 ShallowWaterSolver 实例
 fn create_solver(
     mesh: Arc<PhysicsMesh>,
     config: Layer3Config<f64>,
 ) -> ShallowWaterSolver<CpuBackend<f64>> {
-    ShallowWaterSolver::new(mesh, config, BACKEND.clone())
+    ShallowWaterSolver::new(mesh, config, test_backend().clone())
 }
 
 // ============================================================
 // 常量与阈值定义
 // ============================================================
-
-/// 机器精度阈值（IEEE 754 双精度）
-const MACHINE_EPS: f64 = f64::EPSILON;
 
 /// 典型干单元水深阈值（与 NumericalParams::h_dry 同步）
 const H_DRY: f64 = 1e-6;
@@ -89,7 +88,7 @@ const VEL_MAX: f64 = 1e3;
 // ============================================================
 
 /// 构建严格对角占优矩阵（保证 PCG 收敛）
-///
+/// 
 /// # Panics
 /// 当 `n == 0` 或 `diag <= off_diag_sum` 时 panic
 fn build_dominant_matrix(n: usize, diag: f64, off_diag: f64) -> CsrMatrix<f64> {
@@ -235,8 +234,7 @@ fn test_zero_rhs_instant_convergence() {
         result2.status
     );
     // 解应该接近零
-    assert!(
-        x_nonzero.iter().all(|v: &f64| v.abs() < 1e-8),
+    assert!(x_nonzero.iter().all(|v: &f64| v.abs() < 1e-8),
         "解应接近零，实际最大值: {}",
         x_nonzero.iter().map(|v: &f64| v.abs()).fold(0.0_f64, |a, b| a.max(b))
     );
@@ -824,4 +822,5 @@ fn test_nan_detection_integration() {
     
     // 验证计数器正确累加
     assert!(solver.stats().nan_count >= 3, "应检测到至少3个NaN");
+    assert!(solver.stats().last_nan_location.is_some());
 }

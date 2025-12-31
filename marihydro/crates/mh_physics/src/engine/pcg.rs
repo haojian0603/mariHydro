@@ -1,43 +1,22 @@
-// marihydro\crates\mh_physics\src\engine\pcg.rs
+// crates/mh_physics/src/engine/pcg.rs
+
 //! 预处理共轭梯度法（PCG）求解器
 //!
-//! 该模块实现了用于求解稀疏对称正定线性系统 Ax = b 的 PCG 算法。
-//! 主要用于半隐式时间积分中的压力泊松方程求解。
-//!
-//! # 算法概述
-//!
-//! PCG 算法是共轭梯度法（CG）的预处理版本，通过引入预处理矩阵 M
-//! 来加速收敛。基本迭代格式为：
-//!
-//! 1. r_0 = b - A*x_0
-//! 2. z_0 = M^{-1} * r_0
-//! 3. p_0 = z_0
-//! 4. 对于 k = 0, 1, 2, ...
-//!    - α_k = (r_k, z_k) / (p_k, A*p_k)
-//!    - x_{k+1} = x_k + α_k * p_k
-//!    - r_{k+1} = r_k - α_k * A*p_k
-//!    - 检查收敛: ||r_{k+1}|| < tol * ||b||
-//!    - z_{k+1} = M^{-1} * r_{k+1}
-//!    - β_k = (r_{k+1}, z_{k+1}) / (r_k, z_k)
-//!    - p_{k+1} = z_{k+1} + β_k * p_k
-//!
-//! # 预处理器
-//!
-//! 目前支持的预处理器：
-//! - 雅可比（对角）预处理：M = diag(A)
-//! - 无预处理（单位矩阵）
+//! 泛型预处理共轭梯度法，支持任意Backend（f32/f64/GPU）。
+//! 用于求解稀疏对称正定线性系统，主要用于半隐式时间积分中的压力泊松方程。
 
 use crate::core::{Backend, CpuBackend};
-use mh_runtime::RuntimeScalar as Scalar;
+use mh_runtime::{RuntimeScalar, DeviceBuffer};
+use num_traits::{FromPrimitive, Float};
 use std::marker::PhantomData;
 
-/// PCG 求解器配置
+/// PCG 求解器配置（Layer 4，保持 f64）
 #[derive(Debug, Clone)]
 pub struct PcgConfig {
     /// 相对容差
-    pub rtol: f64, // ALLOW_F64: Layer 4 配置参数
+    pub rtol: f64,
     /// 绝对容差
-    pub atol: f64, // ALLOW_F64: Layer 4 配置参数
+    pub atol: f64,
     /// 最大迭代次数
     pub max_iter: usize,
     /// 预处理器类型
@@ -69,7 +48,7 @@ pub enum PreconditionerType {
 
 /// PCG 求解结果
 #[derive(Debug, Clone)]
-pub struct PcgResult<S: Scalar> {
+pub struct PcgResult<S: RuntimeScalar> {
     /// 是否收敛
     pub converged: bool,
     /// 实际迭代次数
@@ -83,16 +62,8 @@ pub struct PcgResult<S: Scalar> {
 }
 
 /// 稀疏矩阵的矩阵-向量乘法 trait
-/// 
-/// 用于 PCG 求解器中的矩阵-向量乘积计算。
-/// 实现者需要提供高效的 y = A*x 计算。
 pub trait SparseMvp<B: Backend> {
     /// 计算矩阵-向量乘积: y = A * x
-    /// 
-    /// # 参数
-    /// 
-    /// - `x`: 输入向量
-    /// - `y`: 输出向量（结果将写入此缓冲区）
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>);
     
     /// 获取矩阵维度
@@ -105,7 +76,7 @@ pub struct DiagonalMatrix<B: Backend> {
     pub diag: B::Buffer<B::Scalar>,
     /// 维度
     n: usize,
-    /// 后端标记
+    /// Backend 标记
     _marker: PhantomData<B>,
 }
 
@@ -126,12 +97,10 @@ impl<B: Backend> DiagonalMatrix<B> {
 }
 
 /// PCG 求解器工作区
-/// 
-/// 存储 PCG 迭代所需的所有临时向量，避免重复分配内存。
 pub struct PcgWorkspace<B: Backend> {
     /// 残差向量 r
     pub r: B::Buffer<B::Scalar>,
-    /// 预处理后的残差 z = M^{-1} * r
+    /// 预处理后的残差 z = M⁻¹ * r
     pub z: B::Buffer<B::Scalar>,
     /// 搜索方向 p
     pub p: B::Buffer<B::Scalar>,
@@ -144,11 +113,12 @@ pub struct PcgWorkspace<B: Backend> {
 impl<B: Backend> PcgWorkspace<B> {
     /// 创建新的工作区
     pub fn new_with_backend(backend: &B, n: usize) -> Self {
+        let zero = B::Scalar::ZERO;
         Self {
-            r: backend.alloc(n),
-            z: backend.alloc(n),
-            p: backend.alloc(n),
-            ap: backend.alloc(n),
+            r: backend.alloc_init(n, zero),
+            z: backend.alloc_init(n, zero),
+            p: backend.alloc_init(n, zero),
+            ap: backend.alloc_init(n, zero),
             n_allocated: n,
         }
     }
@@ -156,10 +126,11 @@ impl<B: Backend> PcgWorkspace<B> {
     /// 确保工作区容量足够
     pub fn ensure_capacity(&mut self, backend: &B, n: usize) {
         if n > self.n_allocated {
-            self.r = backend.alloc(n);
-            self.z = backend.alloc(n);
-            self.p = backend.alloc(n);
-            self.ap = backend.alloc(n);
+            let zero = B::Scalar::ZERO;
+            self.r = backend.alloc_init(n, zero);
+            self.z = backend.alloc_init(n, zero);
+            self.p = backend.alloc_init(n, zero);
+            self.ap = backend.alloc_init(n, zero);
             self.n_allocated = n;
         }
     }
@@ -171,27 +142,10 @@ impl<B: Backend> PcgWorkspace<B> {
 }
 
 /// PCG 求解器
-/// 
-/// 泛型预处理共轭梯度法求解器，用于求解稀疏对称正定线性系统。
-/// 
-/// # 类型参数
-/// 
-/// - `B`: 计算后端类型
-/// 
-/// # 示例
-/// 
-/// ```ignore
-/// let backend = CpuBackend::<f64>::new();
-/// let config = PcgConfig::default();
-/// let solver = PcgSolver::new_with_backend(backend, n, config);
-/// 
-/// let result = solver.solve(&matrix, &mut x, &b, Some(&precond));
-/// if result.converged {
-///     println!("求解成功，迭代次数: {}", result.iterations);
-/// }
-/// ```
+///
+/// 泛型预处理共轭梯度法求解器，支持任意 Backend。
 pub struct PcgSolver<B: Backend> {
-    /// 计算后端实例
+    /// Backend 实例
     backend: B,
     /// 配置
     config: PcgConfig,
@@ -200,13 +154,7 @@ pub struct PcgSolver<B: Backend> {
 }
 
 impl<B: Backend> PcgSolver<B> {
-    /// 使用后端实例创建 PCG 求解器
-    /// 
-    /// # 参数
-    /// 
-    /// - `backend`: 计算后端实例
-    /// - `n`: 问题维度（向量长度）
-    /// - `config`: 求解器配置
+    /// 使用 Backend 实例创建 PCG 求解器
     pub fn new_with_backend(backend: B, n: usize, config: PcgConfig) -> Self
     where
         B: Clone,
@@ -219,7 +167,7 @@ impl<B: Backend> PcgSolver<B> {
         }
     }
     
-    /// 获取后端引用
+    /// 获取 Backend 引用
     pub fn backend(&self) -> &B {
         &self.backend
     }
@@ -235,114 +183,133 @@ impl<B: Backend> PcgSolver<B> {
     }
     
     /// 确保工作区容量
-    pub fn ensure_capacity(&mut self, n: usize)
-    where
-        B: Clone,
-    {
+    pub fn ensure_capacity(&mut self, n: usize) {
         self.workspace.ensure_capacity(&self.backend, n);
     }
 }
 
-/// CPU f64 后端的 PCG 求解器实现
-impl PcgSolver<CpuBackend<f64>> {
+/// 泛型点积函数
+#[inline]
+fn dot_product<S: RuntimeScalar>(x: &[S], y: &[S], n: usize) -> S {
+    let mut sum = S::ZERO;
+    for i in 0..n {
+        sum = sum + x[i] * y[i];
+    }
+    sum
+}
+
+/// 泛型预处理器应用函数
+fn apply_preconditioner<B: Backend>(
+    r: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
+    config: &PcgConfig,
+    precond: Option<&DiagonalMatrix<B>>,
+    n: usize,
+) {
+    match (config.preconditioner, precond) {
+        (PreconditionerType::Jacobi, Some(diag)) => {
+            for i in 0..n {
+                let d = diag.diag[i];
+                let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::ZERO);
+                if d.abs() > eps {
+                    z[i] = r[i] / d;
+                } else {
+                    z[i] = r[i];
+                }
+            }
+        }
+        _ => {
+            for i in 0..n {
+                z[i] = r[i];
+            }
+        }
+    }
+}
+
+/// 统一的 PCG 求解器实现（支持任意 Backend）
+impl<B: Backend> PcgSolver<B>
+where
+    B::Scalar: RuntimeScalar + FromPrimitive + Float,
+{
     /// 求解线性系统 Ax = b
-    /// 
-    /// # 参数
-    /// 
-    /// - `matrix`: 系数矩阵（通过 SparseMvp trait 提供）
-    /// - `x`: 解向量（输入初始猜测，输出解）
-    /// - `b`: 右端向量
-    /// - `precond`: 可选的雅可比预处理器（对角矩阵）
-    /// 
-    /// # 返回
-    /// 
-    /// 返回 PcgResult，包含收敛信息和迭代统计
-    pub fn solve<M: SparseMvp<CpuBackend<f64>>>(
+    pub fn solve<M: SparseMvp<B>>(
         &mut self,
         matrix: &M,
-        x: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        b: &Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        precond: Option<&DiagonalMatrix<CpuBackend<f64>>>,
-    ) -> PcgResult<f64> {
+        x: &mut B::Buffer<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        precond: Option<&DiagonalMatrix<B>>,
+    ) -> PcgResult<B::Scalar> {
         let n = matrix.dimension();
         
         // 确保工作区容量
-        self.workspace.ensure_capacity(&self.backend, n);
+        self.ensure_capacity(n);
         
-        // 步骤 1: 计算初始残差 r_0 = b - A*x_0
-        matrix.apply(x, &mut self.workspace.r);  // r = A*x
+        let workspace = &mut self.workspace;
+        
+        // 步骤 1: 计算初始残差 r₀ = b - A·x₀
+        matrix.apply(x, &mut workspace.ap);  // 临时使用 ap 存储 A·x
         for i in 0..n {
-            self.workspace.r[i] = b[i] - self.workspace.r[i];  // r = b - A*x
+            workspace.r[i] = b[i] - workspace.ap[i];
         }
         
         // 计算 ||b|| 用于相对收敛判断
-        let b_norm = dot_product(b, b, n).sqrt();
-        let initial_r_norm = dot_product(&self.workspace.r, &self.workspace.r, n).sqrt();
+        let b_norm = dot_product(&b.as_slice()[..n], &b.as_slice()[..n], n).sqrt();
+        let initial_r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
         
         // 如果 b 接近零，直接返回
-        if b_norm < self.config.atol {
+        let eps = B::Scalar::from_f64(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        if b_norm < eps {
             return PcgResult {
                 converged: true,
                 iterations: 0,
                 residual_norm: initial_r_norm,
                 initial_residual_norm: initial_r_norm,
-                relative_residual: 0.0,
+                relative_residual: B::Scalar::ZERO,
             };
         }
         
-        // 步骤 2: 应用预处理 z_0 = M^{-1} * r_0
-        apply_preconditioner_static(
-            &self.workspace.r,
-            &mut self.workspace.z,
-            &self.config,
-            precond,
-            n,
-        );
+        // 步骤 2: 应用预处理 z₀ = M⁻¹·r₀
+        apply_preconditioner(&workspace.r, &mut workspace.z, &self.config, precond, n);
         
-        // 步骤 3: 初始化搜索方向 p_0 = z_0
+        // 步骤 3: 初始化搜索方向 p₀ = z₀
         for i in 0..n {
-            self.workspace.p[i] = self.workspace.z[i];
+            workspace.p[i] = workspace.z[i];
         }
         
-        // rho = (r, z)
-        let mut rho = dot_product(&self.workspace.r, &self.workspace.z, n);
+        // ρ = (r, z)
+        let mut rho = dot_product(&workspace.r.as_slice()[..n], &workspace.z.as_slice()[..n], n);
         
         // 主迭代循环
         for iter in 0..self.config.max_iter {
             // 计算 Ap
-            matrix.apply(&self.workspace.p, &mut self.workspace.ap);
+            matrix.apply(&workspace.p, &mut workspace.ap);
             
-            // alpha = rho / (p, Ap)
-            let p_ap = dot_product(&self.workspace.p, &self.workspace.ap, n);
-            if p_ap.abs() < 1e-30 {
-                // 防止除零
-                let r_norm = dot_product(&self.workspace.r, &self.workspace.r, n).sqrt();
+            // α = ρ / (p, Ap)
+            let p_ap = dot_product(&workspace.p.as_slice()[..n], &workspace.ap.as_slice()[..n], n);
+            let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::ZERO);
+            if p_ap.abs() < eps {
                 return PcgResult {
                     converged: false,
                     iterations: iter,
-                    residual_norm: r_norm,
+                    residual_norm: dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt(),
                     initial_residual_norm: initial_r_norm,
-                    relative_residual: r_norm / b_norm,
+                    relative_residual: B::Scalar::ZERO,
                 };
             }
             let alpha = rho / p_ap;
             
-            // x = x + alpha * p
-            // r = r - alpha * Ap
+            // x = x + α·p
+            // r = r - α·Ap
             for i in 0..n {
-                x[i] += alpha * self.workspace.p[i];
-                self.workspace.r[i] -= alpha * self.workspace.ap[i];
+                x[i] = x[i] + alpha * workspace.p[i];
+                workspace.r[i] = workspace.r[i] - alpha * workspace.ap[i];
             }
             
             // 检查收敛
-            let r_norm = dot_product(&self.workspace.r, &self.workspace.r, n).sqrt();
+            let r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
             let relative_residual = r_norm / b_norm;
             
-            if self.config.verbose && (iter % 10 == 0 || iter < 5) {
-                eprintln!("PCG 迭代 {}: 相对残差 = {:.6e}", iter, relative_residual);
-            }
-            
-            if r_norm < self.config.atol || relative_residual < self.config.rtol {
+            if r_norm < eps || relative_residual < B::Scalar::from_f64(self.config.rtol).unwrap_or(B::Scalar::ZERO) {
                 return PcgResult {
                     converged: true,
                     iterations: iter + 1,
@@ -352,28 +319,22 @@ impl PcgSolver<CpuBackend<f64>> {
                 };
             }
             
-            // 应用预处理 z = M^{-1} * r
-            apply_preconditioner_static(
-                &self.workspace.r,
-                &mut self.workspace.z,
-                &self.config,
-                precond,
-                n,
-            );
+            // 应用预处理 z = M⁻¹·r
+            apply_preconditioner(&workspace.r, &mut workspace.z, &self.config, precond, n);
             
-            // beta = (r_new, z_new) / (r_old, z_old)
-            let rho_new = dot_product(&self.workspace.r, &self.workspace.z, n);
+            // β = (rₙₑ𝓌, zₙₑ𝓌) / (rₒₗ𝒹, zₒₗ𝒹)
+            let rho_new = dot_product(&workspace.r.as_slice()[..n], &workspace.z.as_slice()[..n], n);
             let beta = rho_new / rho;
             rho = rho_new;
             
-            // p = z + beta * p
+            // p = z + β·p
             for i in 0..n {
-                self.workspace.p[i] = self.workspace.z[i] + beta * self.workspace.p[i];
+                workspace.p[i] = workspace.z[i] + beta * workspace.p[i];
             }
         }
         
         // 达到最大迭代次数，未收敛
-        let r_norm = dot_product(&self.workspace.r, &self.workspace.r, n).sqrt();
+        let r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
         PcgResult {
             converged: false,
             iterations: self.config.max_iter,
@@ -384,76 +345,7 @@ impl PcgSolver<CpuBackend<f64>> {
     }
 }
 
-/// 静态预处理器应用函数（避免借用冲突）
-fn apply_preconditioner_static(
-    r: &[f64],
-    z: &mut [f64],
-    config: &PcgConfig,
-    precond: Option<&DiagonalMatrix<CpuBackend<f64>>>,
-    n: usize,
-) {
-    match (config.preconditioner, precond) {
-        (PreconditionerType::Jacobi, Some(diag)) => {
-            // 雅可比预处理: z_i = r_i / diag_i
-            for i in 0..n {
-                let d = diag.diag[i];
-                if d.abs() > 1e-30 {
-                    z[i] = r[i] / d;
-                } else {
-                    z[i] = r[i];
-                }
-            }
-        }
-        _ => {
-            // 无预处理: z = r
-            for i in 0..n {
-                z[i] = r[i];
-            }
-        }
-    }
-}
-
-/// 静态点积函数（避免借用冲突）
-#[inline]
-fn dot_product(x: &[f64], y: &[f64], n: usize) -> f64 {
-    let mut sum = 0.0;
-    for i in 0..n {
-        sum += x[i] * y[i];
-    }
-    sum
-}
-
-/// 简化的对角矩阵乘法（用于泊松方程）
-/// 
-/// 当系统矩阵近似为对角矩阵时使用。
-impl SparseMvp<CpuBackend<f64>> for DiagonalMatrix<CpuBackend<f64>> {
-    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) { // ALLOW_F64: 与 CpuBackend<f64> 配合
-        for i in 0..self.n {
-            y[i] = self.diag[i] * x[i];
-        }
-    }
-    
-    fn dimension(&self) -> usize {
-        self.n
-    }
-}
-
-impl SparseMvp<CpuBackend<f32>> for DiagonalMatrix<CpuBackend<f32>> {
-    fn apply(&self, x: &Vec<f32>, y: &mut Vec<f32>) {
-        for i in 0..self.n {
-            y[i] = self.diag[i] * x[i];
-        }
-    }
-    
-    fn dimension(&self) -> usize {
-        self.n
-    }
-}
-
-/// 通用稀疏矩阵（CSR 格式）
-/// 
-/// 压缩稀疏行（Compressed Sparse Row）格式的稀疏矩阵，
-/// 用于存储压力泊松方程的系数矩阵。
+/// 稀疏矩阵（CSR 格式）
 pub struct CsrMatrix<B: Backend> {
     /// 行指针数组（长度 n+1）
     pub row_ptr: Vec<usize>,
@@ -471,14 +363,6 @@ pub struct CsrMatrix<B: Backend> {
 
 impl<B: Backend> CsrMatrix<B> {
     /// 创建新的 CSR 矩阵
-    /// 
-    /// # 参数
-    /// 
-    /// - `n_rows`: 行数
-    /// - `n_cols`: 列数
-    /// - `row_ptr`: 行指针数组
-    /// - `col_idx`: 列索引数组
-    /// - `values`: 非零元素值
     pub fn new(
         n_rows: usize,
         n_cols: usize,
@@ -512,12 +396,14 @@ impl<B: Backend> CsrMatrix<B> {
     }
 }
 
-impl SparseMvp<CpuBackend<f64>> for CsrMatrix<CpuBackend<f64>> {
-    /// 计算 CSR 矩阵-向量乘积: y = A * x
-    fn apply(&self, x: &Vec<f64>, y: &mut Vec<f64>) { // ALLOW_F64: 与 CpuBackend<f64> 配合
+impl<B: Backend> SparseMvp<B> for CsrMatrix<B>
+where
+    B::Scalar: RuntimeScalar + FromPrimitive,
+{
+    fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
         // 清零输出向量
         for i in 0..self.n_rows {
-            y[i] = 0.0;
+            y[i] = B::Scalar::ZERO;
         }
         
         // 逐行计算
@@ -525,10 +411,10 @@ impl SparseMvp<CpuBackend<f64>> for CsrMatrix<CpuBackend<f64>> {
             let row_start = self.row_ptr[row];
             let row_end = self.row_ptr[row + 1];
             
-            let mut sum = 0.0;
+            let mut sum = B::Scalar::ZERO;
             for j in row_start..row_end {
                 let col = self.col_idx[j];
-                sum += self.values[j] * x[col];
+                sum = sum + self.values[j] * x[col];
             }
             y[row] = sum;
         }
@@ -539,179 +425,24 @@ impl SparseMvp<CpuBackend<f64>> for CsrMatrix<CpuBackend<f64>> {
     }
 }
 
-impl SparseMvp<CpuBackend<f32>> for CsrMatrix<CpuBackend<f32>> {
-    fn apply(&self, x: &Vec<f32>, y: &mut Vec<f32>) {
-        for i in 0..self.n_rows {
-            y[i] = 0.0;
-        }
-        
-        for row in 0..self.n_rows {
-            let row_start = self.row_ptr[row];
-            let row_end = self.row_ptr[row + 1];
-            
-            let mut sum = 0.0f32;
-            for j in row_start..row_end {
-                let col = self.col_idx[j];
-                sum += self.values[j] * x[col];
-            }
-            y[row] = sum;
+/// 对角矩阵的稀疏矩阵-向量乘法实现
+impl<B: Backend> SparseMvp<B> for DiagonalMatrix<B>
+where
+    B::Scalar: RuntimeScalar,
+{
+    fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
+        for i in 0..self.n {
+            y[i] = self.diag[i] * x[i];
         }
     }
     
     fn dimension(&self) -> usize {
-        self.n_rows
+        self.n
     }
-}
-
-/// CPU f32 后端的 PCG 求解器实现
-impl PcgSolver<CpuBackend<f32>> {
-    /// 求解线性系统 Ax = b
-    pub fn solve<M: SparseMvp<CpuBackend<f32>>>(
-        &mut self,
-        matrix: &M,
-        x: &mut Vec<f32>,
-        b: &Vec<f32>,
-        precond: Option<&DiagonalMatrix<CpuBackend<f32>>>,
-    ) -> PcgResult<f32> {
-        let n = matrix.dimension();
-        
-        self.workspace.ensure_capacity(&self.backend, n);
-        
-        // 步骤 1: 计算初始残差
-        matrix.apply(x, &mut self.workspace.r);
-        for i in 0..n {
-            self.workspace.r[i] = b[i] - self.workspace.r[i];
-        }
-        
-        let b_norm = dot_product_f32(b, b, n).sqrt();
-        let initial_r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
-        
-        if b_norm < self.config.atol as f32 {
-            return PcgResult {
-                converged: true,
-                iterations: 0,
-                residual_norm: initial_r_norm,
-                initial_residual_norm: initial_r_norm,
-                relative_residual: 0.0,
-            };
-        }
-        
-        // 步骤 2: 应用预处理
-        apply_preconditioner_f32(
-            &self.workspace.r,
-            &mut self.workspace.z,
-            &self.config,
-            precond,
-            n,
-        );
-        
-        // 步骤 3: 初始化搜索方向
-        for i in 0..n {
-            self.workspace.p[i] = self.workspace.z[i];
-        }
-        
-        let mut rho = dot_product_f32(&self.workspace.r, &self.workspace.z, n);
-        
-        // 主迭代循环
-        for iter in 0..self.config.max_iter {
-            matrix.apply(&self.workspace.p, &mut self.workspace.ap);
-            
-            let p_ap = dot_product_f32(&self.workspace.p, &self.workspace.ap, n);
-            if p_ap.abs() < 1e-20 {
-                let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
-                return PcgResult {
-                    converged: false,
-                    iterations: iter,
-                    residual_norm: r_norm,
-                    initial_residual_norm: initial_r_norm,
-                    relative_residual: r_norm / b_norm,
-                };
-            }
-            let alpha = rho / p_ap;
-            
-            for i in 0..n {
-                x[i] += alpha * self.workspace.p[i];
-                self.workspace.r[i] -= alpha * self.workspace.ap[i];
-            }
-            
-            let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
-            let relative_residual = r_norm / b_norm;
-            
-            if r_norm < self.config.atol as f32 || relative_residual < self.config.rtol as f32 {
-                return PcgResult {
-                    converged: true,
-                    iterations: iter + 1,
-                    residual_norm: r_norm,
-                    initial_residual_norm: initial_r_norm,
-                    relative_residual,
-                };
-            }
-            
-            apply_preconditioner_f32(
-                &self.workspace.r,
-                &mut self.workspace.z,
-                &self.config,
-                precond,
-                n,
-            );
-            
-            let rho_new = dot_product_f32(&self.workspace.r, &self.workspace.z, n);
-            let beta = rho_new / rho;
-            rho = rho_new;
-            
-            for i in 0..n {
-                self.workspace.p[i] = self.workspace.z[i] + beta * self.workspace.p[i];
-            }
-        }
-        
-        let r_norm = dot_product_f32(&self.workspace.r, &self.workspace.r, n).sqrt();
-        PcgResult {
-            converged: false,
-            iterations: self.config.max_iter,
-            residual_norm: r_norm,
-            initial_residual_norm: initial_r_norm,
-            relative_residual: r_norm / b_norm,
-        }
-    }
-}
-
-fn apply_preconditioner_f32(
-    r: &[f32],
-    z: &mut [f32],
-    config: &PcgConfig,
-    precond: Option<&DiagonalMatrix<CpuBackend<f32>>>,
-    n: usize,
-) {
-    match (config.preconditioner, precond) {
-        (PreconditionerType::Jacobi, Some(diag)) => {
-            for i in 0..n {
-                let d = diag.diag[i];
-                if d.abs() > 1e-20 {
-                    z[i] = r[i] / d;
-                } else {
-                    z[i] = r[i];
-                }
-            }
-        }
-        _ => {
-            for i in 0..n {
-                z[i] = r[i];
-            }
-        }
-    }
-}
-
-#[inline]
-fn dot_product_f32(x: &[f32], y: &[f32], n: usize) -> f32 {
-    let mut sum = 0.0f32;
-    for i in 0..n {
-        sum += x[i] * y[i];
-    }
-    sum
 }
 
 /// 压力泊松矩阵构建器
-/// 
+///
 /// 用于从网格拓扑构建压力泊松方程的系数矩阵。
 pub struct PoissonMatrixBuilder {
     /// 单元数量
@@ -725,32 +456,14 @@ impl PoissonMatrixBuilder {
     }
     
     /// 构建压力泊松矩阵（对角部分）
-    /// 
-    /// 对于压力校正方程，对角项与单元面积和时间步长相关：
-    /// A_ii = Σ_f (h_f * L_f / d_f) + ε
-    /// 
-    /// 其中 ε 是小的正则化项，用于处理干单元。
-    /// 
-    /// # 参数
-    /// 
-    /// - `backend`: 计算后端
-    /// - `cell_volumes`: 单元体积（面积）
-    /// - `dt`: 时间步长
-    /// - `gravity`: 重力加速度
-    /// - `h`: 水深
-    /// - `h_min`: 最小水深阈值
-    /// 
-    /// # 返回
-    /// 
-    /// 返回对角矩阵的对角元素向量
     pub fn build_diagonal(
         &self,
         backend: &CpuBackend<f64>,
         cell_areas: &[f64],
-        dt: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        gravity: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        dt: f64,
+        gravity: f64,
         h: &[f64],
-        h_min: f64, // ALLOW_F64: 与 CpuBackend<f64> 配合
+        h_min: f64,
     ) -> DiagonalMatrix<CpuBackend<f64>> {
         let mut diag = backend.alloc(self.n_cells);
         
@@ -758,10 +471,6 @@ impl PoissonMatrixBuilder {
             let area = cell_areas[i];
             let h_eff = h[i].max(h_min);
             
-            // 对角项系数：用于简化的对角近似
-            // 实际的泊松方程对角项应包含相邻单元的贡献
-            // 这里使用 A_ii ≈ area / (g * θ * dt² * h)
-            // 其中 θ 是隐式因子（通常取 0.5-1.0）
             let theta = 0.5;
             diag[i] = area / (gravity * theta * dt * dt * h_eff);
         }
@@ -773,37 +482,30 @@ impl PoissonMatrixBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    /// 测试简单的对角系统求解
+    use mh_runtime::CpuBackend;
+
     #[test]
     fn test_pcg_diagonal_system() {
         let backend = CpuBackend::<f64>::new();
         let n = 10;
         
-        // 创建对角矩阵 A = diag([1, 2, 3, ..., 10])
         let diag: Vec<f64> = (1..=n).map(|i| i as f64).collect();
-        let matrix = DiagonalMatrix::new(diag.clone(), n);
+        let matrix = DiagonalMatrix::new(diag, n);
         
-        // 右端向量 b = [1, 1, ..., 1]
-        let b: Vec<f64> = vec![1.0; n];
+        let mut b = vec![0.0_f64; n];
+        b.fill(1.0);
+        let mut x = vec![0.0_f64; n];
         
-        // 初始猜测 x = [0, 0, ..., 0]
-        let mut x: Vec<f64> = vec![0.0; n];
-        
-        // 创建求解器
         let config = PcgConfig::default();
         let mut solver = PcgSolver::new_with_backend(backend, n, config);
         
-        // 求解
         let result = solver.solve(&matrix, &mut x, &b, None);
         
-        assert!(result.converged, "PCG 应该收敛");
+        assert!(result.converged);
         
-        // 验证解：x_i = 1/i
         for i in 0..n {
             let expected = 1.0 / ((i + 1) as f64);
-            assert!((x[i] - expected).abs() < 1e-6, 
-                "x[{}] = {}, 期望 {}", i, x[i], expected);
+            assert!((x[i] - expected).abs() < 1e-6);
         }
     }
 }

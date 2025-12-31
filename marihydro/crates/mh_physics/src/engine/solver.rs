@@ -548,7 +548,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         let half = B::Scalar::from_f64(0.5).unwrap();
         
         let owner = self.mesh.face_owner(face_idx);
-        let normal = self.mesh.face_normal_generic::<B>(face_idx);
+        let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败：坐标超出Backend标量范围");
         let length_f64 = self.mesh.face_length(face_idx);
         let length = B::Scalar::from_f64(length_f64).unwrap();
         let h = state.h[owner.get()];
@@ -665,7 +665,7 @@ impl<B: Backend> ShallowWaterSolver<B> {
         state: &ShallowWaterState<B>,
         face_idx: FaceIndex,
     ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
-        let normal = self.mesh.face_normal_generic::<B>(face_idx);
+        let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败：坐标超出Backend标量范围");
         let length_f64 = self.mesh.face_length(face_idx);
         let length = B::Scalar::from_f64(length_f64).unwrap();
         let owner = self.mesh.face_owner(face_idx);
