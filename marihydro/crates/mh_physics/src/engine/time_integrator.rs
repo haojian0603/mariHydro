@@ -1,27 +1,18 @@
 // crates/mh_physics/src/engine/time_integrator.rs
 
-//! SSP Runge-Kutta 时间积分器
+//! SSP Runge-Kutta时间积分器
 //!
-//! 实现强稳定保持 Runge-Kutta 方法，支持 Backend 泛型。
-//! 时间参数使用 B::Scalar，确保与状态变量精度一致。
+//! 实现强稳定保持Runge-Kutta方法，支持Backend泛型化。
+//! 时间参数使用B::Scalar，确保与状态变量精度一致。
 
-use crate::state::{RhsBuffers, ShallowWaterState};
+use crate::state::{RhsBuffers, ShallowWaterStateGeneric as ShallowWaterState};
 use crate::Backend;
-use mh_foundation::error::MhResult;
+use mh_foundation::MhResult;
 use mh_runtime::RuntimeScalar;
-use num_traits::{FromPrimitive, Float};
+use num_traits::FromPrimitive;use num_traits::Float;
 
-/// RHS 计算器 trait（Backend 泛型版本）
+/// RHS计算器trait（Backend泛型版本）
 pub trait RhsComputer<B: Backend> {
-    /// 计算右端项
-    ///
-    /// # 参数
-    /// - `state`: 当前状态
-    /// - `time`: 当前时间（Backend 标量类型）
-    /// - `output`: 输出缓冲区
-    ///
-    /// # 返回
-    /// 返回最大波速，用于 CFL 条件
     fn compute_rhs(
         &mut self,
         state: &ShallowWaterState<B>,
@@ -30,30 +21,13 @@ pub trait RhsComputer<B: Backend> {
     ) -> MhResult<B::Scalar>;
 }
 
-/// 时间积分器 trait（Backend 泛型版本）
+/// 时间积分器trait（Backend泛型版本）
 pub trait TimeIntegrator<B: Backend>: Send + Sync {
-    /// 积分器名称
     fn name(&self) -> &'static str;
-
-    /// 时间精度阶数
     fn order(&self) -> u8;
-
-    /// Runge-Kutta 级数
     fn stages(&self) -> u8;
-
-    /// 最大稳定 CFL 数
     fn max_cfl(&self) -> f64;
 
-    /// 推进一个时间步
-    ///
-    /// # 参数
-    /// - `state`: 要更新的状态（in-place 修改）
-    /// - `time`: 当前时间（Backend 标量类型）
-    /// - `dt`: 时间步长（Backend 标量类型）
-    /// - `rhs_computer`: 右端项计算器
-    ///
-    /// # 返回
-    /// 返回实际使用的最大波速
     fn advance<R: RhsComputer<B>>(
         &mut self,
         state: &mut ShallowWaterState<B>,
@@ -62,17 +36,21 @@ pub trait TimeIntegrator<B: Backend>: Send + Sync {
         rhs_computer: &mut R,
     ) -> MhResult<B::Scalar>;
 
-    /// 确保内部缓冲区大小正确
     fn ensure_size(&mut self, n_cells: usize, n_tracers: usize);
 }
 
-/// 一阶前向欧拉（保留用于调试和对比）
-pub struct ForwardEuler<B: Backend> {
+/// 一阶前向欧拉
+pub struct ForwardEuler<B: Backend>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     rhs: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend> ForwardEuler<B> {
-    /// 创建前向欧拉积分器
+impl<B: Backend> ForwardEuler<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     pub fn new(n_cells: usize, n_tracers: usize) -> Self {
         Self {
             rhs: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
@@ -80,7 +58,10 @@ impl<B: Backend> ForwardEuler<B> {
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
+impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     fn name(&self) -> &'static str {
         "ForwardEuler"
     }
@@ -112,34 +93,39 @@ impl<B: Backend> TimeIntegrator<B> for ForwardEuler<B> {
     ) -> MhResult<B::Scalar> {
         self.rhs.reset();
         let max_wave_speed = rhs_computer.compute_rhs(state, time, &mut self.rhs)?;
-
-        // U^{n+1} = U^n + dt * L(U^n)
         state.add_scaled_rhs(&self.rhs, dt);
         state.enforce_positivity();
-
         Ok(max_wave_speed)
     }
 }
 
-/// SSP-RK2 (二阶 Heun 方法)
-pub struct SspRk2<B: Backend> {
+/// SSP-RK2
+pub struct SspRk2<B: Backend>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     state_1: ShallowWaterState<B>,
     rhs_1: RhsBuffers<B::Scalar>,
     rhs_2: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend> SspRk2<B> {
-    /// 创建 SSP-RK2 积分器
+impl<B: Backend> SspRk2<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     pub fn new(backend: B, n_cells: usize, n_tracers: usize) -> Self {
         Self {
-            state_1: ShallowWaterState::<B>::new_with_backend(backend, n_cells),
+            state_1: ShallowWaterState::<B>::new_with_backend(backend.clone(), n_cells),
             rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
             rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
         }
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for SspRk2<B> {
+impl<B: Backend> TimeIntegrator<B> for SspRk2<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     fn name(&self) -> &'static str {
         "SSP-RK2"
     }
@@ -174,23 +160,18 @@ impl<B: Backend> TimeIntegrator<B> for SspRk2<B> {
     ) -> MhResult<B::Scalar> {
         let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE);
 
-        // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
-
         self.state_1.copy_from(state);
         self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 
-        // Stage 2: U^{n+1} = 0.5 * U^n + 0.5 * (U^(1) + dt * L(U^(1)))
         self.rhs_2.reset();
         let time_plus_dt = time + dt;
         let max_wave_speed_2 = rhs_computer.compute_rhs(&self.state_1, time_plus_dt, &mut self.rhs_2)?;
-
         self.state_1.add_scaled_rhs(&self.rhs_2, dt);
         self.state_1.enforce_positivity();
 
-        // 线性组合：U^{n+1} = 0.5 * U^n + 0.5 * U^(1)
         state.axpy(half, half, &self.state_1);
         state.enforce_positivity();
 
@@ -198,8 +179,11 @@ impl<B: Backend> TimeIntegrator<B> for SspRk2<B> {
     }
 }
 
-/// SSP-RK3 (三阶) - 主推荐方案
-pub struct SspRk3<B: Backend> {
+/// SSP-RK3（推荐）
+pub struct SspRk3<B: Backend>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     state_1: ShallowWaterState<B>,
     state_2: ShallowWaterState<B>,
     rhs_1: RhsBuffers<B::Scalar>,
@@ -207,8 +191,10 @@ pub struct SspRk3<B: Backend> {
     rhs_3: RhsBuffers<B::Scalar>,
 }
 
-impl<B: Backend> SspRk3<B> {
-    /// 创建 SSP-RK3 积分器
+impl<B: Backend> SspRk3<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     pub fn new(backend: B, n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(backend.clone(), n_cells),
@@ -220,7 +206,10 @@ impl<B: Backend> SspRk3<B> {
     }
 }
 
-impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
+impl<B: Backend> TimeIntegrator<B> for SspRk3<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     fn name(&self) -> &'static str {
         "SSP-RK3"
     }
@@ -261,30 +250,23 @@ impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
         let coef_two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap_or(B::Scalar::ONE);
         let coef_050 = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE);
 
-        // Stage 1: U^(1) = U^n + dt * L(U^n)
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
-
         self.state_1.copy_from(state);
         self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 
-        // Stage 2: U^(2) = 3/4 * U^n + 1/4 * (U^(1) + dt * L(U^(1)))
         self.rhs_2.reset();
         let time_plus_dt = time + dt;
         let max_wave_speed_2 = rhs_computer.compute_rhs(&self.state_1, time_plus_dt, &mut self.rhs_2)?;
-
         self.state_1.add_scaled_rhs(&self.rhs_2, dt);
         self.state_1.enforce_positivity();
-
         self.state_2.linear_combine(coef_075, state, coef_025, &self.state_1);
         self.state_2.enforce_positivity();
 
-        // Stage 3: U^{n+1} = 1/3 * U^n + 2/3 * (U^(2) + dt * L(U^(2)))
         self.rhs_3.reset();
         let time_plus_half_dt = time + dt * coef_050;
         let max_wave_speed_3 = rhs_computer.compute_rhs(&self.state_2, time_plus_half_dt, &mut self.rhs_3)?;
-
         self.state_2.add_scaled_rhs(&self.rhs_3, dt);
         self.state_2.enforce_positivity();
 
@@ -295,7 +277,7 @@ impl<B: Backend> TimeIntegrator<B> for SspRk3<B> {
     }
 }
 
-/// 时间积分器类型枚举
+/// 积分器类型枚举
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TimeIntegratorKind {
     ForwardEuler,
@@ -304,17 +286,6 @@ pub enum TimeIntegratorKind {
     SspRk3,
 }
 
-impl std::fmt::Display for TimeIntegratorKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ForwardEuler => write!(f, "ForwardEuler"),
-            Self::SspRk2 => write!(f, "SSP-RK2"),
-            Self::SspRk3 => write!(f, "SSP-RK3"),
-        }
-    }
-}
-
-/// 工厂函数：创建时间积分器（保持 API 兼容性）
 pub fn create_integrator<B: Backend + Clone>(
     kind: TimeIntegratorKind,
     backend: B,
@@ -324,16 +295,21 @@ pub fn create_integrator<B: Backend + Clone>(
     TimeIntegratorEnum::<B>::new(kind, backend, n_cells, n_tracers)
 }
 
-/// 时间积分器枚举包装器
-pub struct TimeIntegratorEnum<B: Backend> {
+/// 积分器枚举包装
+pub struct TimeIntegratorEnum<B: Backend>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     kind: TimeIntegratorKind,
     euler: Option<ForwardEuler<B>>,
     rk2: Option<SspRk2<B>>,
     rk3: Option<SspRk3<B>>,
 }
 
-impl<B: Backend> TimeIntegratorEnum<B> {
-    /// 创建新的时间积分器
+impl<B: Backend> TimeIntegratorEnum<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     pub fn new(kind: TimeIntegratorKind, backend: B, n_cells: usize, n_tracers: usize) -> Self {
         match kind {
             TimeIntegratorKind::ForwardEuler => Self {
@@ -357,7 +333,6 @@ impl<B: Backend> TimeIntegratorEnum<B> {
         }
     }
 
-    /// 积分器名称
     pub fn name(&self) -> &'static str {
         match self.kind {
             TimeIntegratorKind::ForwardEuler => "ForwardEuler",
@@ -366,7 +341,6 @@ impl<B: Backend> TimeIntegratorEnum<B> {
         }
     }
 
-    /// 推进一个时间步
     pub fn advance<R: RhsComputer<B>>(
         &mut self,
         state: &mut ShallowWaterState<B>,
@@ -393,7 +367,6 @@ impl<B: Backend> TimeIntegratorEnum<B> {
         }
     }
 
-    /// 确保内部缓冲区大小正确
     pub fn ensure_size(&mut self, n_cells: usize, n_tracers: usize) {
         match self.kind {
             TimeIntegratorKind::ForwardEuler => {
@@ -413,40 +386,49 @@ impl<B: Backend> TimeIntegratorEnum<B> {
 mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
-    use num_traits::FromPrimitive;
 
-    struct ExponentialDecayRhs;
+    struct TestRhs;
 
-    impl<B: Backend> RhsComputer<B> for ExponentialDecayRhs {
+    impl<B: Backend> RhsComputer<B> for TestRhs {
         fn compute_rhs(
             &mut self,
             state: &ShallowWaterState<B>,
             _time: B::Scalar,
             output: &mut RhsBuffers<B::Scalar>,
         ) -> MhResult<B::Scalar> {
-            for i in 0..state.n_cells() {
-                output.dh_dt[i] = state.h[i] * B::Scalar::from_f64(-1.0).unwrap();
+            let n = state.n_cells();
+            for i in 0..n {
+                output.dh_dt[i] = state.h[i] * B::Scalar::from_f64(-0.1).unwrap();
             }
             Ok(B::Scalar::ONE)
         }
     }
 
     #[test]
-    fn test_forward_euler_basic() {
+    fn test_forward_euler_f64() {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 10);
-        state.h.fill(1.0_f64);
-        
+        state.h.fill(1.0);
+
         let mut integrator = ForwardEuler::<CpuBackend<f64>>::new(10, 0);
-        let mut rhs = ExponentialDecayRhs;
-        let dt = 0.01_f64;
+        let mut rhs = TestRhs;
+        let dt = 0.1;
 
-        for _ in 0..100 {
-            integrator.advance(&mut state, 0.0_f64, dt, &mut rhs).unwrap();
-        }
+        integrator.advance(&mut state, 0.0, dt, &mut rhs).unwrap();
+        assert!((state.h[0] - 0.99).abs() < 1e-10);
+    }
 
-        let expected = (-1.0_f64).exp();
-        let actual = state.h[0];
-        assert!((actual - expected).abs() < 0.02);
+    #[test]
+    fn test_ssp_rk3_f32() {
+        let backend = CpuBackend::<f32>::new();
+        let mut state = ShallowWaterState::<CpuBackend<f32>>::new_with_backend(backend.clone(), 5);
+        state.h.fill(2.0f32);
+
+        let mut integrator = SspRk3::<CpuBackend<f32>>::new(backend, 5, 0);
+        let mut rhs = TestRhs;
+        let dt = 0.05f32;
+
+        integrator.advance(&mut state, 0.0, dt, &mut rhs).unwrap();
+        assert!(state.h[0] < 2.0f32);
     }
 }

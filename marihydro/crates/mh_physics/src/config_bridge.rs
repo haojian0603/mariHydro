@@ -3,6 +3,11 @@
 //!
 //! 本模块提供从应用层配置（mh_config::SolverConfig）到引擎层
 //! 泛型配置的显式转换，确保类型安全和精度一致性。
+//!
+//! # 精度转换说明
+//!
+//! 从f64转换到f32时，由于IEEE 754二进制浮点表示限制，无法保证完全相等。
+//! 例如：9.81 → f32 → f64后为9.8100004196167。测试中使用epsilon比较。
 
 use mh_config::SolverConfig as Layer4Config;
 use mh_config::solver_config::{RiemannSolverType, TimeIntegrationMethod};
@@ -134,13 +139,13 @@ where
         self
     }
 
-    /// 设置NaN检测（新增方法）
+    /// 设置NaN检测
     pub fn nan_detection_enabled(mut self, enabled: bool) -> Self {
         self.config.stability.check_nan = enabled;
         self
     }
 
-    /// 设置稳定性选项（更通用的方法）
+    /// 设置稳定性选项
     pub fn stability_options(mut self, options: StabilityOptions) -> Self {
         self.config.stability = options;
         self
@@ -179,7 +184,6 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigBridgeError)`: 转换失败（数值溢出或无法转换）
     pub fn from_layer4(config: &Layer4Config) -> Result<Self, ConfigBridgeError> {
-        // 从 Layer4Config 构建 NumericalParams<f64>
         let params_f64 = NumericalParams::<f64> {
             h_min: config.physics.h_min,
             h_dry: config.physics.h_dry,
@@ -190,27 +194,23 @@ where
             ..NumericalParams::<f64>::default()
         };
 
-        // 转换数值参数
         let params = NumericalParams::<S>::from_f64_params(&params_f64)
             .map_err(|_| ConfigBridgeError::ConversionFailed {
                 field: "numerical_params", 
                 value: 0.0,
             })?;
 
-        // 转换重力加速度
         let gravity = S::from_f64(config.physics.gravity)
             .ok_or(ConfigBridgeError::ConversionFailed {
                 field: "gravity",
                 value: config.physics.gravity,
             })?;
-        // 转换时间步减小因子
         let timestep_reduction_factor = S::from_f64(config.numerical.timestep_reduction_factor)
             .ok_or(ConfigBridgeError::ConversionFailed {
                 field: "timestep_reduction_factor",
                 value: config.numerical.timestep_reduction_factor,
             })?;
 
-        // 转换数值格式
         let scheme = match config.numerical.riemann_solver {
             RiemannSolverType::Hllc => NumericalScheme::SecondOrderMuscl,
             RiemannSolverType::Roe => NumericalScheme::SecondOrderMuscl,
@@ -218,36 +218,28 @@ where
             RiemannSolverType::Central => NumericalScheme::FirstOrder,
         };
 
-        // 转换时间积分器
         let integrator = match config.numerical.time_integration {
             TimeIntegrationMethod::ForwardEuler => TimeIntegrator::Explicit,
             TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
             TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
         };
 
-        // 转换其他配置
-        let use_hydrostatic_reconstruction = config.numerical.use_hydrostatic_reconstruction;
-        let parallel_threshold = config.parallel.threshold;
-        let implicit_friction = config.numerical.friction;
-        let max_fallback_attempts = config.numerical.max_fallback_attempts;
-
         Ok(Self {
             params,
             gravity,
-            use_hydrostatic_reconstruction,
-            parallel_threshold,
-            implicit_friction,
+            use_hydrostatic_reconstruction: config.numerical.use_hydrostatic_reconstruction,
+            parallel_threshold: config.parallel.threshold,
+            implicit_friction: config.numerical.friction,
             scheme,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),
-            max_fallback_attempts,
+            max_fallback_attempts: config.numerical.max_fallback_attempts,
             timestep_reduction_factor,
             integrator,
         })
     }
 }
 
-// 转换 trait 实现（Layer 4 → Layer 3）
 impl From<RiemannSolverType> for NumericalScheme {
     fn from(value: RiemannSolverType) -> Self {
         match value {
@@ -275,13 +267,17 @@ mod tests {
     use mh_config::SolverConfig;
     use num_traits::ToPrimitive;
 
+    /// f64精度容差（相对误差约1e-15）
+    const EPSILON_F64: f64 = 1e-10;
+
     #[test]
     fn test_from_layer4_f64() {
         let layer4 = SolverConfig::default();
         let layer3: Layer3Config<f64> = Layer3Config::from_layer4(&layer4).unwrap();
         
-        assert_eq!(layer3.gravity.to_f64().unwrap(), layer4.physics.gravity);
-        assert_eq!(layer3.params.cfl.to_f64().unwrap(), layer4.physics.cfl);
+        // 使用epsilon比较，容忍f64-f64转换的微小误差
+        assert!((layer3.gravity.to_f64().unwrap() - layer4.physics.gravity).abs() < EPSILON_F64);
+        assert!((layer3.params.cfl.to_f64().unwrap() - layer4.physics.cfl).abs() < EPSILON_F64);
     }
 
     #[test]
@@ -289,8 +285,12 @@ mod tests {
         let layer4 = SolverConfig::default();
         let layer3: Layer3Config<f32> = Layer3Config::from_layer4(&layer4).unwrap();
         
-        assert_eq!(layer3.gravity.to_f64().unwrap(), layer4.physics.gravity);
-        assert_eq!(layer3.params.cfl.to_f64().unwrap(), layer4.physics.cfl);
+        // f32转换后应有合理精度误差，不能期望完全相等
+        let expected_gravity = f32::from_f64(layer4.physics.gravity).unwrap();
+        assert!((layer3.gravity.to_f64().unwrap() - expected_gravity.to_f64().unwrap()).abs() < EPSILON_F64);
+        
+        let expected_cfl = f32::from_f64(layer4.physics.cfl).unwrap();
+        assert!((layer3.params.cfl.to_f64().unwrap() - expected_cfl.to_f64().unwrap()).abs() < EPSILON_F64);
     }
 
     #[test]

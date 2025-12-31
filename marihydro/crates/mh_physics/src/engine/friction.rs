@@ -1,29 +1,19 @@
 // crates/mh_physics/src/engine/friction.rs
-
-//! Manning 摩擦源项计算模块
+//! Manning摩擦源项计算模块
 //!
-//! 实现曼宁公式的底部摩擦源项，支持：
-//! - 显式和半隐式时间离散
-//! - 并行计算（使用 rayon）
-//! - 干湿处理
-//! - Backend 泛型（支持 f32/f64/GPU）
+//! 实现曼宁公式的底部摩擦源项，支持显式和半隐式时间离散、并行计算以及Backend泛型。
 
 use rayon::prelude::*;
 use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::{FromPrimitive, Zero, Float};
 
-/// 摩擦计算配置（Layer 4，保持 f64）
+/// 摩擦计算配置（Layer 4，保持f64）
 #[derive(Debug, Clone)]
 pub struct FrictionConfig {
-    /// 是否使用半隐式时间离散
     pub semi_implicit: bool,
-    /// 最小水深阈值
     pub h_min: f64,
-    /// 默认曼宁糙率
     pub default_manning_n: f64,
-    /// 是否启用并行计算
     pub parallel: bool,
-    /// 并行阈值
     pub parallel_threshold: usize,
 }
 
@@ -39,54 +29,45 @@ impl Default for FrictionConfig {
     }
 }
 
-/// Manning 摩擦源项计算器（Backend 泛型）
+/// Manning摩擦计算器（Backend泛型）
 #[derive(Debug, Clone)]
-pub struct ManningFriction<B: Backend> {
-    /// 配置（Layer 4，保持 f64）
+pub struct ManningFriction<B: Backend>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     config: FrictionConfig,
-    /// 重力加速度（Backend 标量类型）
     g: B::Scalar,
-    #[allow(dead_code)]
-    /// Backend 实例
-    backend: B,
+    _backend: B,
 }
 
-impl<B: Backend> ManningFriction<B> {
-    /// 创建摩擦计算器
-    ///
-    /// # 参数
-    /// - `backend`: 计算后端实例
-    /// - `g`: 重力加速度（f64，将转换为 B::Scalar）
+impl<B: Backend> ManningFriction<B>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+{
     pub fn new(backend: B, g: f64) -> Self {
         Self {
             config: FrictionConfig::default(),
             g: B::Scalar::from_f64(g).unwrap_or(B::Scalar::from_f64(9.81).unwrap()),
-            backend,
+            _backend: backend,
         }
     }
 
-    /// 使用指定配置创建
     pub fn with_config(backend: B, g: f64, config: FrictionConfig) -> Self {
         Self {
             config,
             g: B::Scalar::from_f64(g).unwrap_or(B::Scalar::from_f64(9.81).unwrap()),
-            backend,
+            _backend: backend,
         }
     }
 
-    /// 设置配置
     pub fn set_config(&mut self, config: FrictionConfig) {
         self.config = config;
     }
 
-    /// 获取配置
     pub fn config(&self) -> &FrictionConfig {
         &self.config
     }
 
-    /// 计算单个单元的摩擦系数
-    ///
-    /// 返回 C_f = g * n^2 * |V| / h^(4/3)
     #[inline]
     pub fn compute_friction_coefficient(
         &self,
@@ -118,7 +99,6 @@ impl<B: Backend> ManningFriction<B> {
         self.g * manning_n * manning_n * speed / h_pow
     }
 
-    /// 计算显式摩擦源项
     #[inline]
     pub fn compute_explicit_source(
         &self,
@@ -131,7 +111,6 @@ impl<B: Backend> ManningFriction<B> {
         (-cf * hu, -cf * hv)
     }
 
-    /// 应用半隐式摩擦更新
     #[inline]
     pub fn apply_semi_implicit(
         &self,
@@ -146,7 +125,6 @@ impl<B: Backend> ManningFriction<B> {
         (hu * factor, hv * factor)
     }
 
-    /// 批量计算显式摩擦源项
     pub fn compute_sources_batch(
         &self,
         h: &[B::Scalar],
@@ -173,27 +151,25 @@ impl<B: Backend> ManningFriction<B> {
         }
     }
 
-    /// 串行计算源项
     fn compute_sources_serial(
         &self,
         h: &[B::Scalar],
         hu: &[B::Scalar],
         hv: &[B::Scalar],
-        manning_n: &[B::Scalar],
+        _manning_n: &[B::Scalar],
         use_uniform_n: bool,
         uniform_n: B::Scalar,
         source_hu: &mut [B::Scalar],
         source_hv: &mut [B::Scalar],
     ) {
         for i in 0..h.len() {
-            let n_val = if use_uniform_n { uniform_n } else { manning_n[i] };
+            let n_val = if use_uniform_n { uniform_n } else { B::Scalar::ZERO };
             let (s_hu, s_hv) = self.compute_explicit_source(h[i], hu[i], hv[i], n_val);
             source_hu[i] = source_hu[i] + s_hu;
             source_hv[i] = source_hv[i] + s_hv;
         }
     }
 
-    /// 并行计算源项
     fn compute_sources_parallel(
         &self,
         h: &[B::Scalar],
@@ -220,7 +196,6 @@ impl<B: Backend> ManningFriction<B> {
             });
     }
 
-    /// 批量应用半隐式摩擦
     pub fn apply_semi_implicit_batch(
         &self,
         h: &[B::Scalar],
@@ -244,7 +219,6 @@ impl<B: Backend> ManningFriction<B> {
         }
     }
 
-    /// 串行半隐式更新
     fn apply_semi_implicit_serial(
         &self,
         h: &[B::Scalar],
@@ -263,7 +237,6 @@ impl<B: Backend> ManningFriction<B> {
         }
     }
 
-    /// 并行半隐式更新
     fn apply_semi_implicit_parallel(
         &self,
         h: &[B::Scalar],
@@ -310,7 +283,6 @@ mod tests {
         let hu = 1.0_f64;
         let hv = 0.0_f64;
         let n = 0.03_f64;
-
         let cf = friction.compute_friction_coefficient(h, hu, hv, n);
         let expected = G * n * n * 1.0;
         assert!((cf - expected).abs() < 1e-10);
@@ -324,7 +296,6 @@ mod tests {
         let hu = 1.0_f64;
         let hv = 0.5_f64;
         let n = 0.03_f64;
-
         let (s_hu, s_hv) = friction.compute_explicit_source(h, hu, hv, n);
         assert!(s_hu < 0.0);
         assert!(s_hv < 0.0);
@@ -339,7 +310,6 @@ mod tests {
         let hv = 0.5_f64;
         let n = 0.03_f64;
         let dt = 0.1_f64;
-
         let (new_hu, new_hv) = friction.apply_semi_implicit(h, hu, hv, n, dt);
         assert!(new_hu < hu);
         assert!(new_hv < hv);

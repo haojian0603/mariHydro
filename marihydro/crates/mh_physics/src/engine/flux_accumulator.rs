@@ -289,6 +289,27 @@ impl<B: Backend> AtomicFluxAccumulator<B> {
 mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
+    use num_traits::FromPrimitive;
+
+    /// f64精度容差（相对误差约1e-15）
+    const EPSILON_F64: f64 = 1e-10;
+
+    /// 从f64创建Backend标量（测试专用）
+    fn scalar_from_f64<B: Backend>(v: f64) -> B::Scalar {
+        B::Scalar::from_f64(v).unwrap_or_else(|| {
+            panic!("f64值 {} 无法转换到目标精度", v)
+        })
+    }
+
+    /// epsilon断言宏
+    macro_rules! assert_approx_eq {
+        ($left:expr, $right:expr, $epsilon:expr) => {
+            assert!(($left - $right).abs() < $epsilon, 
+                "assertion failed: |{} - {}| = {} >= {}", 
+                $left, $right, ($left - $right).abs(), $epsilon
+            );
+        };
+    }
 
     #[test]
     fn 测试单线程累加器创建() {
@@ -320,8 +341,9 @@ mod tests {
         acc.accumulate_bed_source(0, 1.0, 2.0);
         acc.accumulate_bed_source(0, 0.5, 0.5);
 
-        assert!((acc.bed_source_x[0] - 1.5).abs() < 1e-10);
-        assert!((acc.bed_source_y[0] - 2.5).abs() < 1e-10);
+        // 使用epsilon比较，容忍浮点运算误差
+        assert!((acc.bed_source_x[0] - 1.5).abs() < EPSILON_F64);
+        assert!((acc.bed_source_y[0] - 2.5).abs() < EPSILON_F64);
     }
 
     #[test]
@@ -338,13 +360,15 @@ mod tests {
         let mut hu = backend.alloc_init(2, 0.0);
         let mut hv = backend.alloc_init(2, 0.0);
         let areas = backend.alloc_init(2, 1.0);
-        let dt = 0.1_f64;
+        
+        let dt = scalar_from_f64::<CpuBackend<f64>>(0.1);
 
         acc.apply_to_state(&mut h, &mut hu, &mut hv, &areas, dt);
 
-        assert!((h[0] - 2.0).abs() < 1e-10);
-        assert!((h[1] - 0.5).abs() < 1e-10);
-        assert!((hu[0] - 0.6).abs() < 1e-10);
+        assert_approx_eq!(h[0], 2.0, EPSILON_F64);
+        assert_approx_eq!(h[1], 0.0, EPSILON_F64);
+        assert_approx_eq!(hu[0], 0.6, EPSILON_F64);
+        assert_approx_eq!(hv[1], 0.3, EPSILON_F64);
     }
 
     #[test]
@@ -362,9 +386,9 @@ mod tests {
         acc.accumulate(0, 0.5, 0.5, 0.5);
 
         let (h, hu, hv) = acc.collect();
-        assert!((h[0] - 1.5).abs() < 1e-10);
-        assert!((hu[0] - 2.5).abs() < 1e-10);
-        assert!((hv[0] - 3.5).abs() < 1e-10);
+        assert!((h[0] - 1.5).abs() < EPSILON_F64);
+        assert!((hu[0] - 2.5).abs() < EPSILON_F64);
+        assert!((hv[0] - 3.5).abs() < EPSILON_F64);
     }
 
     #[test]
@@ -375,7 +399,7 @@ mod tests {
         acc.accumulate_flux(0, Some(1), 1.0, 2.0, 3.0);
 
         let (h, _hu, _hv) = acc.collect();
-        assert!((h[0] - (-1.0)).abs() < 1e-10);
-        assert!((h[1] - 1.0).abs() < 1e-10);
+        assert!((h[0] - (-1.0)).abs() < EPSILON_F64);
+        assert!((h[1] - 1.0).abs() < EPSILON_F64);
     }
 }

@@ -1,56 +1,37 @@
 // crates/mh_runtime/src/backend.rs
 
-//! Backend - 计算后端抽象
+//! 计算后端抽象
 //!
 //! 提供统一的计算后端接口，支持 CPU 和未来的 GPU 后端。
-//! 
-//! # 设计说明
-//! 
 //! 使用宏 `impl_cpu_backend!` 生成 f32/f64 后端实现，消除代码重复。
-//! 
-//! # 密封模式
-//! 
-//! `Backend` trait 使用密封模式（sealed trait pattern）防止外部实现。
-//! 这确保了只有库内部预定义的后端类型（如 `CpuBackend<f32>`、`CpuBackend<f64>`）
-//! 可以作为 Backend，从而：
-//! 1. 允许库在不破坏兼容性的情况下添加新方法
-//! 2. 确保所有 Backend 实现满足内部假设
-//! 3. 便于性能优化（编译器可以更好地内联）
-//!
-//! 如果用户需要自定义计算后端（如 GPU），应通过 feature flag 或 fork 实现。
+//! 采用密封 trait 模式防止外部实现，确保向后兼容性和优化空间。
 
 use bytemuck::Pod;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-#[allow(unused_imports)]
-use num_traits::FromPrimitive;
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
+use num_traits::FromPrimitive;
 
-// =============================================================================
-// 密封模块
-// =============================================================================
-
-/// 密封模块，用于限制 Backend trait 只能在库内部实现
+/// 密封模块，限制 Backend 只能在库内部实现
 mod private {
-    /// 密封 trait - 外部 crate 无法实现此 trait
     pub trait Sealed {}
 }
 
 /// 内存位置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryLocation {
-    /// 主机内存 (CPU)
+    /// 主机内存（CPU）
     Host,
-    /// 设备内存 (GPU)
+    /// 设备内存（GPU），包含设备 ID
     Device(usize),
 }
 
 /// 二维向量 trait
 ///
-/// 抽象不同后端的二维向量类型，确保几何运算的一致性
+/// 抽象不同后端的二维向量类型，确保几何运算一致性
 pub trait Vector2D: Copy + Clone + Send + Sync + 'static {
-    /// 标量类型
+    /// 关联的标量类型
     type Scalar: RuntimeScalar;
     
     /// 获取 x 分量
@@ -63,25 +44,16 @@ pub trait Vector2D: Copy + Clone + Send + Sync + 'static {
 /// 计算后端 Trait（密封）
 ///
 /// 抽象不同计算设备的操作，包括内存分配、BLAS 操作等。
-/// 
-/// # 密封 Trait
-/// 
-/// 此 trait 是密封的，只能由库内部类型实现。外部 crate 无法为自定义类型
-/// 实现此 trait。这允许库在未来添加新方法而不破坏向后兼容性。
-/// 
-/// 当前支持的 Backend 实现：
-/// - `CpuBackend<f32>`: CPU 单精度后端
-/// - `CpuBackend<f64>`: CPU 双精度后端
-/// 
+/// 只能由库内部类型实现，外部 crate 无法为自定义类型实现此 trait。
+///
 /// # 类型参数
-/// 
 /// - `Scalar`: 标量类型（f32 或 f64）
 /// - `Buffer<T>`: 关联的缓冲区类型
 /// - `Vector2D`: 二维向量类型
 pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 标量类型
     type Scalar: RuntimeScalar;
-    /// 缓冲区类型
+    /// 关联的缓冲区类型
     type Buffer<T: Pod + Clone + Send + Sync>: DeviceBuffer<T> + Deref<Target = [T]> + DerefMut;
     /// 二维向量类型
     type Vector2D: Vector2D<Scalar = Self::Scalar>;
@@ -114,10 +86,6 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 同步操作（GPU 后端需要）
     fn synchronize(&self) {}
 
-    // =========================================================================
-    // BLAS Level 1 操作
-    // =========================================================================
-
     /// y = alpha * x + y (AXPY)
     fn axpy(
         &self,
@@ -143,10 +111,6 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 缩放: x = alpha * x
     fn scale(&self, alpha: Self::Scalar, x: &mut Self::Buffer<Self::Scalar>);
 
-    // =========================================================================
-    // 规约操作
-    // =========================================================================
-    
     /// 最大值
     fn reduce_max(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
     
@@ -159,16 +123,8 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 2-范数
     fn norm2(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
 
-    // =========================================================================
-    // 物理约束
-    // =========================================================================
-    
     /// 强制正性（水深等物理量）
     fn enforce_positivity(&self, x: &mut Self::Buffer<Self::Scalar>, min_val: Self::Scalar);
-
-    // =========================================================================
-    // 几何运算
-    // =========================================================================
 
     /// 创建二维向量
     fn vec2_new(x: Self::Scalar, y: Self::Scalar) -> Self::Vector2D;
@@ -186,11 +142,7 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D;
 }
 
-// =============================================================================
-// CPU 后端
-// =============================================================================
-
-/// CPU 后端（零大小类型）
+/// CPU 后端
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CpuBackend<S: RuntimeScalar> {
     _marker: PhantomData<S>,
@@ -205,30 +157,9 @@ impl<S: RuntimeScalar> CpuBackend<S> {
     }
 }
 
-// =============================================================================
-// 宏生成 CPU 后端实现
-// =============================================================================
-
 /// 生成 CPU 后端 f32/f64 实现的宏
-/// 
-/// 使用宏统一 f32 和 f64 的实现，消除代码重复
 macro_rules! impl_cpu_backend {
     ($scalar:ty, $name:literal) => {
-        impl Vector2D for [$scalar; 2] {
-            type Scalar = $scalar;
-            
-            #[inline]
-            fn x(&self) -> $scalar {
-                self[0]
-            }
-            
-            #[inline]
-            fn y(&self) -> $scalar {
-                self[1]
-            }
-        }
-
-        // 密封 trait 实现 - 确保只有库内部类型可以实现 Backend
         impl private::Sealed for CpuBackend<$scalar> {}
 
         impl Backend for CpuBackend<$scalar> {
@@ -317,10 +248,23 @@ macro_rules! impl_cpu_backend {
                 [v[0] * s, v[1] * s]
             }
         }
+
+        impl Vector2D for [$scalar; 2] {
+            type Scalar = $scalar;
+            
+            #[inline]
+            fn x(&self) -> $scalar {
+                self[0]
+            }
+            
+            #[inline]
+            fn y(&self) -> $scalar {
+                self[1]
+            }
+        }
     };
 }
 
-// 使用宏生成 f32 和 f64 后端实现
 impl_cpu_backend!(f32, "CPU-f32");
 impl_cpu_backend!(f64, "CPU-f64");
 
@@ -364,13 +308,25 @@ mod tests {
     }
 
     #[test]
-    fn test_vec2_new_f32() {
-        let v = <CpuBackend<f32>>::vec2_new(1.0f32, 2.0f32);
-        assert_eq!(v, [1.0f32, 2.0f32]);
+    fn test_vec_operations_f32() {
+        let v1 = <CpuBackend<f32>>::vec2_new(3.0f32, 4.0f32);
+        let v2 = <CpuBackend<f32>>::vec2_new(1.0f32, 2.0f32);
+        
+        let dot = <CpuBackend<f32>>::vec2_dot(&v1, &v2);
+        assert_eq!(dot, 11.0f32);
+        
+        let len = <CpuBackend<f32>>::vec2_length(&v1);
+        assert_eq!(len, 5.0f32);
+        
+        let sub = <CpuBackend<f32>>::vec2_sub(&v1, &v2);
+        assert_eq!(sub, [2.0f32, 2.0f32]);
+        
+        let scaled = <CpuBackend<f32>>::vec2_scale(&v1, 2.0f32);
+        assert_eq!(scaled, [6.0f32, 8.0f32]);
     }
 
     #[test]
-    fn test_vec2_operations_f64() {
+    fn test_vec_operations_f64() {
         let v1 = <CpuBackend<f64>>::vec2_new(3.0, 4.0);
         let v2 = <CpuBackend<f64>>::vec2_new(1.0, 2.0);
         
@@ -385,12 +341,5 @@ mod tests {
         
         let scaled = <CpuBackend<f64>>::vec2_scale(&v1, 2.0);
         assert_eq!(scaled, [6.0, 8.0]);
-    }
-
-    #[test]
-    fn test_vector2d_trait() {
-        let v = [3.0f64, 4.0f64];
-        assert_eq!(v.x(), 3.0);
-        assert_eq!(v.y(), 4.0);
     }
 }

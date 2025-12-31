@@ -128,8 +128,9 @@ pub struct SemiImplicitConfig {
     pub theta: f64, // ALLOW_F64: Layer 4 配置参数
 }
 
-impl Default for SemiImplicitConfig {
-    fn default() -> Self {
+impl SemiImplicitConfig {
+    /// 创建默认配置
+    pub fn new() -> Self {
         Self {
             gravity: 9.81,
             h_min: 1e-6,
@@ -137,6 +138,42 @@ impl Default for SemiImplicitConfig {
             solver_max_iter: 200,
             theta: 0.5,
         }
+    }
+
+    /// 保守配置（高精度，收敛更稳健）
+    ///
+    /// - 求解器容差缩小10倍
+    /// - 最大迭代次数增加50%
+    /// - 隐式因子更接近隐式（更安全）
+    pub fn conservative() -> Self {
+        Self {
+            gravity: 9.81,
+            h_min: 1e-6,
+            solver_rtol: 1e-9,          // 更严格
+            solver_max_iter: 300,       // 更多迭代
+            theta: 0.6,                 // 更隐式
+        }
+    }
+
+    /// 快速配置（高性能，牺牲部分精度）
+    ///
+    /// - 求解器容差放宽10倍
+    /// - 最大迭代次数减少50%
+    /// - 隐式因子更接近显式（更快）
+    pub fn fast() -> Self {
+        Self {
+            gravity: 9.81,
+            h_min: 1e-6,
+            solver_rtol: 1e-7,          // 更宽松
+            solver_max_iter: 100,       // 更少迭代
+            theta: 0.4,                 // 更显式
+        }
+    }
+}
+
+impl Default for SemiImplicitConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

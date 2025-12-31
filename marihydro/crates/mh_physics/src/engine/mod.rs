@@ -1,19 +1,7 @@
-// crates/mh_physics/src/engine/mod.rs
-
 //! 物理引擎模块
 //!
-//! 提供求解器、时间积分器、通量累加等核心计算组件。
-//!
-//! # 模块结构
-//!
-//! - `flux_accumulator` - 通量累加器
-//! - `time_integrator` - 时间积分器 (ForwardEuler, SSP-RK2, SSP-RK3)
-//! - `timestep` - CFL时间步控制
-//! - `solver` - 主求解器
-//! - `parallel` - 并行通量计算
-//! - `semi_implicit` - 半隐式时间推进策略
-//! - `strategy` - 时间积分策略模式
-//! - `pcg` - 预处理共轭梯度法求解器
+//! 提供浅水方程求解器的核心计算组件，支持Backend泛型化运行时切换。
+//! 本模块属于Layer 3(Engine层)，所有数值类型使用RuntimeScalar泛型参数。
 
 pub mod flux_accumulator;
 pub mod friction;
@@ -27,17 +15,17 @@ pub mod timestep;
 // 重导出常用类型
 pub use flux_accumulator::{FluxAccumulator, AtomicFluxAccumulator};
 pub use time_integrator::{
-    TimeIntegrator, TimeIntegratorKind, TimeIntegratorEnum,
     ForwardEuler, SspRk2, SspRk3, RhsComputer, create_integrator,
+    TimeIntegrator, TimeIntegratorKind, TimeIntegratorEnum,
 };
 pub use timestep::{
     CflCalculator, TimeStepController, TimeStepControllerBuilder, TimeStepStats,
 };
 pub use solver::{
-    ShallowWaterSolver,
-    SolverStats, SolverWorkspace, HydrostaticReconstruction, HydrostaticFaceState,
-    BedSlopeCorrection, NumericalScheme, FallbackStrategy, StabilityOptions,
-    StabilityStatus, NanDetectionResult,
+    ShallowWaterSolver, SolverStats, SolverWorkspaceGeneric as SolverWorkspace,
+    HydrostaticReconstruction, HydrostaticFaceState, BedSlopeCorrection,
+    NumericalScheme, FallbackStrategy, StabilityOptions, StabilityStatus,
+    NanDetectionResult,
 };
 pub use parallel::{
     ParallelFluxCalculator, ParallelFluxConfig, ParallelFluxConfigBuilder,
@@ -45,15 +33,15 @@ pub use parallel::{
 };
 pub use friction::{ManningFriction, FrictionConfig};
 pub use pcg::{
-    PcgSolver, PcgConfig, PcgResult, PcgWorkspace,
-    PreconditionerType, SparseMvp, DiagonalMatrix, CsrMatrix,
-    PoissonMatrixBuilder,
+    PcgSolver, PcgWorkspace, PcgResult, PcgConfig,
+    PreconditionerType, SparseMvp, DiagonalMatrix, PoissonMatrixBuilder,
 };
-
-// 重导出策略模式类型
 pub use strategy::{
     TimeIntegrationStrategy, StrategyKind, StepResult,
     ExplicitStrategy, ExplicitConfig,
     SemiImplicitStrategyGeneric, SemiImplicitConfig as SemiImplicitStrategyConfig,
     SolverWorkspaceGeneric,
 };
+
+// 从numerics模块重导出CsrMatrix
+pub use crate::numerics::linear_algebra::csr::CsrMatrix;

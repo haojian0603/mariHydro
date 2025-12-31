@@ -1,46 +1,51 @@
 // crates/mh_physics/src/engine/parallel.rs
 
-//! 并行通量计算模块（Backend泛型化版本）
+//! 并行通量计算器
 //!
-//! 提供多种并行策略用于加速通量计算，支持任意Backend（CPU f32/f64, GPU）。
+//! 提供多种并行策略加速通量计算，支持任意Backend（CPU f32/f64、GPU）。
+//! 采用图着色算法实现无锁并行累加，适用于大规模网格。
 //!
 //! # 并行策略
-//! - 串行计算（小规模问题）
-//! - 收集后累加（先并行计算通量，后串行累加到单元）
-//! - 着色并行（使用图着色实现真正无锁并行）
 //!
-//! # Backend泛型化
-//! 整个模块完全Backend化，所有计算数据使用`B::Buffer<B::Scalar>`存储，
-//! 几何数据使用`B::Vector2D`，支持运行时精度切换。
+//! - `Sequential`: 串行计算，适用于小规模问题
+//! - `CollectThenAccumulate`: 并行计算通量后串行累加
+//! - `Colored`: 基于图着色的无锁并行累加
+//! - `Auto`: 根据问题规模自动选择策略
+//!
+//! # 线程安全
+//!
+//! `Colored`策略使用图着色确保同一颜色的面不共享单元，结合`SendPtr`实现
+//! 无锁并行写入。此方案在编译期保证线程安全，无数据竞争风险。
 
 #![allow(unsafe_code)]
 
-use crate::adapter::PhysicsMesh;
+use crate::adapter::{CellIndex, PhysicsMesh};
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
 use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 
-use mh_runtime::{Backend, CellIndex, DeviceBuffer, FaceIndex, RuntimeScalar};
+use log::info;
+use mh_runtime::{Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
 use num_traits::{Float, FromPrimitive, ToPrimitive};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-// 线程安全指针包装器
-
-/// 用于并行计算的可发送原始指针包装器
-/// 
-/// SAFETY: 调用者必须确保：
-/// 1. 指针在整个并行操作期间有效
-/// 2. 不同线程不会写入同一内存位置
+/// 线程安全指针包装器
+///
+/// 用于在并行计算中安全传递可变指针。着色算法保证同一颜色的面不共享单元，
+/// 因此不同线程写入的数组位置不会重叠。
+///
+/// # 安全性
+///
+/// 调用者必须确保：
+/// 1. 指针在并行操作期间始终有效
+/// 2. 不同线程不会写入同一内存位置（由面着色保证）
 #[derive(Clone, Copy)]
 struct SendPtr<T>(*mut T);
 
-// SAFETY: SendPtr 可以安全地在线程间发送，因为我们保证：
-// 1. 着色算法确保同一颜色的面不共享单元
-// 2. 不同线程写入不同的数组位置
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
 
@@ -50,7 +55,7 @@ impl<T: Copy> SendPtr<T> {
     unsafe fn read_at(&self, offset: usize) -> T {
         self.0.add(offset).read()
     }
-    
+
     /// 写入指定偏移位置的值
     #[inline]
     unsafe fn write_at(&self, offset: usize, value: T) {
@@ -58,57 +63,31 @@ impl<T: Copy> SendPtr<T> {
     }
 }
 
-// 简单的日志宏替代 tracing
-macro_rules! debug {
-    ($($arg:tt)*) => {
-        #[cfg(debug_assertions)]
-        {
-            // 在调试模式下可以打印日志
-            // eprintln!("[DEBUG] {}", format!($($arg)*));
-        }
-    };
-}
-
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        // trace 级别默认不输出
-    };
-}
-
-macro_rules! info {
-    ($($arg:tt)*) => {
-        // info 级别可选输出
-        // eprintln!("[INFO] {}", format!($($arg)*));
-    };
-}
-
-// ============================================================
-// 配置
-// ============================================================
-
 /// 并行策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ParallelStrategy {
     /// 串行执行
     Sequential,
-    /// 收集后累加：并行计算通量 → 收集结果 → 串行累加
+    /// 并行计算通量后串行累加
     CollectThenAccumulate,
-    /// 着色并行：使用图着色分组面，同一颜色的面可安全并行处理
+    /// 基于图着色的无锁并行累加
     Colored,
-    /// 自动选择（根据问题规模）
+    /// 自动选择最优策略
     #[default]
     Auto,
 }
 
-/// 并行计算配置（Backend泛型化）
+/// 并行计算配置
+///
+/// 控制并行策略、阈值和数值参数。所有数值字段使用`B::Scalar`泛型，
+/// 支持运行时精度切换。
 #[derive(Debug, Clone)]
 pub struct ParallelFluxConfig<S: RuntimeScalar> {
     /// 数值参数
     pub params: NumericalParams<S>,
     /// 重力加速度
     pub g: S,
-    /// 最小并行面数（低于此值使用串行）
+    /// 最小并行面数
     pub min_parallel_size: usize,
     /// 并行策略
     pub strategy: ParallelStrategy,
@@ -120,7 +99,7 @@ impl<S: RuntimeScalar> Default for ParallelFluxConfig<S> {
     fn default() -> Self {
         Self {
             params: NumericalParams::<S>::default(),
-            g: S::from_config(9.81).unwrap_or(S::ZERO),
+            g: S::from_f64(9.81).unwrap_or(S::ZERO),
             min_parallel_size: 1000,
             strategy: ParallelStrategy::Auto,
             use_hydrostatic_reconstruction: true,
@@ -129,13 +108,14 @@ impl<S: RuntimeScalar> Default for ParallelFluxConfig<S> {
 }
 
 impl<S: RuntimeScalar> ParallelFluxConfig<S> {
-    /// 创建构建器
+    /// 创建配置构建器
     pub fn builder() -> ParallelFluxConfigBuilder<S> {
         ParallelFluxConfigBuilder::default()
     }
 }
 
-/// 配置构建器
+/// 并行计算配置构建器
+#[derive(Debug)]
 pub struct ParallelFluxConfigBuilder<S: RuntimeScalar> {
     config: ParallelFluxConfig<S>,
 }
@@ -149,41 +129,45 @@ impl<S: RuntimeScalar> Default for ParallelFluxConfigBuilder<S> {
 }
 
 impl<S: RuntimeScalar> ParallelFluxConfigBuilder<S> {
+    /// 设置数值参数
     pub fn params(mut self, params: NumericalParams<S>) -> Self {
         self.config.params = params;
         self
     }
 
+    /// 设置重力加速度
     pub fn gravity(mut self, g: S) -> Self {
         self.config.g = g;
         self
     }
 
+    /// 设置最小并行面数
     pub fn min_parallel_size(mut self, size: usize) -> Self {
         self.config.min_parallel_size = size;
         self
     }
 
+    /// 设置并行策略
     pub fn strategy(mut self, strategy: ParallelStrategy) -> Self {
         self.config.strategy = strategy;
         self
     }
 
+    /// 设置是否启用静水重构
     pub fn use_hydrostatic_reconstruction(mut self, enable: bool) -> Self {
         self.config.use_hydrostatic_reconstruction = enable;
         self
     }
 
+    /// 构建配置
     pub fn build(self) -> ParallelFluxConfig<S> {
         self.config
     }
 }
 
-// ============================================================
-// 性能指标
-// ============================================================
-
 /// 性能指标
+///
+/// 记录并行计算的调用次数、处理面数和时间消耗，用于性能分析。
 #[derive(Debug, Clone, Default)]
 pub struct FluxComputeMetrics {
     /// 总计算次数
@@ -192,9 +176,9 @@ pub struct FluxComputeMetrics {
     pub parallel_calls: usize,
     /// 串行计算次数
     pub sequential_calls: usize,
-    /// 总计算时间
+    /// 累计计算时间
     pub total_duration: Duration,
-    /// 处理的面总数
+    /// 累计处理面数
     pub total_faces: usize,
 }
 
@@ -226,107 +210,95 @@ impl FluxComputeMetrics {
     }
 }
 
-// ============================================================
-// 并行通量计算器（Backend泛型化版本）
-// ============================================================
-
-/// 并行通量计算器（Backend泛型化）
+/// 并行通量计算器
 ///
-/// 封装通量计算的并行执行逻辑，支持任意Backend。
-/// 
+/// 封装多种并行策略的通量计算逻辑，支持任意Backend。
+///
 /// # 类型参数
-/// 
 /// - `B`: 计算后端，提供存储和计算能力
 pub struct ParallelFluxCalculator<B: Backend> {
     config: ParallelFluxConfig<B::Scalar>,
-    /// 黎曼求解器
     riemann: HllcSolver<B>,
-    /// 干湿处理器
     wetting_drying: WettingDryingHandler<B>,
-    /// 静水重构
     hydrostatic: HydrostaticReconstruction<B>,
-    /// 性能指标
     metrics: FluxComputeMetrics,
-    /// 面着色（用于 Colored 策略）
-    /// 每个元素是一组可以并行处理的面索引
     face_colors: Option<Vec<Vec<usize>>>,
-    /// 后端实例（预留用于GPU加速）
-    #[allow(dead_code)]
-    backend: B,
+    _backend: B,
 }
 
 impl<B: Backend> ParallelFluxCalculator<B> {
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig<B::Scalar>, backend: B) -> Self {
-        let riemann_params = crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
+        let riemann_params =
+            crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
         Self {
             riemann: HllcSolver::<B>::new(&riemann_params, config.g),
             wetting_drying: WettingDryingHandler::<B>::from_params(&config.params),
-            hydrostatic: HydrostaticReconstruction::<B>::new(&config.params, config.g),
+            hydrostatic: HydrostaticReconstruction::<B>::new(&riemann_params, config.g),
             metrics: FluxComputeMetrics::default(),
             face_colors: None,
             config,
-            backend,
+            _backend: backend,
         }
     }
 
-    /// 为网格设置面着色（用于 Colored 策略）
+    /// 为网格设置面着色
+    ///
+    /// 构建面邻接图并执行贪心着色算法，确保同一颜色的面不共享单元。
+    /// 此方法必须在首次使用`Colored`策略前调用。
     pub fn setup_face_coloring(&mut self, mesh: &PhysicsMesh) {
-        let start = Instant::now();
+        let _start = Instant::now();
         let n_faces = mesh.n_faces();
-        
+
         if n_faces == 0 {
             self.face_colors = Some(Vec::new());
-            debug!("Face coloring: empty mesh, no coloring needed");
             return;
         }
 
-        trace!("Building face adjacency graph for {} faces", n_faces);
-        
-        // 构建面邻接关系
         let face_neighbors = self.build_face_adjacency(mesh);
-        
-        // 贪心着色
         let (face_color, num_colors) = self.greedy_coloring(&face_neighbors, n_faces);
 
-        // 按颜色分组面
-        let mut color_faces: Vec<Vec<usize>> = vec![Vec::new(); num_colors];
+        let mut color_faces = vec![Vec::new(); num_colors];
         for (face, &color) in face_color.iter().enumerate() {
             if color != usize::MAX {
                 color_faces[color].push(face);
             }
         }
 
-        let _duration = start.elapsed();
-        
+        let _duration = _start.elapsed();
+
         info!(
-            "Face coloring complete: {} faces, {} colors, took {:?}",
+            "面着色完成：{} 个面，{} 种颜色，耗时 {:?}",
             n_faces, num_colors, _duration
         );
 
         self.face_colors = Some(color_faces);
     }
-    
+
     /// 构建面邻接关系
-    fn build_face_adjacency(&self, mesh: &PhysicsMesh) -> Vec<std::collections::HashSet<usize>> {
+    fn build_face_adjacency(
+        &self,
+        mesh: &PhysicsMesh,
+    ) -> Vec<std::collections::HashSet<usize>> {
         use std::collections::{HashMap, HashSet};
-        
+
         let n_faces = mesh.n_faces();
-        
-        // 构建单元到面的映射
         let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
+
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(FaceIndex(face_idx));
-            cell_to_faces.entry(owner.get()).or_default().push(face_idx);
-            if let Some(neigh) = mesh.face_neighbor(FaceIndex(face_idx)) {
+            let owner = mesh.face_owner(RuntimeFaceIndex(face_idx));
+            cell_to_faces
+                .entry(owner.get())
+                .or_default()
+                .push(face_idx);
+
+            if let Some(neigh) = mesh.face_neighbor(RuntimeFaceIndex(face_idx)) {
                 cell_to_faces.entry(neigh.get()).or_default().push(face_idx);
             }
         }
-        
-        // 构建面的邻接表
-        let mut face_neighbors: Vec<HashSet<usize>> = vec![HashSet::new(); n_faces];
+
+        let mut face_neighbors = vec![HashSet::new(); n_faces];
         for faces in cell_to_faces.values() {
-            // 同一单元的所有面互为邻居
             for i in 0..faces.len() {
                 for j in (i + 1)..faces.len() {
                     face_neighbors[faces[i]].insert(faces[j]);
@@ -334,27 +306,25 @@ impl<B: Backend> ParallelFluxCalculator<B> {
                 }
             }
         }
-        
+
         face_neighbors
     }
-    
+
     /// 贪心图着色算法
     fn greedy_coloring(
-        &self, 
-        face_neighbors: &[std::collections::HashSet<usize>], 
-        n_faces: usize
+        &self,
+        face_neighbors: &[std::collections::HashSet<usize>],
+        n_faces: usize,
     ) -> (Vec<usize>, usize) {
         use std::collections::HashSet;
-        
+
         let mut face_color = vec![usize::MAX; n_faces];
         let mut num_colors = 0;
 
-        // 按邻居数量排序（高度数优先，能减少总颜色数）
         let mut order: Vec<usize> = (0..n_faces).collect();
         order.sort_by_key(|&f| std::cmp::Reverse(face_neighbors[f].len()));
 
         for &face in &order {
-            // 找到邻居使用的颜色
             let used_colors: HashSet<usize> = face_neighbors[face]
                 .iter()
                 .filter_map(|&n| {
@@ -366,7 +336,6 @@ impl<B: Backend> ParallelFluxCalculator<B> {
                 })
                 .collect();
 
-            // 找到最小可用颜色
             let mut color = 0;
             while used_colors.contains(&color) {
                 color += 1;
@@ -375,7 +344,7 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             face_color[face] = color;
             num_colors = num_colors.max(color + 1);
         }
-        
+
         (face_color, num_colors)
     }
 
@@ -404,35 +373,56 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         let start = Instant::now();
 
         let (max_speed, is_parallel) = match self.config.strategy {
-            ParallelStrategy::Sequential => {
-                (self.compute_serial(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), false)
-            }
-            ParallelStrategy::CollectThenAccumulate => {
-                (self.compute_parallel(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
-            }
+            ParallelStrategy::Sequential => (
+                self.compute_serial(
+                    state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                ),
+                false,
+            ),
+            ParallelStrategy::CollectThenAccumulate => (
+                self.compute_parallel(
+                    state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                ),
+                true,
+            ),
             ParallelStrategy::Colored => {
-                // 如果没有设置着色，先设置
                 if !self.has_face_coloring() {
                     self.setup_face_coloring(mesh);
                 }
-                (self.compute_colored(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
+                (
+                    self.compute_colored(
+                        state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                    ),
+                    true,
+                )
             }
             ParallelStrategy::Auto => {
                 if n_faces < self.config.min_parallel_size {
-                    (self.compute_serial(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), false)
+                    (
+                        self.compute_serial(
+                            state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                        ),
+                        false,
+                    )
                 } else if self.has_face_coloring() {
-                    // 有着色就用着色并行
-                    (self.compute_colored(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
+                    (
+                        self.compute_colored(
+                            state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                        ),
+                        true,
+                    )
                 } else {
-                    // 否则用收集后累加
-                    (self.compute_parallel(state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv), true)
+                    (
+                        self.compute_parallel(
+                            state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+                        ),
+                        true,
+                    )
                 }
             }
         };
 
-        let duration = start.elapsed();
-        self.metrics.record(n_faces, is_parallel, duration);
-
+        self.metrics.record(n_faces, is_parallel, start.elapsed());
         max_speed
     }
 
@@ -447,22 +437,22 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         source_hu: &mut B::Buffer<B::Scalar>,
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
-        // 重置
-        flux_h.fill(B::Scalar::ZERO);
-        flux_hu.fill(B::Scalar::ZERO);
-        flux_hv.fill(B::Scalar::ZERO);
-        source_hu.fill(B::Scalar::ZERO);
-        source_hv.fill(B::Scalar::ZERO);
+        let zero = B::Scalar::ZERO;
+        flux_h.fill(zero);
+        flux_hu.fill(zero);
+        flux_hv.fill(zero);
+        source_hu.fill(zero);
+        source_hv.fill(zero);
 
         let n_faces = mesh.n_faces();
-        let mut max_speed = B::Scalar::ZERO;
+        let mut max_wave_speed = zero;
 
         for face_idx in 0..n_faces {
-            let (flux, bed_src, length, owner, neighbor) = 
-                self.compute_face(state, mesh, FaceIndex(face_idx));
+            let (flux, bed_src, length, owner, neighbor) =
+                self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
 
-            if flux.max_wave_speed > max_speed {
-                max_speed = flux.max_wave_speed;
+            if flux.max_wave_speed > max_wave_speed {
+                max_wave_speed = flux.max_wave_speed;
             }
 
             let fh = flux.mass * length;
@@ -486,10 +476,10 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             }
         }
 
-        max_speed
+        max_wave_speed
     }
 
-    /// 并行计算（先并行计算，后串行累加）
+    /// 并行计算后串行累加
     fn compute_parallel(
         &self,
         state: &ShallowWaterState<B>,
@@ -500,19 +490,19 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         source_hu: &mut B::Buffer<B::Scalar>,
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
+        let zero = B::Scalar::ZERO;
         let n_faces = mesh.n_faces();
-        
-        // 使用f64 atomic作为临时方案（后续在RuntimeScalar trait中添加Atomic关联类型）
-        let max_speed_atomic = AtomicU64::new(0u64);
 
-        // 并行计算所有面
+        // 临时方案：使用f64 atomic作为桥接
+        // 未来将通过RuntimeScalar::Atomic关联类型实现泛型原子操作
+        let max_speed_atomic = AtomicU64::new(zero.to_f64().unwrap_or(0.0).to_bits());
+
         let face_results: Vec<_> = (0..n_faces)
             .into_par_iter()
             .map(|face_idx| {
-                let (flux, bed_src, length, owner, neighbor) = 
-                    self.compute_face(state, mesh, FaceIndex(face_idx));
+                let (flux, bed_src, length, owner, neighbor) =
+                    self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
 
-                // 临时方案：转换为f64进行atomic操作
                 let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
                 max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
 
@@ -520,12 +510,11 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             })
             .collect();
 
-        // 串行累加
-        flux_h.fill(B::Scalar::ZERO);
-        flux_hu.fill(B::Scalar::ZERO);
-        flux_hv.fill(B::Scalar::ZERO);
-        source_hu.fill(B::Scalar::ZERO);
-        source_hv.fill(B::Scalar::ZERO);
+        flux_h.fill(zero);
+        flux_hu.fill(zero);
+        flux_hv.fill(zero);
+        source_hu.fill(zero);
+        source_hv.fill(zero);
 
         for (flux, bed_src, length, owner, neighbor) in face_results {
             let fh = flux.mass * length;
@@ -549,12 +538,14 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             }
         }
 
-        // 临时方案：从atomic加载并转换回B::Scalar
-        let max_speed_bits = max_speed_atomic.load(Ordering::Relaxed);
-        B::Scalar::from_f64(f64::from_bits(max_speed_bits)).unwrap_or(B::Scalar::ZERO)
+        let bits = max_speed_atomic.load(Ordering::Relaxed);
+        B::Scalar::from_f64(f64::from_bits(bits)).unwrap_or(zero)
     }
 
-    /// 着色并行计算（真正无锁并行）
+    /// 基于图着色的无锁并行累加
+    ///
+    /// 通过贪心着色算法将面分组，确保同组面不共享单元，实现无锁并行写入。
+    /// 使用`SendPtr`绕过Rust借用检查，安全性由着色算法保证。
     fn compute_colored(
         &self,
         state: &ShallowWaterState<B>,
@@ -565,59 +556,37 @@ impl<B: Backend> ParallelFluxCalculator<B> {
         source_hu: &mut B::Buffer<B::Scalar>,
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
-        // 重置
-        flux_h.fill(B::Scalar::ZERO);
-        flux_hu.fill(B::Scalar::ZERO);
-        flux_hv.fill(B::Scalar::ZERO);
-        source_hu.fill(B::Scalar::ZERO);
-        source_hv.fill(B::Scalar::ZERO);
+        let zero = B::Scalar::ZERO;
+        flux_h.fill(zero);
+        flux_hu.fill(zero);
+        flux_hv.fill(zero);
+        source_hu.fill(zero);
+        source_hv.fill(zero);
 
-        // 临时方案：使用f64 atomic
-        let max_speed_atomic = AtomicU64::new(0u64);
-
+        let max_speed_atomic = AtomicU64::new(zero.to_f64().unwrap_or(0.0).to_bits());
         let color_faces = match &self.face_colors {
             Some(cf) => cf,
-            None => {
-                debug!("compute_colored: no face coloring available, returning 0.0");
-                return B::Scalar::ZERO;
-            }
+            None => return zero,
         };
 
-        trace!("compute_colored: processing {} color groups", color_faces.len());
+        let flux_h_ptr = SendPtr(flux_h.as_slice_mut().as_mut_ptr());
+        let flux_hu_ptr = SendPtr(flux_hu.as_slice_mut().as_mut_ptr());
+        let flux_hv_ptr = SendPtr(flux_hv.as_slice_mut().as_mut_ptr());
+        let source_hu_ptr = SendPtr(source_hu.as_slice_mut().as_mut_ptr());
+        let source_hv_ptr = SendPtr(source_hv.as_slice_mut().as_mut_ptr());
 
-        // 按颜色批次处理
-        // 同一颜色的面不共享单元，可以安全并行写入
-        for (_color_idx, faces_in_color) in color_faces.iter().enumerate() {
-            trace!("  color {}: {} faces", _color_idx, faces_in_color.len());
-            
-            // 创建原子计数器用于统计处理的面数（调试用）
-            #[cfg(debug_assertions)]
-            let processed_count = std::sync::atomic::AtomicUsize::new(0);
-            
-            // SAFETY: 由于着色算法保证同一颜色的面不共享任何单元，
-            // 因此不同线程写入的数组位置不会重叠，没有数据竞争。
-            // 使用 SendPtr 包装原始指针以满足 Sync 要求。
-            let flux_h_ptr = SendPtr(flux_h.as_slice_mut().as_mut_ptr());
-            let flux_hu_ptr = SendPtr(flux_hu.as_slice_mut().as_mut_ptr());
-            let flux_hv_ptr = SendPtr(flux_hv.as_slice_mut().as_mut_ptr());
-            let source_hu_ptr = SendPtr(source_hu.as_slice_mut().as_mut_ptr());
-            let source_hv_ptr = SendPtr(source_hv.as_slice_mut().as_mut_ptr());
-            
-            // 并行计算并累加当前颜色的所有面
+        for faces_in_color in color_faces {
             faces_in_color.par_iter().for_each(|&face_idx| {
-                let (flux, bed_src, length, owner, neighbor) = 
-                    self.compute_face(state, mesh, FaceIndex(face_idx));
-                
-                // 临时方案：转换为f64进行atomic操作
+                let (flux, bed_src, length, owner, neighbor) =
+                    self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+
                 let speed_f64 = flux.max_wave_speed.to_f64().unwrap_or(0.0);
                 max_speed_atomic.fetch_max(speed_f64.to_bits(), Ordering::Relaxed);
-                
+
                 let fh = flux.mass * length;
                 let fhu = flux.momentum_x * length;
                 let fhv = flux.momentum_y * length;
 
-                // 安全累加（不同线程不会冲突）
-                // SAFETY: 着色保证同一颜色的面不共享单元
                 unsafe {
                     let owner_idx = owner.get();
                     flux_h_ptr.write_at(owner_idx, flux_h_ptr.read_at(owner_idx) - fh);
@@ -625,7 +594,7 @@ impl<B: Backend> ParallelFluxCalculator<B> {
                     flux_hv_ptr.write_at(owner_idx, flux_hv_ptr.read_at(owner_idx) - fhv);
                     source_hu_ptr.write_at(owner_idx, source_hu_ptr.read_at(owner_idx) + bed_src.source_left_x);
                     source_hv_ptr.write_at(owner_idx, source_hv_ptr.read_at(owner_idx) + bed_src.source_left_y);
-                    
+
                     if let Some(neigh) = neighbor {
                         let neigh_idx = neigh.get();
                         flux_h_ptr.write_at(neigh_idx, flux_h_ptr.read_at(neigh_idx) + fh);
@@ -635,95 +604,77 @@ impl<B: Backend> ParallelFluxCalculator<B> {
                         source_hv_ptr.write_at(neigh_idx, source_hv_ptr.read_at(neigh_idx) + bed_src.source_right_y);
                     }
                 }
-                
-                #[cfg(debug_assertions)]
-                processed_count.fetch_add(1, Ordering::Relaxed);
             });
-            
-            #[cfg(debug_assertions)]
-            debug_assert_eq!(
-                processed_count.load(Ordering::Relaxed), 
-                faces_in_color.len(),
-                "Not all faces in color {} were processed", _color_idx
-            );
         }
 
-        // 临时方案：从atomic加载并转换回B::Scalar
-        let max_speed_bits = max_speed_atomic.load(Ordering::Relaxed);
-        B::Scalar::from_f64(f64::from_bits(max_speed_bits)).unwrap_or(B::Scalar::ZERO)
+        let bits = max_speed_atomic.load(Ordering::Relaxed);
+        B::Scalar::from_f64(f64::from_bits(bits)).unwrap_or(zero)
     }
 
-    /// 计算单个面的通量
+    /// 计算单个面的通量和源项
     fn compute_face(
         &self,
         state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        face_idx: FaceIndex,
-    ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
-        let normal = mesh.face_normal_generic::<B>(face_idx).expect("面法向量转换失败：坐标超出Backend标量范围");
+        face_idx: RuntimeFaceIndex,
+    ) -> (
+        RiemannFlux<B::Scalar>,
+        BedSlopeCorrection<B>,
+        B::Scalar,
+        CellIndex,
+        Option<CellIndex>,
+    ) {
+        let normal = mesh.face_normal_generic::<B>(face_idx)
+            .expect("边界面法向量转换失败：坐标超出Backend标量范围");
         let length_f64 = mesh.face_length(face_idx);
         let length = B::Scalar::from_f64(length_f64).unwrap_or(B::Scalar::ZERO);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
 
         let owner_idx = owner.get();
-        let neighbor_idx = neighbor.map(|c| c.get());
-
-        // 左侧状态
         let h_l = state.h[owner_idx];
-        let z_l = B::Scalar::from_f64(mesh.cell_z_bed(owner)).unwrap_or(B::Scalar::ZERO);
+        let z_l = state.z[owner_idx];
         let (u_l, v_l) = self.config.params.safe_velocity_components(
-            state.hu[owner_idx], state.hv[owner_idx], h_l
+            state.hu[owner_idx], state.hv[owner_idx], h_l,
         );
         let vel_l = B::vec2_new(u_l, v_l);
 
-        // 右侧状态
-        let (h_r, vel_r, z_r) = if let Some(neigh_idx) = neighbor_idx {
+        let (h_r, vel_r, z_r) = if let Some(neigh) = neighbor {
+            let neigh_idx = neigh.get();
             let h = state.h[neigh_idx];
             let (u, v) = self.config.params.safe_velocity_components(
-                state.hu[neigh_idx], state.hv[neigh_idx], h
+                state.hu[neigh_idx], state.hv[neigh_idx], h,
             );
-            (h, B::vec2_new(u, v), B::Scalar::from_f64(mesh.cell_z_bed(CellIndex(neigh_idx))).unwrap_or(B::Scalar::ZERO))
+            (h, B::vec2_new(u, v), state.z[neigh_idx])
         } else {
-            // 边界处理: vn = vel_l · normal, vel_r = vel_l - 2 * vn * normal
             let vn = B::vec2_dot(&vel_l, &normal);
             let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
             let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
             (h_l, vel_r, z_l)
         };
 
-        // 静水重构
-        let recon = if self.config.use_hydrostatic_reconstruction {
+        let recon_state = if self.config.use_hydrostatic_reconstruction {
             self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
         } else {
+            let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
                 vel_left: vel_l,
                 vel_right: vel_r,
-                z_face: (z_l + z_r) * B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF),
+                z_face: (z_l + z_r) * half,
             }
         };
 
-        // 干湿限制
-        let wet_l = self.wetting_drying.get_state(recon.h_left);
-        let wet_r = self.wetting_drying.get_state(recon.h_right);
+        let wet_l = self.wetting_drying.get_state(recon_state.h_left);
+        let wet_r = self.wetting_drying.get_state(recon_state.h_right);
         let flux_limiter = match (wet_l, wet_r) {
             (WetState::Dry, WetState::Dry) => B::Scalar::ZERO,
-            (WetState::Dry, _) | (_, WetState::Dry) => {
-                let h_min = recon.h_left.min(recon.h_right);
-                let h_wet = self.config.params.h_wet;
-                if h_min > h_wet {
-                    B::Scalar::ONE
-                } else {
-                    h_min / h_wet
-                }
-            }
-            (WetState::PartiallyWet, _) | (_, WetState::PartiallyWet) => {
-                let h_min = recon.h_left.min(recon.h_right);
-                let h_dry = self.config.params.h_dry;
-                let h_wet = self.config.params.h_wet;
-                let fraction = (h_min - h_dry) / (h_wet - h_dry);
+            (WetState::Dry, _) | (_, WetState::Dry) => B::Scalar::ONE,
+            (WetState::PartiallyWet, WetState::PartiallyWet) => {
+                let h_min = recon_state.h_left.min(recon_state.h_right);
+                let fraction = (h_min - self.config.params.h_dry)
+                    / (self.config.params.h_wet - self.config.params.h_dry);
                 let one = B::Scalar::ONE;
                 let zero = B::Scalar::ZERO;
                 if fraction > one {
@@ -737,33 +688,27 @@ impl<B: Backend> ParallelFluxCalculator<B> {
             _ => B::Scalar::ONE,
         };
 
-        // 黎曼通量
         let flux = self.riemann.solve(
-            recon.h_left,
-            recon.h_right,
-            recon.vel_left,
-            recon.vel_right,
+            recon_state.h_left,
+            recon_state.h_right,
+            recon_state.vel_left,
+            recon_state.vel_right,
             normal,
         ).unwrap_or_else(|_| RiemannFlux::zero());
 
-        let limited_flux = flux.scaled(flux_limiter);
+        let bed_src = self.hydrostatic.bed_slope_correction(
+            h_l, h_r, recon_state.h_left, recon_state.h_right, normal, length,
+        );
 
-        // 床坡源项
-        let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, z_l, z_r, normal, length);
-
-        (limited_flux, bed_src, length, owner, neighbor)
+        (flux.scaled(flux_limiter), bed_src, length, owner, neighbor)
     }
 
-    // =========================================================================
-    // 访问器
-    // =========================================================================
-
-    /// 获取配置
+    /// 获取配置引用
     pub fn config(&self) -> &ParallelFluxConfig<B::Scalar> {
         &self.config
     }
 
-    /// 获取性能指标
+    /// 获取性能指标引用
     pub fn metrics(&self) -> &FluxComputeMetrics {
         &self.metrics
     }
@@ -774,17 +719,15 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     }
 }
 
-// ============================================================
-// 构建器
-// ============================================================
-
-/// 并行计算器构建器（Backend泛型化）
+/// 并行计算器构建器
+#[derive(Debug)]
 pub struct ParallelFluxCalculatorBuilder<B: Backend> {
     config: ParallelFluxConfig<B::Scalar>,
     backend: B,
 }
 
 impl<B: Backend> ParallelFluxCalculatorBuilder<B> {
+    /// 创建构建器
     pub fn new(backend: B) -> Self {
         Self {
             config: ParallelFluxConfig::default(),
@@ -792,32 +735,37 @@ impl<B: Backend> ParallelFluxCalculatorBuilder<B> {
         }
     }
 
+    /// 设置配置
     pub fn config(mut self, config: ParallelFluxConfig<B::Scalar>) -> Self {
         self.config = config;
         self
     }
 
+    /// 设置数值参数
     pub fn params(mut self, params: NumericalParams<B::Scalar>) -> Self {
         self.config.params = params;
         self
     }
 
-    pub fn gravity(mut self, g: B::Scalar) -> Self { 
+    /// 设置重力加速度
+    pub fn gravity(mut self, g: B::Scalar) -> Self {
         self.config.g = g;
         self
     }
 
+    /// 设置并行策略
     pub fn strategy(mut self, strategy: ParallelStrategy) -> Self {
         self.config.strategy = strategy;
         self
     }
 
+    /// 构建计算器
     pub fn build(self) -> ParallelFluxCalculator<B> {
         ParallelFluxCalculator::new(self.config, self.backend)
     }
 }
 
-impl<B: Backend> Default for ParallelFluxCalculatorBuilder<B> 
+impl<B: Backend> Default for ParallelFluxCalculatorBuilder<B>
 where
     B: Default,
 {
@@ -825,10 +773,6 @@ where
         Self::new(B::default())
     }
 }
-    
-// ============================================================
-// 测试
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -857,16 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn test_colored_strategy() {
-        let config = ParallelFluxConfig::<f64>::builder()
-            .strategy(ParallelStrategy::Colored)
-            .build();
-        
-        assert_eq!(config.strategy, ParallelStrategy::Colored);
-    }
-
-    #[test]
-    fn test_metrics() {
+    fn test_metrics_record() {
         let mut metrics = FluxComputeMetrics::default();
         metrics.record(1000, true, Duration::from_millis(10));
         metrics.record(500, false, Duration::from_millis(5));
@@ -878,24 +813,12 @@ mod tests {
     }
 
     #[test]
-    fn test_calculator_builder() {
-        let backend = CpuBackend::<f64>::new();
-        let calc = ParallelFluxCalculatorBuilder::new(backend)
-            .gravity(10.0)
-            .strategy(ParallelStrategy::CollectThenAccumulate)
-            .build();
-
-        assert!((calc.config().g - 10.0).abs() < 1e-10);
-        assert_eq!(calc.config().strategy, ParallelStrategy::CollectThenAccumulate);
-    }
-
-    #[test]
     fn test_f32_backend() {
         let backend = CpuBackend::<f32>::new();
         let config = ParallelFluxConfig::<f32>::builder()
             .gravity(10.0f32)
             .build();
-        
+
         let calc = ParallelFluxCalculator::<CpuBackend<f32>>::new(config, backend);
         assert!((calc.config().g - 10.0f32).abs() < 1e-6);
     }

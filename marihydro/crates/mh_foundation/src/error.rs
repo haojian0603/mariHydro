@@ -41,7 +41,7 @@ use std::{fmt, io, path::PathBuf, sync::PoisonError, sync::mpsc::SendError};
 ///
 /// # 示例
 ///
-/// ```
+/// ``` 
 /// use mh_foundation::error::MhResult;
 ///
 /// fn read_data() -> MhResult<Vec<f64>> {
@@ -75,7 +75,7 @@ pub enum MhError {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ``` 
     /// # use mh_foundation::error::MhError;
     /// let err = MhError::io("磁盘已满");
     /// assert!(err.to_string().contains("IO错误"));
@@ -105,7 +105,7 @@ pub enum MhError {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ``` 
     /// # use mh_foundation::error::{MhError, MhResult};
     /// fn add_vectors(a: &[f64], b: &[f64]) -> MhResult<Vec<f64>> {
     ///     if a.len() != b.len() {
@@ -195,7 +195,7 @@ impl MhError {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ``` 
     /// # use mh_foundation::error::MhError;
     /// let err = MhError::io("磁盘已满");
     /// assert!(err.to_string().contains("IO错误"));
@@ -304,7 +304,7 @@ impl MhError {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ``` 
     /// # use mh_foundation::error::{MhError, MhResult};
     /// fn divide(a: f64, b: f64) -> MhResult<f64> {
     ///     mh_foundation::ensure!(b != 0.0, MhError::invalid_input("除数不能为零"));
@@ -330,7 +330,7 @@ impl MhError {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ``` 
     /// # use mh_foundation::error::{MhError, MhResult};
     /// fn process(a: &[f64], b: &[f64]) -> MhResult<()> {
     ///     MhError::check_size("vectors", a.len(), b.len())?;
