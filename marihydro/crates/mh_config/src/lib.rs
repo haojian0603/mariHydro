@@ -39,6 +39,7 @@ pub mod precision;
 pub mod solver_config;
 pub mod dyn_solver;
 pub mod error;
+pub mod hot_reload;
 
 /// 层级标识
 pub const LAYER: u8 = 4;
@@ -48,3 +49,7 @@ pub use precision::Precision;
 pub use solver_config::{SolverConfig, MeshConfig, PhysicsConfig, OutputConfig};
 pub use dyn_solver::{DynSolver, GridInfo, MetricsSnapshot, SolverError};
 pub use error::ConfigError;
+pub use hot_reload::{
+    ConfigWatcher, ConfigUpdates, ConfigValue, HotReloadConfig,
+    HotReloadable, HotReloadError, HotReloadResult,
+};

@@ -138,7 +138,6 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
         unsafe {
             std::ptr::copy_nonoverlapping(vec.as_ptr(), aligned.ptr, len);
         }
-        std::mem::forget(vec);
         aligned.len = len;
         aligned
     }

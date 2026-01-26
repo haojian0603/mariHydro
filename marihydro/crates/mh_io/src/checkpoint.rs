@@ -182,8 +182,11 @@ impl Checkpoint {
 
     /// 从网格快照计算哈希
     pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot) -> Self {
-        // 简单哈希：组合节点数和单元数
-        self.mesh_hash = (mesh.n_nodes as u64) << 32 | (mesh.n_cells as u64);
+        let mut h = 0u64;
+        for (x, y) in &mesh.node_positions {
+            h = h.wrapping_add(x.to_bits() ^ y.to_bits());
+        }
+        self.mesh_hash = h;
         self
     }
 
@@ -196,63 +199,52 @@ impl Checkpoint {
 
         // 使用临时文件写入，成功后重命名（原子操作）
         let temp_path = path.with_extension("mhck.tmp");
-        
+
         {
             let file = File::create(&temp_path)?;
             let mut writer = BufWriter::new(file);
+            let mut hasher = crc32fast::Hasher::new();
 
-            // 收集所有数据用于计算 CRC
-            let mut data = Vec::new();
+            macro_rules! write_crc {
+                ($bytes:expr) => {{
+                    writer.write_all($bytes)?;
+                    hasher.update($bytes);
+                }}
+            }
 
-            // 魔数
-            data.extend_from_slice(CHECKPOINT_MAGIC);
+            write_crc!(CHECKPOINT_MAGIC);
+            write_crc!(&self.version.to_le_bytes());
+            write_crc!(&self.time.to_le_bytes());
+            write_crc!(&(self.step as u64).to_le_bytes());
 
-            // 版本
-            data.extend_from_slice(&self.version.to_le_bytes());
-
-            // 时间和步数
-            data.extend_from_slice(&self.time.to_le_bytes());
-            data.extend_from_slice(&(self.step as u64).to_le_bytes());
-
-            // 配置哈希
             let hash = self.config_hash.unwrap_or(0);
-            data.extend_from_slice(&hash.to_le_bytes());
+            write_crc!(&hash.to_le_bytes());
+            write_crc!(&self.created_at.to_le_bytes());
 
-            // 创建时间
-            data.extend_from_slice(&self.created_at.to_le_bytes());
-
-            // 单元数
             let n_cells = self.state.n_cells();
-            data.extend_from_slice(&(n_cells as u64).to_le_bytes());
+            write_crc!(&(n_cells as u64).to_le_bytes());
 
-            // 状态数据
             for &h in &self.state.h {
-                data.extend_from_slice(&h.to_le_bytes());
+                write_crc!(&h.to_le_bytes());
             }
             for &hu in &self.state.hu {
-                data.extend_from_slice(&hu.to_le_bytes());
+                write_crc!(&hu.to_le_bytes());
             }
             for &hv in &self.state.hv {
-                data.extend_from_slice(&hv.to_le_bytes());
+                write_crc!(&hv.to_le_bytes());
             }
 
-            // 底床高程
             let has_z = self.state.z.is_some() as u8;
-            data.push(has_z);
+            write_crc!(&[has_z]);
             if let Some(z) = &self.state.z {
                 for &val in z {
-                    data.extend_from_slice(&val.to_le_bytes());
+                    write_crc!(&val.to_le_bytes());
                 }
             }
 
-            // 网格哈希
-            data.extend_from_slice(&self.mesh_hash.to_le_bytes());
+            write_crc!(&self.mesh_hash.to_le_bytes());
 
-            // 写入数据
-            writer.write_all(&data)?;
-
-            // 计算并写入 CRC32
-            let crc = Self::compute_crc32(&data);
+            let crc = hasher.finalize();
             writer.write_all(&crc.to_le_bytes())?;
 
             writer.flush()?;
@@ -298,18 +290,17 @@ impl Checkpoint {
             });
         }
 
-        // 解析数据
         let mut offset = 0;
 
-        // 魔数
+        if data.len() < 4 {
+            return Err(CheckpointError::Corrupted("unexpected EOF".into()));
+        }
         if &data[offset..offset + 4] != CHECKPOINT_MAGIC {
             return Err(CheckpointError::Format("无效的检查点文件格式".into()));
         }
         offset += 4;
 
-        // 版本
-        let version = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        offset += 4;
+        let version = read_u32(data, &mut offset)?;
 
         if version > MAX_SUPPORTED_VERSION {
             return Err(CheckpointError::Version {
@@ -318,25 +309,11 @@ impl Checkpoint {
             });
         }
 
-        // 时间
-        let time = f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // 步数
-        let step = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
-
-        // 配置哈希
-        let config_hash = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // 创建时间
-        let created_at = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // 单元数
-        let n_cells = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
+        let time = read_f64(data, &mut offset)?;
+        let step = read_u64(data, &mut offset)? as usize;
+        let config_hash = read_u64(data, &mut offset)?;
+        let created_at = read_u64(data, &mut offset)?;
+        let n_cells = read_u64(data, &mut offset)? as usize;
 
         // 状态数据
         let mut h = Vec::with_capacity(n_cells);
@@ -344,27 +321,26 @@ impl Checkpoint {
         let mut hv = Vec::with_capacity(n_cells);
 
         for _ in 0..n_cells {
-            h.push(f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()));
-            offset += 8;
+            h.push(read_f64(data, &mut offset)?);
         }
         for _ in 0..n_cells {
-            hu.push(f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()));
-            offset += 8;
+            hu.push(read_f64(data, &mut offset)?);
         }
         for _ in 0..n_cells {
-            hv.push(f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()));
-            offset += 8;
+            hv.push(read_f64(data, &mut offset)?);
         }
 
         // 底床高程
+        if offset >= data.len() {
+            return Err(CheckpointError::Corrupted("unexpected EOF".into()));
+        }
         let has_z = data[offset] != 0;
         offset += 1;
 
         let z = if has_z {
             let mut z_vec = Vec::with_capacity(n_cells);
             for _ in 0..n_cells {
-                z_vec.push(f64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()));
-                offset += 8;
+                z_vec.push(read_f64(data, &mut offset)?);
             }
             Some(z_vec)
         } else {
@@ -373,7 +349,7 @@ impl Checkpoint {
 
         // 网格哈希
         let mesh_hash = if offset + 8 <= data.len() {
-            u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
+            read_u64(data, &mut offset)?
         } else {
             0
         };
@@ -480,6 +456,28 @@ impl Checkpoint {
         }
         !crc
     }
+}
+
+fn read_u32(data: &[u8], offset: &mut usize) -> CheckpointResult<u32> {
+    if *offset + 4 > data.len() {
+        return Err(CheckpointError::Corrupted("unexpected EOF".into()));
+    }
+    let v = u32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap());
+    *offset += 4;
+    Ok(v)
+}
+
+fn read_u64(data: &[u8], offset: &mut usize) -> CheckpointResult<u64> {
+    if *offset + 8 > data.len() {
+        return Err(CheckpointError::Corrupted("unexpected EOF".into()));
+    }
+    let v = u64::from_le_bytes(data[*offset..*offset + 8].try_into().unwrap());
+    *offset += 8;
+    Ok(v)
+}
+
+fn read_f64(data: &[u8], offset: &mut usize) -> CheckpointResult<f64> {
+    read_u64(data, offset).map(f64::from_bits)
 }
 
 /// 生成 CRC32 查找表（编译期计算）

@@ -10,6 +10,10 @@
 use super::types::{BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
 use crate::types::NumericalParams;
+use mh_runtime::Backend;
+use num_traits::{FromPrimitive, Float, Zero};
+use mh_runtime::Vector2D;
+use mh_runtime::RuntimeScalar;
 
 // ============================================================
 // 动量镜像模式
@@ -69,9 +73,10 @@ impl GhostMomentumMode {
 /// use mh_physics::boundary::{GhostStateCalculator, BoundaryKind, BoundaryParams};
 /// use mh_physics::state::ConservedState;
 ///
+/// type B = mh_runtime::CpuBackend<f64>;
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
 /// let interior = ConservedState::<f64>::from_primitive(1.0, 0.5, 0.0);
-/// let normal = (1.0, 0.0);  // 使用元组而非 DVec2
+/// let normal = B::vec2_new(1.0, 0.0);  // 使用 backend 向量类型
 /// let z_bed = 0.0; // 底床高程
 ///
 /// let ghost = calculator.compute_ghost(
@@ -97,197 +102,190 @@ impl GhostStateCalculator {
         Self::new(BoundaryParams::from_numerical_params(params))
     }
 
-    /// 计算幽灵单元状态
-    ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `kind`: 边界类型
-    /// - `normal`: 面外法向量（单位向量）(nx, ny)
-    /// - `external`: 外部强迫数据（用于开边界）
-    /// - `z_bed`: 内部单元底床高程（用于计算水位）
-    ///
-    /// # 返回
-    /// 幽灵单元的守恒量状态
-    // ALLOW_F64: 与 ConservedState 和速度元组配合使用
-    pub fn compute_ghost(
+    /// 计算幽灵单元状态（Backend 泛型）
+    pub fn compute_ghost<B: Backend>(
         &self,
-        interior: ConservedState<f64>,
+        interior: ConservedState<B::Scalar>,
         kind: BoundaryKind,
-        normal: (f64, f64),
+        normal: B::Vector2D,
         external: Option<&ExternalForcing>,
-        z_bed: f64, 
-    ) -> ConservedState::<f64> {
+        z_bed: B::Scalar,
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float,
+    {
         match kind {
-            BoundaryKind::Wall => self.compute_wall_ghost(interior, normal),
-            BoundaryKind::Symmetry => self.compute_symmetry_ghost(interior, normal),
-            BoundaryKind::OpenSea => {
-                self.compute_open_sea_ghost(interior, normal, external.unwrap_or(&ExternalForcing::ZERO), z_bed)
-            }
-            BoundaryKind::Outflow => self.compute_outflow_ghost(interior),
+            BoundaryKind::Wall => self.compute_wall_ghost::<B>(interior, normal),
+            BoundaryKind::Symmetry => self.compute_symmetry_ghost::<B>(interior, normal),
+            BoundaryKind::OpenSea => self.compute_open_sea_ghost::<B>(
+                interior,
+                normal,
+                external.unwrap_or(&ExternalForcing::ZERO),
+                z_bed,
+            ),
+            BoundaryKind::Outflow => self.compute_outflow_ghost::<B>(interior),
             BoundaryKind::RiverInflow => {
-                self.compute_inflow_ghost(interior, external.unwrap_or(&ExternalForcing::ZERO))
+                self.compute_inflow_ghost::<B>(interior, external.unwrap_or(&ExternalForcing::ZERO))
             }
-            BoundaryKind::Periodic => {
-                // 周期边界需要特殊处理，这里返回内部状态作为占位
-                // 实际周期边界在网格连接阶段处理
-                interior
-            }
+            BoundaryKind::Periodic => interior,
         }
     }
 
-    /// 计算固壁边界的幽灵状态
-    ///
-    /// 实现无穿透条件：法向速度反向。
-    fn compute_wall_ghost(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> ConservedState::<f64> {
-        let h = interior.h.max(self.params.h_min);
+    /// 计算固壁边界的幽灵状态（无穿透，法向反射）
+    fn compute_wall_ghost<B: Backend>(
+        &self,
+        interior: ConservedState<B::Scalar>,
+        normal: B::Vector2D,
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float + Zero + FromPrimitive,
+    {
+        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(h_min);
 
-        // 计算速度
-        let u = interior.hu / h;
-        let v = interior.hv / h;
+        let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
+        let v = if h > B::Scalar::ZERO { interior.hv / h } else { B::Scalar::ZERO };
 
-        // 分解为法向和切向分量 (dot product)
-        let un = u * normal.0 + v * normal.1;
-        // 切向分量: ut = velocity - normal * un
-        let ut_x = u - normal.0 * un;
-        let ut_y = v - normal.1 * un;
+        let nx = normal.x();
+        let ny = normal.y();
+        let un = u * nx + v * ny;
+        let ut_x = u - nx * un;
+        let ut_y = v - ny * un;
 
-        // 幽灵速度：法向反转，切向保持
-        let ghost_u = ut_x - normal.0 * un;
-        let ghost_v = ut_y - normal.1 * un;
+        let ghost_u = ut_x - nx * un;
+        let ghost_v = ut_y - ny * un;
 
-        ConservedState::<f64> {
+        ConservedState {
             h,
             hu: h * ghost_u,
             hv: h * ghost_v,
         }
     }
 
-    /// 计算对称边界的幽灵状态
-    ///
-    /// 与固壁类似，但可能有不同的动量处理。
-    fn compute_symmetry_ghost(&self, interior: ConservedState<f64>, normal: (f64, f64)) -> ConservedState::<f64> {
-        // 对称边界与固壁类似，法向速度反向
-        self.compute_wall_ghost(interior, normal)
+    /// 对称边界：与固壁同处理
+    fn compute_symmetry_ghost<B: Backend>(
+        &self,
+        interior: ConservedState<B::Scalar>,
+        normal: B::Vector2D,
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float,
+    {
+        self.compute_wall_ghost::<B>(interior, normal)
     }
 
-    /// 计算开海边界的幽灵状态
-    ///
-    /// 使用 Flather 辐射条件。
-    /// 
-    /// Flather 条件基于特征分解：
-    /// un* = un_ext + (c/h)(η_int - η_ext)
-    /// 其中 η = h + z_bed 是水位
-    fn compute_open_sea_ghost(
+    /// 开海边界（Flather 辐射，含干湿处理）
+    fn compute_open_sea_ghost<B: Backend>(
         &self,
-        interior: ConservedState<f64>,
-        normal: (f64, f64),
+        interior: ConservedState<B::Scalar>,
+        normal: B::Vector2D,
         external: &ExternalForcing,
-        z_bed: f64,
-    ) -> ConservedState::<f64> {
-        let h_int = interior.h.max(self.params.h_min);
-        let c = self.params.wave_speed(h_int);
+        z_bed: B::Scalar,
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float + Zero + FromPrimitive,
+    {
+        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ONE);
+        let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
 
-        // 内部速度
+        let h_int = interior.h.max(h_min);
+        if h_int <= h_min {
+            return ConservedState { h: h_min, hu: B::Scalar::ZERO, hv: B::Scalar::ZERO };
+        }
+
         let u_int = interior.hu / h_int;
         let v_int = interior.hv / h_int;
+        let nx = normal.x();
+        let ny = normal.y();
+        let un_int = u_int * nx + v_int * ny;
 
-        // 法向速度 (dot product)
-        let un_int = u_int * normal.0 + v_int * normal.1;
-        let un_ext = external.velocity.0 * normal.0 + external.velocity.1 * normal.1;
+        let eta_ext = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO);
+        let h_ext = (eta_ext - z_bed).max(h_min);
+        let c_int = (g * h_int).sqrt();
+        let c_ext = (g * h_ext).sqrt();
 
-        // Flather 条件修正法向速度
-        // 正确使用水位 η = h + z_bed
-        let eta_int = h_int + z_bed;
-        let eta_ext = external.eta.max(self.params.h_min);
-        let eta_diff = eta_int - eta_ext;
-        let un_ghost = un_ext - (c / h_int) * eta_diff;
+        let lambda_out = un_int - c_int;
+        let un_ghost = if lambda_out > B::Scalar::ZERO {
+            // 超临界/流出，纯辐射
+            un_int - (c_int / h_int) * (h_int - h_ext)
+        } else {
+            // 亚临界：外部强迫 + 辐射修正
+            two * c_ext - un_int - (c_int / h_int) * (h_int - h_ext)
+        };
 
-        // 切向速度保持: ut = velocity - normal * un
-        let ut_x = u_int - normal.0 * un_int;
-        let ut_y = v_int - normal.1 * un_int;
-        // ghost_velocity = ut + normal * un_ghost
-        let ghost_u = ut_x + normal.0 * un_ghost;
-        let ghost_v = ut_y + normal.1 * un_ghost;
+        let ut_int = -u_int * ny + v_int * nx; // 切向分量标量
+        let t = B::vec2_new(-ny, nx);
+        let vel_ghost = B::vec2_add(
+            &B::vec2_scale(&normal, un_ghost),
+            &B::vec2_scale(&t, ut_int),
+        );
 
-        // 幽灵水深：从外部水位减去底床高程
-        // h_ghost = max(0, eta_ext - z_bed)
-        let h_ghost = (external.eta - z_bed).max(self.params.h_min);
-
-        ConservedState::<f64> {
-            h: h_ghost,
-            hu: h_ghost * ghost_u,
-            hv: h_ghost * ghost_v,
+        let ghost_u = vel_ghost.x();
+        let ghost_v = vel_ghost.y();
+        ConservedState {
+            h: h_ext,
+            hu: h_ext * ghost_u,
+            hv: h_ext * ghost_v,
         }
     }
 
-    /// 计算出流边界的幽灵状态
-    ///
-    /// 零梯度外推：直接复制内部状态。
-    fn compute_outflow_ghost(&self, interior: ConservedState<f64>) -> ConservedState::<f64> {
+    /// 出流：零梯度外推
+    fn compute_outflow_ghost<B: Backend>(
+        &self,
+        interior: ConservedState<B::Scalar>,
+    ) -> ConservedState<B::Scalar> {
         interior
     }
 
-    /// 计算入流边界的幽灵状态
-    ///
-    /// 使用外部强迫的速度和水深。
-    fn compute_inflow_ghost(
+    /// 入流：使用外部水位/速度
+    fn compute_inflow_ghost<B: Backend>(
         &self,
-        _interior: ConservedState<f64>,
+        _interior: ConservedState<B::Scalar>,
         external: &ExternalForcing,
-    ) -> ConservedState::<f64> {
-        let h = external.eta.max(self.params.h_min);
-        ConservedState::<f64> {
-            h,
-            hu: h * external.velocity.0,
-            hv: h * external.velocity.1,
-        }
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float + Zero + FromPrimitive,
+    {
+        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO).max(h_min);
+        let u = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO);
+        let v = B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        ConservedState { h, hu: h * u, hv: h * v }
     }
 
     /// 使用指定的动量模式计算幽灵状态
-    ///
-    /// 更灵活的接口，允许自定义动量处理方式。
-    ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量 (nx, ny)
-    /// - `mode`: 动量镜像模式
-    ///
-    /// # 返回
-    /// 幽灵单元状态
-    pub fn compute_ghost_with_mode(
+    pub fn compute_ghost_with_mode<B: Backend>(
         &self,
-        interior: ConservedState<f64>,
-        normal: (f64, f64),
+        interior: ConservedState<B::Scalar>,
+        normal: B::Vector2D,
         mode: GhostMomentumMode,
-    ) -> ConservedState::<f64> {
-        let h = interior.h.max(self.params.h_min);
-        let u = interior.hu / h;
-        let v = interior.hv / h;
+    ) -> ConservedState<B::Scalar>
+    where
+        B::Scalar: Float + Zero + FromPrimitive,
+    {
+        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(h_min);
+        let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
+        let v = if h > B::Scalar::ZERO { interior.hv / h } else { B::Scalar::ZERO };
 
-        // dot product
-        let un = u * normal.0 + v * normal.1;
-        // ut = velocity - normal * un
-        let ut_x = u - normal.0 * un;
-        let ut_y = v - normal.1 * un;
+        let nx = normal.x();
+        let ny = normal.y();
+        let un = u * nx + v * ny;
+        let ut_x = u - nx * un;
+        let ut_y = v - ny * un;
 
         let (ghost_u, ghost_v) = match mode {
-            GhostMomentumMode::FullReflect => {
-                // ut - normal * un
-                (ut_x - normal.0 * un, ut_y - normal.1 * un)
-            }
+            GhostMomentumMode::FullReflect => (ut_x - nx * un, ut_y - ny * un),
             GhostMomentumMode::FreeSlip => {
-                // ut - normal * (un * 0.5)
-                (ut_x - normal.0 * (un * 0.5), ut_y - normal.1 * (un * 0.5))
+                let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+                (ut_x - nx * (un * half), ut_y - ny * (un * half))
             }
             GhostMomentumMode::NoReflect => (u, v),
             GhostMomentumMode::FullCancel => (-u, -v),
         };
 
-        ConservedState::<f64> {
-            h,
-            hu: h * ghost_u,
-            hv: h * ghost_v,
-        }
+        ConservedState { h, hu: h * ghost_u, hv: h * ghost_v }
     }
 
     /// 批量计算幽灵状态
@@ -301,15 +299,17 @@ impl GhostStateCalculator {
     /// - `externals`: 外部强迫数组（可选）
     /// - `z_beds`: 底床高程数组
     /// - `output`: 输出数组
-    pub fn compute_ghost_batch(
+    pub fn compute_ghost_batch<B: Backend>(
         &self,
-        interiors: &[ConservedState<f64>],
+        interiors: &[ConservedState<B::Scalar>],
         kinds: &[BoundaryKind],
-        normals: &[(f64, f64)],
+        normals: &[B::Vector2D],
         externals: Option<&[ExternalForcing]>,
-        z_beds: &[f64],
-        output: &mut [ConservedState<f64>],
-    ) {
+        z_beds: &[B::Scalar],
+        output: &mut [ConservedState<B::Scalar>],
+    ) where
+        B::Scalar: Float,
+    {
         debug_assert_eq!(interiors.len(), kinds.len());
         debug_assert_eq!(interiors.len(), normals.len());
         debug_assert_eq!(interiors.len(), z_beds.len());
@@ -319,7 +319,7 @@ impl GhostStateCalculator {
 
         for i in 0..interiors.len() {
             let external = externals.map(|e| &e[i]).unwrap_or(&empty_forcing);
-            output[i] = self.compute_ghost(interiors[i], kinds[i], normals[i], Some(external), z_beds[i]);
+            output[i] = self.compute_ghost::<B>(interiors[i], kinds[i], normals[i], Some(external), z_beds[i]);
         }
     }
 
@@ -350,11 +350,15 @@ impl Default for GhostStateCalculator {
 /// # 返回
 /// 反射后的速度 (u, v)
 #[inline]
-pub fn reflect_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, f64) {
-    // dot product
-    let un = velocity.0 * normal.0 + velocity.1 * normal.1;
-    // velocity - 2.0 * un * normal
-    (velocity.0 - 2.0 * un * normal.0, velocity.1 - 2.0 * un * normal.1)
+pub fn reflect_velocity<B: Backend>(velocity: (B::Scalar, B::Scalar), normal: B::Vector2D) -> (B::Scalar, B::Scalar)
+where
+    B::Scalar: Float + Zero + FromPrimitive,
+{
+    let nx = normal.x();
+    let ny = normal.y();
+    let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
+    let un = velocity.0 * nx + velocity.1 * ny;
+    (velocity.0 - two * un * nx, velocity.1 - two * un * ny)
 }
 
 /// 分解速度为法向和切向分量
@@ -366,11 +370,14 @@ pub fn reflect_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, f64) 
 /// # 返回
 /// (法向分量标量, 切向分量向量 (ut_x, ut_y))
 #[inline]
-pub fn decompose_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, (f64, f64)) {
-    // dot product
-    let un = velocity.0 * normal.0 + velocity.1 * normal.1;
-    // ut = velocity - normal * un
-    let ut = (velocity.0 - normal.0 * un, velocity.1 - normal.1 * un);
+pub fn decompose_velocity<B: Backend>(velocity: (B::Scalar, B::Scalar), normal: B::Vector2D) -> (B::Scalar, (B::Scalar, B::Scalar))
+where
+    B::Scalar: Float,
+{
+    let nx = normal.x();
+    let ny = normal.y();
+    let un = velocity.0 * nx + velocity.1 * ny;
+    let ut = (velocity.0 - nx * un, velocity.1 - ny * un);
     (un, ut)
 }
 
@@ -381,18 +388,21 @@ pub fn decompose_velocity(velocity: (f64, f64), normal: (f64, f64)) -> (f64, (f6
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     fn approx_eq(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-10
     }
 
+    type B = CpuBackend<f64>;
+
     #[test]
     fn test_wall_ghost_no_penetration() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
-        let normal = (1.0, 0.0);
+        let normal = B::vec2_new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
+        let ghost = calculator.compute_ghost::<B>(interior, BoundaryKind::Wall, normal, None, 0.0);
 
         // 水深保持
         assert!(approx_eq(ghost.h, 1.0));
@@ -406,9 +416,9 @@ mod tests {
     fn test_wall_ghost_oblique() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 1.0);
-        let normal = (1.0, 0.0);
+        let normal = B::vec2_new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
+        let ghost = calculator.compute_ghost::<B>(interior, BoundaryKind::Wall, normal, None, 0.0);
 
         // 法向反转，切向保持
         assert!(approx_eq(ghost.hu, -1.0));
@@ -419,9 +429,9 @@ mod tests {
     fn test_outflow_ghost() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedState::<f64>::from_primitive(1.5, 0.5, 0.3);
-        let normal = (1.0, 0.0);
+        let normal = B::vec2_new(1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None, 0.0);
+        let ghost = calculator.compute_ghost::<B>(interior, BoundaryKind::Outflow, normal, None, 0.0);
 
         // 出流：完全复制
         assert!(approx_eq(ghost.h, 1.5));
@@ -433,10 +443,10 @@ mod tests {
     fn test_inflow_ghost() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedState::<f64>::from_primitive(1.0, 0.0, 0.0);
-        let normal = (-1.0, 0.0);
+        let normal = B::vec2_new(-1.0, 0.0);
         let external = ExternalForcing::new(2.0, 1.0, 0.0);
 
-        let ghost = calculator.compute_ghost(
+        let ghost = calculator.compute_ghost::<B>(
             interior,
             BoundaryKind::RiverInflow,
             normal,
@@ -457,13 +467,13 @@ mod tests {
         
         // 内部单元: h=1.0, z_bed=0.5, 所以 η_int = 1.5
         let interior = ConservedState::<f64>::from_primitive(1.0, 0.0, 0.0);
-        let normal = (1.0, 0.0);
+        let normal = B::vec2_new(1.0, 0.0);
         let z_bed = 0.5;
         
         // 外部强迫: η_ext = 1.5 (与内部相同)
         let external = ExternalForcing::new(1.5, 0.0, 0.0);
         
-        let ghost = calculator.compute_ghost(
+        let ghost = calculator.compute_ghost::<B>(
             interior,
             BoundaryKind::OpenSea,
             normal,
@@ -481,18 +491,18 @@ mod tests {
     fn test_ghost_momentum_modes() {
         let calculator = GhostStateCalculator::default();
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
-        let normal = (1.0, 0.0);
+        let normal = B::vec2_new(1.0, 0.0);
 
         // FullReflect
-        let ghost = calculator.compute_ghost_with_mode(interior, normal, GhostMomentumMode::FullReflect);
+        let ghost = calculator.compute_ghost_with_mode::<B>(interior, normal, GhostMomentumMode::FullReflect);
         assert!(approx_eq(ghost.hu, -1.0));
 
         // NoReflect
-        let ghost = calculator.compute_ghost_with_mode(interior, normal, GhostMomentumMode::NoReflect);
+        let ghost = calculator.compute_ghost_with_mode::<B>(interior, normal, GhostMomentumMode::NoReflect);
         assert!(approx_eq(ghost.hu, 1.0));
 
         // FullCancel
-        let ghost = calculator.compute_ghost_with_mode(interior, normal, GhostMomentumMode::FullCancel);
+        let ghost = calculator.compute_ghost_with_mode::<B>(interior, normal, GhostMomentumMode::FullCancel);
         assert!(approx_eq(ghost.hu, -1.0));
         assert!(approx_eq(ghost.hv, 0.0));
     }
@@ -500,15 +510,15 @@ mod tests {
     #[test]
     fn test_reflect_velocity() {
         let v = (1.0, 0.0);
-        let n = (1.0, 0.0);
-        let reflected = reflect_velocity(v, n);
+        let n = B::vec2_new(1.0, 0.0);
+        let reflected = reflect_velocity::<B>(v, n);
         assert!(approx_eq(reflected.0, -1.0));
         assert!(approx_eq(reflected.1, 0.0));
 
         // 斜向入射
         let v = (1.0, 1.0);
-        let n = (1.0, 0.0);
-        let reflected = reflect_velocity(v, n);
+        let n = B::vec2_new(1.0, 0.0);
+        let reflected = reflect_velocity::<B>(v, n);
         assert!(approx_eq(reflected.0, -1.0));
         assert!(approx_eq(reflected.1, 1.0));
     }
@@ -516,8 +526,8 @@ mod tests {
     #[test]
     fn test_decompose_velocity() {
         let v = (3.0, 4.0);
-        let n = (1.0, 0.0);
-        let (un, ut) = decompose_velocity(v, n);
+        let n = B::vec2_new(1.0, 0.0);
+        let (un, ut) = decompose_velocity::<B>(v, n);
         assert!(approx_eq(un, 3.0));
         assert!(approx_eq(ut.0, 0.0));
         assert!(approx_eq(ut.1, 4.0));
@@ -532,11 +542,11 @@ mod tests {
             ConservedState::<f64>::from_primitive(2.0, 0.0, 1.0),
         ];
         let kinds = vec![BoundaryKind::Wall, BoundaryKind::Outflow];
-        let normals = vec![(1.0, 0.0), (0.0, 1.0)];
+        let normals = vec![B::vec2_new(1.0, 0.0), B::vec2_new(0.0, 1.0)];
         let z_beds = vec![0.0, 0.0];
 
         let mut output = vec![ConservedState::<f64>::default(); 2];
-        calculator.compute_ghost_batch(&interiors, &kinds, &normals, None, &z_beds, &mut output);
+        calculator.compute_ghost_batch::<B>(&interiors, &kinds, &normals, None, &z_beds, &mut output);
 
         // 固壁：法向反转
         assert!(approx_eq(output[0].hu, -1.0));

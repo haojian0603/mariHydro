@@ -132,7 +132,14 @@ impl<T> Idx<T> {
     /// 从 usize 创建
     #[inline]
     pub fn from_usize(index: usize) -> Self {
-        Self::new(index as u32)
+        Self::try_from_usize(index).unwrap_or(Self::INVALID)
+    }
+
+    pub fn try_from_usize(index: usize) -> Result<Self, crate::error::MhError> {
+        if index > u32::MAX as usize {
+            return Err(crate::error::MhError::invalid_input("Idx 溢出: usize > u32::MAX"));
+        }
+        Ok(Self::new(index as u32))
     }
 
     /// 从原始 u32 创建

@@ -4,10 +4,9 @@
 //! 预留 CUDA 后端支持，当前仅提供接口定义。
 //! 实际 GPU 实现将在未来阶段完成。
 //!
-//! # Safety
+//! # 说明
 //!
-//! 本模块使用 unsafe 代码实现 Send/Sync traits，经过审查确保线程安全。
-#![allow(unsafe_code)]
+//! 当前 GPU 后端为占位实现，提供安全的 CPU 回退以避免运行期崩溃。
 
 use mh_runtime::DeviceBuffer;
 use mh_runtime::RuntimeScalar as Scalar;
@@ -34,88 +33,66 @@ impl<S: Scalar> CudaBackendPlaceholder<S> {
 /// GPU 缓冲区占位符
 #[derive(Debug, Clone)]
 pub struct GpuBuffer<T: Pod> {
-    len: usize,
-    _marker: PhantomData<T>,
+    data: Vec<T>,
 }
 
-// SAFETY: GpuBuffer<T> 的线程安全性分析
-//
-// 1. 当前实现说明：
-//    - 这是一个占位符类型，尚未实现实际的 GPU 功能
-//    - 所有操作方法都会 panic (unimplemented!)
-//
-// 2. 内部状态：
-//    - len: usize - 缓冲区长度（纯数据）
-//    - _marker: PhantomData<T> - 零大小类型标记
-//
-// 3. Send 安全性 (T: Pod 时)：
-//    - PhantomData<T> 不包含实际数据
-//    - len 是 Copy 类型
-//    - 当未来实现 GPU 功能时，CUDA/GPU 缓冲区句柄
-//      通常是线程安全的（GPU 驱动处理同步）
-//
-// 4. Sync 安全性 (T: Pod 时)：
-//    - 当前实现不包含可变状态
-//    - 未来实现 GPU 功能时，需要确保：
-//      a) GPU 内存访问通过驱动同步
-//      b) 主机端访问通过适当的复制操作
-//
-// 5. Pod 约束保证：
-//    - T: Pod 确保数据可以安全地在主机和设备间复制
-//    - 不包含指针或需要特殊处理的资源
-//
-// TODO: 实现实际 GPU 功能时需要重新审查这些保证
-unsafe impl<T: Pod> Send for GpuBuffer<T> {}
-unsafe impl<T: Pod> Sync for GpuBuffer<T> {}
+impl<T: Pod + Default + Clone> GpuBuffer<T> {
+    /// 创建 CPU 回退缓冲区
+    pub fn new(len: usize) -> Self {
+        Self {
+            data: vec![T::default(); len],
+        }
+    }
+}
 
 impl<T: Pod> Index<usize> for GpuBuffer<T> {
     type Output = T;
     fn index(&self, _index: usize) -> &Self::Output {
-        unimplemented!("GPU buffer direct indexing not supported, use copy_to_vec first")
+        &self.data[_index]
     }
 }
 
 impl<T: Pod> IndexMut<usize> for GpuBuffer<T> {
     fn index_mut(&mut self, _index: usize) -> &mut Self::Output {
-        unimplemented!("GPU buffer direct indexing not supported, use copy_to_vec first")
+        &mut self.data[_index]
     }
 }
 
 impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for GpuBuffer<T> {
     fn len(&self) -> usize {
-        self.len
+        self.data.len()
     }
     
     fn copy_from_slice(&mut self, _src: &[T]) {
-        unimplemented!("GPU buffer not implemented")
+        self.data.copy_from_slice(_src)
     }
     
     fn copy_to_vec(&self) -> Vec<T> {
-        unimplemented!("GPU buffer not implemented")
+        self.data.clone()
     }
     
     fn copy_to_slice(&self, _dst: &mut [T]) {
-        unimplemented!("GPU buffer not implemented")
+        _dst.copy_from_slice(&self.data)
     }
     
     fn as_slice(&self) -> &[T] {
-        panic!("Cannot access GPU buffer as slice directly")
+        &self.data
     }
     
     fn as_slice_mut(&mut self) -> &mut [T] {
-        panic!("Cannot access GPU buffer as slice directly")
+        &mut self.data
     }
     
     fn fill(&mut self, _value: T) {
-        unimplemented!("GPU buffer not implemented")
+        self.data.fill(_value)
     }
     
     fn resize(&mut self, _new_len: usize, _value: T) {
-        unimplemented!("GPU buffer not implemented")
+        self.data.resize(_new_len, _value)
     }
     
     fn clear(&mut self) {
-        unimplemented!("GPU buffer not implemented")
+        self.data.clear()
     }
 }
 

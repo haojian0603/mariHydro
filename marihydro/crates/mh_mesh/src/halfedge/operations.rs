@@ -5,7 +5,7 @@
 //! 提供边分裂、边折叠、边翻转等 O(1) 拓扑操作。
 
 use super::mesh::{HalfEdge, HalfEdgeMesh, Vertex};
-use mh_foundation::index::{FaceIndex, HalfEdgeIndex, VertexIndex};
+use super::mesh::{FaceIndex, HalfEdgeIndex, VertexIndex};
 
 /// 拓扑操作结果
 #[derive(Debug, Clone)]

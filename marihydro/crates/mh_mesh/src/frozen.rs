@@ -535,8 +535,24 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             ));
         }
 
+        if self.face_owner.len() != self.n_faces {
+            return Err("face_owner length mismatch".into());
+        }
+
+        if self.face_neighbor.len() != self.n_faces {
+            return Err("face_neighbor length mismatch".into());
+        }
+
+        if self.face_length.len() != self.n_faces {
+            return Err("face_length length mismatch".into());
+        }
+
         if self.cell_node_offsets.len() != self.n_cells + 1 {
             return Err("cell_node_offsets length mismatch".to_string());
+        }
+
+        if self.cell_face_offsets.len() != self.n_cells + 1 {
+            return Err("cell_face_offsets mismatch".into());
         }
 
         for (i, &owner) in self.face_owner.iter().enumerate() {

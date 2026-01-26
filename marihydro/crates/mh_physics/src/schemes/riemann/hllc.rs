@@ -273,6 +273,9 @@ impl<B: Backend> RiemannSolver for HllcSolver<B> {
         vel_right: B::Vector2D,
         normal: B::Vector2D,
     ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        let h_left = h_left.max(B::Scalar::ZERO);
+        let h_right = h_right.max(B::Scalar::ZERO);
+
         let is_dry_l = h_left <= self.params.h_dry;
         let is_dry_r = h_right <= self.params.h_dry;
 

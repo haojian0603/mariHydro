@@ -146,8 +146,8 @@ impl RemoteSensingAgent {
     ) -> Vec<f64> {
         let (width, height) = image.dimensions;
         let (min_x, min_y, max_x, max_y) = (image.bounds[0], image.bounds[1], image.bounds[2], image.bounds[3]);
-        let dx = (max_x - min_x) / width as f64;
-        let dy = (max_y - min_y) / height as f64;
+        let dx = (max_x - min_x) / width.saturating_sub(1).max(1) as f64;
+        let dy = (max_y - min_y) / height.saturating_sub(1).max(1) as f64;
 
         let mut result = Vec::with_capacity(target_cells.len());
         for &cell in target_cells {
@@ -178,12 +178,24 @@ impl RemoteSensingAgent {
                     vx0 * (1.0 - ty) + vx1 * ty
                 }
                 InterpolationMethod::IDW { power } => {
-                    let ix = gx.round().max(0.0) as usize;
-                    let iy = gy.round().max(0.0) as usize;
-                    let idx = iy * width + ix;
-                    let base = data.get(idx).copied().unwrap_or_default() as f64;
-                    let w = 1.0 / (dx.hypot(dy).max(1e-6).powf(power));
-                    base * w
+                    let x0 = gx.floor() as usize;
+                    let y0 = gy.floor() as usize;
+                    let x1 = (x0 + 1).min(width.saturating_sub(1));
+                    let y1 = (y0 + 1).min(height.saturating_sub(1));
+
+                    let pts = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)];
+                    let mut ws = 0.0;
+                    let mut vs = 0.0;
+                    for (ix, iy) in pts {
+                        let px = min_x + ix as f64 * dx;
+                        let py = min_y + iy as f64 * dy;
+                        let d = ((cell[0] - px).powi(2) + (cell[1] - py).powi(2)).sqrt().max(1e-6);
+                        let wgt = 1.0 / d.powf(power);
+                        let val = data.get(iy * width + ix).copied().unwrap_or_default() as f64;
+                        ws += wgt;
+                        vs += wgt * val;
+                    }
+                    if ws > 0.0 { vs / ws } else { 0.0 }
                 }
             };
             let conc = self.empirical_inversion(value as f32, image.sensor)

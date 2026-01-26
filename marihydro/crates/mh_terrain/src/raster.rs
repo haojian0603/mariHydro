@@ -21,13 +21,16 @@ pub struct RasterData {
 
 impl RasterData {
     /// 创建新的栅格数据
-    pub fn new(width: usize, height: usize, nodata: f64) -> Self {
-        Self {
-            data: vec![nodata; width * height],
+    pub fn new(width: usize, height: usize, nodata: f64) -> MhResult<Self> {
+        let len = width
+            .checked_mul(height)
+            .ok_or_else(|| mh_foundation::error::MhError::invalid_input("raster size overflow"))?;
+        Ok(Self {
+            data: vec![nodata; len],
             width,
             height,
             nodata,
-        }
+        })
     }
 
     /// 从数据创建

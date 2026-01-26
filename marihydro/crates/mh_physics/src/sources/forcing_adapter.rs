@@ -40,7 +40,6 @@ pub struct WindForcingAdapter {
     /// 空气密度 [kg/m³]
     rho_air: f64,
     /// 水密度 [kg/m³] (预留用于潜在扩展)
-    #[allow(dead_code)]
     rho_water: f64,
     /// 缓存的风速 (u, v)
     cached_wind: (f64, f64),
@@ -59,6 +58,16 @@ impl WindForcingAdapter {
             cached_wind: (0.0, 0.0),
             enabled: true,
         }
+    }
+
+    /// 启用/禁用风场强迫
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// 设置水密度 [kg/m³]
+    pub fn set_rho_water(&mut self, rho_water: f64) {
+        self.rho_water = rho_water;
     }
 
     /// 从恒定风场创建
@@ -111,6 +120,9 @@ impl SourceTerm for WindForcingAdapter {
         cell: usize,
         ctx: &SourceContext,
     ) -> SourceContribution {
+        if !self.enabled {
+            return SourceContribution::ZERO;
+        }
         let h = state.h[cell];
         if ctx.is_dry(h) {
             return SourceContribution::ZERO;
@@ -120,8 +132,7 @@ impl SourceTerm for WindForcingAdapter {
         let (tau_x, tau_y) = self.compute_stress(wind_u, wind_v);
 
         // 动量源项 = τ / ρ_water (转换为 m²/s²)
-        let rho_water = 1025.0;
-        SourceContribution::momentum(tau_x / rho_water, tau_y / rho_water)
+        SourceContribution::momentum(tau_x / self.rho_water, tau_y / self.rho_water)
     }
 
     fn is_explicit(&self) -> bool {
@@ -150,6 +161,11 @@ impl WindForcingAdapterGeneric<f64> {
     pub fn set_stress(&mut self, tau_x: f64, tau_y: f64) {
         self.cached_stress = (tau_x, tau_y);
     }
+
+    /// 启用/禁用风场强迫
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
 }
 
 impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
@@ -171,6 +187,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
         ctx: &SourceContextGeneric<f64>,
     ) -> SourceContributionGeneric<f64> {
+        if !self.enabled {
+            return SourceContributionGeneric::default();
+        }
         let h = state.h[cell];
         if ctx.is_dry(h) {
             return SourceContributionGeneric::default();

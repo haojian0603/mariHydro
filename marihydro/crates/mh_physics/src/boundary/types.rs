@@ -10,6 +10,8 @@
 
 
 use serde::{Deserialize, Serialize};
+use mh_runtime::RuntimeScalar;
+use num_traits::FromPrimitive;
 
 use crate::types::NumericalParams;
 
@@ -343,6 +345,52 @@ impl ExternalForcing {
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.eta.is_finite() && self.velocity.0.is_finite() && self.velocity.1.is_finite()
+    }
+}
+
+/// 泛型外部强迫数据（Backend 友好）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GenericExternalForcing<S> {
+    /// 水位 [m]
+    pub eta: S,
+    /// x 方向速度 [m/s]
+    pub u: S,
+    /// y 方向速度 [m/s]
+    pub v: S,
+    /// 流量 [m³/s]（可选）
+    pub discharge: Option<S>,
+    /// 示踪剂浓度（可选）
+    pub tracer: Option<S>,
+}
+
+impl<S: RuntimeScalar> GenericExternalForcing<S> {
+    pub const ZERO: Self = Self {
+        eta: S::ZERO,
+        u: S::ZERO,
+        v: S::ZERO,
+        discharge: None,
+        tracer: None,
+    };
+
+    pub fn with_eta(eta: S) -> Self {
+        Self { eta, ..Self::ZERO }
+    }
+
+    pub fn with_discharge(discharge: S) -> Self {
+        Self { discharge: Some(discharge), ..Self::ZERO }
+    }
+
+    pub fn from_f64_forcing(forcing: &ExternalForcing) -> Self
+    where
+        S: FromPrimitive,
+    {
+        Self {
+            eta: S::from_f64(forcing.eta).unwrap_or(S::ZERO),
+            u: S::from_f64(forcing.velocity.0).unwrap_or(S::ZERO),
+            v: S::from_f64(forcing.velocity.1).unwrap_or(S::ZERO),
+            discharge: None,
+            tracer: None,
+        }
     }
 }
 

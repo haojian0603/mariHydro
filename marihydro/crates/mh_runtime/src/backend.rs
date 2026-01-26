@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
+use crate::error::{RuntimeError, RuntimeResult};
 use num_traits::FromPrimitive;
 
 /// 密封模块，限制 Backend 只能在库内部实现
@@ -83,6 +84,11 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
         Self::Scalar::from_f64(v).unwrap_or(Self::Scalar::ZERO)
     }
 
+    #[inline]
+    fn try_scalar_from_f64(&self, v: f64) -> RuntimeResult<Self::Scalar> {
+        Self::Scalar::from_f64(v).ok_or(RuntimeError::NonFinite { value: v })
+    }
+
     /// 同步操作（GPU 后端需要）
     fn synchronize(&self) {}
 
@@ -140,6 +146,21 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     
     /// 向量缩放
     fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D;
+
+    /// 向量相加
+    fn vec2_add(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D;
+
+    /// 零向量
+    fn vec2_zero() -> Self::Vector2D;
+
+    /// 从切片收集一个向量（用于边界法向量表）
+    fn vec2_gather(slice: &[Self::Vector2D], idx: usize) -> Self::Vector2D;
+
+    /// 单块缓冲克隆（便于零拷贝视图）
+    fn clone_buffer<T: Pod + Clone + Send + Sync>(&self, src: &Self::Buffer<T>) -> Self::Buffer<T>;
+
+    /// 按字段交错拷贝 sources -> dst（SoA -> AoS 或打包快照）
+    fn copy_interleaved<T: Pod + Clone + Send + Sync + Default>(&self, sources: &[&[T]], dst: &mut Self::Buffer<T>);
 }
 
 /// CPU 后端
@@ -180,17 +201,20 @@ macro_rules! impl_cpu_backend {
             }
 
             fn axpy(&self, alpha: $scalar, x: &Vec<$scalar>, y: &mut Vec<$scalar>) {
-                for (yi, xi) in y.iter_mut().zip(x.iter()) {
+                let n = x.len().min(y.len());
+                for (yi, xi) in y.iter_mut().take(n).zip(x.iter().take(n)) {
                     *yi += alpha * xi;
                 }
             }
 
             fn dot(&self, x: &Vec<$scalar>, y: &Vec<$scalar>) -> $scalar {
-                x.iter().zip(y.iter()).map(|(a, b)| a * b).sum()
+                let n = x.len().min(y.len());
+                x.iter().take(n).zip(y.iter().take(n)).map(|(a, b)| a * b).sum()
             }
 
             fn copy(&self, src: &Vec<$scalar>, dst: &mut Vec<$scalar>) {
-                dst.copy_from_slice(src);
+                let n = src.len().min(dst.len());
+                dst[..n].copy_from_slice(&src[..n]);
             }
 
             fn scale(&self, alpha: $scalar, x: &mut Vec<$scalar>) {
@@ -246,6 +270,41 @@ macro_rules! impl_cpu_backend {
             #[inline]
             fn vec2_scale(v: &Self::Vector2D, s: Self::Scalar) -> Self::Vector2D {
                 [v[0] * s, v[1] * s]
+            }
+
+            #[inline]
+            fn vec2_add(a: &Self::Vector2D, b: &Self::Vector2D) -> Self::Vector2D {
+                [a[0] + b[0], a[1] + b[1]]
+            }
+
+            #[inline]
+            fn vec2_zero() -> Self::Vector2D {
+                [0 as $scalar, 0 as $scalar]
+            }
+
+            #[inline]
+            fn vec2_gather(slice: &[Self::Vector2D], idx: usize) -> Self::Vector2D {
+                slice.get(idx).copied().unwrap_or([0 as $scalar, 0 as $scalar])
+            }
+
+            #[inline]
+            fn clone_buffer<T: Pod + Clone + Send + Sync>(&self, src: &Self::Buffer<T>) -> Self::Buffer<T> {
+                src.clone()
+            }
+
+            fn copy_interleaved<T: Pod + Clone + Send + Sync + Default>(&self, sources: &[&[T]], dst: &mut Self::Buffer<T>) {
+                let n_fields = sources.len();
+                if n_fields == 0 {
+                    return;
+                }
+                let len = sources[0].len();
+                dst.clear();
+                dst.reserve(len * n_fields);
+                for i in 0..len {
+                    for field in sources {
+                        dst.push(field.get(i).cloned().unwrap_or_default());
+                    }
+                }
             }
         }
 

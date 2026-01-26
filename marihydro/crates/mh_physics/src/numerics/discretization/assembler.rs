@@ -176,7 +176,7 @@ where
             let h_n = state.h[neighbor].max(h_min);
             
             // 调和平均水深（对称）
-            let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
+            let two = self.backend.scalar_from_f64(2.0);
             let h_f = two * h_o * h_n / (h_o + h_n);
             
             if h_f < h_min {
@@ -432,7 +432,7 @@ where
             let v = state.hv[i] / h;
 
             let speed = (u * u + v * v).sqrt();
-            let h43 = h.powf(B::Scalar::from_f64(4.0 / 3.0).unwrap_or(one));
+            let h43 = h.powf(self.backend.scalar_from_f64(4.0 / 3.0));
 
             // 摩擦系数
             let cf = manning_n * manning_n * g * speed / h43;

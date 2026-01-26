@@ -32,7 +32,7 @@ pub use limiter::{
 
 pub use reconstruction::{
     GradientType, MusclConfig,
-    MusclReconstructorGeneric,
+    MusclReconstructorGeneric, WenoConfig, WenoReconstructorGeneric,
     ReconstructedStateGeneric, ReconstructorGeneric,
 };
 

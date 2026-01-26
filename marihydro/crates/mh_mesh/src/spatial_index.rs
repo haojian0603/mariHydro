@@ -35,6 +35,7 @@
 //! ```
 
 use mh_geo::Point2D;
+use crate::error::MeshError;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
 
@@ -65,8 +66,10 @@ impl CellEnvelope {
     ///
     /// # Panics
     /// 如果顶点列表为空则 panic
-    pub fn new(cell_index: usize, vertices: &[Point2D]) -> Self {
-        debug_assert!(!vertices.is_empty(), "单元顶点列表不能为空");
+    pub fn new(cell_index: usize, vertices: &[Point2D]) -> Result<Self, MeshError> {
+        if vertices.is_empty() {
+            return Err(MeshError::invalid_topology("spatial_index", "empty vertices"));
+        }
         
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
@@ -80,13 +83,13 @@ impl CellEnvelope {
             max_y = max_y.max(v.y);
         }
 
-        Self {
+        Ok(Self {
             cell_index,
             min_x,
             min_y,
             max_x,
             max_y,
-        }
+        })
     }
 
     /// 从边界坐标直接创建
@@ -280,7 +283,9 @@ impl MeshSpatialIndex {
         for i in 0..n_cells {
             let vertices = get_cell_vertices(i);
             if !vertices.is_empty() {
-                envelopes.push(CellEnvelope::new(i, &vertices));
+                if let Ok(env) = CellEnvelope::new(i, &vertices) {
+                    envelopes.push(env);
+                }
             }
             cell_vertices.push(vertices);
         }
@@ -653,7 +658,7 @@ mod tests {
             Point2D::new(1.0, 0.0),
             Point2D::new(0.5, 1.0),
         ];
-        let env = CellEnvelope::new(0, &vertices);
+        let env = CellEnvelope::new(0, &vertices).unwrap();
 
         assert_eq!(env.cell_index, 0);
         assert_eq!(env.min_x, 0.0);

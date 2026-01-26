@@ -13,6 +13,7 @@
 
 use bytemuck::Pod;
 use std::ops::{Index, IndexMut};
+use crate::error::{RuntimeError, RuntimeResult};
 
 /// 设备缓冲区 Trait
 /// 
@@ -98,8 +99,12 @@ impl<T: Pod + Clone + Send + Sync> DeviceBuffer<T> for Vec<T> {
     }
     
     fn copy_from_slice(&mut self, src: &[T]) {
-        Vec::clear(self);
-        self.extend_from_slice(src);
+        if self.len() == src.len() {
+            self.as_mut_slice().copy_from_slice(src);
+        } else {
+            Vec::clear(self);
+            self.extend_from_slice(src);
+        }
     }
     
     #[inline]
@@ -218,6 +223,8 @@ pub struct CpuBufferPool<T: Pod + Clone + Send + Sync> {
     free_buffers: std::sync::Mutex<Vec<Vec<T>>>,
     /// 活跃缓冲区数量
     active_count: std::sync::atomic::AtomicUsize,
+    /// 当前总内存占用
+    current_bytes: std::sync::atomic::AtomicUsize,
     /// 配置
     config: BufferPoolConfig,
 }
@@ -228,12 +235,18 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
         Self {
             free_buffers: std::sync::Mutex::new(Vec::new()),
             active_count: std::sync::atomic::AtomicUsize::new(0),
+            current_bytes: std::sync::atomic::AtomicUsize::new(0),
             config,
         }
     }
 
     /// 从池中获取缓冲区
-    pub fn acquire(&self, len: usize, initial_value: T) -> PooledBuffer<'_, T> {
+    pub fn acquire(&self, len: usize, initial_value: T) -> RuntimeResult<PooledBuffer<'_, T>> {
+        let requested = len * std::mem::size_of::<T>();
+        let current = self.current_bytes.load(std::sync::atomic::Ordering::Relaxed);
+        if current + requested > self.config.max_memory_bytes {
+            return Err(RuntimeError::buffer("buffer pool OOM"));
+        }
         let buffer = {
             let mut free = self.free_buffers.lock().unwrap_or_else(|poisoned| {
                 eprintln!("[mh_runtime::buffer] BufferPool mutex poisoned, recovering");
@@ -256,22 +269,28 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
 
         let buffer = buffer.unwrap_or_else(|| vec![initial_value; len]);
         self.active_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.current_bytes.fetch_add(requested, std::sync::atomic::Ordering::Relaxed);
 
-        PooledBuffer {
+        Ok(PooledBuffer {
             buffer: Some(buffer),
             pool: self,
-        }
+        })
     }
 
     /// 归还缓冲区
-    fn release(&self, buffer: Vec<T>) {
+    fn release(&self, mut buffer: Vec<T>) {
         self.active_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        let released = buffer.len() * std::mem::size_of::<T>();
+        self.current_bytes.fetch_sub(released, std::sync::atomic::Ordering::Relaxed);
         
         if self.config.enable_reuse {
             let mut free = self.free_buffers.lock().unwrap_or_else(|poisoned| {
                 eprintln!("[mh_runtime::buffer] BufferPool mutex poisoned, recovering");
                 poisoned.into_inner()
             });
+            if buffer.capacity() > self.config.max_memory_bytes / 4 {
+                buffer.shrink_to_fit();
+            }
             if free.len() < self.config.max_buffers {
                 free.push(buffer);
             }
@@ -391,7 +410,7 @@ mod tests {
         
         // 获取缓冲区
         {
-            let buf = pool.acquire(100, 0.0);
+            let buf = pool.acquire(100, 0.0).unwrap();
             assert_eq!(buf.len(), 100);
             assert_eq!(pool.active_count(), 1);
         }
@@ -402,7 +421,7 @@ mod tests {
         
         // 重用缓冲区
         {
-            let buf = pool.acquire(50, 1.0);
+            let buf = pool.acquire(50, 1.0).unwrap();
             assert_eq!(buf.len(), 50);
             assert_eq!(pool.free_count(), 0);
         }

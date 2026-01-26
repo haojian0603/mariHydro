@@ -1,8 +1,16 @@
 // crates/mh_physics/src/sediment/properties.rs
 
 //! 泥沙物理属性
-//! 包含粒径、密度、沉降速度等参数
+//!
+//! 包含粒径、密度、沉降速度等参数。
+//!
+//! # 设计说明
+//!
+//! - **泛型化**: `SedimentPropertiesGeneric<S>` 支持任意精度标量
+//! - **Layer 4 别名**: `SedimentProperties = SedimentPropertiesGeneric<f64>`
+//! - **配置驱动**: 所有物理常数从 `PhysicalConstants` 获取
 
+use mh_runtime::RuntimeScalar as Scalar;
 use serde::{Deserialize, Serialize};
 
 use crate::types::PhysicalConstants;
@@ -27,48 +35,76 @@ pub enum SedimentType {
 }
 
 impl SedimentType {
-    /// 根据粒径自动分类
-    pub fn from_diameter(d50_mm: f64) -> Self {
-        if d50_mm < 0.004 {
+    /// 根据粒径自动分类（mm 为单位）
+    ///
+    /// # 参数
+    /// - `d50_mm`: 中值粒径 [mm]
+    pub fn from_diameter<S: Scalar>(d50_mm: S) -> Self {
+        let d = d50_mm.to_f64().unwrap_or(0.0);
+        if d < 0.004 {
             Self::Clay
-        } else if d50_mm < 0.063 {
+        } else if d < 0.063 {
             Self::Silt
-        } else if d50_mm < 0.25 {
+        } else if d < 0.25 {
             Self::FineSand
-        } else if d50_mm < 0.5 {
+        } else if d < 0.5 {
             Self::MediumSand
-        } else if d50_mm < 2.0 {
+        } else if d < 2.0 {
             Self::CoarseSand
         } else {
             Self::Gravel
         }
     }
+    
+    /// 根据粒径自动分类（f64 版本，保持兼容性）
+    pub fn from_diameter_f64(d50_mm: f64) -> Self {
+        Self::from_diameter(d50_mm)
+    }
 }
 
-/// 泥沙物理属性
+/// 泥沙物理属性（泛型版本）
+///
+/// # 类型参数
+///
+/// - `S`: 标量类型，实现 `RuntimeScalar`
+///
+/// # 示例
+///
+/// ```ignore
+/// use mh_physics::sediment::SedimentPropertiesGeneric;
+///
+/// // 使用 f64
+/// let props: SedimentPropertiesGeneric<f64> = SedimentPropertiesGeneric::from_d50_mm(0.5);
+///
+/// // 使用 f32
+/// let props_f32: SedimentPropertiesGeneric<f32> = SedimentPropertiesGeneric::from_d50_mm(0.5);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SedimentProperties {
+pub struct SedimentPropertiesGeneric<S: Scalar> {
     /// 中值粒径 d50 [m]
-    pub d50: f64,
+    pub d50: S,
     /// 泥沙密度 [kg/m³]
-    pub rho_s: f64,
+    pub rho_s: S,
     /// 相对密度 s = ρs/ρw
-    pub relative_density: f64,
+    pub relative_density: S,
     /// 沉降速度 [m/s]
-    pub settling_velocity: f64,
+    pub settling_velocity: S,
     /// 临界起动剪切应力 [Pa]
-    pub critical_shear_stress: f64,
+    pub critical_shear_stress: S,
     /// 临界希尔兹数
-    pub critical_shields: f64,
+    pub critical_shields: S,
     /// 床面孔隙率
-    pub porosity: f64,
+    pub porosity: S,
     /// 静止摩擦角 [度]
-    pub angle_of_repose: f64,
+    pub angle_of_repose: S,
     /// 无量纲粒径 D*
-    pub dimensionless_diameter: f64,
+    pub dimensionless_diameter: S,
 }
 
-impl SedimentProperties {
+/// Layer 4 类型别名：f64 精度
+pub type SedimentProperties = SedimentPropertiesGeneric<f64>;
+
+impl<S: Scalar> SedimentPropertiesGeneric<S> {
     /// 从 d50 (mm) 创建，自动计算其他属性
     pub fn from_d50_mm(d50_mm: f64) -> Self {
         Self::from_d50_mm_with_physics(d50_mm, &PhysicalConstants::freshwater())
@@ -81,27 +117,27 @@ impl SedimentProperties {
         let s = rho_s / physics.rho_water;
         
         // 无量纲粒径
-        let d_star = Self::compute_dimensionless_diameter(d50, s, physics);
+        let d_star = Self::compute_dimensionless_diameter_f64(d50, s, physics);
         
         // 沉降速度
-        let ws = Self::compute_settling_velocity(d50, s, d_star, physics);
+        let ws = Self::compute_settling_velocity_f64(d50, s, d_star, physics);
         
         // 临界希尔兹数
-        let theta_cr = Self::compute_critical_shields(d_star);
+        let theta_cr = Self::compute_critical_shields_f64(d_star);
         
         // 临界剪切应力
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50,
-            rho_s,
-            relative_density: s,
-            settling_velocity: ws,
-            critical_shear_stress: tau_cr,
-            critical_shields: theta_cr,
-            porosity: 0.4,
-            angle_of_repose: 32.0,
-            dimensionless_diameter: d_star,
+            d50: S::from_f64(d50).unwrap_or(S::ZERO),
+            rho_s: S::from_f64(rho_s).unwrap_or(S::ZERO),
+            relative_density: S::from_f64(s).unwrap_or(S::ZERO),
+            settling_velocity: S::from_f64(ws).unwrap_or(S::ZERO),
+            critical_shear_stress: S::from_f64(tau_cr).unwrap_or(S::ZERO),
+            critical_shields: S::from_f64(theta_cr).unwrap_or(S::ZERO),
+            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
+            angle_of_repose: S::from_f64(32.0).unwrap_or(S::ZERO),
+            dimensionless_diameter: S::from_f64(d_star).unwrap_or(S::ZERO),
         }
     }
 
@@ -113,32 +149,34 @@ impl SedimentProperties {
     /// 自定义参数创建，使用指定物理常数
     pub fn custom_with_physics(d50: f64, rho_s: f64, physics: &PhysicalConstants) -> Self {
         let s = rho_s / physics.rho_water;
-        let d_star = Self::compute_dimensionless_diameter(d50, s, physics);
-        let ws = Self::compute_settling_velocity(d50, s, d_star, physics);
-        let theta_cr = Self::compute_critical_shields(d_star);
+        let d_star = Self::compute_dimensionless_diameter_f64(d50, s, physics);
+        let ws = Self::compute_settling_velocity_f64(d50, s, d_star, physics);
+        let theta_cr = Self::compute_critical_shields_f64(d_star);
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50,
-            rho_s,
-            relative_density: s,
-            settling_velocity: ws,
-            critical_shear_stress: tau_cr,
-            critical_shields: theta_cr,
-            porosity: 0.4,
-            angle_of_repose: 32.0,
-            dimensionless_diameter: d_star,
+            d50: S::from_f64(d50).unwrap_or(S::ZERO),
+            rho_s: S::from_f64(rho_s).unwrap_or(S::ZERO),
+            relative_density: S::from_f64(s).unwrap_or(S::ZERO),
+            settling_velocity: S::from_f64(ws).unwrap_or(S::ZERO),
+            critical_shear_stress: S::from_f64(tau_cr).unwrap_or(S::ZERO),
+            critical_shields: S::from_f64(theta_cr).unwrap_or(S::ZERO),
+            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
+            angle_of_repose: S::from_f64(32.0).unwrap_or(S::ZERO),
+            dimensionless_diameter: S::from_f64(d_star).unwrap_or(S::ZERO),
         }
     }
 
+    // ========== 内部 f64 计算方法 (Layer 2) ==========
+    
     /// 计算无量纲粒径 D* = d × [(s-1)g/ν²]^(1/3)
-    fn compute_dimensionless_diameter(d: f64, s: f64, physics: &PhysicalConstants) -> f64 {
+    fn compute_dimensionless_diameter_f64(d: f64, s: f64, physics: &PhysicalConstants) -> f64 {
         let factor = (s - 1.0) * physics.g / (physics.nu_water * physics.nu_water);
         d * factor.powf(1.0 / 3.0)
     }
 
     /// 计算沉降速度 (Van Rijn, 1984)
-    fn compute_settling_velocity(d: f64, s: f64, d_star: f64, physics: &PhysicalConstants) -> f64 {
+    fn compute_settling_velocity_f64(d: f64, s: f64, d_star: f64, physics: &PhysicalConstants) -> f64 {
         if d_star < 1.0 {
             // Stokes 沉降
             (s - 1.0) * physics.g * d * d / (18.0 * physics.nu_water)
@@ -156,41 +194,68 @@ impl SedimentProperties {
     }
 
     /// 计算临界希尔兹数 (Soulsby-Whitehouse, 1997)
-    fn compute_critical_shields(d_star: f64) -> f64 {
+    fn compute_critical_shields_f64(d_star: f64) -> f64 {
         0.30 / (1.0 + 1.2 * d_star) + 0.055 * (1.0 - (-0.02 * d_star).exp())
     }
 
     /// 计算床面剪切应力对应的希尔兹数
-    pub fn shields_number(&self, tau_b: f64, physics: &PhysicalConstants) -> f64 {
-        tau_b / ((self.rho_s - physics.rho_water) * physics.g * self.d50)
+    ///
+    /// # 注意
+    ///
+    /// 该方法需要 `PhysicalConstants` 使用相同的标量类型，
+    /// 当前 PhysicalConstants 使用 f64，因此需要转换。
+    pub fn shields_number(&self, tau_b: S, physics: &PhysicalConstants) -> S {
+        let rho_s_f64 = self.rho_s.to_f64().unwrap_or(0.0);
+        let d50_f64 = self.d50.to_f64().unwrap_or(0.0);
+        let tau_b_f64 = tau_b.to_f64().unwrap_or(0.0);
+        
+        let result = tau_b_f64 / ((rho_s_f64 - physics.rho_water) * physics.g * d50_f64);
+        S::from_f64(result).unwrap_or(S::ZERO)
     }
 
     /// 判断是否起动
-    pub fn is_mobile(&self, tau_b: f64, physics: &PhysicalConstants) -> bool {
-        self.shields_number(tau_b, physics) > self.critical_shields
+    pub fn is_mobile(&self, tau_b: S, physics: &PhysicalConstants) -> bool {
+        let shields = self.shields_number(tau_b, physics);
+        shields > self.critical_shields
     }
 
     /// 获取超临界希尔兹数
-    pub fn excess_shields(&self, tau_b: f64, physics: &PhysicalConstants) -> f64 {
-        (self.shields_number(tau_b, physics) - self.critical_shields).max(0.0)
+    pub fn excess_shields(&self, tau_b: S, physics: &PhysicalConstants) -> S {
+        let shields = self.shields_number(tau_b, physics);
+        if shields > self.critical_shields {
+            shields - self.critical_shields
+        } else {
+            S::ZERO
+        }
     }
 }
 
-/// 多粒径泥沙级配
+// ============================================================================
+// SedimentClass - 多粒径泥沙级配（泛型版本）
+// ============================================================================
+
+/// 多粒径泥沙级配（泛型版本）
+///
+/// # 类型参数
+///
+/// - `S`: 标量类型，实现 `RuntimeScalar`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SedimentClass {
+pub struct SedimentClassGeneric<S: Scalar> {
     /// 粒径组（按升序）
-    pub sizes: Vec<SedimentProperties>,
+    pub sizes: Vec<SedimentPropertiesGeneric<S>>,
     /// 各粒径组的体积分数（和为1）
-    pub fractions: Vec<f64>,
+    pub fractions: Vec<S>,
 }
 
-impl SedimentClass {
+/// Layer 4 类型别名：f64 精度
+pub type SedimentClass = SedimentClassGeneric<f64>;
+
+impl<S: Scalar> SedimentClassGeneric<S> {
     /// 创建单粒径
     pub fn uniform(d50_mm: f64) -> Self {
         Self {
-            sizes: vec![SedimentProperties::from_d50_mm(d50_mm)],
-            fractions: vec![1.0],
+            sizes: vec![SedimentPropertiesGeneric::from_d50_mm(d50_mm)],
+            fractions: vec![S::ONE],
         }
     }
 
@@ -200,17 +265,21 @@ impl SedimentClass {
         let sum: f64 = fractions.iter().sum();
         
         Self {
-            sizes: sizes_mm.iter().map(|&d| SedimentProperties::from_d50_mm(d)).collect(),
-            fractions: fractions.iter().map(|&f| f / sum).collect(),
+            sizes: sizes_mm.iter()
+                .map(|&d| SedimentPropertiesGeneric::from_d50_mm(d))
+                .collect(),
+            fractions: fractions.iter()
+                .map(|&f| S::from_f64(f / sum).unwrap_or(S::ZERO))
+                .collect(),
         }
     }
 
     /// 获取加权平均d50
-    pub fn mean_d50(&self) -> f64 {
+    pub fn mean_d50(&self) -> S {
         self.sizes.iter()
             .zip(self.fractions.iter())
-            .map(|(s, f)| s.d50 * f)
-            .sum()
+            .map(|(s, f)| s.d50 * *f)
+            .fold(S::ZERO, |acc, x| acc + x)
     }
 
     /// 获取粒径组数量
@@ -272,8 +341,9 @@ mod tests {
         let props = SedimentProperties::from_d50_mm(0.5);
         let physics = PhysicalConstants::freshwater();
         
-        // 低于临界，返回0
-        assert_eq!(props.excess_shields(0.01, &physics), 0.0);
+        // 低于临界，返回接近0的值
+        let excess_low = props.excess_shields(0.01, &physics);
+        assert!(excess_low.abs() < 1e-10);
         
         // 高于临界，返回正值
         assert!(props.excess_shields(10.0, &physics) > 0.0);

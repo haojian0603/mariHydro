@@ -107,17 +107,16 @@ pub fn run_from_config<P: AsRef<Path>>(config_path: P) -> Result<RunResult, Work
     // 创建管理器并运行
     let storage = MemoryStorage::new();
     let manager = WorkflowManager::new(storage);
-    
+    let manager = std::sync::Arc::new(manager);
+
     manager.submit(job)?;
-    
-    // 这里应该调用实际的求解器运行
-    // 当前返回占位符结果
-    Ok(RunResult {
-        job_id,
-        success: true,
-        message: "Simulation submitted successfully".to_string(),
-        elapsed_secs: 0.0,
-    })
+
+    let runner = JobRunner::new(manager.clone());
+    let start = std::time::Instant::now();
+    match runner.run(job_id) {
+        Ok(()) => Ok(RunResult::success(job_id, start.elapsed().as_secs_f64())),
+        Err(e) => Ok(RunResult::failure(job_id, e.to_string())),
+    }
 }
 
 /// 批量运行多个配置

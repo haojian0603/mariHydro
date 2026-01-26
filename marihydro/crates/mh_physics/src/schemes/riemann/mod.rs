@@ -7,6 +7,8 @@
 //! - [`HllcSolver`]: 高精度求解器，正确处理接触间断
 //! - [`RusanovSolver`]: 简单鲁棒的求解器，GPU 友好
 //! - [`AdaptiveSolver`]: 自适应求解器，自动选择最优方法
+//! - [`HlleSolver`]: HLLE 求解器，强间断更稳定
+//! - [`RoeSolver`]: Roe 求解器，接触间断分辨率高
 //!
 //! # 求解器选择指南
 //!
@@ -27,6 +29,8 @@
 
 mod adaptive;
 mod hllc;
+mod hlle;
+mod roe;
 mod rusanov;
 mod traits;
 pub mod batch;
@@ -38,6 +42,12 @@ pub use traits::{
 
 // HLLC 求解器
 pub use hllc::HllcSolver;
+
+// HLLE 求解器
+pub use hlle::{create_hlle_solver, HlleSolver};
+
+// Roe 求解器
+pub use roe::{create_roe_solver, RoeSolver};
 
 // Rusanov 求解器
 pub use rusanov::{

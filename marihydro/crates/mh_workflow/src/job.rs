@@ -203,11 +203,20 @@ impl SimulationConfig {
 
     /// 验证配置
     pub fn validate(&self) -> Result<(), String> {
+        if !self.project_path.exists() {
+            return Err("project_path not found".into());
+        }
+        if !self.start_time.is_finite() || !self.end_time.is_finite() {
+            return Err("time not finite".into());
+        }
         if self.end_time <= self.start_time {
             return Err("End time must be greater than start time".into());
         }
         if self.output_interval <= 0.0 {
             return Err("Output interval must be positive".into());
+        }
+        if self.checkpoint_interval < 0.0 {
+            return Err("Checkpoint interval must be non-negative".into());
         }
         if self.max_cfl <= 0.0 || self.max_cfl > 1.0 {
             return Err("Max CFL must be in range (0, 1]".into());

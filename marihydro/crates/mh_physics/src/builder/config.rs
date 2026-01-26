@@ -298,6 +298,55 @@ impl SolverConfig {
             ));
         }
 
+        if self.friction && (self.manning_coefficient < 0.001 || self.manning_coefficient > 0.5) {
+            return Err(ConfigError::InvalidValue(
+                "manning_coefficient".to_string(),
+                "超出物理范围 [0.001, 0.5]".to_string(),
+            ));
+        }
+
+        // 科里奥利参数范围
+        if self.coriolis && self.coriolis_parameter.abs() > 1.5e-4 {
+            return Err(ConfigError::InvalidValue(
+                "coriolis_parameter".to_string(),
+                "超出范围 [-1.5e-4, 1.5e-4]".to_string(),
+            ));
+        }
+
+        // 风拖曳系数范围
+        if self.wind_forcing && (self.wind_drag_coefficient < 0.0 || self.wind_drag_coefficient > 0.01) {
+            return Err(ConfigError::InvalidValue(
+                "wind_drag_coefficient".to_string(),
+                "超出范围 [0, 0.01]".to_string(),
+            ));
+        }
+
+        // 最大速度限制
+        if self.max_velocity < 1.0 {
+            return Err(ConfigError::InvalidValue(
+                "max_velocity".to_string(),
+                "必须 >= 1.0 m/s".to_string(),
+            ));
+        }
+
+        // 精度与阈值匹配检查
+        if matches!(self.precision, Precision::F32) && self.h_min < 1e-6 {
+            return Err(ConfigError::InvalidValue(
+                "h_min".to_string(),
+                "F32 精度下 h_min 过小，建议 >= 1e-6".to_string(),
+            ));
+        }
+
+        // 模块依赖检查
+        if matches!(self.riemann_solver, RiemannSolverType::Roe)
+            && matches!(self.limiter, LimiterType::None)
+        {
+            return Err(ConfigError::InvalidValue(
+                "limiter".to_string(),
+                "Roe 求解器建议启用限制器以保证稳定性".to_string(),
+            ));
+        }
+
         Ok(())
     }
 

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use num_traits::{Float, FromPrimitive, ToPrimitive};
 
-use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing};
+use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing, GenericExternalForcing};
 use crate::state::ConservedState;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 
@@ -80,6 +80,77 @@ pub trait BoundaryDataProvider: Send + Sync {
     }
 }
 
+/// 强迫数据结果类型
+pub type ForcingResult = Result<ExternalForcing, ForcingError>;
+
+/// 强迫数据错误
+#[derive(Debug, Error)]
+pub enum ForcingError {
+    #[error("强迫数据缺失：边界 {boundary}, 面 {face_id}")]
+    Missing { boundary: String, face_id: usize },
+    #[error("强迫数据超出时间范围：t={time}, 有效范围 [{t_min}, {t_max}]")]
+    OutOfTimeRange { time: f64, t_min: f64, t_max: f64 },
+    #[error("强迫数据插值失败")]
+    InterpolationFailed,
+}
+
+/// 严格模式边界数据提供者
+pub trait StrictBoundaryDataProvider: Send + Sync {
+    /// 获取强迫数据（严格模式，失败返回错误）
+    fn get_forcing_strict(&self, face_id: usize, time: f64) -> ForcingResult;
+
+    /// 批量获取（遇到错误立即返回）
+    fn get_forcings_batch_strict(
+        &self,
+        face_ids: &[usize],
+        time: f64,
+        output: &mut [ExternalForcing],
+    ) -> Result<(), ForcingError> {
+        for (i, &face_id) in face_ids.iter().enumerate() {
+            output[i] = self.get_forcing_strict(face_id, time)?;
+        }
+        Ok(())
+    }
+}
+
+/// 带回退策略的强迫数据提供者
+pub struct ForcingProviderWithFallback<P: BoundaryDataProvider> {
+    primary: P,
+    fallback: ExternalForcing,
+    missing_count: std::sync::atomic::AtomicUsize,
+    log_missing: bool,
+}
+
+impl<P: BoundaryDataProvider> ForcingProviderWithFallback<P> {
+    pub fn new(primary: P, fallback: ExternalForcing) -> Self {
+        Self {
+            primary,
+            fallback,
+            missing_count: std::sync::atomic::AtomicUsize::new(0),
+            log_missing: true,
+        }
+    }
+
+    pub fn missing_count(&self) -> usize {
+        self.missing_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl<P: BoundaryDataProvider> BoundaryDataProvider for ForcingProviderWithFallback<P> {
+    fn get_forcing(&self, face_id: usize, time: f64) -> Option<ExternalForcing> {
+        match self.primary.get_forcing(face_id, time) {
+            Some(f) => Some(f),
+            None => {
+                self.missing_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if self.log_missing {
+                    eprintln!("[WARN] 强迫数据缺失: face={}, t={:.2}, 使用回退值", face_id, time);
+                }
+                Some(self.fallback)
+            }
+        }
+    }
+}
+
 /// 恒定强迫数据提供者
 pub struct ConstantForcingProvider {
     forcing: ExternalForcing,
@@ -117,7 +188,7 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 // ============================================================
 
 /// 边界条件管理器（Backend泛型化）
-pub struct BoundaryManager<B: Backend> {
+pub struct BoundaryManager<'a, B: Backend> {
     /// 边界条件定义（按名称索引）
     conditions: HashMap<String, BoundaryCondition>,
 
@@ -145,14 +216,18 @@ pub struct BoundaryManager<B: Backend> {
     /// 计算参数
     params: BoundaryParams,
 
-    /// 后端实例（预留用于GPU加速）
+    /// 后端实例（预留用于GPU加速；以引用形式避免多实例）
     #[allow(dead_code)]
-    backend: B,
+    backend: &'a B,
 }
 
-impl<B: Backend> BoundaryManager<B> {
+impl<'a, B> BoundaryManager<'a, B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar + ToPrimitive,
+{
     /// 创建新的边界管理器
-    pub fn new_with_backend(backend: B, params: BoundaryParams) -> Self {
+    pub fn new_with_backend(backend: &'a B, params: BoundaryParams) -> Self {
         Self {
             conditions: HashMap::new(),
             condition_indices: HashMap::new(),
@@ -168,11 +243,31 @@ impl<B: Backend> BoundaryManager<B> {
     }
 
     /// 从数值参数创建
-    pub fn from_numerical_params(backend: B, params: &crate::types::NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
+    pub fn from_numerical_params(
+        backend: &'a B,
+        params: &crate::types::NumericalParams<B::Scalar>,
+        gravity: B::Scalar,
+    ) -> Self {
         // 转换参数到 f64（因为 ExternalForcing 使用 f64）
         let gravity_f64 = gravity.to_f64().unwrap_or(9.81);
         let h_min = params.h_min.to_f64().unwrap_or(1e-6);
         Self::new_with_backend(backend, BoundaryParams::new(gravity_f64, h_min))
+    }
+
+    /// 获取泛型强迫数据（Backend 标量类型）
+    pub fn get_generic_forcing(
+        &self,
+        face_id: usize,
+        time: f64,
+        provider: &dyn BoundaryDataProvider,
+    ) -> GenericExternalForcing<B::Scalar>
+    where
+        B::Scalar: RuntimeScalar + FromPrimitive,
+    {
+        match provider.get_forcing(face_id, time) {
+            Some(f) => GenericExternalForcing::from_f64_forcing(&f),
+            None => GenericExternalForcing::ZERO,
+        }
     }
 
     /// 添加边界条件定义
@@ -414,14 +509,7 @@ impl<B: Backend> BoundaryManager<B> {
     }
 }
 
-impl<B: Backend> Default for BoundaryManager<B>
-where
-    B: Default,
-{
-    fn default() -> Self {
-        Self::new_with_backend(B::default(), BoundaryParams::default())
-    }
-}
+// NOTE: BoundaryManager 持有 backend 引用，无法提供无参 Default 实现。
 
 // ============================================================
 // 错误类型
@@ -462,7 +550,7 @@ mod tests {
     #[test]
     fn test_boundary_manager_creation() {
         let backend = CpuBackend::<f64>::new();
-        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         assert_eq!(manager.total_boundary_faces(), 0);
         assert_eq!(manager.condition_count(), 0);
     }
@@ -470,7 +558,7 @@ mod tests {
     #[test]
     fn test_add_condition() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
 
         let idx1 = manager.add_condition(BoundaryCondition::wall("north"));
         let idx2 = manager.add_condition(BoundaryCondition::open_sea("south"));
@@ -487,7 +575,7 @@ mod tests {
     #[test]
     fn test_register_face_f64() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         manager.add_condition(BoundaryCondition::wall("north"));
         manager.add_condition(BoundaryCondition::open_sea("south"));
 
@@ -506,7 +594,7 @@ mod tests {
     #[test]
     fn test_register_unknown_condition() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         let result = manager.register_face(0, 0, CpuBackend::<f64>::vec2_new(0.0, 1.0), 1.0, "unknown");
 
         assert!(result.is_err());
@@ -520,7 +608,7 @@ mod tests {
     #[test]
     fn test_wall_flux_f64() {
         let backend = CpuBackend::<f64>::new();
-        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         let (mass, momentum) = manager.compute_wall_flux(1.0, CpuBackend::<f64>::vec2_new(1.0, 0.0));
 
         assert_eq!(mass, 0.0);
@@ -531,7 +619,7 @@ mod tests {
     #[test]
     fn test_wall_flux_f32() {
         let backend = CpuBackend::<f32>::new();
-        let manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(backend, BoundaryParams::default());
+        let manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(&backend, BoundaryParams::default());
         let (mass, momentum) = manager.compute_wall_flux(1.0f32, CpuBackend::<f32>::vec2_new(1.0, 0.0));
 
         assert_eq!(mass, 0.0f32);
@@ -541,7 +629,7 @@ mod tests {
     #[test]
     fn test_outflow_flux_f64() {
         let backend = CpuBackend::<f64>::new();
-        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         let interior = ConservedState::<f64>::from_primitive(1.0, 1.0, 0.0);
         let (mass, _) = manager.compute_outflow_flux(interior, CpuBackend::<f64>::vec2_new(1.0, 0.0));
 
@@ -551,7 +639,7 @@ mod tests {
     #[test]
     fn test_validate_normalization() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(backend, BoundaryParams::default());
+        let mut manager = BoundaryManager::<CpuBackend<f64>>::new_with_backend(&backend, BoundaryParams::default());
         manager.add_condition(BoundaryCondition::wall("test"));
 
         // 单位向量应该通过
@@ -586,7 +674,7 @@ mod tests {
     #[test]
     fn test_f32_backend_full() {
         let backend = CpuBackend::<f32>::new();
-        let mut manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(backend, BoundaryParams::default());
+        let mut manager = BoundaryManager::<CpuBackend<f32>>::new_with_backend(&backend, BoundaryParams::default());
         
         manager.add_condition(BoundaryCondition::wall("test"));
         manager.register_face(0, 0, CpuBackend::<f32>::vec2_new(1.0, 0.0), 1.0f32, "test").unwrap();

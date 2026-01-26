@@ -195,6 +195,18 @@ impl MeshSnapshot {
                 self.bed_elevations.len()
             ));
         }
+        if let (Some(faces), Some(ids)) = (&self.boundary_faces, &self.boundary_ids) {
+            if faces.len() != ids.len() {
+                return Err("boundary length mismatch".into());
+            }
+        }
+        if let Some(names) = &self.boundary_names {
+            if let Some(ids) = &self.boundary_ids {
+                if names.len() != ids.len() {
+                    return Err("boundary name mismatch".into());
+                }
+            }
+        }
         // 检查节点索引是否越界
         for (i, nodes) in self.cell_nodes.iter().enumerate() {
             for &idx in nodes {
@@ -289,6 +301,9 @@ impl StateSnapshot {
 
     /// 添加标量场
     pub fn with_scalar(mut self, name: &str, values: Vec<f64>) -> Self {
+        if values.len() != self.n_cells() {
+            return self;
+        }
         if self.scalars.is_none() {
             self.scalars = Some(Vec::new());
             self.scalar_names = Some(Vec::new());
@@ -339,6 +354,16 @@ impl StateSnapshot {
         if let Some(z) = &self.z {
             if z.len() != n {
                 return Err(format!("z 长度不匹配: 期望 {}, 实际 {}", n, z.len()));
+            }
+        }
+        if let (Some(vals), Some(names)) = (&self.scalars, &self.scalar_names) {
+            if vals.len() != names.len() {
+                return Err("scalar name mismatch".into());
+            }
+            for v in vals {
+                if v.len() != n {
+                    return Err("scalar length mismatch".into());
+                }
             }
         }
         // 检查 NaN/Inf

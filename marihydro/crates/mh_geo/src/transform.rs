@@ -332,8 +332,11 @@ impl GeoTransformer {
             return Ok(());
         }
 
-        let n = x.len().min(y.len());
-        for i in 0..n {
+        if x.len() != y.len() {
+            return Err(mh_foundation::error::MhError::size_mismatch("transform_inplace", x.len(), y.len()));
+        }
+
+        for i in 0..x.len() {
             let (nx, ny) = self.transform_point(x[i], y[i])?;
             x[i] = nx;
             y[i] = ny;
@@ -350,26 +353,23 @@ impl GeoTransformer {
             return 0.0;
         }
 
-        // 使用有限差分计算收敛角
-        let delta = 0.0001; // 约11米（在赤道）
-
-        // 获取点在目标 CRS 中的坐标
-        let (px, py) = match self.transform_point(x, y) {
+        let (lon, lat) = match self.source_proj.inverse(x, y) {
             Ok(p) => p,
             Err(_) => return 0.0,
         };
 
-        // 北向偏移
-        let (px_n, py_n) = match self.transform_point(x, y + delta) {
+        let delta_lat = 1e-5;
+        let (px, py) = match self.target_proj.forward(lon, lat) {
+            Ok(p) => p,
+            Err(_) => return 0.0,
+        };
+        let (px_n, py_n) = match self.target_proj.forward(lon, lat + delta_lat) {
             Ok(p) => p,
             Err(_) => return 0.0,
         };
 
-        // 计算网格北方向
         let dx = px_n - px;
         let dy = py_n - py;
-
-        // 收敛角 = arctan(dx/dy)
         dx.atan2(dy)
     }
 

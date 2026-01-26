@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use crate::error::{RuntimeError, RuntimeResult};
 
 // =============================================================================
 // SafeIdx - 带代际验证的索引（Runtime 层）
@@ -80,7 +81,14 @@ impl<Tag> SafeIdx<Tag> {
     /// 从 usize 创建（代际默认为1）
     #[inline]
     pub fn from_usize(index: usize) -> Self {
-        Self::new(index as u32, 1)
+        Self::try_from_usize(index).unwrap_or(Self::INVALID)
+    }
+
+    pub fn try_from_usize(index: usize) -> RuntimeResult<Self> {
+        if index > u32::MAX as usize {
+            return Err(RuntimeError::InvalidIndex);
+        }
+        Ok(Self::new(index as u32, 1))
     }
 
     /// 从原始 u32 创建（代际默认为1）

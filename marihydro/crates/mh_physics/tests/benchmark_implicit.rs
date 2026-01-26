@@ -144,7 +144,7 @@ fn test_preconditioner_comparison() {
     
     let config = SolverConfig::new(1e-10, 1000);
     
-    let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new(&*BACKEND);
+    let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new((*BACKEND).clone());
     let (time_no, result_no, _) = run_benchmark(&matrix, &rhs, &no_precond, &config);
     
     let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();

@@ -143,7 +143,7 @@ pub struct MorphodynamicsSolver<B: Backend> {
     /// 最新统计
     stats: MorphologyStats<B::Scalar>,
     /// 后端（保留以支持后续缓冲区分配）
-    _backend: B,
+    backend: B,
 }
 
 impl<B> MorphodynamicsSolver<B>
@@ -163,7 +163,7 @@ where
             dz_dt: backend.alloc_init(n_cells, B::Scalar::ZERO),
             flux_divergence: backend.alloc_init(n_cells, B::Scalar::ZERO),
             stats: MorphologyStats::default(),
-            _backend: backend,
+            backend,
         }
     }
 
@@ -262,8 +262,8 @@ where
             self.compute_divergence_upwind(mesh, state, &qb_x, &qb_y);
 
             // 临时更新河床
-            let factor = B::Scalar::from_f64(1.0 / (1.0 - self.config.porosity)).unwrap_or(B::Scalar::ZERO);
-            let max_dz = B::Scalar::from_f64(self.config.max_dz_rate).unwrap_or(B::Scalar::ONE) * dt;
+            let factor = self.backend.scalar_from_f64(1.0 / (1.0 - self.config.porosity));
+            let max_dz = self.backend.scalar_from_f64(self.config.max_dz_rate) * dt;
 
             let mut max_change = B::Scalar::ZERO;
 
@@ -276,7 +276,7 @@ where
 
                 // 干湿边界约束
                 let eta = z_old[i] + state.h[i];
-                let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+                let h_dry = self.backend.scalar_from_f64(self.config.h_dry);
                 if z_new > eta && state.h[i] > h_dry {
                     // 不能高于水面
                     state.z[i] = eta;
@@ -317,8 +317,8 @@ where
         qb_y: &B::Buffer<B::Scalar>,
     ) -> B::Buffer<B::Scalar> {
         let n = state.n_cells();
-        let mut jacobian = self._backend.alloc_init(n, B::Scalar::ZERO);
-        let _eps = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
+        let mut jacobian = self.backend.alloc_init(n, B::Scalar::ZERO);
+        let _eps = self.backend.scalar_from_f64(1e-6);
 
         for i in 0..n {
             let q_mag = (qb_x[i] * qb_x[i] + qb_y[i] * qb_y[i]).sqrt();
@@ -327,9 +327,9 @@ where
             }
 
             let h = state.h[i];
-            let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+            let h_dry = self.backend.scalar_from_f64(self.config.h_dry);
             if h > h_dry {
-                let coeff = B::Scalar::from_f64(-1.5).unwrap_or(B::Scalar::ZERO);
+                let coeff = self.backend.scalar_from_f64(-1.5);
                 jacobian[i] = coeff * q_mag / h;
             }
         }
@@ -358,7 +358,7 @@ where
         qb_x: &[B::Scalar],
         qb_y: &[B::Scalar],
     ) {
-        let factor = B::Scalar::from_f64(1.0 / (1.0 - self.config.porosity)).unwrap_or(B::Scalar::ONE);
+        let factor = self.backend.scalar_from_f64(1.0 / (1.0 - self.config.porosity));
 
         // 清零
         for v in self.dz_dt.as_slice_mut() {
@@ -377,9 +377,9 @@ where
             let neighbor = neighbor_ci.map(|c| c.get());
 
             let (nx_f64, ny_f64) = mesh.face_normal_2d_tuple(face_idx);
-            let nx = B::Scalar::from_f64(nx_f64).unwrap_or(B::Scalar::ZERO);
-            let ny = B::Scalar::from_f64(ny_f64).unwrap_or(B::Scalar::ZERO);
-            let length = B::Scalar::from_f64(mesh.face_length(fi)).unwrap_or(B::Scalar::ZERO);
+            let nx = self.backend.scalar_from_f64(nx_f64);
+            let ny = self.backend.scalar_from_f64(ny_f64);
+            let length = self.backend.scalar_from_f64(mesh.face_length(fi));
 
             // Owner 的法向通量
             let q_n_owner = qb_x[owner] * nx + qb_y[owner] * ny;
@@ -399,12 +399,12 @@ where
             let flux = q_n * length * factor;
 
             // 累加到通量散度
-            let area_o = B::Scalar::from_f64(mesh.cell_area_unchecked(owner_ci)).unwrap_or(B::Scalar::ONE);
+            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(owner_ci));
             self.flux_divergence[owner] += flux / area_o;
 
             if let Some(neigh) = neighbor_ci {
                 let neigh_idx: usize = neigh.get();
-                let area_n = B::Scalar::from_f64(mesh.cell_area_unchecked(neigh)).unwrap_or(B::Scalar::ONE);
+                let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(neigh));
                 self.flux_divergence[neigh_idx] -= flux / area_n;
             }
         }
@@ -417,7 +417,7 @@ where
 
     /// 强耦合更新河床和水深
     fn update_bed_coupled(&mut self, state: &mut ShallowWaterState<B>, mesh: &PhysicsMesh, dt: B::Scalar) {
-        let max_dz = B::Scalar::from_f64(self.config.max_dz_rate).unwrap_or(B::Scalar::ONE) * dt;
+        let max_dz = self.backend.scalar_from_f64(self.config.max_dz_rate) * dt;
 
         for i in 0..state.n_cells() {
             let mut dz = self.dz_dt[i] * dt;
@@ -425,7 +425,7 @@ where
             // 限制变化率
             dz = dz.clamp(-max_dz, max_dz);
 
-            let eps = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::ZERO);
+            let eps = self.backend.scalar_from_f64(1e-14);
             if dz.abs() < eps {
                 continue;
             }
@@ -437,7 +437,7 @@ where
             let z_new = z_old + dz;
             let h_new = (eta - z_new).max(B::Scalar::ZERO);
 
-            let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+            let h_dry = self.backend.scalar_from_f64(self.config.h_dry);
             if dz > h_old && h_old > h_dry {
                 state.z[i] = eta;
                 state.h[i] = B::Scalar::ZERO;
@@ -447,7 +447,7 @@ where
             }
 
             // 更新统计
-            let area = B::Scalar::from_f64(mesh.cell_area_unchecked(CellIndex::new(i))).unwrap_or(B::Scalar::ONE);
+            let area = self.backend.scalar_from_f64(mesh.cell_area_unchecked(CellIndex::new(i)));
             if dz < B::Scalar::ZERO {
                 self.stats.max_erosion = self.stats.max_erosion.max(-dz);
                 self.stats.total_erosion += -dz * area;
@@ -476,28 +476,28 @@ where
                 let neigh = neigh_ci.get();
 
                 let dist = mesh.face_dist_o2n(fi);
-                let dist_s = B::Scalar::from_f64(dist).unwrap_or(B::Scalar::ZERO);
-                if dist_s <= B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO) {
+                let dist_s = self.backend.scalar_from_f64(dist);
+                if dist_s <= self.backend.scalar_from_f64(1e-10) {
                     continue;
                 }
 
                 let dz = state.z[neigh] - state.z[owner];
                 let slope = dz.abs() / dist_s;
 
-                let h_dry = B::Scalar::from_f64(self.config.h_dry).unwrap_or(B::Scalar::ZERO);
+                let h_dry = self.backend.scalar_from_f64(self.config.h_dry);
                 let is_wet = state.h[owner] > h_dry || state.h[neigh] > h_dry;
                 let max_slope = if is_wet {
-                    B::Scalar::from_f64(self.config.angle_repose_wet.tan()).unwrap_or(B::Scalar::ONE)
+                    self.backend.scalar_from_f64(self.config.angle_repose_wet.tan())
                 } else {
-                    B::Scalar::from_f64(self.config.angle_repose_dry.tan()).unwrap_or(B::Scalar::ONE)
+                    self.backend.scalar_from_f64(self.config.angle_repose_dry.tan())
                 };
 
                 if slope > max_slope {
                     let target_dz = max_slope * dist_s * dz.signum();
-                    let correction = (dz - target_dz) * B::Scalar::from_f64(self.config.avalanche_relaxation).unwrap_or(B::Scalar::ONE);
+                    let correction = (dz - target_dz) * self.backend.scalar_from_f64(self.config.avalanche_relaxation);
 
-                    let area_owner = B::Scalar::from_f64(mesh.cell_area_unchecked(owner_ci)).unwrap_or(B::Scalar::ONE);
-                    let area_neigh = B::Scalar::from_f64(mesh.cell_area_unchecked(neigh_ci)).unwrap_or(B::Scalar::ONE);
+                    let area_owner = self.backend.scalar_from_f64(mesh.cell_area_unchecked(owner_ci));
+                    let area_neigh = self.backend.scalar_from_f64(mesh.cell_area_unchecked(neigh_ci));
                     let total_area = area_owner + area_neigh;
 
                     let dz_owner = correction * area_neigh / total_area;

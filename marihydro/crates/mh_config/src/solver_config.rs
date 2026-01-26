@@ -396,6 +396,70 @@ impl SolverConfig {
 
     /// 验证配置有效性
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_iterations == 0 {
+            return Err(ConfigError::InvalidValue {
+                key: "max_iterations".into(),
+                value: self.max_iterations.to_string(),
+                reason: "必须为正数".into(),
+            });
+        }
+
+        if self.max_time <= 0.0 || !self.max_time.is_finite() {
+            return Err(ConfigError::InvalidValue {
+                key: "max_time".into(),
+                value: self.max_time.to_string(),
+                reason: "必须为正的有限值".into(),
+            });
+        }
+
+        if self.time.min_dt <= 0.0 || !self.time.min_dt.is_finite() {
+            return Err(ConfigError::InvalidValue {
+                key: "time.min_dt".into(),
+                value: self.time.min_dt.to_string(),
+                reason: "必须为正".into(),
+            });
+        }
+        if self.time.max_dt < self.time.min_dt {
+            return Err(ConfigError::InvalidValue {
+                key: "time.max_dt".into(),
+                value: self.time.max_dt.to_string(),
+                reason: "必须 >= min_dt".into(),
+            });
+        }
+        if !(self.time.initial_dt >= self.time.min_dt && self.time.initial_dt <= self.time.max_dt) {
+            return Err(ConfigError::InvalidValue {
+                key: "time.initial_dt".into(),
+                value: self.time.initial_dt.to_string(),
+                reason: "必须在[min_dt, max_dt]".into(),
+            });
+        }
+        if self.time.growth_factor <= 1.0 {
+            return Err(ConfigError::InvalidValue {
+                key: "time.growth_factor".into(),
+                value: self.time.growth_factor.to_string(),
+                reason: "必须 > 1".into(),
+            });
+        }
+        if self.time.shrink_factor <= 0.0 || self.time.shrink_factor >= 1.0 {
+            return Err(ConfigError::InvalidValue {
+                key: "time.shrink_factor".into(),
+                value: self.time.shrink_factor.to_string(),
+                reason: "必须在(0,1)".into(),
+            });
+        }
+
+        if self.output.interval <= 0.0 || !self.output.interval.is_finite() {
+            return Err(ConfigError::InvalidValue {
+                key: "output.interval".into(),
+                value: self.output.interval.to_string(),
+                reason: "必须为正的有限值".into(),
+            });
+        }
+
+        if self.mesh.file.as_os_str().is_empty() {
+            return Err(ConfigError::Missing("mesh.file".into()));
+        }
+
         // CFL 验证
         if self.physics.cfl <= 0.0 || self.physics.cfl > 2.0 {
             return Err(ConfigError::InvalidValue {

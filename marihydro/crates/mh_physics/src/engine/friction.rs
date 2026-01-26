@@ -5,7 +5,7 @@
 
 use rayon::prelude::*;
 use mh_runtime::{Backend, RuntimeScalar};
-use num_traits::{FromPrimitive, Zero, Float};
+use num_traits::{Zero, Float};
 
 /// 摩擦计算配置（Layer 4，保持f64）
 #[derive(Debug, Clone)]
@@ -29,45 +29,103 @@ impl Default for FrictionConfig {
     }
 }
 
-/// Manning摩擦计算器（Backend泛型）
+/// Manning 摩擦计算器（Backend 泛型）
+/// 
+/// 实现曼宁公式的底部摩擦源项计算，支持显式和半隐式离散。
+/// 通过 Backend 泛型实现 f32/f64 精度切换和 GPU 加速。
+/// 
+/// # 类型参数
+/// 
+/// - `B`: 计算后端类型，必须实现 `Backend` trait
+/// 
+/// # 数学模型
+/// 
+/// Manning 摩擦公式:
+/// $$\tau_b = \rho g n^2 \frac{|\mathbf{u}|}{h^{4/3}} \mathbf{u}$$
+/// 
+/// 其中:
+/// - $n$: Manning 糙率系数
+/// - $h$: 水深
+/// - $\mathbf{u}$: 流速向量
 #[derive(Debug, Clone)]
 pub struct ManningFriction<B: Backend>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
+    /// 计算后端实例
+    backend: B,
+    /// 摩擦配置
     config: FrictionConfig,
+    /// 重力加速度
     g: B::Scalar,
-    _backend: B,
 }
 
 impl<B: Backend> ManningFriction<B>
 where
     B::Buffer<B::Scalar>: Send + Sync,
+    B::Scalar: RuntimeScalar,
 {
+    /// 使用后端实例创建摩擦计算器
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `g`: 重力加速度 [m/s²]
+    /// 
+    /// # 返回
+    /// 
+    /// 返回初始化完成的摩擦计算器实例
     pub fn new(backend: B, g: f64) -> Self {
         Self {
+            g: backend.scalar_from_f64(g),
             config: FrictionConfig::default(),
-            g: B::Scalar::from_f64(g).unwrap_or(B::Scalar::from_f64(9.81).unwrap()),
-            _backend: backend,
+            backend,
         }
     }
 
+    /// 使用自定义配置创建摩擦计算器
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `g`: 重力加速度 [m/s²]
+    /// - `config`: 摩擦计算配置
     pub fn with_config(backend: B, g: f64, config: FrictionConfig) -> Self {
         Self {
+            g: backend.scalar_from_f64(g),
             config,
-            g: B::Scalar::from_f64(g).unwrap_or(B::Scalar::from_f64(9.81).unwrap()),
-            _backend: backend,
+            backend,
         }
     }
 
+    /// 设置配置
     pub fn set_config(&mut self, config: FrictionConfig) {
         self.config = config;
     }
 
+    /// 获取配置引用
     pub fn config(&self) -> &FrictionConfig {
         &self.config
     }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
 
+    /// 计算摩擦系数
+    /// 
+    /// # 参数
+    /// 
+    /// - `h`: 水深 [m]
+    /// - `hu`: x 方向动量 [m²/s]
+    /// - `hv`: y 方向动量 [m²/s]
+    /// - `manning_n`: Manning 糙率系数
+    /// 
+    /// # 返回
+    /// 
+    /// 摩擦系数 C_f
     #[inline]
     pub fn compute_friction_coefficient(
         &self,
@@ -76,7 +134,7 @@ where
         hv: B::Scalar,
         manning_n: B::Scalar,
     ) -> B::Scalar {
-        let h_min = B::Scalar::from_f64(self.config.h_min).unwrap_or(B::Scalar::ZERO);
+        let h_min = self.backend.scalar_from_f64(self.config.h_min);
         if h < h_min {
             return B::Scalar::ZERO;
         }
@@ -90,8 +148,9 @@ where
             return B::Scalar::ZERO;
         }
 
-        let h_pow = h_safe.powf(B::Scalar::from_f64(4.0 / 3.0).unwrap_or(B::Scalar::ONE));
-        let eps = B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::ZERO);
+        let four_thirds = self.backend.scalar_from_f64(4.0 / 3.0);
+        let h_pow = h_safe.powf(four_thirds);
+        let eps = self.backend.scalar_from_f64(1e-12);
         if h_pow < eps {
             return B::Scalar::ZERO;
         }
@@ -99,6 +158,18 @@ where
         self.g * manning_n * manning_n * speed / h_pow
     }
 
+    /// 计算显式摩擦源项
+    /// 
+    /// # 参数
+    /// 
+    /// - `h`: 水深 [m]
+    /// - `hu`: x 方向动量 [m²/s]
+    /// - `hv`: y 方向动量 [m²/s]
+    /// - `manning_n`: Manning 糙率系数
+    /// 
+    /// # 返回
+    /// 
+    /// (S_hu, S_hv) 源项元组
     #[inline]
     pub fn compute_explicit_source(
         &self,
@@ -111,6 +182,19 @@ where
         (-cf * hu, -cf * hv)
     }
 
+    /// 应用半隐式摩擦离散
+    /// 
+    /// # 参数
+    /// 
+    /// - `h`: 水深 [m]
+    /// - `hu`: x 方向动量 [m²/s]
+    /// - `hv`: y 方向动量 [m²/s]
+    /// - `manning_n`: Manning 糙率系数
+    /// - `dt`: 时间步长 [s]
+    /// 
+    /// # 返回
+    /// 
+    /// 更新后的 (hu, hv) 元组
     #[inline]
     pub fn apply_semi_implicit(
         &self,

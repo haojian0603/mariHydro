@@ -45,9 +45,12 @@ pub mod buffer;
 pub mod indices;
 pub mod metrics;
 pub mod numerics; 
+pub mod numa;
 pub mod tolerance;
 pub mod arena_ext;
 pub mod error;
+pub mod simd;
+pub mod soa_layout;
 
 // 核心类型导出
 pub use scalar::{RuntimeScalar, AtomicScalar};

@@ -1,6 +1,6 @@
 // crates/mh_physics/src/sediment/shear_stress.rs
 
-//! 床面剪切应力计算模块
+//! 床面剪切应力计算模块（Backend 无关标量版本）
 //!
 //! 提供统一的床面剪切应力计算，消除 manager.rs 和 bed_load.rs 中的重复代码。
 //!
@@ -21,10 +21,6 @@
 //! - h: 水深 [m]
 //!
 //! ## Chezy 公式
-//!
-// crates/mh_physics/src/sediment/shear_stress.rs
-
-//! 床面剪切应力计算模块（Backend 无关标量版本）
 
 use crate::core::Backend;
 use crate::types::PhysicalConstants;
@@ -33,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 /// 剪切应力计算结果
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ShearStress<S: RuntimeScalar = f64> {
+pub struct ShearStress<S: RuntimeScalar> {
     /// 剪切应力大小 [Pa]
     pub magnitude: S,
     /// x 方向分量 [Pa]
@@ -43,6 +39,9 @@ pub struct ShearStress<S: RuntimeScalar = f64> {
     /// 剪切流速 [m/s]
     pub u_star: S,
 }
+
+/// Layer 4 便捷别名（f64）
+pub type ShearStressF64 = ShearStress<f64>;
 
 impl<S: RuntimeScalar> Default for ShearStress<S> {
     fn default() -> Self {
@@ -63,7 +62,7 @@ impl<S: RuntimeScalar> ShearStress<S> {
 
 /// 床面剪切应力计算器
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ShearStressCalculator<S: RuntimeScalar = f64> {
+pub struct ShearStressCalculator<S: RuntimeScalar> {
     /// 最小水深 [m]
     pub h_min: S,
     /// 水密度 [kg/m³]
@@ -71,6 +70,9 @@ pub struct ShearStressCalculator<S: RuntimeScalar = f64> {
     /// 重力加速度 [m/s²]
     pub g: S,
 }
+
+/// Layer 4 便捷别名（f64）
+pub type ShearStressCalculatorF64 = ShearStressCalculator<f64>;
 
 impl<S: RuntimeScalar> Default for ShearStressCalculator<S> {
     fn default() -> Self {
@@ -208,9 +210,9 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
     }
 }
 
-/// Manning 糙率，可为常数或数组
+/// Manning 糙率（切片版本，Layer 4 兼容）
 #[derive(Debug, Clone, Copy, Serialize)]
-pub enum ManningCoeff<'a, S: RuntimeScalar = f64> {
+pub enum ManningCoeff<'a, S: RuntimeScalar> {
     /// 常数糙率
     Uniform(S),
     /// 按单元提供的糙率数组
@@ -238,13 +240,38 @@ impl<'a, S: RuntimeScalar> From<&'a [S]> for ManningCoeff<'a, S> {
     }
 }
 
-// Removed From implementation for ManningCoeff
+/// Manning 糙率（Backend 缓冲区版本，Layer 3 推荐）
+#[derive(Debug, Clone, Copy)]
+pub enum ManningCoeffBuf<'a, S: RuntimeScalar, B: Backend<Scalar = S>> {
+    Uniform(S),
+    Buffer(&'a B::Buffer<S>),
+}
 
-// Removed From implementation for ChezyCoeff
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ManningCoeffBuf<'a, S, B> {
+    pub fn get(&self, idx: usize) -> S {
+        match self {
+            ManningCoeffBuf::Uniform(v) => *v,
+            ManningCoeffBuf::Buffer(buf) => buf[idx],
+        }
+    }
+}
 
-/// Chezy 系数，可为常数或数组
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> From<S> for ManningCoeffBuf<'a, S, B> {
+    fn from(val: S) -> Self {
+        ManningCoeffBuf::Uniform(val)
+    }
+}
+
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ManningCoeffBuf<'a, S, B> {
+    /// 从 Backend 缓冲区创建 ManningCoeffBuf
+    pub fn from_buffer(buf: &'a B::Buffer<S>) -> Self {
+        ManningCoeffBuf::Buffer(buf)
+    }
+}
+
+/// Chezy 系数（切片版本，Layer 4 兼容）
 #[derive(Debug, Clone, Copy, Serialize)]
-pub enum ChezyCoeff<'a, S: RuntimeScalar = f64> {
+pub enum ChezyCoeff<'a, S: RuntimeScalar> {
     /// 常数 Chezy 系数
     Uniform(S),
     /// 按单元提供的 Chezy 系数数组
@@ -272,17 +299,44 @@ impl<'a, S: RuntimeScalar> From<&'a [S]> for ChezyCoeff<'a, S> {
     }
 }
 
-// Removed From implementation for ChezyCoeff
+/// Chezy 系数（Backend 缓冲区版本，Layer 3 推荐）
+#[derive(Debug, Clone, Copy)]
+pub enum ChezyCoeffBuf<'a, S: RuntimeScalar, B: Backend<Scalar = S>> {
+    Uniform(S),
+    Buffer(&'a B::Buffer<S>),
+}
+
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ChezyCoeffBuf<'a, S, B> {
+    pub fn get(&self, idx: usize) -> S {
+        match self {
+            ChezyCoeffBuf::Uniform(v) => *v,
+            ChezyCoeffBuf::Buffer(buf) => buf[idx],
+        }
+    }
+}
+
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> From<S> for ChezyCoeffBuf<'a, S, B> {
+    fn from(val: S) -> Self {
+        ChezyCoeffBuf::Uniform(val)
+    }
+}
+
+impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ChezyCoeffBuf<'a, S, B> {
+    /// 从 Backend 缓冲区创建 ChezyCoeffBuf
+    pub fn from_buffer(buf: &'a B::Buffer<S>) -> Self {
+        ChezyCoeffBuf::Buffer(buf)
+    }
+}
 
 impl<S: RuntimeScalar> ShearStressCalculator<S> {
     /// 使用 Backend 缓冲区批量计算 Manning 剪切应力
     pub fn manning_batch_backend<B>(
         &self,
-        backend: &B,
+        _backend: &B,
         h: &B::Buffer<S>,
         u: &B::Buffer<S>,
         v: &B::Buffer<S>,
-        manning_n: ManningCoeff<'_, S>,
+        manning_n: ManningCoeffBuf<'_, S, B>,
         tau_out: &mut B::Buffer<S>,
         tau_x_out: &mut B::Buffer<S>,
         tau_y_out: &mut B::Buffer<S>,
@@ -300,17 +354,16 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
             tau_y_out[i] = shear.tau_y;
             u_star_out[i] = shear.u_star;
         }
-        let _ = backend;
     }
 
     /// 使用 Backend 缓冲区批量计算 Chezy 剪切应力
     pub fn chezy_batch_backend<B>(
         &self,
-        backend: &B,
+        _backend: &B,
         h: &B::Buffer<S>,
         u: &B::Buffer<S>,
         v: &B::Buffer<S>,
-        chezy_c: ChezyCoeff<'_, S>,
+        chezy_c: ChezyCoeffBuf<'_, S, B>,
         tau_out: &mut B::Buffer<S>,
         tau_x_out: &mut B::Buffer<S>,
         tau_y_out: &mut B::Buffer<S>,
@@ -328,7 +381,6 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
             tau_y_out[i] = shear.tau_y;
             u_star_out[i] = shear.u_star;
         }
-        let _ = backend;
     }
 }
 

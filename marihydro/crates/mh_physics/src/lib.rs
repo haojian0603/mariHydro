@@ -58,9 +58,11 @@ pub mod vertical;
 
 // 待迁移模块（占位）
 pub mod forcing;
+pub mod limiters;
 pub mod numerics;
 pub mod sediment;
 pub mod sources;
+pub mod conservation;
 pub mod waves;
 
 // 新增模块：字段注册、gpu、配置桥接和统一错误处理
@@ -115,7 +117,6 @@ pub use types::{
 // 重导出源项类型
 pub use sources::{
     SourceContribution, SourceContext, SourceTerm, SourceHelpers,
-    ManningFriction, ManningFrictionConfig, ChezyFriction, ChezyFrictionConfig,
     CoriolisConfig, CoriolisSource,
 };
 

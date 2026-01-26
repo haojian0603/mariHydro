@@ -87,6 +87,13 @@ impl CrsDefinition {
         CrsDefinition::Epsg(code)
     }
 
+    pub fn utm_zone_checked(zone: u8, north: bool) -> crate::error::GeoResult<Self> {
+        if !(1..=60).contains(&zone) {
+            return Err(crate::error::GeoError::invalid_utm_zone(zone));
+        }
+        Ok(Self::utm_zone(zone, north))
+    }
+
     /// Web Mercator (EPSG:3857)
     #[must_use]
     pub fn web_mercator() -> Self {
@@ -104,6 +111,19 @@ impl CrsDefinition {
         let zone = zone.clamp(1, 60);
         let north = lat >= 0.0;
         Self::utm_zone(zone, north)
+    }
+
+    pub fn auto_utm_checked(lon: f64, lat: f64) -> crate::error::GeoResult<Self> {
+        if !(-180.0..=180.0).contains(&lon) {
+            return Err(crate::error::GeoError::coordinate_out_of_range("经度", lon, -180.0, 180.0));
+        }
+        if !(-90.0..=90.0).contains(&lat) {
+            return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0));
+        }
+        if lat > 84.0 || lat < -80.0 {
+            return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
+        }
+        Ok(Self::auto_utm(lon, lat))
     }
 
     /// 高斯-克吕格 3度带
@@ -342,19 +362,19 @@ impl Crs {
 
     /// 创建 UTM 投影 CRS
     #[must_use]
-    pub fn utm(zone: u8, north: bool) -> Self {
+    pub fn utm(zone: u8, north: bool) -> MhResult<Self> {
         let code = if north {
             32600 + u32::from(zone)
         } else {
             32700 + u32::from(zone)
         };
-        Self::from_epsg(code).unwrap_or_else(|_| Self::wgs84())
+        Self::from_epsg(code)
     }
 
     /// 创建 Web Mercator CRS
     #[must_use]
-    pub fn web_mercator() -> Self {
-        Self::from_epsg(3857).unwrap_or_else(|_| Self::wgs84())
+    pub fn web_mercator() -> MhResult<Self> {
+        Self::from_epsg(3857)
     }
 
     /// 是否为地理坐标系
@@ -423,15 +443,13 @@ pub fn crs_from_epsg(code: u32) -> MhResult<Crs> {
 
 /// 根据经纬度自动选择合适的投影 CRS
 #[must_use]
-pub fn auto_projected_crs(lon: f64, lat: f64) -> Crs {
+pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
     // 中国区域使用 CGCS2000 高斯-克吕格
     if (73.0..=135.0).contains(&lon) && (3.0..=54.0).contains(&lat) {
         let zone = (lon / 3.0).round() as u8;
         let code = 4534 + u32::from(zone.saturating_sub(25));
-        Crs::from_epsg(code).unwrap_or_else(|_| {
-            // 回退到 UTM
-            Crs::utm(((lon + 180.0) / 6.0).floor() as u8 + 1, lat >= 0.0)
-        })
+        Crs::from_epsg(code)
+            .or_else(|_| Crs::utm(((lon + 180.0) / 6.0).floor() as u8 + 1, lat >= 0.0))
     } else {
         // 其他区域使用 UTM
         let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
@@ -531,11 +549,11 @@ mod tests {
     #[test]
     fn test_auto_projected_crs() {
         // 北京 - 应该选择 CGCS2000 高斯-克吕格
-        let crs = auto_projected_crs(116.4, 39.9);
+        let crs = auto_projected_crs(116.4, 39.9).unwrap();
         assert!(crs.is_projected());
 
         // 纽约 - 应该选择 UTM
-        let crs_ny = auto_projected_crs(-74.0, 40.7);
+        let crs_ny = auto_projected_crs(-74.0, 40.7).unwrap();
         assert!(crs_ny.is_projected());
     }
 }

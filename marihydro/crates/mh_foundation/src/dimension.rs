@@ -93,6 +93,16 @@ impl Default for D3Dynamic {
     }
 }
 
+impl D3Dynamic {
+    pub fn storage_size_runtime(&self, n_cells: usize) -> usize {
+        n_cells * self.n_layers.max(1)
+    }
+
+    pub fn flat_index_runtime(&self, cell: usize, layer: usize) -> usize {
+        cell * self.n_layers.max(1) + layer
+    }
+}
+
 impl Dimension for D3Dynamic {
     /// 编译期无法确定，使用 1 作为占位
     const N_LAYERS: usize = 1;

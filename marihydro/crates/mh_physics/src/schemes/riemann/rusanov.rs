@@ -16,8 +16,7 @@
 //! λ_max = max(|u_L| + c_L, |u_R| + c_R)
 //! c = sqrt(g * h)
 //! ```
-use num_traits::Float;
-use num_traits::FromPrimitive;
+use num_traits::{Float, FromPrimitive, Zero};
 use mh_runtime::Vector2D;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
@@ -91,17 +90,17 @@ pub struct RusanovSolver<B: Backend> {
     params: SolverParams<B::Scalar>,
     /// Rusanov 特定配置
     config: RusanovConfig<B::Scalar>,
-    /// Backend phantom data
-    _backend: std::marker::PhantomData<B>,
 }
 
-impl<B: Backend> RusanovSolver<B> {
+impl<B: Backend> RusanovSolver<B>
+where
+    B::Scalar: Float + FromPrimitive + Zero,
+{
     /// 创建新的 Rusanov 求解器
     pub fn new(numerical_params: &NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
         Self {
             params: SolverParams::from_numerical(numerical_params, gravity),
             config: RusanovConfig::default(),
-            _backend: std::marker::PhantomData,
         }
     }
 
@@ -114,7 +113,6 @@ impl<B: Backend> RusanovSolver<B> {
         Self {
             params: SolverParams::from_numerical(numerical_params, gravity),
             config,
-            _backend: std::marker::PhantomData,
         }
     }
 
@@ -123,17 +121,12 @@ impl<B: Backend> RusanovSolver<B> {
         Self {
             params,
             config: RusanovConfig::default(),
-            _backend: std::marker::PhantomData,
         }
     }
 
     /// 从参数和配置创建
     pub fn from_params_with_config(params: SolverParams<B::Scalar>, config: RusanovConfig<B::Scalar>) -> Self {
-        Self { 
-            params, 
-            config,
-            _backend: std::marker::PhantomData,
-        }
+        Self { params, config }
     }
 
     /// 获取参数
@@ -269,9 +262,9 @@ impl<B: Backend> RusanovSolver<B> {
         // 计算物理通量
         let (f_h, f_hun, f_hut) = self.physical_flux(h_wet, un_wet, ut_wet);
 
-        let three = B::Scalar::from_f64(3.0).unwrap();
+        let three = B::Scalar::from_f64(3.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE);
         let two = B::Scalar::TWO;
-        let nine = B::Scalar::from_f64(9.0).unwrap();
+        let nine = B::Scalar::from_f64(9.0).unwrap_or(three * three);
 
         // 使用 Riemann 不变量的 Ritter 溃坝解
         let (mass, mom_n, mom_t) = if wet_on_left {
@@ -284,7 +277,7 @@ impl<B: Backend> RusanovSolver<B> {
                 let u_star = (two * c_wet + un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap());
+                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -298,7 +291,7 @@ impl<B: Backend> RusanovSolver<B> {
                 let u_star = -(two * c_wet - un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap());
+                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -318,7 +311,10 @@ impl<B: Backend> RusanovSolver<B> {
 // RiemannSolver trait 实现
 // ============================================================================
 
-impl<B: Backend> RiemannSolver for RusanovSolver<B> {
+impl<B: Backend> RiemannSolver for RusanovSolver<B>
+where
+    B::Scalar: Float + FromPrimitive + Zero,
+{
     type Scalar = B::Scalar;
     type Vector2D = B::Vector2D;
 
@@ -344,6 +340,8 @@ impl<B: Backend> RiemannSolver for RusanovSolver<B> {
         vel_right: B::Vector2D,
         normal: B::Vector2D,
     ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        let h_left = h_left.max(B::Scalar::ZERO);
+        let h_right = h_right.max(B::Scalar::ZERO);
         let h_dry = self.params.h_dry;
 
         let left_wet = h_left > h_dry;

@@ -39,10 +39,11 @@
 //! ```ignore
 //! use mh_physics::boundary::{GhostStateCalculator, BoundaryKind, BoundaryParams};
 //! use mh_physics::state::ConservedState;
+//! type B = mh_runtime::CpuBackend<f64>;
 //!
 //! let calculator = GhostStateCalculator::default();
 //! let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
-//! let normal = (1.0, 0.0);  // 使用元组而非 DVec2
+//! let normal = B::vec2_new(1.0, 0.0);  // 使用 backend 向量类型
 //! let z_bed = 0.0; // 底床高程
 //!
 //! let ghost = calculator.compute_ghost(
@@ -71,6 +72,7 @@ pub use types::{
     BoundaryKind,
     BoundaryCondition,
     ExternalForcing,
+    GenericExternalForcing,
     BoundaryParams,
 };
 
@@ -80,6 +82,9 @@ pub use manager::{
     BoundaryManager,
     BoundaryDataProvider,
     ConstantForcingProvider,
+    StrictBoundaryDataProvider,
+    ForcingProviderWithFallback,
+    ForcingError,
     BoundaryError,
 };
 

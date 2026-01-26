@@ -9,7 +9,7 @@ use crate::state::{RhsBuffers, ShallowWaterStateGeneric as ShallowWaterState};
 use crate::Backend;
 use mh_foundation::MhResult;
 use mh_runtime::RuntimeScalar;
-use num_traits::FromPrimitive;use num_traits::Float;
+use num_traits::{Float, FromPrimitive};
 
 /// RHS计算器trait（Backend泛型版本）
 pub trait RhsComputer<B: Backend> {

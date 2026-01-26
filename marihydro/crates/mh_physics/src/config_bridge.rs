@@ -40,6 +40,8 @@ pub struct Layer3Config<S: RuntimeScalar> {
     pub parallel_threshold: usize,
     /// 是否启用隐式摩擦
     pub implicit_friction: bool,
+    /// 黎曼求解器类型
+    pub riemann_solver: RiemannSolverType,
     /// 数值格式
     pub scheme: NumericalScheme,
     /// 回退策略
@@ -66,6 +68,7 @@ where
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
             implicit_friction: true,
+            riemann_solver: RiemannSolverType::Hllc,
             scheme: NumericalScheme::SecondOrderMuscl,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),
@@ -96,6 +99,12 @@ where
     /// 设置数值格式
     pub fn scheme(mut self, scheme: NumericalScheme) -> Self {
         self.config.scheme = scheme;
+        self
+    }
+
+    /// 设置黎曼求解器类型
+    pub fn riemann_solver(mut self, solver: RiemannSolverType) -> Self {
+        self.config.riemann_solver = solver;
         self
     }
 
@@ -230,6 +239,7 @@ where
             use_hydrostatic_reconstruction: config.numerical.use_hydrostatic_reconstruction,
             parallel_threshold: config.parallel.threshold,
             implicit_friction: config.numerical.friction,
+            riemann_solver: config.numerical.riemann_solver,
             scheme,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),

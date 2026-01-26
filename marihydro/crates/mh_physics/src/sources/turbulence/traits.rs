@@ -88,6 +88,25 @@ impl<S: Scalar> VelocityGradient<S> {
         self.du_dx.is_finite() && self.du_dy.is_finite() 
             && self.dv_dx.is_finite() && self.dv_dy.is_finite()
     }
+
+    /// 校验速度梯度场与网格尺度
+    pub fn validate_fields(
+        velocity_gradients: &[VelocityGradient<S>],
+        cell_sizes: &[S],
+    ) -> Result<(), &'static str> {
+        if velocity_gradients.len() != cell_sizes.len() {
+            return Err("velocity_gradients 与 cell_sizes 长度不一致");
+        }
+        for (grad, &size) in velocity_gradients.iter().zip(cell_sizes.iter()) {
+            if !grad.is_valid() {
+                return Err("velocity_gradients 存在无效值");
+            }
+            if !size.is_finite() || size <= S::ZERO {
+                return Err("cell_sizes 存在非正或非有限值");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 湍流闭合模型 trait（完全泛型化）

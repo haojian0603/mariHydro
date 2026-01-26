@@ -19,6 +19,7 @@ pub mod exporters;
 pub mod import;
 pub mod infra;
 pub mod error;
+pub mod netcdf_tide;
 pub mod project;
 
 // 核心功能模块
@@ -41,3 +42,10 @@ pub type Result<T> = IoResult<T>;
 pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManager};
 pub use pipeline::{IoPipeline, OutputRequest, PipelineConfig, PipelineStats, PvdEntry};
 pub use snapshot::{MeshSnapshot, SnapshotMeta, StateSnapshot, StateSnapshotMeta, StateStatistics};
+
+// 潮汐数据 I/O
+pub use netcdf_tide::{
+    TidalDataReader, TpxoReader, Fes2014Reader, TidalModel, TidalGrid,
+    TidalConstituent, BoundaryTidalConstants, TidalIoError,
+    open_tidal_data, TidalBoundaryExtractor,
+};

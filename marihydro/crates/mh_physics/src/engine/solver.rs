@@ -5,16 +5,17 @@
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
-use crate::schemes::{HllcSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::{HllcSolver, HlleSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
-use crate::numerics::{MusclConfig, MusclReconstructorGeneric};
-use crate::numerics::reconstruction::ReconstructorGeneric;
+use crate::numerics::{MusclConfig, MusclReconstructorGeneric, WenoConfig, WenoReconstructorGeneric};
+use crate::numerics::reconstruction::ReconstructedStateGeneric;
 use crate::state::ShallowWaterState;
 use crate::types::{NumericalParams};
 use crate::Layer3Config;
 
 use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, RuntimeScalar, Vector2D};
-use num_traits::{Float, FromPrimitive, ToPrimitive};
+use mh_config::solver_config::RiemannSolverType;
+use num_traits::{Float, ToPrimitive};
 use rayon::prelude::*;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -38,18 +39,50 @@ pub struct BedSlopeCorrection<B: Backend> {
     pub source_right_y: B::Scalar,
 }
 
-/// 求解器统计信息
-#[derive(Debug, Clone, Default)]
-pub struct SolverStats {
-    pub max_wave_speed: f64,
+/// 求解器统计信息（Backend 泛型版本）
+/// 
+/// 记录每个时间步的求解器性能指标和状态信息。
+/// 所有数值类型使用 Backend 标量类型，确保精度一致性。
+/// 
+/// # 类型参数
+/// 
+/// - `B`: 计算后端类型
+#[derive(Debug, Clone)]
+pub struct SolverStats<B: Backend> {
+    /// 最大波速 [m/s]
+    pub max_wave_speed: B::Scalar,
+    /// 干单元数量
     pub dry_cells: usize,
+    /// 被限制的面数量
     pub limited_faces: usize,
-    pub dt: f64,
+    /// 实际时间步长 [s]
+    pub dt: B::Scalar,
+    /// 回退次数
     pub fallback_count: u32,
+    /// 当前数值格式
     pub current_scheme: NumericalScheme,
+    /// 稳定性状态
     pub stability_status: StabilityStatus,
+    /// 检测到的 NaN 数量
     pub nan_count: u32,
+    /// 最后一个 NaN 位置
     pub last_nan_location: Option<usize>,
+}
+
+impl<B: Backend> Default for SolverStats<B> {
+    fn default() -> Self {
+        Self {
+            max_wave_speed: B::Scalar::ZERO,
+            dry_cells: 0,
+            limited_faces: 0,
+            dt: B::Scalar::ZERO,
+            fallback_count: 0,
+            current_scheme: NumericalScheme::default(),
+            stability_status: StabilityStatus::default(),
+            nan_count: 0,
+            last_nan_location: None,
+        }
+    }
 }
 
 /// 稳定性状态
@@ -73,11 +106,63 @@ impl std::fmt::Display for StabilityStatus {
     }
 }
 
-impl SolverStats {
+impl<B: Backend> SolverStats<B> {
+    /// 检查是否需要回退
     pub fn needs_fallback(&self) -> bool {
-        matches!(self.stability_status, StabilityStatus::NeedsFallback | StabilityStatus::Unstable)
+        matches!(
+            self.stability_status,
+            StabilityStatus::NeedsFallback | StabilityStatus::Unstable
+        )
     }
 
+    /// 生成摘要字符串
+    pub fn summary(&self) -> String {
+        use num_traits::ToPrimitive;
+        format!(
+            "dt={:.4}s, 波速={:.2}m/s, 干单元={}, 限制面={}, 状态={}, 回退={}, NaN={}",
+            self.dt.to_f64().unwrap_or(0.0),
+            self.max_wave_speed.to_f64().unwrap_or(0.0),
+            self.dry_cells,
+            self.limited_faces,
+            self.stability_status,
+            self.fallback_count,
+            self.nan_count,
+        )
+    }
+    
+    /// 转换为 f64 版本（用于日志输出和序列化）
+    pub fn to_f64(&self) -> SolverStatsF64 {
+        use num_traits::ToPrimitive;
+        SolverStatsF64 {
+            max_wave_speed: self.max_wave_speed.to_f64().unwrap_or(0.0),
+            dry_cells: self.dry_cells,
+            limited_faces: self.limited_faces,
+            dt: self.dt.to_f64().unwrap_or(0.0),
+            fallback_count: self.fallback_count,
+            current_scheme: self.current_scheme,
+            stability_status: self.stability_status,
+            nan_count: self.nan_count,
+            last_nan_location: self.last_nan_location,
+        }
+    }
+}
+
+/// 求解器统计信息（f64 版本，用于输出和序列化）
+#[derive(Debug, Clone, Default)]
+pub struct SolverStatsF64 {
+    pub max_wave_speed: f64,
+    pub dry_cells: usize,
+    pub limited_faces: usize,
+    pub dt: f64,
+    pub fallback_count: u32,
+    pub current_scheme: NumericalScheme,
+    pub stability_status: StabilityStatus,
+    pub nan_count: u32,
+    pub last_nan_location: Option<usize>,
+}
+
+impl SolverStatsF64 {
+    /// 生成摘要字符串
     pub fn summary(&self) -> String {
         format!(
             "dt={:.4}s, wave_speed={:.2}m/s, dry={}, limited={}, status={}, fallbacks={}, nan_detected={}",
@@ -172,12 +257,91 @@ pub enum NumericalScheme {
     SecondOrderWeno,
 }
 
+/// 标量重构器封装（MUSCL/WENO）
+enum ScalarReconstructor<S: RuntimeScalar> {
+    Muscl(MusclReconstructorGeneric<S>),
+    Weno(WenoReconstructorGeneric<S>),
+}
+
+impl<S: RuntimeScalar> ScalarReconstructor<S> {
+    fn new(mesh: Arc<PhysicsMesh>, scheme: NumericalScheme) -> Self {
+        match scheme {
+            NumericalScheme::SecondOrderWeno => {
+                Self::Weno(WenoReconstructorGeneric::new(WenoConfig::default(), mesh))
+            }
+            NumericalScheme::FirstOrder => {
+                let mut recon = MusclReconstructorGeneric::new(MusclConfig::first_order(), mesh);
+                recon.set_config(MusclConfig::first_order());
+                Self::Muscl(recon)
+            }
+            NumericalScheme::SecondOrderMuscl => {
+                Self::Muscl(MusclReconstructorGeneric::new(MusclConfig::default(), mesh))
+            }
+        }
+    }
+
+    fn configure_for_scheme(&mut self, scheme: NumericalScheme, mesh: Arc<PhysicsMesh>) {
+        match (scheme, self) {
+            (NumericalScheme::SecondOrderWeno, ScalarReconstructor::Weno(recon)) => {
+                recon.set_config(WenoConfig::default());
+            }
+            (NumericalScheme::SecondOrderMuscl, ScalarReconstructor::Muscl(recon)) => {
+                recon.set_config(MusclConfig::default());
+            }
+            (NumericalScheme::FirstOrder, ScalarReconstructor::Muscl(recon)) => {
+                recon.set_config(MusclConfig::first_order());
+            }
+            _ => {
+                *self = Self::new(mesh, scheme);
+            }
+        }
+    }
+
+    fn compute_gradients(&mut self, values: &[S]) {
+        match self {
+            ScalarReconstructor::Muscl(recon) => recon.compute_gradients(values),
+            ScalarReconstructor::Weno(recon) => recon.compute_gradients(values),
+        }
+    }
+
+    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
+        match self {
+            ScalarReconstructor::Muscl(recon) => recon.reconstruct_scalar(face_id, values),
+            ScalarReconstructor::Weno(recon) => recon.reconstruct_scalar(face_id, values),
+        }
+    }
+}
+
 impl std::fmt::Display for NumericalScheme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FirstOrder => write!(f, "First Order"),
             Self::SecondOrderMuscl => write!(f, "MUSCL"),
             Self::SecondOrderWeno => write!(f, "WENO"),
+        }
+    }
+}
+
+impl NumericalScheme {
+    /// 是否已实现
+    pub fn is_implemented(&self) -> bool {
+        true
+    }
+
+    /// 格式阶数
+    pub fn order(&self) -> usize {
+        match self {
+            Self::FirstOrder => 1,
+            Self::SecondOrderMuscl | Self::SecondOrderWeno => 2,
+        }
+    }
+
+    /// 降级链
+    pub fn fallback(&self) -> Option<Self> {
+        match self {
+            Self::SecondOrderWeno => Some(Self::SecondOrderMuscl),
+            Self::SecondOrderMuscl => Some(Self::FirstOrder),
+            Self::FirstOrder => None,
         }
     }
 }
@@ -295,7 +459,7 @@ impl<B: Backend> HydrostaticReconstruction<B> {
         normal: B::Vector2D,
         length: B::Scalar,
     ) -> BedSlopeCorrection<B> {
-        let half = B::Scalar::from_f64(0.5).unwrap();
+        let half = B::Scalar::HALF;
         let g = self.gravity;
         let pressure_diff_l = half * g * (h_l * h_l - h_l_star * h_l_star) * length;
         let pressure_diff_r = half * g * (h_r * h_r - h_r_star * h_r_star) * length;
@@ -320,20 +484,37 @@ where
     _gravity: B::Scalar,
     backend: B,
     workspace: SolverWorkspaceGeneric<B>,
-    riemann: HllcSolver<B>,
+    riemann: Box<dyn RiemannSolver<Scalar = B::Scalar, Vector2D = B::Vector2D>>,
     wetting_drying: WettingDryingHandler<B>,
     hydrostatic: HydrostaticReconstruction<B>,
     timestep_ctrl: TimeStepController<B>,
-    stats: SolverStats,
-    muscl_eta: MusclReconstructorGeneric<B::Scalar>,
-    muscl_u: MusclReconstructorGeneric<B::Scalar>,
-    muscl_v: MusclReconstructorGeneric<B::Scalar>,
+    stats: SolverStats<B>,
+    recon_eta: ScalarReconstructor<B::Scalar>,
+    recon_u: ScalarReconstructor<B::Scalar>,
+    recon_v: ScalarReconstructor<B::Scalar>,
 }
 
 impl<B: Backend> ShallowWaterSolver<B>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
+    fn build_riemann_solver(
+        config: &Layer3Config<B::Scalar>,
+        params: &NumericalParams<B::Scalar>,
+        solver_params: &SolverParams<B::Scalar>,
+        gravity: B::Scalar,
+    ) -> Box<dyn RiemannSolver<Scalar = B::Scalar, Vector2D = B::Vector2D>> {
+        match config.riemann_solver {
+            RiemannSolverType::Hllc => Box::new(HllcSolver::<B>::new(solver_params, gravity)),
+            RiemannSolverType::Roe => Box::new(RoeSolver::<B>::new(solver_params, gravity)),
+            RiemannSolverType::Rusanov => Box::new(RusanovSolver::<B>::new(params, gravity)),
+            RiemannSolverType::Central => {
+                log::warn!("Central 求解器未实现，已回退为 Rusanov");
+                Box::new(RusanovSolver::<B>::new(params, gravity))
+            }
+        }
+    }
+
     pub fn new(
         mesh: Arc<PhysicsMesh>, 
         config: Layer3Config<B::Scalar>, 
@@ -344,23 +525,16 @@ where
         let params = config.params.clone();
         let timestep_ctrl = TimeStepController::<B>::new(gravity, &params);
 
-        let muscl_config = match config.scheme {
-            NumericalScheme::SecondOrderMuscl | NumericalScheme::SecondOrderWeno => {
-                MusclConfig::default()
-            }
-            NumericalScheme::FirstOrder => MusclConfig::first_order(),
-        };
-
         let workspace = SolverWorkspaceGeneric::new(&backend, n_cells);
         
         // 转换参数类型：Layer 4 NumericalParams → Layer 3 SolverParams
         let solver_params = crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&params, gravity);
-        let riemann = HllcSolver::<B>::new(&solver_params, gravity);
+        let riemann = Self::build_riemann_solver(&config, &params, &solver_params, gravity);
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
         let hydrostatic = HydrostaticReconstruction::<B>::new(&solver_params, gravity);
-        let muscl_eta = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
-        let muscl_u = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config.clone(), mesh.clone());
-        let muscl_v = MusclReconstructorGeneric::<B::Scalar>::new(muscl_config, mesh.clone());
+        let recon_eta = ScalarReconstructor::new(mesh.clone(), config.scheme);
+        let recon_u = ScalarReconstructor::new(mesh.clone(), config.scheme);
+        let recon_v = ScalarReconstructor::new(mesh.clone(), config.scheme);
 
         Self {
             mesh,
@@ -374,9 +548,9 @@ where
             hydrostatic,
             timestep_ctrl,
             stats: SolverStats::default(),
-            muscl_eta,
-            muscl_u,
-            muscl_v,
+            recon_eta,
+            recon_u,
+            recon_v,
         }
     }
 
@@ -401,10 +575,10 @@ where
         }
         
         let (dry_cells, limited_count) = self.enforce_positivity(state, dt);
-        self.stats.max_wave_speed = max_wave_speed.to_f64().unwrap_or(0.0);
+        self.stats.max_wave_speed = max_wave_speed;
         self.stats.dry_cells = dry_cells;
         self.stats.limited_faces = limited_count;
-        self.stats.dt = dt.to_f64().unwrap_or(0.0);
+        self.stats.dt = dt;
         
         dt
     }
@@ -433,21 +607,18 @@ where
             self.workspace.eta[i] = state.h[i] + state.z[i];
         }
 
+        let scheme = self.config.scheme;
+        self.recon_eta.configure_for_scheme(scheme, self.mesh.clone());
+        self.recon_u.configure_for_scheme(scheme, self.mesh.clone());
+        self.recon_v.configure_for_scheme(scheme, self.mesh.clone());
+
         if !self.use_second_order() {
-            let cfg = MusclConfig::first_order();
-            self.muscl_eta.set_config(cfg.clone());
-            self.muscl_u.set_config(cfg.clone());
-            self.muscl_v.set_config(cfg);
             return;
         }
 
-        let cfg = MusclConfig::default();
-        self.muscl_eta.set_config(cfg.clone());
-        self.muscl_u.set_config(cfg.clone());
-        self.muscl_v.set_config(cfg);
-        self.muscl_eta.compute_gradients(&self.workspace.eta);
-        self.muscl_u.compute_gradients(&self.workspace.vel_u);
-        self.muscl_v.compute_gradients(&self.workspace.vel_v);
+        self.recon_eta.compute_gradients(&self.workspace.eta);
+        self.recon_u.compute_gradients(&self.workspace.vel_u);
+        self.recon_v.compute_gradients(&self.workspace.vel_v);
     }
 
     #[inline]
@@ -457,11 +628,11 @@ where
         face_idx: FaceIndex,
     ) -> (B::Scalar, B::Scalar) {
         let g = self.hydrostatic.gravity;
-        let half = B::Scalar::from_f64(0.5).unwrap();
+        let half = B::Scalar::HALF;
         let owner = self.mesh.face_owner(face_idx);
         let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
-        let length = B::Scalar::from_f64(length_f64).unwrap();
+        let length = self.backend.scalar_from_f64(length_f64);
         let h = state.h[owner.get()];
         let pressure = half * g * h * h * length;
         let flux_hu = -pressure * normal.x();
@@ -562,14 +733,14 @@ where
     ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
         let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
-        let length = B::Scalar::from_f64(length_f64).unwrap();
+        let length = self.backend.scalar_from_f64(length_f64);
         let owner = self.mesh.face_owner(face_idx);
         let neighbor = self.mesh.face_neighbor(face_idx);
 
         let (h_l, vel_l, z_l, h_r, vel_r, z_r) = if self.use_second_order() {
-            let eta_rec = self.muscl_eta.reconstruct_scalar(face_idx.get(), &self.workspace.eta);
-            let u_rec = self.muscl_u.reconstruct_scalar(face_idx.get(), &self.workspace.vel_u);
-            let v_rec = self.muscl_v.reconstruct_scalar(face_idx.get(), &self.workspace.vel_v);
+            let eta_rec = self.recon_eta.reconstruct_scalar(face_idx.get(), &self.workspace.eta);
+            let u_rec = self.recon_u.reconstruct_scalar(face_idx.get(), &self.workspace.vel_u);
+            let v_rec = self.recon_v.reconstruct_scalar(face_idx.get(), &self.workspace.vel_v);
 
             if let Some(neigh) = neighbor {
                 let z_owner = state.z[owner.get()];
@@ -596,7 +767,7 @@ where
                 let v_l = v_rec.left;
                 let vel_left = B::vec2_new(u_l, v_l);
                 let vn = B::vec2_dot(&vel_left, &normal);
-                let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
+                let two = B::Scalar::TWO;
                 let vel_right = B::vec2_sub(&vel_left, &B::vec2_scale(&normal, vn * two));
                 (h_left, vel_left, z_owner, h_left, vel_right, z_owner)
             }
@@ -623,7 +794,7 @@ where
                 )
             } else {
                 let vn = B::vec2_dot(&vel_l, &normal);
-                let two = B::Scalar::from_f64(2.0).unwrap();
+                let two = B::Scalar::TWO;
                 let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
                 (h_l, vel_l, z_l, h_l, vel_r, z_l)
             }
@@ -633,7 +804,7 @@ where
         let recon_state = if self.config.use_hydrostatic_reconstruction {
             self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
         } else {
-            let half = B::Scalar::from_f64(0.5).unwrap();
+            let half = B::Scalar::HALF;
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,
@@ -682,7 +853,7 @@ where
     fn update_state(&self, state: &mut ShallowWaterState<B>, dt: B::Scalar) {
         for i in self.mesh.cells() {
             let area_f64 = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0_f64);
-            let inv_area = B::Scalar::from_f64(1.0 / area_f64).unwrap();
+            let inv_area = self.backend.scalar_from_f64(1.0 / area_f64);
             state.h[i] = state.h[i] + dt * inv_area * self.workspace.flux_h[i];
             state.hu[i] = state.hu[i] + dt * inv_area * 
                 (self.workspace.flux_hu[i] + self.workspace.source_hu[i]);
@@ -755,12 +926,12 @@ where
         &self.backend
     }
 
-    pub fn stats(&self) -> &SolverStats {
+    pub fn stats(&self) -> &SolverStats<B> {
         &self.stats
     }
 
     pub fn max_wave_speed(&self) -> f64 {
-        self.stats.max_wave_speed
+        self.stats.max_wave_speed.to_f64().unwrap_or(0.0)
     }
 
     pub fn dry_cell_count(&self) -> usize {

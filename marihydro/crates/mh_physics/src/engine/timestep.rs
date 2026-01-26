@@ -73,21 +73,37 @@ where
 
         let max_speed = self.compute_max_wave_speed_parallel(state, params);
 
+        if !max_speed.is_finite() || max_speed <= B::Scalar::ZERO {
+            return self.dt_min;
+        }
         if max_speed < self.min_wave_speed {
-            return self.dt_max;
+            return self.dt_max.max(self.dt_min);
         }
 
         let dt = self.cfl * min_length / max_speed;
-        dt.min(self.dt_max).max(self.dt_min)
+        self.clamp_dt(dt)
     }
 
     pub fn compute_from_max_speed(&self, max_speed: B::Scalar) -> B::Scalar {
+        if !max_speed.is_finite() || max_speed <= B::Scalar::ZERO {
+            return self.dt_min;
+        }
         if max_speed < self.min_wave_speed {
-            return self.dt_max;
+            return self.dt_max.max(self.dt_min);
         }
 
-        let min_length = B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE);
+        let min_length = self.cached_dx_min.unwrap_or_else(|| {
+            B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE)
+        });
         let dt = self.cfl * min_length / max_speed;
+        self.clamp_dt(dt)
+    }
+
+    #[inline]
+    fn clamp_dt(&self, dt: B::Scalar) -> B::Scalar {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO {
+            return self.dt_min;
+        }
         dt.min(self.dt_max).max(self.dt_min)
     }
 
@@ -114,8 +130,10 @@ where
             let c = (self.g * h.max(B::Scalar::ZERO)).sqrt();
             let wave_speed = speed + c;
 
-            if let Some(bits) = wave_speed.to_f64().map(|f| f.to_bits()) {
-                max_speed.fetch_max(bits, Ordering::Relaxed);
+            if wave_speed.is_finite() {
+                if let Some(bits) = wave_speed.to_f64().map(|f| f.to_bits()) {
+                    max_speed.fetch_max(bits, Ordering::Relaxed);
+                }
             }
         });
 
@@ -130,22 +148,32 @@ where
         }
 
         let min_dx = AtomicU64::new(f64::MAX.to_bits());
+        let found = std::sync::atomic::AtomicBool::new(false);
 
         (0..n).into_par_iter().for_each(|i| {
             let area = mesh.cell_area(CellIndex(i)).unwrap_or(0.0);
             let perimeter = mesh.cell_perimeter(CellIndex(i)).unwrap_or(0.0);
 
-            if perimeter < 1e-14 {
+            if !area.is_finite() || !perimeter.is_finite() || perimeter < 1e-14 || area <= 0.0 {
                 return;
             }
 
             let dx = 2.0 * area / perimeter;
             let bits = dx.to_bits();
             min_dx.fetch_min(bits, Ordering::Relaxed);
+            found.store(true, Ordering::Relaxed);
         });
 
-        B::Scalar::from_f64(f64::from_bits(min_dx.load(Ordering::Relaxed)))
-            .unwrap_or(B::Scalar::ONE)
+        if !found.load(Ordering::Relaxed) {
+            return B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE);
+        }
+
+        let min_val = f64::from_bits(min_dx.load(Ordering::Relaxed));
+        if !min_val.is_finite() || min_val <= 0.0 {
+            return B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE);
+        }
+
+        B::Scalar::from_f64(min_val).unwrap_or(B::Scalar::ONE)
     }
 }
 
@@ -207,11 +235,15 @@ where
         };
 
         let grown = self.current_dt * growth;
-        let new_dt = if suggested < grown {
+        let mut new_dt = if suggested < grown {
             suggested
         } else {
             grown
         };
+
+        if !new_dt.is_finite() || new_dt <= B::Scalar::ZERO {
+            new_dt = self.calculator.dt_min;
+        }
 
         let threshold = B::Scalar::from_f64(0.95).unwrap_or(B::Scalar::ONE);
         if new_dt >= self.current_dt * threshold {
@@ -233,11 +265,15 @@ where
         };
 
         let grown = self.current_dt * growth;
-        let new_dt = if suggested < grown {
+        let mut new_dt = if suggested < grown {
             suggested
         } else {
             grown
         };
+
+        if !new_dt.is_finite() || new_dt <= B::Scalar::ZERO {
+            new_dt = self.calculator.dt_min;
+        }
 
         let threshold = B::Scalar::from_f64(0.95).unwrap_or(B::Scalar::ONE);
         if new_dt >= self.current_dt * threshold {

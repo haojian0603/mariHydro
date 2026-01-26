@@ -227,6 +227,13 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
         }
     }
 
+    pub fn try_insert(&mut self, value: T) -> Result<Idx<Tag>, crate::error::MhError> {
+        if self.slots.len() >= u32::MAX as usize {
+            return Err(crate::error::MhError::internal("Arena 索引溢出"));
+        }
+        Ok(self.insert(value))
+    }
+
     /// 获取元素的不可变引用
     /// 
     /// # 返回值

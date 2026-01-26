@@ -165,6 +165,14 @@ impl<S: Storage> WorkflowManager<S> {
 
         tracing::info!("Job submitted: {}", id);
 
+        if self.config.auto_start {
+            if self.active_jobs.read().len() < self.config.max_concurrent {
+                if let Some(next) = self.pop_next_job()? {
+                    let _ = self.start_job(next.id);
+                }
+            }
+        }
+
         Ok(id)
     }
 
@@ -210,6 +218,10 @@ impl<S: Storage> WorkflowManager<S> {
 
     /// 启动任务
     pub fn start_job(&self, id: JobId) -> Result<(), WorkflowError> {
+        if self.active_jobs.read().len() >= self.config.max_concurrent {
+            return Err(WorkflowError::Other("max_concurrent reached".into()));
+        }
+
         let mut job = self.get_job(id)?;
 
         if job.status != JobStatus::Pending && job.status != JobStatus::Queued {

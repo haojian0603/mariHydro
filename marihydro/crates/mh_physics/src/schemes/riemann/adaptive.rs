@@ -18,7 +18,6 @@
 use mh_runtime::Vector2D;
 use num_traits::real::Real;
 use super::hllc::HllcSolver;
-use num_traits::FromPrimitive;
 use super::rusanov::RusanovSolver;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
@@ -225,9 +224,11 @@ pub struct AdaptiveSolver<B: Backend> {
     stats: AdaptiveStatsCounters,
     /// 基本参数
     params: SolverParams<B::Scalar>,
+    /// 后端实例
+    backend: B,
 }
 
-impl<B: Backend> AdaptiveSolver<B> {
+impl<B: Backend + Clone + Default> AdaptiveSolver<B> {
     /// 创建新的自适应求解器
     pub fn new(numerical_params: &NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
         let params = SolverParams::from_numerical(numerical_params, gravity);
@@ -237,6 +238,7 @@ impl<B: Backend> AdaptiveSolver<B> {
             config: AdaptiveConfig::default(),
             stats: AdaptiveStatsCounters::default(),
             params,
+            backend: B::default(),
         }
     }
 
@@ -253,6 +255,7 @@ impl<B: Backend> AdaptiveSolver<B> {
             config,
             stats: AdaptiveStatsCounters::default(),
             params,
+            backend: B::default(),
         }
     }
 
@@ -292,7 +295,7 @@ impl<B: Backend> AdaptiveSolver<B> {
         if depth_jump > self.config.depth_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(depth_jump, self.config.depth_jump_threshold);
-                if weight < B::Scalar::from_f64(0.01).unwrap() {
+                if weight < self.backend.scalar_from_f64(0.01) {
                     return (SolverChoice::Rusanov, AdaptiveReason::DepthJump);
                 }
                 return (
@@ -313,12 +316,12 @@ impl<B: Backend> AdaptiveSolver<B> {
         let vel_avg_x = (vel_l_x + vel_r_x) * B::Scalar::HALF;
         let vel_avg_y = (vel_l_y + vel_r_y) * B::Scalar::HALF;
         let vel_avg_len = num_traits::Float::sqrt(vel_avg_x * vel_avg_x + vel_avg_y * vel_avg_y);
-        let froude = vel_avg_len / num_traits::Float::max(c_avg, B::Scalar::from_f64(1e-10).unwrap());
+        let froude = vel_avg_len / num_traits::Float::max(c_avg, self.backend.scalar_from_f64(1e-10));
 
         if froude > self.config.froude_critical {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(froude, self.config.froude_critical);
-                if weight < B::Scalar::from_f64(0.01).unwrap() {
+                if weight < self.backend.scalar_from_f64(0.01) {
                     return (SolverChoice::Rusanov, AdaptiveReason::Supercritical);
                 }
                 return (
@@ -336,7 +339,7 @@ impl<B: Backend> AdaptiveSolver<B> {
         if vel_jump > self.config.velocity_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(vel_jump, self.config.velocity_jump_threshold);
-                if weight < B::Scalar::from_f64(0.01).unwrap() {
+                if weight < self.backend.scalar_from_f64(0.01) {
                     return (SolverChoice::Rusanov, AdaptiveReason::VelocityJump);
                 }
                 return (
@@ -357,7 +360,7 @@ impl<B: Backend> AdaptiveSolver<B> {
         }
 
         let width = threshold * self.config.transition_width;
-        let tiny = B::Scalar::from_f64(1e-10).unwrap();
+        let tiny = self.backend.scalar_from_f64(1e-10);
         if width < tiny {
             return B::Scalar::ZERO;
         }
@@ -393,7 +396,7 @@ impl<B: Backend> AdaptiveSolver<B> {
 // RiemannSolver trait 实现
 // ============================================================================
 
-impl<B: Backend> RiemannSolver for AdaptiveSolver<B> {
+impl<B: Backend + Clone + Default> RiemannSolver for AdaptiveSolver<B> {
     type Scalar = B::Scalar;
     type Vector2D = B::Vector2D;
 

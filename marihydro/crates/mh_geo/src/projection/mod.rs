@@ -103,7 +103,7 @@ impl ProjectionType {
             }),
             _ => Err(GeoError::unsupported_epsg(  
                 code,
-                "4326, 3857, 32601-32660, 32701-32760, 4502-4554"
+                "4326, 3857, 32601-32660, 32701-32760, 4502-4512, 4534-4554"
             )),
         }
     }
@@ -169,7 +169,7 @@ impl ProjectionType {
     /// 自动从经度确定高斯-克吕格 3度带
     #[must_use]
     pub fn auto_gk3(lon: f64) -> Self {
-        let zone = (lon / 3.0).round() as u8;
+        let zone = (lon / 3.0).floor() as u8;
         let zone = zone.clamp(25, 45);
         Self::GaussKruger3 { zone }
     }

@@ -17,7 +17,7 @@ mod test_harness {
     use super::*;
 
     pub fn test_backend() -> CpuBackend<f64> {
-        *BACKEND
+        BACKEND.clone()
     }
 
     pub fn create_test_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
@@ -33,7 +33,7 @@ mod test_harness {
 
 use test_harness::{create_test_state, leak_state};
 
-fn build_bridge() -> AssimilableBridge<'static> {
+fn build_bridge() -> AssimilableBridge<'static, CpuBackend<f64>> {
     let mut state = create_test_state(2);
     
     // 初始化水体数据
@@ -50,13 +50,16 @@ fn build_bridge() -> AssimilableBridge<'static> {
     let centers = vec![[0.0, 0.0], [1.0, 0.0]];
     
     let state_ref = leak_state(state);
-    AssimilableBridge::new(state_ref, areas, centers)
+    let backend_ref = &*BACKEND;
+    AssimilableBridge::new(backend_ref, state_ref, &areas, &centers)
 }
 
 #[test]
 fn test_conserved_quantities() {
     let mut bridge = build_bridge();
-    let conserved = ConservedQuantities::compute(&mut bridge as &mut dyn PhysicsAssimilable);
+    let conserved = ConservedQuantities::compute(
+        &mut bridge as &mut dyn PhysicsAssimilable<CpuBackend<f64>>
+    );
     let expected_mass = 1000.0 * (1.0 + 2.0);
     assert!((conserved.total_mass - expected_mass).abs() < 1e-6);
 }
@@ -69,7 +72,10 @@ fn test_conservation_check() {
 
     // 轻微扰动
     bridge.get_depth_mut()[0] += 0.1;
-    let error = checker.check(&mut bridge as &mut dyn PhysicsAssimilable, 0.0);
+    let error = checker.check(
+        &mut bridge as &mut dyn PhysicsAssimilable<CpuBackend<f64>>,
+        0.0,
+    );
     assert!(error.mass_error.abs() > 0.0);
     assert!(checker.max_error().is_some());
 }

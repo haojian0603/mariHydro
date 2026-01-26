@@ -4,7 +4,6 @@
 //! 本模块属于Layer 3(Engine层)，所有数值类型使用RuntimeScalar泛型参数。
 
 pub mod flux_accumulator;
-pub mod friction;
 pub mod parallel;
 pub mod pcg;
 pub mod solver;
@@ -31,7 +30,6 @@ pub use parallel::{
     ParallelFluxCalculator, ParallelFluxConfig, ParallelFluxConfigBuilder,
     ParallelStrategy, FluxComputeMetrics,
 };
-pub use friction::{ManningFriction, FrictionConfig};
 pub use pcg::{
     PcgSolver, PcgWorkspace, PcgResult, PcgConfig,
     PreconditionerType, SparseMvp, DiagonalMatrix, PoissonMatrixBuilder,

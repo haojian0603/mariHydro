@@ -18,7 +18,7 @@
 use crate::numerics::linear_algebra::{AlignedVec64, aligned_vec};
 use crate::numerics::linear_algebra::csr::CsrMatrix;
 use mh_runtime::{Backend, RuntimeScalar, DeviceBuffer};
-use num_traits::{FromPrimitive, Zero, One};
+use num_traits::{Zero, One};
 use std::sync::Arc;
 
 // ============================================================================
@@ -96,16 +96,63 @@ pub trait Preconditioner<B: Backend>: Send + Sync {
 // 恒等预条件器（无操作）
 // ============================================================================
 
-/// 恒等预条件器（无操作，用于测试）
+/// 恒等预条件器（无操作，用于测试和基准）
+/// 
+/// 实现 M = I，即 M⁻¹x = x。
+/// 主要用于：
+/// - 测试求解器收敛性
+/// - 作为无预处理的基准
+/// - 调试矩阵结构
+/// 
+/// # 类型参数
+/// 
+/// - `B`: 计算后端类型
 pub struct IdentityPreconditioner<B: Backend> {
-    _marker: std::marker::PhantomData<B>,
+    /// 计算后端实例
+    backend: B,
+    /// 向量维度（用于验证）
+    n: usize,
 }
 
 impl<B: Backend> IdentityPreconditioner<B> {
     /// 创建恒等预条件器
-    pub fn new(_backend: &B) -> Self {
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    pub fn new(backend: B) -> Self {
+        Self { backend, n: 0 }
+    }
+    
+    /// 创建指定维度的恒等预条件器
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `n`: 向量维度
+    pub fn with_dimension(backend: B, n: usize) -> Self {
+        Self { backend, n }
+    }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+    
+    /// 获取维度
+    #[inline]
+    pub fn dimension(&self) -> usize {
+        self.n
+    }
+}
+
+impl<B: Backend + Clone> IdentityPreconditioner<B> {
+    /// 从后端引用创建（向后兼容）
+    pub fn from_backend_ref(backend: &B) -> Self {
         Self {
-            _marker: std::marker::PhantomData,
+            backend: backend.clone(),
+            n: 0,
         }
     }
 }
@@ -119,7 +166,8 @@ impl<B: Backend> Preconditioner<B> for IdentityPreconditioner<B> {
         y.copy_from_slice(x);
     }
 
-    fn update(&mut self, _matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
+    fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
+        self.n = matrix.n_rows();
         Ok(())
     }
 }
@@ -308,7 +356,7 @@ pub struct SsorPreconditioner<B: Backend> {
 impl<B: Backend> SsorPreconditioner<B> {
     /// 从矩阵创建 SSOR 预条件器
     pub fn from_matrix(
-        _backend: &B,
+        backend: &B,
         matrix: Arc<CsrMatrix<B::Scalar>>,
         params: SsorParams,
     ) -> Result<Self, PreconditionerError> {
@@ -316,7 +364,7 @@ impl<B: Backend> SsorPreconditioner<B> {
         let mut temp = aligned_vec(n);
         temp.fill(B::Scalar::zero());
 
-        let omega = B::Scalar::from_f64(params.omega).unwrap_or(B::Scalar::one());
+        let omega = backend.scalar_from_f64(params.omega);
 
         Ok(Self {
             matrix,

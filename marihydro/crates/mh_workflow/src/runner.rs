@@ -87,6 +87,8 @@ pub struct RunnerConfig {
     pub num_threads: usize,
     pub output_interval: f64,
     pub nan_detection_enabled: bool,
+    pub dt_min: f64,
+    pub dt_max: f64,
 }
 
 impl Default for RunnerConfig {
@@ -98,6 +100,8 @@ impl Default for RunnerConfig {
             num_threads: 0,
             output_interval: 60.0,
             nan_detection_enabled: true,
+            dt_min: 1e-8,
+            dt_max: 10.0,
         }
     }
 }
@@ -111,6 +115,8 @@ impl From<&SimulationConfig> for RunnerConfig {
             num_threads: config.num_threads,
             output_interval: config.output_interval,
             nan_detection_enabled: true,
+            dt_min: 1e-8,
+            dt_max: 10.0,
         }
     }
 }
@@ -441,7 +447,18 @@ impl<S: Storage> JobRunner<S> {
             context.config.checkpoint_interval,
         );
 
-        while !context.is_finished() && !context.is_cancelled() {
+        while !context.is_finished() {
+            if context.is_cancelled() {
+                return Err(RunnerError::Cancelled);
+            }
+
+            while context.is_paused() {
+                if context.is_cancelled() {
+                    return Err(RunnerError::Cancelled);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
             if let Some(timeout) = timeout {
                 if context.elapsed() > timeout {
                     return Err(RunnerError::Timeout(self.config.timeout_secs));
@@ -457,7 +474,7 @@ impl<S: Storage> JobRunner<S> {
                 *context.last_checkpoint_time.write() = current_time;
             }
 
-            if context.should_output(current_time) {
+            if context.config.enable_output && context.should_output(current_time) {
                 self.write_output(context)?;
                 *context.last_output_time.write() = current_time;
             }
@@ -476,12 +493,6 @@ impl<S: Storage> JobRunner<S> {
                 last_progress_time = Instant::now();
             }
 
-            while context.is_paused() {
-                std::thread::sleep(Duration::from_millis(100));
-                if context.is_cancelled() {
-                    break;
-                }
-            }
         }
 
         tracing::info!(
@@ -501,7 +512,7 @@ impl<S: Storage> JobRunner<S> {
         let mut state = context.state.write();
 
         let dt_computed = solver.compute_dt(&state);
-        let dt = dt_computed.max(1e-8).min(10.0);
+        let dt = dt_computed.max(self.config.dt_min).min(self.config.dt_max);
 
         solver.step(&mut state, dt);
 

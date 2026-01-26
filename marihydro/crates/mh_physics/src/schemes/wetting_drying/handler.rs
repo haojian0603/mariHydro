@@ -179,6 +179,9 @@ impl<B: Backend> WettingDryingHandler<B> {
     /// 使用配置创建处理器
     #[inline]
     pub fn new(config: WettingDryingConfig<B::Scalar>) -> Self {
+        if let Err(reason) = config.validate() {
+            panic!("WettingDryingConfig 无效: {reason}");
+        }
         Self { config }
     }
 

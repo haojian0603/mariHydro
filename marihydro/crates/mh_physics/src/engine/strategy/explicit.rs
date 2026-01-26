@@ -78,20 +78,6 @@ impl<B: Backend> ExplicitStrategy<B> {
     }
 }
 
-impl<B: Backend + Clone> ExplicitStrategy<B> {
-    /// 创建显式策略（需要 Clone 后端）
-    /// 
-    /// 此方法用于兼容默认后端场景。对于大多数情况，
-    /// 建议使用 `new_with_backend` 方法显式传入后端实例。
-    #[deprecated(note = "请使用 new_with_backend 方法显式传入后端实例")]
-    pub fn new(config: ExplicitConfig) -> Self
-    where
-        B: Default,
-    {
-        Self::new_with_backend(B::default(), config)
-    }
-}
-
 /// HLL 通量计算结果
 struct HllFlux<S: Scalar> {
     /// 质量通量

@@ -131,9 +131,19 @@ impl VerticalMixing {
                 for cell in 0..self.n_cells.min(drho_dz[k].len()).min(du_dz[k].len()) {
                     // 计算 Richardson 数
                     // Ri = -(g/ρ₀) × (∂ρ/∂z) / (∂u/∂z)²
-                    let shear_sq = du_dz[k][cell].powi(2).max(1e-10);
-                    let buoyancy = -(g / rho_0) * drho_dz[k][cell];
-                    let ri = buoyancy / shear_sq;
+                    let du = du_dz[k][cell];
+                    let drho = drho_dz[k][cell];
+                    if !du.is_finite() || !drho.is_finite() {
+                        self.nu_v[k][cell] = nu_0;
+                        self.kappa_v[k][cell] = nu_0 * 0.1;
+                        continue;
+                    }
+                    let shear_sq = du.powi(2).max(1e-10);
+                    let buoyancy = -(g / rho_0) * drho;
+                    let mut ri = buoyancy / shear_sq;
+                    if !ri.is_finite() {
+                        ri = 0.0;
+                    }
 
                     // 存储 Ri
                     if let Some(ref mut ri_field) = self.ri {
@@ -165,14 +175,29 @@ impl VerticalMixing {
 
         for layer in 0..n_layers.min(k_field.len()).min(epsilon_field.len()) {
             for cell in 0..self.n_cells.min(k_field[layer].len()) {
-                let k = k_field[layer][cell].max(1e-12);
-                let eps = epsilon_field[layer][cell].max(1e-12);
+                let k_raw = k_field[layer][cell];
+                let eps_raw = epsilon_field[layer][cell];
+                if !k_raw.is_finite() || !eps_raw.is_finite() {
+                    continue;
+                }
+                let k = k_raw.max(1e-12);
+                let eps = eps_raw.max(1e-12);
 
                 let nu = c_mu * k * k / eps;
                 self.nu_v[layer][cell] = nu.clamp(1e-7, 1.0);
                 self.kappa_v[layer][cell] = nu / 0.9; // Pr_t ≈ 0.9
             }
         }
+    }
+
+    /// 获取特定层的 Richardson 数（仅 PP 模型可用）
+    pub fn ri_at_layer(&self, k: usize) -> Option<&[f64]> {
+        self.ri.as_ref().and_then(|ri| ri.get(k).map(|v| v.as_slice()))
+    }
+
+    /// 是否启用 Richardson 数存储
+    pub fn has_ri(&self) -> bool {
+        self.ri.is_some()
     }
 
     /// 获取特定层的涡粘性

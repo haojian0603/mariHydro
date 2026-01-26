@@ -11,10 +11,14 @@
 //! 3. **泛型数据**: 顶点/边/面可附加用户数据
 //! 4. **脏标记**: 支持增量计算
 
-use mh_foundation::arena::Arena;
-use mh_foundation::index::{FaceIndex, FaceTag, HalfEdgeIndex, HalfEdgeTag, VertexIndex, VertexTag};
+use mh_foundation::index::{FaceTag, HalfEdgeTag, VertexTag};
+use mh_runtime::arena_ext::{SafeArena, SafeIdx};
 use mh_geo::Point3D;
 use std::collections::HashSet;
+
+pub type VertexIndex = SafeIdx<VertexTag>;
+pub type HalfEdgeIndex = SafeIdx<HalfEdgeTag>;
+pub type FaceIndex = SafeIdx<FaceTag>;
 
 /// 顶点数据
 #[derive(Debug, Clone)]
@@ -108,11 +112,11 @@ impl<F: Default> Face<F> {
 #[derive(Debug)]
 pub struct HalfEdgeMesh<V = (), F = ()> {
     /// 顶点存储
-    vertices: Arena<Vertex<V>, VertexTag>,
+    vertices: SafeArena<Vertex<V>, VertexTag>,
     /// 半边存储
-    halfedges: Arena<HalfEdge, HalfEdgeTag>,
+    halfedges: SafeArena<HalfEdge, HalfEdgeTag>,
     /// 面存储
-    faces: Arena<Face<F>, FaceTag>,
+    faces: SafeArena<Face<F>, FaceTag>,
     /// 脏顶点集合 (需要重新计算的顶点)
     dirty_vertices: HashSet<VertexIndex>,
     /// 脏面集合 (需要重新计算的面)
@@ -126,12 +130,15 @@ impl<V, F> Default for HalfEdgeMesh<V, F> {
 }
 
 impl<V, F> HalfEdgeMesh<V, F> {
+    pub type VertexIndex = SafeIdx<VertexTag>;
+    pub type HalfEdgeIndex = SafeIdx<HalfEdgeTag>;
+    pub type FaceIndex = SafeIdx<FaceTag>;
     /// 创建空网格
     pub fn new() -> Self {
         Self {
-            vertices: Arena::new(),
-            halfedges: Arena::new(),
-            faces: Arena::new(),
+            vertices: SafeArena::new(),
+            halfedges: SafeArena::new(),
+            faces: SafeArena::new(),
             dirty_vertices: HashSet::new(),
             dirty_faces: HashSet::new(),
         }
@@ -140,9 +147,9 @@ impl<V, F> HalfEdgeMesh<V, F> {
     /// 创建指定容量的网格
     pub fn with_capacity(n_vertices: usize, n_halfedges: usize, n_faces: usize) -> Self {
         Self {
-            vertices: Arena::with_capacity(n_vertices),
-            halfedges: Arena::with_capacity(n_halfedges),
-            faces: Arena::with_capacity(n_faces),
+            vertices: SafeArena::with_capacity(n_vertices),
+            halfedges: SafeArena::with_capacity(n_halfedges),
+            faces: SafeArena::with_capacity(n_faces),
             dirty_vertices: HashSet::new(),
             dirty_faces: HashSet::new(),
         }
@@ -173,6 +180,9 @@ impl<V, F> HalfEdgeMesh<V, F> {
     /// 边数量 (半边数/2)
     #[inline]
     pub fn n_edges(&self) -> usize {
+        if self.halfedges.len() % 2 != 0 {
+            return 0;
+        }
         self.halfedges.len() / 2
     }
 
@@ -216,6 +226,15 @@ impl<V, F> HalfEdgeMesh<V, F> {
         self.vertices.remove(idx)
     }
 
+    pub fn remove_vertex_safe(&mut self, idx: VertexIndex) -> Result<(), crate::error::MeshError> {
+        if self.vertex_halfedges(idx).next().is_some() {
+            return Err(crate::error::MeshError::invalid_topology("remove_vertex", "vertex still referenced"));
+        }
+        self.dirty_vertices.remove(&idx);
+        self.vertices.remove(idx);
+        Ok(())
+    }
+
     /// 检查顶点是否存在
     #[inline]
     pub fn contains_vertex(&self, idx: VertexIndex) -> bool {
@@ -224,7 +243,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
 
     /// 遍历所有顶点索引
     pub fn vertex_indices(&self) -> impl Iterator<Item = VertexIndex> + '_ {
-        self.vertices.indices()
+        self.vertices.iter().map(|(idx, _)| idx)
     }
 
     /// 遍历所有顶点
@@ -258,6 +277,16 @@ impl<V, F> HalfEdgeMesh<V, F> {
         self.halfedges.remove(idx)
     }
 
+    pub fn remove_halfedge_safe(&mut self, idx: HalfEdgeIndex) -> Result<(), crate::error::MeshError> {
+        if let Some(he) = self.halfedge(idx) {
+            if he.twin.is_valid() || he.face.is_valid() {
+                return Err(crate::error::MeshError::invalid_topology("remove_halfedge", "halfedge still referenced"));
+            }
+        }
+        self.halfedges.remove(idx);
+        Ok(())
+    }
+
     /// 检查半边是否存在
     #[inline]
     pub fn contains_halfedge(&self, idx: HalfEdgeIndex) -> bool {
@@ -266,7 +295,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
 
     /// 遍历所有半边索引
     pub fn halfedge_indices(&self) -> impl Iterator<Item = HalfEdgeIndex> + '_ {
-        self.halfedges.indices()
+        self.halfedges.iter().map(|(idx, _)| idx)
     }
 
     /// 遍历所有半边
@@ -308,6 +337,15 @@ impl<V, F> HalfEdgeMesh<V, F> {
         self.faces.remove(idx)
     }
 
+    pub fn remove_face_safe(&mut self, idx: FaceIndex) -> Result<(), crate::error::MeshError> {
+        if self.face_halfedges(idx).next().is_some() {
+            return Err(crate::error::MeshError::invalid_topology("remove_face", "face still referenced"));
+        }
+        self.dirty_faces.remove(&idx);
+        self.faces.remove(idx);
+        Ok(())
+    }
+
     /// 检查面是否存在
     #[inline]
     pub fn contains_face(&self, idx: FaceIndex) -> bool {
@@ -316,7 +354,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
 
     /// 遍历所有面索引
     pub fn face_indices(&self) -> impl Iterator<Item = FaceIndex> + '_ {
-        self.faces.indices()
+        self.faces.iter().map(|(idx, _)| idx)
     }
 
     /// 遍历所有面

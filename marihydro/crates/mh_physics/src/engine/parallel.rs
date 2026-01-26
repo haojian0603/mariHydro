@@ -17,6 +17,8 @@
 //! `Colored`策略使用图着色确保同一颜色的面不共享单元，并通过原子累加
 //! 保证并行写入无数据竞争。
 
+#![allow(unsafe_code)]
+
 use crate::adapter::{CellIndex, PhysicsMesh};
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
 use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver};
@@ -28,8 +30,39 @@ use log::info;
 use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
 use num_traits::{Float, FromPrimitive};
 use rayon::prelude::*;
+use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+
+/// 生命周期绑定的可发送裸指针封装
+#[derive(Clone, Copy)]
+struct SendPtr<'a, T: ?Sized> {
+    ptr: *mut T,
+    _marker: PhantomData<&'a mut T>,
+}
+
+// SAFETY: 生命周期由 PhantomData 绑定，使用者需确保不产生别名冲突
+unsafe impl<'a, T: ?Sized + Send> Send for SendPtr<'a, T> {}
+unsafe impl<'a, T: ?Sized + Send + Sync> Sync for SendPtr<'a, T> {}
+
+impl<'a, T: ?Sized> SendPtr<'a, T> {
+    fn new(ptr: *mut T) -> Self {
+        Self {
+            ptr,
+            _marker: PhantomData,
+        }
+    }
+
+    /// 从可变引用创建
+    fn from_ref(r: &'a mut T) -> Self {
+        Self::new(r as *mut T)
+    }
+
+    /// 取出可变引用（调用方需保证无别名写冲突）
+    unsafe fn as_mut(&self) -> &'a mut T {
+        &mut *self.ptr
+    }
+}
 
 /// 并行策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -199,7 +232,10 @@ pub struct ParallelFluxCalculator<B: Backend> {
     _backend: B,
 }
 
-impl<B: Backend> ParallelFluxCalculator<B> {
+impl<B: Backend> ParallelFluxCalculator<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     /// 创建计算器
     pub fn new(config: ParallelFluxConfig<B::Scalar>, backend: B) -> Self {
         let riemann_params =
@@ -517,8 +553,100 @@ impl<B: Backend> ParallelFluxCalculator<B> {
     /// 基于图着色的无锁并行累加
     ///
     /// 通过贪心着色算法将面分组，确保同组面不共享单元，实现无锁并行写入。
-    /// 使用原子累加绕过可变别名冲突，安全性由着色算法保证。
+    /// 使用图着色提供的“无共享单元”保证进行并行累加。
+    ///
+    /// 优先走“可变切片”快路径以避免原子开销；若 backend 无法暴露可变切片则
+    /// 回退到原子累加路径。
     fn compute_colored(
+        &self,
+        state: &ShallowWaterState<B>,
+        mesh: &PhysicsMesh,
+        flux_h: &mut B::Buffer<B::Scalar>,
+        flux_hu: &mut B::Buffer<B::Scalar>,
+        flux_hv: &mut B::Buffer<B::Scalar>,
+        source_hu: &mut B::Buffer<B::Scalar>,
+        source_hv: &mut B::Buffer<B::Scalar>,
+    ) -> B::Scalar {
+        let zero = B::Scalar::ZERO;
+        let color_faces = match &self.face_colors {
+            Some(cf) => cf,
+            None => return zero,
+        };
+
+        // 快路径：backend 支持可变切片，结合颜色保证同色不共享单元，消除原子开销。
+        if let (
+            Some(flux_h_slice),
+            Some(flux_hu_slice),
+            Some(flux_hv_slice),
+            Some(source_hu_slice),
+            Some(source_hv_slice),
+        ) = (
+            flux_h.try_as_slice_mut(),
+            flux_hu.try_as_slice_mut(),
+            flux_hv.try_as_slice_mut(),
+            source_hu.try_as_slice_mut(),
+            source_hv.try_as_slice_mut(),
+        ) {
+            flux_h_slice.fill(zero);
+            flux_hu_slice.fill(zero);
+            flux_hv_slice.fill(zero);
+            source_hu_slice.fill(zero);
+            source_hv_slice.fill(zero);
+
+            let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(zero);
+            let flux_h_ptr = SendPtr::from_ref(flux_h_slice);
+            let flux_hu_ptr = SendPtr::from_ref(flux_hu_slice);
+            let flux_hv_ptr = SendPtr::from_ref(flux_hv_slice);
+            let source_hu_ptr = SendPtr::from_ref(source_hu_slice);
+            let source_hv_ptr = SendPtr::from_ref(source_hv_slice);
+
+            for faces_in_color in color_faces {
+                faces_in_color.par_iter().for_each(|&face_idx| {
+                    let (flux, bed_src, length, owner, neighbor) =
+                        self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+
+                    max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
+
+                    let fh = flux.mass * length;
+                    let fhu = flux.momentum_x * length;
+                    let fhv = flux.momentum_y * length;
+
+                    // SAFETY: 着色保证同一颜色内的 faces 不共享单元，避免别名写冲突
+                    let flux_h = unsafe { flux_h_ptr.as_mut() };
+                    let flux_hu = unsafe { flux_hu_ptr.as_mut() };
+                    let flux_hv = unsafe { flux_hv_ptr.as_mut() };
+                    let source_hu = unsafe { source_hu_ptr.as_mut() };
+                    let source_hv = unsafe { source_hv_ptr.as_mut() };
+
+                    let owner_idx = owner.get();
+                    flux_h[owner_idx] = flux_h[owner_idx] - fh;
+                    flux_hu[owner_idx] = flux_hu[owner_idx] - fhu;
+                    flux_hv[owner_idx] = flux_hv[owner_idx] - fhv;
+                    source_hu[owner_idx] = source_hu[owner_idx] + bed_src.source_left_x;
+                    source_hv[owner_idx] = source_hv[owner_idx] + bed_src.source_left_y;
+
+                    if let Some(neigh) = neighbor {
+                        let neigh_idx = neigh.get();
+                        flux_h[neigh_idx] = flux_h[neigh_idx] + fh;
+                        flux_hu[neigh_idx] = flux_hu[neigh_idx] + fhu;
+                        flux_hv[neigh_idx] = flux_hv[neigh_idx] + fhv;
+                        source_hu[neigh_idx] = source_hu[neigh_idx] + bed_src.source_right_x;
+                        source_hv[neigh_idx] = source_hv[neigh_idx] + bed_src.source_right_y;
+                    }
+                });
+            }
+
+            return max_speed_atomic.load(Ordering::Relaxed);
+        }
+
+        // 回退：backend 不支持切片时使用原子累加路径。
+        self.compute_colored_atomic(
+            state, mesh, flux_h, flux_hu, flux_hv, source_hu, source_hv,
+        )
+    }
+
+    /// 原子累加回退路径，适用于无法获取可变切片的 backend。
+    fn compute_colored_atomic(
         &self,
         state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,

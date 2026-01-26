@@ -13,10 +13,12 @@ use mh_physics::core::CpuBackend;
 #[test]
 #[allow(deprecated)]
 fn test_strategy_creation() {
-    let _explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
-    let _semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let _explicit: ExplicitStrategy<CpuBackend<f64>> =
+        ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());
+    let _semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
 }
 
@@ -24,12 +26,14 @@ fn test_strategy_creation() {
 #[test]
 #[allow(deprecated)]
 fn test_strategy_names() {
-    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
+    let explicit: ExplicitStrategy<CpuBackend<f64>> =
+        ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());
     assert!(!explicit.name().is_empty());
     
-    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
     assert!(!semi_implicit.name().is_empty());
 }
@@ -38,12 +42,14 @@ fn test_strategy_names() {
 #[test]
 #[allow(deprecated)]
 fn test_cfl_support() {
-    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
+    let explicit: ExplicitStrategy<CpuBackend<f64>> =
+        ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());
     assert!(!explicit.supports_large_cfl());
     
-    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
     assert!(semi_implicit.supports_large_cfl());
 }

@@ -68,6 +68,16 @@ impl<I: Copy> CsrConnectivity<I> {
         Self { offsets, indices }
     }
 
+    pub fn try_new(offsets: Vec<u32>, indices: Vec<I>) -> Result<Self, crate::error::MeshError> {
+        if offsets.is_empty() {
+            return Err(crate::error::MeshError::invalid_topology("csr", "empty offsets"));
+        }
+        if offsets.last().copied().unwrap_or(0) as usize != indices.len() {
+            return Err(crate::error::MeshError::invalid_topology("csr", "offsets mismatch"));
+        }
+        Ok(Self { offsets, indices })
+    }
+
     /// 创建空的 CSR 结构（0 行）
     pub fn empty() -> Self {
         Self {

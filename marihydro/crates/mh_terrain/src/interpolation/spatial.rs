@@ -129,17 +129,19 @@ impl GeoTransform {
     /// 地理坐标转栅格坐标
     #[inline]
     pub fn geo_to_pixel(&self, x: f64, y: f64) -> (f64, f64) {
-        // 简化版（无旋转）
-        let px = (x - self.origin_x) / self.pixel_width;
-        let py = (y - self.origin_y) / self.pixel_height;
+        let det = self.pixel_width * self.pixel_height - self.rotation_x * self.rotation_y;
+        let dx = x - self.origin_x;
+        let dy = y - self.origin_y;
+        let px = (dx * self.pixel_height - dy * self.rotation_x) / det;
+        let py = (-dx * self.rotation_y + dy * self.pixel_width) / det;
         (px, py)
     }
 
     /// 栅格坐标转地理坐标
     #[inline]
     pub fn pixel_to_geo(&self, px: f64, py: f64) -> (f64, f64) {
-        let x = self.origin_x + px * self.pixel_width;
-        let y = self.origin_y + py * self.pixel_height;
+        let x = self.origin_x + px * self.pixel_width + py * self.rotation_x;
+        let y = self.origin_y + px * self.rotation_y + py * self.pixel_height;
         (x, y)
     }
 }

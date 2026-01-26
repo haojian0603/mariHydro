@@ -183,6 +183,9 @@ where
 {
     /// 创建新的泥沙管理器
     pub fn new_with_backend(backend: B, n_cells: usize, config: SedimentConfigGeneric<B::Scalar>) -> Self {
+        if config.tau_critical <= B::Scalar::ZERO {
+            panic!("SedimentConfig: tau_critical 必须为正值");
+        }
         Self {
             state: SedimentStateGeneric::new_with_backend(&backend, n_cells),
             exchange_flux: backend.alloc(n_cells),
@@ -290,7 +293,7 @@ where
         manning_n: &[B::Scalar],
     ) {
         let n_cells = self.state.n_cells;
-        let g = self.config.water_density * B::Scalar::from_f64(9.81).unwrap_or(B::Scalar::ONE);
+        let g = self.config.water_density * self.backend.scalar_from_f64(9.81);
         let h_min = self.config.min_depth;
 
         for i in 0..n_cells {
@@ -306,8 +309,8 @@ where
             let v = hv / h;
             let speed_sq = u * u + v * v;
 
-            let n = if i < manning_n.len() { manning_n[i] } else { B::Scalar::from_f64(0.03).unwrap_or(B::Scalar::ZERO) };
-            let h_pow = h.powf(B::Scalar::from_f64(1.0 / 3.0).unwrap_or(B::Scalar::ONE));
+            let n = if i < manning_n.len() { manning_n[i] } else { self.backend.scalar_from_f64(0.03) };
+            let h_pow = h.powf(self.backend.scalar_from_f64(1.0 / 3.0));
 
             // τ = ρ g n² |u|² / h^(1/3)
             self.tau_bed[i] = g * n * n * speed_sq / h_pow;
@@ -324,6 +327,13 @@ where
         let m = self.config.erosion_rate;
         let ws = self.config.settling_velocity;
         let h_min = self.config.min_depth;
+
+        if tau_c <= B::Scalar::ZERO {
+            for i in 0..n_cells {
+                self.exchange_flux[i] = B::Scalar::ZERO;
+            }
+            return;
+        }
 
         for i in 0..n_cells {
             let h = state.h[i];
@@ -355,8 +365,15 @@ where
         &mut self,
         state: &ShallowWaterStateGeneric<B>,
         cell_areas: &[B::Scalar],
+        manning_n: &[B::Scalar],
         dt: B::Scalar,
     ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO {
+            return Err(SedimentError::InvalidParameter("dt must be positive".to_string()));
+        }
+        self.compute_bed_shear_stress(state, manning_n);
+        self.compute_exchange_flux(state);
+
         let n_cells = self.state.n_cells;
         let h_min = self.config.min_depth;
 
@@ -440,7 +457,7 @@ where
 
         let total_current = total_bed + total_suspended;
         let error = (total_current - self.initial_total_mass).abs();
-        let abs_tol = B::Scalar::from_f64(1e-6).unwrap_or(self.config.conservation_tolerance);
+        let abs_tol = self.backend.scalar_from_f64(1e-6);
         let rel_tol = self.config.conservation_tolerance;
         let baseline = self.initial_total_mass.abs().max(abs_tol);
         let relative_error = error / baseline;
@@ -462,6 +479,7 @@ where
         state: &ShallowWaterStateGeneric<B>,
         cell_areas: &[B::Scalar],
         tracer_rhs: &mut [B::Scalar],
+        manning_n: &[B::Scalar],
         _dt: B::Scalar,
     ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
         let n_cells = self.state.n_cells;
@@ -469,6 +487,12 @@ where
         let ws = self.config.settling_velocity;
         let tau_c = self.config.tau_critical;
         let m = self.config.erosion_rate;
+
+        if tau_c <= B::Scalar::ZERO {
+            return Err(SedimentError::InvalidParameter("tau_critical must be positive".to_string()));
+        }
+
+        self.compute_bed_shear_stress(state, manning_n);
 
         let mut stats = SedimentFluxStats::default();
         let mut max_erosion = B::Scalar::ZERO;

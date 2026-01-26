@@ -178,10 +178,10 @@ fn test_vector_ops() {
 
     assert!((norm2(&x) - 5.0).abs() < 1e-14);
 
-    let d = dot(&x, &y);
+    let d = dot(&x, &y).unwrap();
     assert!((d - 11.0).abs() < 1e-14);
 
-    axpy(2.0, &x, &mut y);
+    axpy(2.0, &x, &mut y).unwrap();
     assert!((y[0] - 7.0).abs() < 1e-14);
     assert!((y[1] - 10.0).abs() < 1e-14);
 }

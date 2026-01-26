@@ -353,6 +353,108 @@ pub struct TideBoundary {
     pub weights: Option<Vec<f64>>,
 }
 
+// ============================================================
+// 天文潮 68 分潮骨架（占位实现，可后续填充精确频率/节点因子）
+// ============================================================
+
+/// 预测结果
+#[derive(Debug, Clone, Copy)]
+pub struct TidePrediction {
+    /// 水位 [m]
+    pub level: f64,
+    /// 上升速率 [m/s]
+    pub rate: f64,
+    /// 预测精度估计（占位）
+    pub accuracy: f64,
+}
+
+/// 68 分潮条目（占位参数）
+#[derive(Debug, Clone)]
+pub struct AstronomicalConstituent {
+    pub name: String,
+    pub speed_rad_per_sec: f64,
+    pub nodal_factor: f64,
+    pub equilibrium_phase: f64,
+    pub amplitude: f64,
+    pub phase: f64,
+}
+
+impl AstronomicalConstituent {
+    pub fn new(name: impl Into<String>, speed_rad_per_sec: f64, amplitude: f64, phase: f64) -> Self {
+        Self {
+            name: name.into(),
+            speed_rad_per_sec,
+            nodal_factor: 1.0,
+            equilibrium_phase: 0.0,
+            amplitude,
+            phase,
+        }
+    }
+
+    #[inline]
+    pub fn value(&self, t_since_epoch: f64) -> (f64, f64) {
+        // 水位贡献与时间导数贡献
+        let theta = self.speed_rad_per_sec * t_since_epoch + self.phase + self.equilibrium_phase;
+        let level = self.nodal_factor * self.amplitude * theta.cos();
+        let rate = -self.nodal_factor * self.amplitude * self.speed_rad_per_sec * theta.sin();
+        (level, rate)
+    }
+}
+
+/// 68 分潮天文潮引擎（占位实现）
+#[derive(Debug, Clone)]
+pub struct AstronomicalTideEngine {
+    epoch_seconds: f64,
+    constituents: Vec<AstronomicalConstituent>,
+}
+
+impl AstronomicalTideEngine {
+    /// 创建包含 68 分潮的占位引擎。
+    ///
+    /// - 频率默认填充为 0（待后续补全真实值）
+    /// - 振幅/相位默认为 0，可通过 `with_constituents` 传入实测值
+    pub fn default_68(epoch_seconds: f64) -> Self {
+        // 使用占位名称 C01..C68，频率占位为 0
+        let constituents = (1..=68)
+            .map(|i| AstronomicalConstituent::new(format!("C{:02}", i), 0.0, 0.0, 0.0))
+            .collect();
+        Self {
+            epoch_seconds,
+            constituents,
+        }
+    }
+
+    /// 用用户提供的分潮表替换（便于未来接入 TPXO/手工参数）
+    pub fn with_constituents(epoch_seconds: f64, constituents: Vec<AstronomicalConstituent>) -> Self {
+        Self {
+            epoch_seconds,
+            constituents,
+        }
+    }
+
+    /// 更新节点因子/平衡相位（占位，未来可接入天文算法）
+    pub fn update_nodal_factors(&mut self, _current_seconds: f64) {
+        // 占位：留空，未来填充 18.6 年节点因子
+    }
+
+    /// 预测指定时刻的潮位和速率（秒）
+    pub fn predict(&self, seconds_since_epoch: f64) -> TidePrediction {
+        let mut level = 0.0;
+        let mut rate = 0.0;
+        let t = seconds_since_epoch - self.epoch_seconds;
+        for c in &self.constituents {
+            let (l, r) = c.value(t);
+            level += l;
+            rate += r;
+        }
+        TidePrediction {
+            level,
+            rate,
+            accuracy: 0.05, // 占位精度
+        }
+    }
+}
+
 impl TideBoundary {
     /// 创建均匀潮汐边界
     pub fn uniform(cells: Vec<usize>, provider: TideProvider) -> Self {
@@ -396,6 +498,157 @@ impl TideBoundary {
                 water_levels[cell] = level;
             }
         }
+    }
+}
+
+// ============================================================================
+// 潮汐联合边界（水位 + 流速）
+// ============================================================================
+
+/// 潮汐联合边界条件
+///
+/// 同时提供水位和流速边界，支持相位差管理与 Flather 修正。
+#[derive(Debug, Clone)]
+pub struct TidalJointBoundary {
+    /// 水位提供者
+    level_provider: TideProvider,
+    /// 流速模型
+    velocity_model: TidalVelocityCalculator,
+    /// 边界法向方向 [rad]
+    normal_direction: f64,
+    /// Flather 系数 (sqrt(h/g))
+    flather_coeff: Option<f64>,
+}
+
+impl TidalJointBoundary {
+    /// 创建联合边界
+    pub fn new(level_provider: TideProvider, velocity_model: TidalVelocityCalculator) -> Self {
+        Self {
+            level_provider,
+            velocity_model,
+            normal_direction: 0.0,
+            flather_coeff: None,
+        }
+    }
+
+    /// 设置边界法向方向
+    pub fn with_normal_direction(mut self, direction_deg: f64) -> Self {
+        self.normal_direction = direction_deg.to_radians();
+        self
+    }
+
+    /// 启用 Flather 边界条件
+    pub fn with_flather(mut self, mean_depth: f64) -> Self {
+        let g = 9.81;
+        self.flather_coeff = Some((mean_depth / g).sqrt());
+        self
+    }
+
+    /// 获取水位边界值
+    pub fn get_level(&self, time: f64) -> f64 {
+        self.level_provider.get_level_at(time)
+    }
+
+    /// 获取流速边界值（返回 u, v 分量）
+    pub fn get_velocity(&self, time: f64) -> (f64, f64) {
+        let _ = self.level_provider.get_level_at(time);
+        self.velocity_model.compute(time)
+    }
+
+    /// 获取法向流速
+    pub fn get_normal_velocity(&self, time: f64) -> f64 {
+        let (u, v) = self.get_velocity(time);
+        u * self.normal_direction.cos() + v * self.normal_direction.sin()
+    }
+
+    /// Flather 边界条件修正（水位）
+    pub fn flather_correction(
+        &self,
+        time: f64,
+        _interior_level: f64,
+        interior_velocity: f64,
+    ) -> Option<f64> {
+        let coeff = self.flather_coeff?;
+        let tidal_level = self.get_level(time);
+        let tidal_velocity = self.get_normal_velocity(time);
+
+        let correction = coeff * (interior_velocity - tidal_velocity);
+        Some(tidal_level - correction)
+    }
+}
+
+/// 分潮流速计算器
+pub struct TidalVelocityCalculator {
+    constituents: Vec<TidalVelocityConstituent>,
+}
+
+/// 流速分潮
+#[derive(Debug, Clone, Copy)]
+pub struct TidalVelocityConstituent {
+    pub name: &'static str,
+    pub u_amplitude: f64,
+    pub v_amplitude: f64,
+    pub omega: f64,
+    pub u_phase: f64,
+    pub v_phase: f64,
+}
+
+impl TidalVelocityCalculator {
+    pub fn new() -> Self {
+        Self { constituents: Vec::new() }
+    }
+
+    pub fn add_constituent(&mut self, constituent: TidalVelocityConstituent) {
+        self.constituents.push(constituent);
+    }
+
+    /// 从水位分潮估算流速分潮（长波近似）
+    pub fn from_level_constituents(
+        level_constituents: &[TidalConstituent],
+        mean_depth: f64,
+        direction: f64,
+    ) -> Self {
+        let g = 9.81;
+        let factor = (g / mean_depth).sqrt();
+        let dir = direction.to_radians();
+
+        let constituents = level_constituents
+            .iter()
+            .map(|lc| {
+                let amp = lc.amplitude * factor;
+                let u_amp = amp * dir.cos();
+                let v_amp = amp * dir.sin();
+                TidalVelocityConstituent {
+                    name: lc.name,
+                    u_amplitude: u_amp,
+                    v_amplitude: v_amp,
+                    omega: lc.omega,
+                    u_phase: lc.phase,
+                    v_phase: lc.phase,
+                }
+            })
+            .collect();
+
+        Self { constituents }
+    }
+
+    /// 计算指定时刻的流速
+    pub fn compute(&self, time: f64) -> (f64, f64) {
+        let mut u = 0.0;
+        let mut v = 0.0;
+
+        for c in &self.constituents {
+            u += c.u_amplitude * (c.omega * time - c.u_phase).cos();
+            v += c.v_amplitude * (c.omega * time - c.v_phase).cos();
+        }
+
+        (u, v)
+    }
+}
+
+impl Default for TidalVelocityCalculator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

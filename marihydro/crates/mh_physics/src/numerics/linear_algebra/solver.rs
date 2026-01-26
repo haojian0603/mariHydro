@@ -31,7 +31,7 @@
 
 use super::csr::CsrMatrix;
 use super::preconditioner::ScalarPreconditioner;
-use super::vector_ops::{axpy, copy, dot, norm2};
+use super::vector_ops::{axpy_unchecked as axpy, copy, dot_unchecked as dot, norm2};
 use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 
@@ -986,7 +986,7 @@ mod tests {
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = ConjugateGradient::<f64>::new(config);
         let backend = CpuBackend::<f64>::new();
-        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
@@ -1020,7 +1020,7 @@ mod tests {
         let config = SolverConfig::new(1e-10, 200);
         let mut cg_solver = ConjugateGradient::<f64>::new(config.clone());
         let backend = CpuBackend::<f64>::new();
-        let ident: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
+        let ident: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
         let cg_result = cg_solver.solve(&matrix, &b, &mut x_cg, &ident);
 
         // PCG
@@ -1064,7 +1064,7 @@ mod tests {
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = PcgSolver::<f64>::new(config);
         let backend = CpuBackend::<f64>::new();
-        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(&backend);
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 

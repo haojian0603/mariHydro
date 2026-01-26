@@ -127,31 +127,6 @@ impl<B: Backend + Clone> SemiImplicitStrategyGeneric<B> {
     }
 }
 
-// 为了向后兼容，保留旧的构造函数（但标记为废弃）
-impl<B: Backend> SemiImplicitStrategyGeneric<B> {
-    /// 创建半隐式策略（废弃，请使用 new_with_backend）
-    #[deprecated(note = "请使用 new_with_backend 方法显式传入后端实例")]
-    pub fn new(n_cells: usize, config: SemiImplicitConfig) -> Self
-    where
-        B: Default + Clone,
-    {
-        let backend = B::default();
-        Self {
-            u_star: backend.alloc(n_cells),
-            v_star: backend.alloc(n_cells),
-            eta_prime: backend.alloc(n_cells),
-            rhs: backend.alloc(n_cells),
-            diag: backend.alloc(n_cells),
-            grad_eta_x: backend.alloc(n_cells),
-            grad_eta_y: backend.alloc(n_cells),
-            pcg_solver: None,  // 旧版本不使用 PCG
-            backend,
-            config,
-            n_cells_allocated: n_cells,
-        }
-    }
-}
-
 impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGeneric<B> {
     fn name(&self) -> &'static str {
         "半隐式压力校正法"

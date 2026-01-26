@@ -193,6 +193,27 @@ pub trait RiemannSolver: Send + Sync {
         normal: Self::Vector2D,
     ) -> Result<RiemannFlux<Self::Scalar>, RiemannError>;
 
+    /// 批量求解多个黎曼问题（默认串行实现）
+    fn solve_batch(
+        &self,
+        h_left: &[Self::Scalar],
+        h_right: &[Self::Scalar],
+        vel_left: &[Self::Vector2D],
+        vel_right: &[Self::Vector2D],
+        normals: &[Self::Vector2D],
+        out_fluxes: &mut [RiemannFlux<Self::Scalar>],
+    ) -> Result<(), RiemannError> {
+        let n = h_left.len();
+        if h_right.len() != n || vel_left.len() != n || vel_right.len() != n || normals.len() != n || out_fluxes.len() != n {
+            return Err(RiemannError::InvalidInput { message: "批量输入长度不一致".to_string() });
+        }
+
+        for i in 0..n {
+            out_fluxes[i] = self.solve(h_left[i], h_right[i], vel_left[i], vel_right[i], normals[i])?;
+        }
+        Ok(())
+    }
+
     /// 重力加速度
     fn gravity(&self) -> Self::Scalar;
 

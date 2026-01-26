@@ -120,6 +120,32 @@ impl PhysicsSnapshot {
             cell_areas: vec![1.0; n_cells],
         }
     }
+
+    pub fn try_new(
+        h: Vec<f64>,
+        u: Vec<f64>,
+        v: Vec<f64>,
+        z: Vec<f64>,
+        sediment: Option<Vec<f64>>,
+        time: f64,
+        cell_centers: Vec<[f64; 2]>,
+        cell_areas: Vec<f64>,
+    ) -> Result<Self, AiError> {
+        let n = h.len();
+        if u.len() != n
+            || v.len() != n
+            || z.len() != n
+            || cell_centers.len() != n
+            || cell_areas.len() != n
+            || sediment.as_ref().map(|s| s.len()).unwrap_or(n) != n
+        {
+            return Err(AiError::InvalidShape { expected: vec![n], actual: vec![] });
+        }
+        if !time.is_finite() {
+            return Err(AiError::InvalidObservation("time 非有限值".into()));
+        }
+        Ok(Self { h, u, v, z, sediment, time, cell_centers, cell_areas })
+    }
     
     /// 单元数量
     pub fn n_cells(&self) -> usize {
@@ -218,6 +244,9 @@ pub trait Assimilable {
     /// 获取速度场可变引用 (u, v)
     fn get_velocity_mut(&mut self) -> Option<(&mut [f64], &mut [f64])>;
     
+    /// 获取水深只读引用
+    fn get_depth(&self) -> &[f64];
+
     /// 获取水深可变引用
     fn get_depth_mut(&mut self) -> &mut [f64];
     
@@ -232,14 +261,8 @@ pub trait Assimilable {
     
     /// 获取当前总水量（用于守恒校验）
     fn total_water_volume(&self) -> f64 {
-        let depth = unsafe { 
-            // 安全：我们只是读取
-            std::slice::from_raw_parts(
-                self.get_depth_mut().as_ptr(),
-                self.n_cells()
-            )
-        };
-        depth.iter()
+        self.get_depth()
+            .iter()
             .zip(self.cell_areas().iter())
             .map(|(&h, &a)| h * a)
             .sum()

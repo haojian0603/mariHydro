@@ -258,6 +258,10 @@ impl TinTerrain {
     ///
     /// 使用重心坐标在包含查询点的三角形内插值
     pub fn interpolate(&self, x: f64, y: f64) -> Option<f64> {
+        let [min_x, min_y, max_x, max_y] = self.global_bounds;
+        if x < min_x || x > max_x || y < min_y || y > max_y {
+            return None;
+        }
         // 使用空间索引查找候选三角形
         let candidates = self.grid_index.query(x, y);
 

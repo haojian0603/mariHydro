@@ -7,9 +7,11 @@
 //!
 //! # 函数列表
 //!
-//! - [`dot`]: 点积 x·y
+//! - [`dot`]: 点积 x·y（返回 Result）
+//! - [`dot_unchecked`]: 点积（无检查版本）
 //! - [`norm2`]: 二范数 ||x||₂
-//! - [`axpy`]: y = α*x + y
+//! - [`axpy`]: y = α*x + y（返回 Result）
+//! - [`axpy_unchecked`]: AXPY（无检查版本）
 //! - [`xpay`]: y = x + α*y
 //! - [`scale`]: x = α*x
 //! - [`copy`]: y = x
@@ -25,10 +27,10 @@
 //! let x = vec![1.0, 2.0, 3.0];
 //! let mut y = vec![4.0, 5.0, 6.0];
 //!
-//! let d = dot(&x, &y);  // 1*4 + 2*5 + 3*6 = 32
-//! let n = norm2(&x);    // sqrt(1 + 4 + 9) ≈ 3.74
+//! let d = dot(&x, &y)?;  // 1*4 + 2*5 + 3*6 = 32
+//! let n = norm2(&x);     // sqrt(1 + 4 + 9) ≈ 3.74
 //!
-//! axpy(2.0, &x, &mut y);  // y = [6, 9, 12]
+//! axpy(2.0, &x, &mut y)?;  // y = [6, 9, 12]
 //! ```
 //!
 //! # 性能优化
@@ -40,27 +42,90 @@
 use mh_runtime::RuntimeScalar;
 
 // ============================================================================
+// 向量运算错误类型
+// ============================================================================
+
+/// 向量运算错误类型
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VectorOpError {
+    /// 维度不匹配
+    DimensionMismatch {
+        /// x 向量长度
+        x_len: usize,
+        /// y 向量长度
+        y_len: usize,
+    },
+    /// 空向量
+    EmptyVector,
+    /// 数值错误（NaN/Inf）
+    NumericalError(String),
+}
+
+impl std::fmt::Display for VectorOpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DimensionMismatch { x_len, y_len } => {
+                write!(f, "向量维度不匹配: x.len()={}, y.len()={}", x_len, y_len)
+            }
+            Self::EmptyVector => write!(f, "空向量"),
+            Self::NumericalError(msg) => write!(f, "数值错误: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for VectorOpError {}
+
+// ============================================================================
 // 核心向量运算（生产级错误检查）
 // ============================================================================
 
-/// 点积 x·y
-///
+/// 点积 x·y（返回 Result）
+/// 
 /// # 参数
-///
+/// 
 /// - `x`: 向量 x
 /// - `y`: 向量 y
-///
+/// 
 /// # 返回
-///
-/// 点积结果
-///
-/// # 错误处理
-/// 使用 `assert_eq!` 在**所有模式**下检查维度，维度不匹配立即 panic
+/// 
+/// - `Ok(S)`: 点积结果
+/// - `Err(VectorOpError)`: 维度不匹配错误
+/// 
+/// # 示例
+/// 
+/// ```ignore
+/// let x = vec![1.0, 2.0, 3.0];
+/// let y = vec![4.0, 5.0, 6.0];
+/// let result = dot(&x, &y)?;  // 32.0
+/// ```
 #[inline(always)]
-pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
-    // 维度不匹配是严重编程错误，必须在所有构建模式下捕获
-    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> Result<S, VectorOpError> {
+    if x.len() != y.len() {
+        return Err(VectorOpError::DimensionMismatch {
+            x_len: x.len(),
+            y_len: y.len(),
+        });
+    }
+    Ok(x.iter().zip(y).map(|(&xi, &yi)| xi * yi).sum())
+}
+
+/// 点积（不检查版本，用于已验证的内部调用）
+/// 
+/// # 安全性
+/// 
+/// 调用者必须确保 `x.len() == y.len()`
+/// 
+/// # 参数
+/// 
+/// - `x`: 向量 x
+/// - `y`: 向量 y
+/// 
+/// # 返回
+/// 
+/// 点积结果
+#[inline(always)]
+pub fn dot_unchecked<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
+    debug_assert_eq!(x.len(), y.len(), "向量维度不匹配（调试断言）");
     x.iter().zip(y).map(|(&xi, &yi)| xi * yi).sum()
 }
 
@@ -75,7 +140,7 @@ pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
 /// 二范数
 #[inline]
 pub fn norm2<S: RuntimeScalar>(x: &[S]) -> S {
-    dot(x, x).sqrt()
+    dot_unchecked(x, x).sqrt()
 }
 
 /// 无穷范数 ||x||∞
@@ -92,21 +157,37 @@ pub fn norm_inf<S: RuntimeScalar>(x: &[S]) -> S {
     x.iter().map(|&v| v.abs()).fold(S::ZERO, |a, b| a.max(b))
 }
 
-/// AXPY: y = α*x + y
-///
+/// AXPY: y = α*x + y（返回 Result）
+/// 
 /// # 参数
-///
+/// 
 /// - `alpha`: 标量 α
 /// - `x`: 向量 x
 /// - `y`: 向量 y（将被修改）
-///
-/// # 错误处理
-/// 维度不匹配立即 panic
+/// 
+/// # 返回
+/// 
+/// - `Ok(())`: 操作成功
+/// - `Err(VectorOpError)`: 维度不匹配错误
 #[inline(always)]
-pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
-    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    
+pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) -> Result<(), VectorOpError> {
+    if x.len() != y.len() {
+        return Err(VectorOpError::DimensionMismatch {
+            x_len: x.len(),
+            y_len: y.len(),
+        });
+    }
+    axpy_unchecked(alpha, x, y);
+    Ok(())
+}
+
+/// AXPY（不检查版本）
+/// 
+/// # 安全性
+/// 
+/// 调用者必须确保 `x.len() == y.len()`
+#[inline(always)]
+pub fn axpy_unchecked<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
     // 使用 chunks_exact 提升向量化概率
     const CHUNK_SIZE: usize = 4;
     for (yi, xi) in y.chunks_exact_mut(CHUNK_SIZE)
@@ -342,7 +423,8 @@ pub fn relative_residual<S: RuntimeScalar>(residual: &[S], b: &[S]) -> S {
 /// 缩放加法别名: y = y + alpha * x
 #[inline(always)]
 pub fn add_scaled<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
-    axpy(alpha, x, y);
+    assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
+    axpy_unchecked(alpha, x, y);
 }
 
 // ============================================================================
@@ -411,7 +493,7 @@ mod tests {
     fn test_dot() {
         let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
         let y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
-        let result = dot(&x, &y);
+        let result = dot(&x, &y).unwrap();
         assert!((result - 32.0).abs() < 1e-14);
         
         // 测试SIMD路径（如果支持）
@@ -438,7 +520,7 @@ mod tests {
     fn test_axpy() {
         let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
         let mut y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
-        axpy(2.0, &x, &mut y);
+        axpy(2.0, &x, &mut y).unwrap();
         assert!((y[0] - 6.0).abs() < 1e-14);
         assert!((y[1] - 9.0).abs() < 1e-14);
         assert!((y[2] - 12.0).abs() < 1e-14);
@@ -556,10 +638,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "向量化操作时维度不匹配")]
     fn test_dot_dimension_mismatch() {
         let x: Vec<Scalar> = vec![1.0, 2.0];
         let y: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        dot(&x, &y);  // ✅ 现在一定会 panic
+        assert!(dot(&x, &y).is_err());
     }
 }

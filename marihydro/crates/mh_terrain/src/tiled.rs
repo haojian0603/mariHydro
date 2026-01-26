@@ -83,6 +83,16 @@ impl TileConfig {
         ]
     }
 
+    pub fn validate(&self) -> mh_foundation::error::MhResult<()> {
+        if self.tile_size == 0 {
+            return Err(mh_foundation::error::MhError::invalid_input("tile_size=0"));
+        }
+        if self.resolution <= 0.0 {
+            return Err(mh_foundation::error::MhError::invalid_input("resolution<=0"));
+        }
+        Ok(())
+    }
+
     /// 获取瓦片坐标
     pub fn tile_coords(&self, x: f64, y: f64) -> Option<(usize, usize)> {
         let dx = x - self.origin.0;
@@ -104,7 +114,8 @@ impl TileConfig {
     }
 
     /// 获取瓦片内局部坐标
-    pub fn local_coords(&self, x: f64, y: f64) -> (f64, f64) {
+    pub fn local_coords(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        self.tile_coords(x, y)?;
         let tile_world_size = self.tile_size as f64 * self.resolution;
         let dx = x - self.origin.0;
         let dy = y - self.origin.1;
@@ -112,7 +123,7 @@ impl TileConfig {
         let local_x = (dx % tile_world_size) / self.resolution;
         let local_y = (dy % tile_world_size) / self.resolution;
 
-        (local_x, local_y)
+        Some((local_x, local_y))
     }
 }
 
@@ -161,7 +172,14 @@ impl Tile {
     }
 
     /// 双线性插值
-    pub fn interpolate(&self, x: f64, y: f64) -> Option<f64> {
+    pub fn interpolate(&self, x: f64, y: f64, fallback: f64) -> f64 {
+        match self.interpolate_internal(x, y) {
+            Some(v) => v,
+            None => fallback,
+        }
+    }
+
+    fn interpolate_internal(&self, x: f64, y: f64) -> Option<f64> {
         let col = x.floor() as isize;
         let row = y.floor() as isize;
 
@@ -290,10 +308,10 @@ impl TiledTerrain {
     /// 获取单点高程
     pub fn get_elevation(&mut self, x: f64, y: f64) -> Option<f64> {
         let (tx, ty) = self.config.tile_coords(x, y)?;
-        let (lx, ly) = self.config.local_coords(x, y);
+        let (lx, ly) = self.config.local_coords(x, y)?;
 
         let tile = self.get_tile(tx, ty)?;
-        tile.interpolate(lx, ly)
+        Some(tile.interpolate(lx, ly, self.config.nodata))
     }
 
     /// 批量获取高程
@@ -326,6 +344,9 @@ impl TiledTerrain {
     /// 插入缓存
     fn insert_cache(&mut self, tx: usize, ty: usize, tile: Tile) {
         // 检查缓存大小
+        if self.config.max_cache_tiles == 0 {
+            return;
+        }
         while self.cache.len() >= self.config.max_cache_tiles {
             self.evict_oldest();
         }
@@ -497,7 +518,7 @@ mod tests {
         tile.set(1, 1, 20.0);
 
         // 中心插值
-        let z = tile.interpolate(0.5, 0.5).unwrap();
+        let z = tile.interpolate(0.5, 0.5, -9999.0);
         assert!((z - 10.0).abs() < 0.1);
     }
 

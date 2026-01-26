@@ -33,6 +33,7 @@
 mod traits;
 mod muscl;
 mod config;
+mod weno;
 
 // ============================================================================
 // 泛型 API (Layer 3) - 主要导出
@@ -41,6 +42,7 @@ mod config;
 pub use traits::{ReconstructorGeneric, ReconstructedStateGeneric};
 pub use muscl::MusclReconstructorGeneric;
 pub use config::{MusclConfig, GradientType};
+pub use weno::{WenoConfig, WenoReconstructorGeneric};
 
 #[cfg(test)]
 mod tests {

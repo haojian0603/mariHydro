@@ -82,6 +82,69 @@ pub enum ProfileMethod {
     Uniform,
 }
 
+/// 浓度剖面恢复方法
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConcentrationProfileMethod {
+    /// 均匀分布
+    Uniform,
+    /// 指数剖面（沉降-扩散平衡）
+    Exponential,
+}
+
+/// 垂向浓度剖面恢复工具
+pub struct ConcentrationProfile;
+
+impl ConcentrationProfile {
+    /// 恢复垂向浓度剖面（返回每层中心浓度）
+    pub fn recover<S: Scalar>(
+        c_avg: S,
+        h: S,
+        n_layers: usize,
+        settling_velocity: S,
+        diffusivity: S,
+        method: ConcentrationProfileMethod,
+    ) -> Vec<S> {
+        if n_layers == 0 {
+            return Vec::new();
+        }
+        if h <= S::ZERO || c_avg <= S::ZERO {
+            return vec![S::ZERO; n_layers];
+        }
+
+        let dz = h / S::from_usize(n_layers).unwrap_or(S::ONE);
+        let kv = diffusivity.max(S::from_f64(1e-12).unwrap_or(S::ZERO));
+        let ws = settling_velocity.abs();
+
+        let mut weights = vec![S::ZERO; n_layers];
+        let mut sum_w = S::ZERO;
+
+        for k in 0..n_layers {
+            let z = dz * S::from_f64(k as f64 + 0.5).unwrap_or(S::ZERO);
+            let w = match method {
+                ConcentrationProfileMethod::Uniform => S::ONE,
+                ConcentrationProfileMethod::Exponential => {
+                    let exponent = -(ws * z).safe_div(kv, S::ZERO);
+                    exponent.exp()
+                }
+            };
+            weights[k] = w;
+            sum_w = sum_w + w;
+        }
+
+        let scale = if sum_w > S::ZERO {
+            c_avg * S::from_usize(n_layers).unwrap_or(S::ONE) / sum_w
+        } else {
+            c_avg
+        };
+
+        for w in &mut weights {
+            *w = (*w * scale).max(S::ZERO);
+        }
+
+        weights
+    }
+}
+
 /// von Karman 常数
 const VON_KARMAN: f64 = 0.41;
 

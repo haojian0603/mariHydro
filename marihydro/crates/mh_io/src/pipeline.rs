@@ -223,10 +223,11 @@ impl IoPipeline {
         let shutdown_clone = shutdown_flag.clone();
         let thread_name = config.thread_name.clone();
 
+        let timeout_ms = config.write_timeout_ms;
         let worker = thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
-                Self::worker_loop(receiver, pending_clone, stats_clone, shutdown_clone);
+                Self::worker_loop(receiver, pending_clone, stats_clone, shutdown_clone, timeout_ms);
             })
             .expect("无法创建 IO 工作线程");
 
@@ -379,7 +380,14 @@ impl IoPipeline {
 
     /// 刷新待处理请求
     pub fn flush(&self) -> crate::error::IoResult<()> {
-        self.submit(OutputRequest::Flush)
+        if self.wait_for_completion(Duration::from_secs(30)) {
+            Ok(())
+        } else {
+            Err(crate::error::IoError::PipelineFailed {
+                stage: "flush".into(),
+                message: "timeout".into(),
+            })
+        }
     }
 
     /// 获取待处理请求数
@@ -409,6 +417,7 @@ impl IoPipeline {
 
     /// 显式关闭管道
     pub fn shutdown(&mut self) {
+        let _ = self.wait_for_completion(Duration::from_secs(30));
         self.shutdown_flag.store(true, Ordering::SeqCst);
         let _ = self.sender.send(OutputRequest::Shutdown);
         if let Some(worker) = self.worker.take() {
@@ -422,6 +431,7 @@ impl IoPipeline {
         pending_count: Arc<AtomicUsize>,
         stats: Arc<Mutex<PipelineStats>>,
         _shutdown_flag: Arc<AtomicBool>,
+        write_timeout_ms: u64,
     ) {
         while let Ok(request) = receiver.recv() {
             if matches!(request, OutputRequest::Shutdown) {
@@ -434,8 +444,12 @@ impl IoPipeline {
             }
 
             let start = Instant::now();
-            let result = Self::process_request(&request)
+            let mut result = Self::process_request(&request)
                 .map_err(|e| e.into_io_error("process_request"));
+            if write_timeout_ms > 0 && start.elapsed().as_millis() as u64 > write_timeout_ms {
+                result = Err(PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
+                    .into_io_error("process_request"));
+            }
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
             {
@@ -498,6 +512,9 @@ impl IoPipeline {
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
         state.validate().map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
+        if mesh.n_cells != state.h.len() {
+            return Err(PipelineError::Serialization("mesh/state length mismatch".into()));
+        }
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -661,6 +678,9 @@ impl IoPipeline {
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
         state.validate().map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
+        if mesh.n_cells != state.h.len() {
+            return Err(PipelineError::Serialization("mesh/state length mismatch".into()));
+        }
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

@@ -10,6 +10,8 @@
 pub mod arena;
 pub mod dimension;
 pub mod error;
+pub mod hydro_error;
+pub mod logging;
 // 已删除: pub mod float;  // 迁移到 mh_runtime::RuntimeScalar
 pub mod index;
 pub mod memory;
@@ -23,6 +25,11 @@ pub use dimension::{D2, D3, D3Dynamic, Dimension, DimensionExt};
 
 // ✅ 修复：使用正确的类型名
 pub use error::{MhError, MhResult};
+
+// ✅ 导出统一错误类型
+pub use hydro_error::{
+    HydroError, HydroResult, ErrorCategory, RecoveryStrategy, ResultExt,
+};
 
 // 已删除 float 相关导出
 // pub use float::{SafeF64, KahanSum};

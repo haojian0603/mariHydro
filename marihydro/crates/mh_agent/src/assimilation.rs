@@ -53,6 +53,14 @@ impl Observation {
                 "观测数据长度不一致".to_string(),
             ));
         }
+        if !self.time.is_finite() {
+            return Err(AiError::InvalidObservation("观测时间非有限值".into()));
+        }
+        for (&v, &u) in self.values.iter().zip(self.uncertainty.iter()) {
+            if !v.is_finite() || !u.is_finite() || u < 0.0 {
+                return Err(AiError::InvalidObservation("观测值/不确定度非法".into()));
+            }
+        }
         Ok(())
     }
 }
@@ -63,6 +71,8 @@ struct NudgingState {
     pending_observation: Option<Observation>,
     cell_centers: Option<Vec<[f64; 2]>>,
     last_snapshot_time: f64,
+    neighbor_list: Option<Vec<Vec<usize>>>,
+    neighbor_radius: Option<f64>,
 }
 
 /// Nudging同化器
@@ -81,6 +91,8 @@ impl NudgingAssimilator {
                 pending_observation: None,
                 cell_centers: None,
                 last_snapshot_time: 0.0,
+                neighbor_list: None,
+                neighbor_radius: None,
             }),
         }
     }
@@ -133,9 +145,6 @@ impl NudgingAssimilator {
         let radius_sq = radius * radius;
 
         for i in 0..n {
-            if corrections[i].abs() < f64::EPSILON {
-                continue;
-            }
             let mut weighted_sum = 0.0;
             let mut weight_total = 0.0;
             for j in 0..n {
@@ -157,6 +166,52 @@ impl NudgingAssimilator {
             *dst = *src;
         }
     }
+
+    fn apply_smoothing_with_neighbors(
+        &self,
+        corrections: &mut [f64],
+        cell_centers: &[[f64; 2]],
+        neighbors: &[Vec<usize>],
+    ) {
+        let n = corrections.len();
+        if n == 0 || cell_centers.len() != n || neighbors.len() != n {
+            return;
+        }
+
+        let mut smoothed = vec![0.0; n];
+        for (i, nbrs) in neighbors.iter().enumerate() {
+            let mut weighted_sum = 0.0;
+            let mut weight_total = 0.0;
+            for &j in nbrs {
+                let dx = cell_centers[i][0] - cell_centers[j][0];
+                let dy = cell_centers[i][1] - cell_centers[j][1];
+                let w = 1.0 / (dx.hypot(dy) + 1e-6);
+                weighted_sum += w * corrections[j];
+                weight_total += w;
+            }
+            if weight_total > 0.0 {
+                smoothed[i] = weighted_sum / weight_total;
+            }
+        }
+
+        corrections.copy_from_slice(&smoothed);
+    }
+}
+
+fn build_neighbors(centers: &[[f64; 2]], radius: f64) -> Vec<Vec<usize>> {
+    let n = centers.len();
+    let r2 = radius * radius;
+    let mut neighbors = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            let dx = centers[i][0] - centers[j][0];
+            let dy = centers[i][1] - centers[j][1];
+            if dx * dx + dy * dy <= r2 {
+                neighbors[i].push(j);
+            }
+        }
+    }
+    neighbors
 }
 
 /// 同化结果
@@ -180,6 +235,19 @@ impl AIAgent for NudgingAssimilator {
             .map_err(|_| AiError::StateAccessError("获取同化状态锁失败".into()))?;
         guard.last_snapshot_time = snapshot.time;
         guard.cell_centers = Some(snapshot.cell_centers.clone());
+        if let Some(radius) = self.config.smoothing_radius {
+            let rebuild = guard.neighbor_list.is_none()
+                || guard.neighbor_radius.map_or(true, |r| (r - radius).abs() > f64::EPSILON)
+                || guard
+                    .cell_centers
+                    .as_ref()
+                    .map(|c| c.len())
+                    != guard.neighbor_list.as_ref().map(|n| n.len());
+            if rebuild {
+                guard.neighbor_list = Some(build_neighbors(&snapshot.cell_centers, radius));
+                guard.neighbor_radius = Some(radius);
+            }
+        }
         Ok(())
     }
 
@@ -256,7 +324,11 @@ impl NudgingAssimilator {
         }
 
         if let (Some(_radius), Some(centers)) = (self.config.smoothing_radius, internal.cell_centers.as_ref()) {
-            self.apply_smoothing(&mut corrections, centers);
+            if let Some(neighbors) = internal.neighbor_list.as_ref() {
+                self.apply_smoothing_with_neighbors(&mut corrections, centers, neighbors);
+            } else {
+                self.apply_smoothing(&mut corrections, centers);
+            }
             max_corr = corrections
                 .iter()
                 .fold(0.0, |m, &c| if c.abs() > m { c.abs() } else { m });
@@ -278,6 +350,7 @@ impl NudgingAssimilator {
 
         internal.last_assimilation_time = current_time;
         internal.cumulative_correction += total_corr;
+        internal.pending_observation = None;
 
         Ok(AssimilationResult {
             cells_modified,

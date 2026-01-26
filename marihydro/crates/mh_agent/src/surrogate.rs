@@ -28,6 +28,8 @@ pub struct SurrogateConfig {
     pub prediction_horizon: f64,
     /// 是否提供不确定性估计
     pub estimate_uncertainty: bool,
+    /// 融合系数
+    pub assimilation_rate: f64,
 }
 
 /// 代理模型预测结果
@@ -232,7 +234,9 @@ impl AIAgent for SurrogateModel {
             let depth = state.get_depth_mut();
             let n = pred.values.len().min(depth.len());
             for i in 0..n {
-                depth[i] = pred.values[i].max(0.0);
+                let blended = (1.0 - self.config.assimilation_rate) * depth[i]
+                    + self.config.assimilation_rate * pred.values[i];
+                depth[i] = blended.max(0.0);
             }
             Ok(())
         } else {

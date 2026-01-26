@@ -18,5 +18,6 @@ pub mod validate;
 
 // 重新导出核心类型
 pub use mesh::{Face, HalfEdge, HalfEdgeMesh, Vertex};
+pub use mesh::{FaceIndex, HalfEdgeIndex, VertexIndex};
 pub use operations::TopologyResult;
 pub use validate::{ValidationError, ValidationReport};

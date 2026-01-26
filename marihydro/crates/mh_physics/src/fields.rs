@@ -12,10 +12,9 @@
 //! 4. **线程安全**：明确标记为 `Send + Sync`，支持多线程访问
 //! 5. **名称验证**：强制 snake_case 命名规范，防止拼写错误
 //!
-//! # Safety
+//! # 线程安全
 //!
-//! 本模块使用 unsafe 实现 Send/Sync traits，字段注册器内部使用锁保护。
-#![allow(unsafe_code)]
+//! 本模块不使用内部可变性，`FieldRegistry` 在 Rust 自动推导下即可满足 `Send + Sync`。
 //!
 //! # 使用场景
 //!
@@ -253,29 +252,13 @@ pub struct FieldRegistry {
     order: Vec<String>,
 }
 
-// SAFETY: FieldRegistry 的线程安全性分析
+// 线程安全性说明：
 //
-// 1. 内部状态：
-//    - fields: HashMap<String, FieldMeta> - 字段元数据映射
-//    - order: Vec<String> - 注册顺序向量
+// - 内部仅包含 HashMap 与 Vec
+// - 修改需要 &mut self
+// - 共享引用仅进行只读访问
 //
-// 2. Send 安全性：
-//    - HashMap<String, FieldMeta> 是 Send（当 String 和 FieldMeta 是 Send 时）
-//    - Vec<String> 是 Send
-//    - String 和 FieldMeta 都是纯数据类型，满足 Send
-//    - 因此 FieldRegistry 可以安全地在线程间移动
-//
-// 3. Sync 安全性：
-//    - 所有修改操作都需要 &mut self
-//    - 共享引用 &FieldRegistry 只能进行只读访问
-//    - HashMap 和 Vec 的共享引用是 Sync
-//    - 不存在内部可变性，不会导致数据竞争
-//
-// 4. 注意事项：
-//    - 运行时修改必须通过外部同步机制（如 RwLock）保护
-//    - 本 unsafe impl 假设用户不会通过其他方式获取内部可变引用
-unsafe impl Send for FieldRegistry {}
-unsafe impl Sync for FieldRegistry {}
+// 因此编译器可自动推导 Send + Sync，无需 unsafe 实现
 
 impl FieldRegistry {
     /// 创建空注册表

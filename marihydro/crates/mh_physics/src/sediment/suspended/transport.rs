@@ -38,7 +38,7 @@ pub struct SuspendedTransport<B: Backend> {
     /// 物理常数
     physics: PhysicalConstants,
     /// 后端
-    _backend: B,
+    backend: B,
 }
 
 impl<B> SuspendedTransport<B>
@@ -71,7 +71,7 @@ where
             concentration: backend.alloc_init(n_cells, B::Scalar::ZERO),
             source_term: backend.alloc_init(n_cells, B::Scalar::ZERO),
             physics,
-            _backend: backend,
+            backend,
         }
     }
     
@@ -111,8 +111,8 @@ where
     /// 从切片计算床面交换源项（便捷包装，内部拷贝到后端缓冲区）
     pub fn compute_source_terms_from_slice(&mut self, tau_b: &[B::Scalar], h: &[B::Scalar]) {
         let n = self.source_term.len();
-        let mut tau_buf = self._backend.alloc_init(n, B::Scalar::ZERO);
-        let mut h_buf = self._backend.alloc_init(n, B::Scalar::ZERO);
+        let mut tau_buf = self.backend.alloc_init(n, B::Scalar::ZERO);
+        let mut h_buf = self.backend.alloc_init(n, B::Scalar::ZERO);
 
         let m = tau_b.len().min(n);
         tau_buf.as_slice_mut()[..m].copy_from_slice(&tau_b[..m]);
@@ -154,8 +154,8 @@ where
     /// 仅源项时间步进（切片版，内部拷贝）
     pub fn step_source_only_from_slice(&mut self, tau_b: &[B::Scalar], h: &[B::Scalar], dt: B::Scalar) {
         let n = self.concentration.len();
-        let mut tau_buf = self._backend.alloc_init(n, B::Scalar::ZERO);
-        let mut h_buf = self._backend.alloc_init(n, B::Scalar::ZERO);
+        let mut tau_buf = self.backend.alloc_init(n, B::Scalar::ZERO);
+        let mut h_buf = self.backend.alloc_init(n, B::Scalar::ZERO);
 
         let m = tau_b.len().min(n);
         tau_buf.as_slice_mut()[..m].copy_from_slice(&tau_b[..m]);
@@ -192,7 +192,7 @@ where
         // 这里只展示源项积分
         for i in 0..self.concentration.len() {
             let depth = h.get(i).copied().unwrap_or(B::Scalar::ZERO);
-                if depth < B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO) {
+                if depth < self.backend.scalar_from_f64(1e-6) {
                 continue;
             }
             
@@ -201,7 +201,7 @@ where
             let c = self.concentration[i];
             
             // 沉降使浓度减少（每单位水深）
-            let settling_term = -ws * c / depth.max(B::Scalar::from_f64(0.01).unwrap_or(B::Scalar::ONE));
+            let settling_term = -ws * c / depth.max(self.backend.scalar_from_f64(0.01));
             
             // 源项 + 沉降
             self.concentration[i] += dt * (self.source_term[i] + settling_term);
@@ -237,7 +237,7 @@ where
         // 需要乘以水深转换为面通量
         let flux = -source * h; // [kg/m²/s]，负号因为侵蚀使床面降低
         
-        let rho_s = B::Scalar::from_f64(self.source.properties().rho_s).unwrap_or(B::Scalar::ONE);
+        let rho_s = self.backend.scalar_from_f64(self.source.properties().rho_s);
         flux / ((B::Scalar::ONE - porosity) * rho_s)
     }
     

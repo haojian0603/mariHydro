@@ -184,6 +184,7 @@ impl<S: RuntimeScalar> TracerFaceFlux<S> {
 pub struct SmagorinskyData<B: Backend> {
     pub grid_scales: B::Buffer<B::Scalar>,
     pub strain_rate_magnitudes: B::Buffer<B::Scalar>,
+    backend: B,
 }
 
 impl<B: Backend> SmagorinskyData<B> {
@@ -191,6 +192,7 @@ impl<B: Backend> SmagorinskyData<B> {
         Self {
             grid_scales: backend.alloc(n_cells),
             strain_rate_magnitudes: backend.alloc(n_cells),
+            backend: backend.clone(),
         }
     }
 
@@ -205,7 +207,7 @@ impl<B: Backend> SmagorinskyData<B> {
     ) -> Self {
         let n_cells = cell_areas.len();
         let mut data = Self::new(backend, n_cells);
-        let min_scale = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
+        let min_scale = backend.scalar_from_f64(1e-6);
         let four = B::Scalar::TWO + B::Scalar::TWO;
 
         for i in 0..n_cells {
@@ -240,7 +242,7 @@ impl<B: Backend> SmagorinskyData<B> {
                 self.grid_scales[right],
                 self.strain_rate_magnitudes[right],
             );
-            let eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO);
+            let eps = self.backend.scalar_from_f64(1e-10);
             if k_left + k_right > eps {
                 B::Scalar::TWO * k_left * k_right / (k_left + k_right)
             } else {
@@ -256,7 +258,6 @@ impl<B: Backend> SmagorinskyData<B> {
 pub struct TracerTransportSolver<B: Backend> {
     config: TracerTransportConfig<B::Scalar>,
     face_fluxes: Vec<TracerFaceFlux<B::Scalar>>,
-    #[allow(dead_code)]
     backend: B,
 }
 
@@ -315,7 +316,10 @@ impl<B: Backend> TracerTransportSolver<B> {
             return zero;
         }
 
-        let eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO);
+        let eps = self.backend.scalar_from_f64(1e-10);
+        if !distance.is_finite() || distance <= zero {
+            return zero;
+        }
         let dc_dx = (c_right - c_left) / Float::max(distance, eps);
         -h_face * diffusivity * dc_dx * face_length
     }
@@ -359,6 +363,11 @@ impl<B: Backend> TracerTransportSolver<B> {
         }
 
         for (i, face) in flow_data.iter().enumerate() {
+            if face.h_face <= self.config.h_min || !face.h_face.is_finite() {
+                self.face_fluxes[i] = TracerFaceFlux::default();
+                continue;
+            }
+
             let c_left = field.concentration_slice()[face.left_cell];
             let c_right = face.right_cell
                 .map(|idx| field.concentration_slice()[idx])
@@ -376,14 +385,14 @@ impl<B: Backend> TracerTransportSolver<B> {
                 if let Some(smag) = smagorinsky_data {
                     smag.face_diffusivity(&self.config.diffusion, face.left_cell, face.right_cell)
                 } else {
-                    let min_k = B::Scalar::from_f64(1e-3).unwrap_or(B::Scalar::ZERO);
+                    let min_k = self.backend.scalar_from_f64(1e-3);
                     Float::max(self.config.diffusion.horizontal_diffusivity, min_k)
                 }
             } else {
                 self.config.diffusion.horizontal_diffusivity
             };
 
-            let diffusive = if face.right_cell.is_some() {
+            let diffusive = if face.right_cell.is_some() && i < face_distances.len() {
                 self.compute_diffusive_flux(
                     c_left,
                     c_right,
@@ -448,11 +457,14 @@ impl<B: Backend> TracerTransportSolver<B> {
         min_cell_size: B::Scalar,
         cfl_number: B::Scalar,
     ) -> B::Scalar {
-        let eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO);
-        let scalar_max = B::Scalar::from_f64(1e20).unwrap_or(B::Scalar::ONE);
+        let eps = self.backend.scalar_from_f64(1e-10);
+        let scalar_max = self.backend.scalar_from_f64(1e20);
+        if !min_cell_size.is_finite() || min_cell_size <= B::Scalar::ZERO {
+            return self.backend.scalar_from_f64(0.0);
+        }
         let dx = Float::max(min_cell_size, eps);
 
-        let dt_advection = if max_velocity > eps {
+        let dt_advection = if max_velocity.is_finite() && max_velocity > eps {
             cfl_number * dx / max_velocity
         } else {
             scalar_max

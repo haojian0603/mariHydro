@@ -210,7 +210,16 @@ impl FileStorage {
         let path = self.job_path(job.id);
         let json = serde_json::to_string_pretty(job)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        std::fs::write(path, json)?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+                std::fs::rename(&tmp, &path)?;
+            } else {
+                return Err(StorageError::Io(e));
+            }
+        }
         Ok(())
     }
 

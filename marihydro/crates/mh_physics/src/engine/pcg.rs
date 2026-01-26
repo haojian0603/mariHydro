@@ -6,15 +6,22 @@
 use crate::core::Backend;
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
 use num_traits::{FromPrimitive, Float};
-use std::marker::PhantomData;
 
-/// PCG 求解器配置（Layer 4，保持f64）
+/// PCG 求解器配置（Layer 4，保持 f64）
+/// 
+/// 配置层使用 f64 类型，在 Layer 3 引擎层使用时通过 `to_runtime()` 转换。
+/// 这确保配置文件的可移植性和精度一致性。
 #[derive(Debug, Clone)]
 pub struct PcgConfig {
+    /// 相对容差
     pub rtol: f64,
+    /// 绝对容差
     pub atol: f64,
+    /// 最大迭代次数
     pub max_iter: usize,
+    /// 预处理器类型
     pub preconditioner: PreconditionerType,
+    /// 是否输出详细信息
     pub verbose: bool,
 }
 
@@ -28,6 +35,45 @@ impl Default for PcgConfig {
             verbose: false,
         }
     }
+}
+
+impl PcgConfig {
+    /// 转换为运行时配置
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端引用，用于标量转换
+    /// 
+    /// # 返回
+    /// 
+    /// 返回使用 Backend 标量类型的运行时配置
+    pub fn to_runtime<B: Backend>(&self, backend: &B) -> PcgRuntimeConfig<B> {
+        PcgRuntimeConfig {
+            rtol: backend.scalar_from_f64(self.rtol),
+            atol: backend.scalar_from_f64(self.atol),
+            max_iter: self.max_iter,
+            preconditioner: self.preconditioner,
+            verbose: self.verbose,
+        }
+    }
+}
+
+/// PCG 运行时配置（Backend 泛型）
+/// 
+/// 从 `PcgConfig` 转换而来，所有标量类型使用 Backend 类型。
+/// 仅在 Layer 3 引擎层内部使用。
+#[derive(Debug, Clone)]
+pub struct PcgRuntimeConfig<B: Backend> {
+    /// 相对容差
+    pub rtol: B::Scalar,
+    /// 绝对容差
+    pub atol: B::Scalar,
+    /// 最大迭代次数
+    pub max_iter: usize,
+    /// 预处理器类型
+    pub preconditioner: PreconditionerType,
+    /// 是否输出详细信息
+    pub verbose: bool,
 }
 
 /// 预处理器类型
@@ -53,34 +99,79 @@ pub trait SparseMvp<B: Backend> {
     fn dimension(&self) -> usize;
 }
 
-/// 对角矩阵（用于Jacobi预处理）
+/// 对角矩阵（用于 Jacobi 预处理）
+/// 
+/// 存储对角线元素，支持高效的对角矩阵-向量乘法。
+/// 通过 Backend 泛型实现精度切换和内存管理。
+/// 
+/// # 数学表示
+/// 
+/// $$D = \text{diag}(d_0, d_1, ..., d_{n-1})$$
+/// 
+/// # 性能
+/// 
+/// - 存储复杂度: O(n)
+/// - 乘法复杂度: O(n)
+#[derive(Clone)]
 pub struct DiagonalMatrix<B: Backend>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
+    /// 对角线元素
     pub diag: B::Buffer<B::Scalar>,
+    /// 矩阵维度
     n: usize,
-    _marker: PhantomData<B>,
+    /// 计算后端实例
+    backend: B,
 }
 
 impl<B: Backend> DiagonalMatrix<B>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
-    pub fn new(diag: B::Buffer<B::Scalar>, n: usize) -> Self {
+    /// 从对角线缓冲区创建对角矩阵
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `diag`: 对角线元素缓冲区
+    /// - `n`: 矩阵维度
+    pub fn new(backend: B, diag: B::Buffer<B::Scalar>, n: usize) -> Self {
+        Self { diag, n, backend }
+    }
+    
+    /// 从现有对角线创建（向后兼容）
+    pub fn from_diag(diag: B::Buffer<B::Scalar>, n: usize) -> Self
+    where
+        B: Default,
+    {
         Self {
             diag,
             n,
-            _marker: PhantomData,
+            backend: B::default(),
         }
     }
 
+    /// 获取矩阵维度
+    #[inline]
     pub fn dimension(&self) -> usize {
         self.n
     }
+    
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
 
     /// 使用闭包批量生成对角线元素
-    pub fn from_fn<F>(backend: &B, n: usize, mut f: F) -> Self
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `n`: 矩阵维度
+    /// - `f`: 生成函数，接收索引返回对角元素
+    pub fn from_fn<F>(backend: B, n: usize, mut f: F) -> Self
     where
         F: FnMut(usize) -> B::Scalar,
     {
@@ -88,7 +179,15 @@ where
         for i in 0..n {
             diag[i] = f(i);
         }
-        Self::new(diag, n)
+        Self::new(backend, diag, n)
+    }
+    
+    /// 从切片创建对角矩阵
+    pub fn from_slice(backend: B, slice: &[B::Scalar]) -> Self {
+        let n = slice.len();
+        let mut diag = backend.alloc(n);
+        diag.copy_from_slice(slice);
+        Self::new(backend, diag, n)
     }
 }
 
@@ -123,6 +222,7 @@ where
 impl<B: Backend> PcgWorkspace<B>
 where
     B::Buffer<B::Scalar>: Send + Sync,
+    B::Scalar: RuntimeScalar,
 {
     pub fn new_with_backend(backend: &B, n: usize) -> Self {
         let zero = B::Scalar::ZERO;
@@ -337,11 +437,31 @@ pub struct PoissonMatrixBuilder {
 }
 
 impl PoissonMatrixBuilder {
+    /// 创建泊松矩阵构建器
+    /// 
+    /// # 参数
+    /// 
+    /// - `n_cells`: 单元数量
     pub fn new(n_cells: usize) -> Self {
         Self { n_cells }
     }
 
-    pub fn build_diagonal<B: Backend>(
+    /// 构建对角矩阵（用于 Jacobi 预处理）
+    /// 
+    /// # 参数
+    /// 
+    /// - `backend`: 计算后端实例
+    /// - `cell_areas`: 单元面积数组
+    /// - `dt`: 时间步长
+    /// - `gravity`: 重力加速度
+    /// - `theta`: 隐式权重因子
+    /// - `h`: 水深数组
+    /// - `h_min`: 最小水深阈值
+    /// 
+    /// # 返回
+    /// 
+    /// 返回对角矩阵，用于预处理
+    pub fn build_diagonal<B: Backend + Clone>(
         &self,
         backend: &B,
         cell_areas: &[B::Scalar],
@@ -371,7 +491,7 @@ impl PoissonMatrixBuilder {
         let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
         let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
 
-        DiagonalMatrix::from_fn(backend, self.n_cells, |i| {
+        DiagonalMatrix::from_fn(backend.clone(), self.n_cells, |i| {
             let area = cell_areas[i];
             let h_eff = h[i].max(h_min);
             let denom = gravity * theta_safe * dt * dt * h_eff;
@@ -394,7 +514,7 @@ mod tests {
         let backend = CpuBackend::<f64>::new();
         let n = 10;
         let diag: Vec<f64> = (1..=n).map(|i| i as f64).collect();
-        let matrix = DiagonalMatrix::new(diag, n);
+        let matrix = DiagonalMatrix::new(backend.clone(), diag, n);
         let mut b = vec![0.0_f64; n];
         b.fill(1.0);
         let mut x = vec![0.0_f64; n];

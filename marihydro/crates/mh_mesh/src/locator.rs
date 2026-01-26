@@ -75,7 +75,7 @@ pub enum LocateResult {
     },
     /// 点在网格外
     Outside {
-        nearest_face: usize,
+        nearest_face: Option<usize>,
         distance: f64,
     },
 }
@@ -178,7 +178,10 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
             };
         }
 
-        let (nearest_face, distance) = self.find_nearest_boundary_face(x, y);
+        let (nearest_face, distance) = self
+            .find_nearest_boundary_face(x, y)
+            .map(|(f, d)| (Some(f), d))
+            .unwrap_or((None, f64::INFINITY));
 
         LocateResult::Outside {
             nearest_face,
@@ -207,9 +210,17 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     pub fn compute_barycentric(&self, cell: usize, x: f64, y: f64) -> [f64; 3] {
         let vertices = self.mesh.get_cell_vertices(cell);
 
+        if vertices.len() > 3 {
+            for i in 1..vertices.len().saturating_sub(1) {
+                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y) {
+                    return bary;
+                }
+            }
+        }
+
         if vertices.len() != 3 {
             let n = vertices.len() as f64;
-            let w = 1.0 / n;
+            let w = 1.0 / n.max(1.0);
             return [w, w, 1.0 - 2.0 * w];
         }
 
@@ -228,7 +239,10 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     }
 
     /// 查找最近的边界面
-    pub fn find_nearest_boundary_face(&self, x: f64, y: f64) -> (usize, f64) {
+    pub fn find_nearest_boundary_face(&self, x: f64, y: f64) -> Option<(usize, f64)> {
+        if self.mesh.boundary_face_indices.is_empty() {
+            return None;
+        }
         let mut min_dist = f64::INFINITY;
         let mut nearest_face = 0usize;
 
@@ -245,7 +259,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
             }
         }
 
-        (nearest_face, min_dist)
+        Some((nearest_face, min_dist))
     }
 
     /// 在指定单元内插值
@@ -493,7 +507,7 @@ mod tests {
         assert_eq!(inside.cell_index(), Some(0));
 
         let outside = LocateResult::Outside {
-            nearest_face: 0,
+            nearest_face: None,
             distance: 1.0,
         };
         assert!(outside.is_outside());
@@ -549,5 +563,21 @@ mod tests {
         // 第二次查询：同一单元格 → 缓存命中
         assert_eq!(cached.find_cell(0.4, 0.3), Some(0));  // 同一单元格内另一个点
         assert!(cached.hit_rate() > 0.0);  // 现在应该有命中
+    }
+}
+
+fn barycentric_in_tri(a: &Point2D, b: &Point2D, c: &Point2D, x: f64, y: f64) -> Option<[f64; 3]> {
+    let denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let l1 = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / denom;
+    let l2 = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / denom;
+    let l3 = 1.0 - l1 - l2;
+    let tol = -1e-12;
+    if l1 >= tol && l2 >= tol && l3 >= tol {
+        Some([l1, l2, l3])
+    } else {
+        None
     }
 }

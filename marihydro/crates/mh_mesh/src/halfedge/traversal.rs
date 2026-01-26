@@ -4,8 +4,7 @@
 //!
 //! 提供高效的网格遍历功能。
 
-use super::mesh::HalfEdgeMesh;
-use mh_foundation::index::{FaceIndex, HalfEdgeIndex, VertexIndex};
+use super::mesh::{FaceIndex, HalfEdgeIndex, HalfEdgeMesh, VertexIndex};
 use mh_geo::{Point2D, Point3D};
 
 // ============================================================================

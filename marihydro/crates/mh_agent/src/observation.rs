@@ -15,6 +15,10 @@ pub trait ObservationOperator: Send + Sync {
     
     /// 获取观测误差协方差（对角阵时返回方差）
     fn observation_error_variance(&self) -> Option<Vec<f64>> { None }
+
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<f64>> {
+        self.observation_error_variance().map(|v| vec![v[0]; n_obs])
+    }
     
     /// 线性化观测算子（返回雅可比矩阵）
     fn linearize(&self, _snapshot: &PhysicsSnapshot) -> Option<Vec<Vec<f64>>> { None }
@@ -69,8 +73,8 @@ impl ObservationOperator for ReflectanceOperator {
             .collect()
     }
     
-    fn observation_error_variance(&self) -> Option<Vec<f64>> {
-        Some(vec![self.observation_std.powi(2); 1])
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<f64>> {
+        Some(vec![self.observation_std.powi(2); n_obs])
     }
 }
 
@@ -143,8 +147,15 @@ pub struct WaterLevelOperator {
 }
 
 impl WaterLevelOperator {
-    pub fn new(station_indices: Vec<usize>, observation_std: f64) -> Self {
-        Self { station_indices, observation_std }
+    pub fn new(
+        station_indices: Vec<usize>,
+        observation_std: f64,
+        n_cells: usize,
+    ) -> Result<Self, crate::AiError> {
+        if station_indices.iter().any(|&i| i >= n_cells) {
+            return Err(crate::AiError::InvalidObservation("观测站索引超出范围".into()));
+        }
+        Ok(Self { station_indices, observation_std })
     }
 }
 

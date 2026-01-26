@@ -56,6 +56,58 @@ pub fn wind_drag_coefficient_wu82(wind_speed: f64) -> f64 {
     (0.8 + 0.065 * w) * 1e-3
 }
 
+/// Garratt (1977) 风阻系数
+#[inline]
+pub fn wind_drag_coefficient_garratt77(wind_speed: f64) -> f64 {
+    let w = wind_speed.abs().min(MAX_WIND_SPEED);
+    (0.75 + 0.067 * w) * 1e-3
+}
+
+/// Smith (1980) 风阻系数
+#[inline]
+pub fn wind_drag_coefficient_smith80(wind_speed: f64) -> f64 {
+    let w = wind_speed.abs().min(MAX_WIND_SPEED);
+    (0.63 + 0.066 * w) * 1e-3
+}
+
+/// Yelland & Taylor (1996) 风阻系数（低风速改进）
+#[inline]
+pub fn wind_drag_coefficient_yelland96(wind_speed: f64) -> f64 {
+    let w = wind_speed.abs().min(MAX_WIND_SPEED);
+    if w < 3.0 {
+        1.0e-3
+    } else if w < 6.0 {
+        let x = w.max(1e-6);
+        (0.29 + 3.1 / x + 7.7 / (x * x)) * 1e-3
+    } else {
+        wind_drag_coefficient_lp81(w)
+    }
+}
+
+/// COARE 3.0 中性风阻系数近似
+#[inline]
+pub fn wind_drag_coefficient_coare30(wind_speed: f64) -> f64 {
+    let w = wind_speed.abs().min(MAX_WIND_SPEED);
+    if w < 10.0 {
+        1.14e-3
+    } else {
+        (0.49 + 0.065 * w) * 1e-3
+    }
+}
+
+/// COARE 3.5 中性风阻系数近似
+#[inline]
+pub fn wind_drag_coefficient_coare35(wind_speed: f64) -> f64 {
+    let w = wind_speed.abs().min(MAX_WIND_SPEED);
+    if w < 6.0 {
+        0.92e-3
+    } else if w < 20.0 {
+        (0.61 + 0.063 * w) * 1e-3
+    } else {
+        2.0e-3
+    }
+}
+
 /// 风阻系数计算方法
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum DragCoefficientMethod {
@@ -64,6 +116,16 @@ pub enum DragCoefficientMethod {
     LargePond1981,
     /// Wu (1982)
     Wu1982,
+    /// Garratt (1977)
+    Garratt1977,
+    /// Smith (1980)
+    Smith1980,
+    /// Yelland & Taylor (1996)
+    YellandTaylor1996,
+    /// COARE 3.0（中性近似）
+    Coare30,
+    /// COARE 3.5（中性近似）
+    Coare35,
     /// 常数（直接存储 f64）
     Constant(u64), // 使用 u64 存储位模式以保持 Copy + Eq
 }
@@ -79,6 +141,11 @@ impl DragCoefficientMethod {
         match self {
             Self::LargePond1981 => wind_drag_coefficient_lp81(wind_speed),
             Self::Wu1982 => wind_drag_coefficient_wu82(wind_speed),
+            Self::Garratt1977 => wind_drag_coefficient_garratt77(wind_speed),
+            Self::Smith1980 => wind_drag_coefficient_smith80(wind_speed),
+            Self::YellandTaylor1996 => wind_drag_coefficient_yelland96(wind_speed),
+            Self::Coare30 => wind_drag_coefficient_coare30(wind_speed),
+            Self::Coare35 => wind_drag_coefficient_coare35(wind_speed),
             Self::Constant(bits) => f64::from_bits(*bits),
         }
     }

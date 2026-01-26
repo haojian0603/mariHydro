@@ -254,7 +254,7 @@ impl PhysicsMesh {
 
     /// 获取面法向量 (3D元组 - Legacy接口)
     #[inline]
-    pub fn face_normal_3d(&self, face: CellIndex) -> (f64, f64, f64) {
+    pub fn face_normal_3d(&self, face: FaceIndex) -> (f64, f64, f64) {
         let n = self.inner.face_normal[face.get()];
         (n.x, n.y, n.z)
     }

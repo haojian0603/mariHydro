@@ -41,6 +41,9 @@ pub mod tide;
 pub mod river;
 pub mod timeseries;
 pub mod spatial;
+pub mod astronomical_tide;
+pub mod data;
+pub mod coupling;
 
 // 风场导出
 pub use wind::{WindProvider, WindData, SpatialWindProvider};
@@ -49,6 +52,14 @@ pub use wind::{WindProvider, WindData, SpatialWindProvider};
 pub use tide::{
     TideProvider, TideData, TideBoundary,
     TidalConstituent, tidal_constituents,
+    TidalJointBoundary, TidalVelocityCalculator, TidalVelocityConstituent,
+};
+
+// 天文潮导出
+pub use astronomical_tide::{
+    AstronomicalTideEngine, ConstituentType, ConstituentSpecies,
+    HarmonicConstant, NodalFactors, AstronomicalArguments,
+    EquilibriumTideCalculator, TidePrediction,
 };
 
 // 河流导出
@@ -59,4 +70,8 @@ pub use timeseries::{TimeSeries, VectorTimeSeries, ExtrapolationMode, TimeSeries
 
 // 空间时序导出
 pub use spatial::{SpatialTimeSeries, SpatialVectorTimeSeries};
+
+// 强迫数据与耦合导出
+pub use data::{ForcingDataReader, ForcingDataError, ForcingMetadata, ForcingField, CFConventions};
+pub use coupling::{SpatialInterpolation, ForcingMeshCoupler, InterpolationWeights, SpatioTemporalForcing};
 

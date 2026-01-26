@@ -37,4 +37,7 @@ pub use sigma::{SigmaCoordinate, SigmaDistribution};
 pub use velocity::VerticalVelocity;
 pub use mixing::{VerticalMixing, VerticalMixingModel};
 pub use state::{LayeredScalar, LayeredState};
-pub use profile::{ProfileRestorer, VerticalProfile, ProfileMethod};
+pub use profile::{
+	ProfileRestorer, VerticalProfile, ProfileMethod,
+	ConcentrationProfile, ConcentrationProfileMethod,
+};

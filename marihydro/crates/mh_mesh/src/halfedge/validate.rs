@@ -4,8 +4,7 @@
 //!
 //! 提供拓扑一致性检查功能。
 
-use super::mesh::HalfEdgeMesh;
-use mh_foundation::index::{FaceIndex, HalfEdgeIndex, VertexIndex};
+use super::mesh::{FaceIndex, HalfEdgeIndex, HalfEdgeMesh, VertexIndex};
 
 /// 验证错误
 #[derive(Debug, Clone)]
@@ -151,7 +150,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
         let start = f_data.halfedge;
         let mut current = start;
         let mut count = 0;
-        let max_count = 1000; // 防止无限循环
+        let max_count = self.n_halfedges().max(10);
 
         loop {
             let Some(he_data) = self.halfedge(current) else {

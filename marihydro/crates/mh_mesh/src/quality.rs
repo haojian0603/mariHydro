@@ -5,7 +5,7 @@
 //! 提供单元质量指标和网格质量统计。
 
 use crate::halfedge::HalfEdgeMesh;
-use mh_foundation::index::FaceIndex;
+use crate::halfedge::mesh::FaceIndex;
 
 /// 计算三角形的长宽比
 /// 
