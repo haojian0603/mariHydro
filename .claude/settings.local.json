@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check)",
+      "Bash(cargo clippy)",
+      "Bash(findstr:*)",
+      "Bash(cargo check:*)",
+      "Bash(1)"
+    ]
+  }
+}
