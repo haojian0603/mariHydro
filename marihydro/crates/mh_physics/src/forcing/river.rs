@@ -82,6 +82,39 @@ pub enum RiverData {
 }
 
 impl RiverProvider {
+    fn normalize_timeseries(times: Vec<f64>, discharges: Vec<f64>) -> (Vec<f64>, Vec<f64>) {
+        let n = times.len().min(discharges.len());
+        if n == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let mut tuples: Vec<(f64, f64)> = (0..n)
+            .filter_map(|i| {
+                let t = times[i];
+                let q = discharges[i];
+                if t.is_finite() && q.is_finite() {
+                    Some((t, q))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        tuples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut out_t = Vec::with_capacity(tuples.len());
+        let mut out_q = Vec::with_capacity(tuples.len());
+        let mut last_t = None;
+        for (t, q) in tuples {
+            if last_t.map_or(true, |lt| t > lt) {
+                out_t.push(t);
+                out_q.push(q);
+                last_t = Some(t);
+            }
+        }
+
+        (out_t, out_q)
+    }
+
     /// 创建恒定流量
     pub fn constant(discharge: f64) -> Self {
         Self {
@@ -99,6 +132,7 @@ impl RiverProvider {
 
     /// 创建时间序列
     pub fn time_series(times: Vec<f64>, discharges: Vec<f64>) -> Self {
+        let (times, discharges) = Self::normalize_timeseries(times, discharges);
         let initial = discharges.first().copied().unwrap_or(0.0);
         Self {
             data: RiverData::TimeSeries { times, discharges },
@@ -116,6 +150,8 @@ impl RiverProvider {
     /// - `rise_time`: 上升时间 [s]（从开始到峰值）
     /// - `fall_time`: 下降时间 [s]（从峰值到恢复基流）
     pub fn flood_wave(base_flow: f64, peak_flow: f64, rise_time: f64, fall_time: f64) -> Self {
+        let rise_time = if rise_time.is_finite() && rise_time > 0.0 { rise_time } else { 0.0 };
+        let fall_time = if fall_time.is_finite() && fall_time > 0.0 { fall_time } else { 0.0 };
         Self {
             data: RiverData::FloodWave {
                 base_flow,
@@ -138,6 +174,9 @@ impl RiverProvider {
         rise_time: f64,
         fall_time: f64,
     ) -> Self {
+        let rise_time = if rise_time.is_finite() && rise_time > 0.0 { rise_time } else { 0.0 };
+        let fall_time = if fall_time.is_finite() && fall_time > 0.0 { fall_time } else { 0.0 };
+        let delay = if delay.is_finite() && delay > 0.0 { delay } else { 0.0 };
         Self {
             data: RiverData::FloodWave {
                 base_flow,
@@ -154,11 +193,16 @@ impl RiverProvider {
 
     /// 创建周期性流量
     pub fn periodic(mean_discharge: f64, amplitude: f64, period_hours: f64) -> Self {
+        let period = if period_hours.is_finite() && period_hours > 0.0 {
+            period_hours * 3600.0
+        } else {
+            0.0
+        };
         Self {
             data: RiverData::Periodic {
                 mean_discharge,
                 amplitude,
-                period: period_hours * 3600.0,
+                period,
                 phase: 0.0,
             },
             direction: 0.0,
@@ -169,6 +213,11 @@ impl RiverProvider {
 
     /// 创建阶梯流量
     pub fn step_changes(initial: f64, steps: Vec<(f64, f64)>) -> Self {
+        let mut steps: Vec<(f64, f64)> = steps
+            .into_iter()
+            .filter(|(t, q)| t.is_finite() && q.is_finite())
+            .collect();
+        steps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         Self {
             data: RiverData::Step { initial, steps },
             direction: 0.0,
@@ -217,11 +266,11 @@ impl RiverProvider {
 
                 if time < start_time {
                     *base_flow
-                } else if time < *peak_time {
+                } else if time < *peak_time && *rise_time > 0.0 {
                     // 上升段
                     let t = (time - start_time) / rise_time;
                     base_flow + t * (peak_flow - base_flow)
-                } else if time < end_time {
+                } else if time < end_time && *fall_time > 0.0 {
                     // 下降段
                     let t = (time - peak_time) / fall_time;
                     peak_flow - t * (peak_flow - base_flow)
@@ -231,6 +280,9 @@ impl RiverProvider {
             }
 
             RiverData::Periodic { mean_discharge, amplitude, period, phase } => {
+                if !period.is_finite() || *period <= 0.0 {
+                    return *mean_discharge;
+                }
                 let omega = 2.0 * std::f64::consts::PI / period;
                 mean_discharge + amplitude * (omega * time + phase).sin()
             }
@@ -345,6 +397,22 @@ impl RiverSystem {
         provider: RiverProvider,
         weights: Vec<f64>,
     ) {
+        let mut weights: Vec<f64> = weights
+            .into_iter()
+            .map(|w| if w.is_finite() { w.max(0.0) } else { 0.0 })
+            .collect();
+        if weights.len() != cells.len() {
+            weights.resize(cells.len(), 0.0);
+        }
+        let sum: f64 = weights.iter().sum();
+        if sum > 0.0 {
+            for w in &mut weights {
+                *w /= sum;
+            }
+        } else if !cells.is_empty() {
+            let uniform = 1.0 / cells.len() as f64;
+            weights.fill(uniform);
+        }
         self.rivers.push(RiverEntry {
             name: name.to_string(),
             cells,
@@ -413,8 +481,14 @@ impl RiverSystem {
         cell_areas: &[f64],
         cross_section_areas: Option<&[f64]>,
     ) {
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
         for river in &self.rivers {
             let q = river.provider.get_discharge_at(time);
+            if !q.is_finite() {
+                continue;
+            }
             let direction = river.provider.get_direction();
 
             for (i, &cell) in river.cells.iter().enumerate() {
@@ -423,7 +497,11 @@ impl RiverSystem {
                 }
 
                 let w = river.weights.get(i).copied().unwrap_or(0.0);
-                let area = cell_areas[cell].max(1e-6);
+                let area_raw = cell_areas[cell];
+                if !area_raw.is_finite() || area_raw <= 0.0 {
+                    continue;
+                }
+                let area = area_raw.max(1e-6);
                 
                 // 计算单元的入流量
                 let q_cell = q * w;

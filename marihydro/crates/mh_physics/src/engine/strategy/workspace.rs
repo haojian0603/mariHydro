@@ -28,7 +28,7 @@
 //! 
 //! ```rust
 //! use mh_runtime::CpuBackend;
-//! use mh_physics::engine::SolverWorkspaceGeneric;
+//! use mh_physics::engine::strategy::SolverWorkspaceGeneric;
 //! 
 //! // 创建f32精度工作区
 //! let backend_f32 = CpuBackend::<f32>::new();

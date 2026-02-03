@@ -4,6 +4,7 @@
 
 use crate::core::Backend;
 use mh_runtime::RuntimeScalar as Scalar;
+use num_traits::{Float, ToPrimitive};
 
 /// 网格验证错误
 #[derive(Debug, thiserror::Error)]
@@ -14,6 +15,8 @@ pub enum MeshValidationError {
         n_faces: usize,
         n_interior_faces: usize,
     },
+    #[error("网格间距无效: axis={axis}, value={value}")]
+    InvalidSpacing { axis: &'static str, value: f64 },
     #[error("单元面积无效: cell={cell}, area={area}")]
     InvalidCellArea { cell: usize, area: f64 },
     #[error("面长度无效: face={face}, length={length}")]

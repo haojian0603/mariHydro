@@ -19,7 +19,8 @@
 
 use crate::ellipsoid::Ellipsoid;
 use crate::projection::{FastProjection, ProjectionType};
-use mh_foundation::error::MhResult;
+use crate::projection::auto_gk3_zone;
+use mh_foundation::error::{MhError, MhResult};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -87,6 +88,7 @@ impl CrsDefinition {
         CrsDefinition::Epsg(code)
     }
 
+    /// UTM 区域投影（带范围检查）
     pub fn utm_zone_checked(zone: u8, north: bool) -> crate::error::GeoResult<Self> {
         if !(1..=60).contains(&zone) {
             return Err(crate::error::GeoError::invalid_utm_zone(zone));
@@ -105,14 +107,11 @@ impl CrsDefinition {
     /// # Arguments
     /// - `lon`: 经度 (度)
     /// - `lat`: 纬度 (度)
-    #[must_use]
-    pub fn auto_utm(lon: f64, lat: f64) -> Self {
-        let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
-        let zone = zone.clamp(1, 60);
-        let north = lat >= 0.0;
-        Self::utm_zone(zone, north)
+    pub fn auto_utm(lon: f64, lat: f64) -> crate::error::GeoResult<Self> {
+        Self::auto_utm_checked(lon, lat)
     }
 
+    /// 从坐标自动计算 UTM 区域（带范围检查）
     pub fn auto_utm_checked(lon: f64, lat: f64) -> crate::error::GeoResult<Self> {
         if !(-180.0..=180.0).contains(&lon) {
             return Err(crate::error::GeoError::coordinate_out_of_range("经度", lon, -180.0, 180.0));
@@ -123,7 +122,13 @@ impl CrsDefinition {
         if lat > 84.0 || lat < -80.0 {
             return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
         }
-        Ok(Self::auto_utm(lon, lat))
+        let zone = if lon == 180.0 {
+            60
+        } else {
+            ((lon + 180.0) / 6.0).floor() as u8 + 1
+        };
+        let north = lat >= 0.0;
+        Self::utm_zone_checked(zone, north)
     }
 
     /// 高斯-克吕格 3度带
@@ -197,6 +202,8 @@ pub struct ResolvedCrs {
     pub definition: String,
     /// EPSG 代码（如果可用）
     pub epsg: Option<u32>,
+    /// EPSG 描述（如果可用）
+    pub description: Option<String>,
     /// 是否为地理坐标系（度）
     pub is_geographic: bool,
     /// 单位名称
@@ -219,10 +226,12 @@ impl ResolvedCrs {
             "metre".to_string()
         };
         let ellipsoid = Self::detect_ellipsoid(definition, epsg);
+        let description = epsg.and_then(Self::epsg_description);
 
         Ok(Self {
             definition: definition.into(),
             epsg,
+            description,
             is_geographic,
             unit_name,
             ellipsoid,
@@ -235,9 +244,22 @@ impl ResolvedCrs {
         Self {
             definition: "EPSG:4326".into(),
             epsg: Some(4326),
+            description: Some("WGS 84".into()),
             is_geographic: true,
             unit_name: "degree".into(),
             ellipsoid: Ellipsoid::WGS84,
+        }
+    }
+
+    /// 获取常见 EPSG 的描述
+    fn epsg_description(code: u32) -> Option<String> {
+        match code {
+            4326 => Some("WGS 84".into()),
+            4490 => Some("CGCS2000".into()),
+            3857 => Some("WGS 84 / Pseudo-Mercator".into()),
+            32601..=32660 => Some(format!("WGS 84 / UTM zone {}N", code - 32600)),
+            32701..=32760 => Some(format!("WGS 84 / UTM zone {}S", code - 32700)),
+            _ => None,
         }
     }
 
@@ -245,7 +267,7 @@ impl ResolvedCrs {
     fn detect_geographic(def: &str, epsg: Option<u32>) -> bool {
         // 常见地理 CRS EPSG 代码
         if let Some(code) = epsg {
-            if code == 4326 || code == 4269 || code == 4267 || code == 4490 {
+            if code == 4326 || code == 4490 {
                 return true;
             }
         }
@@ -316,7 +338,13 @@ impl Crs {
     /// 如果 CRS 定义无法解析则返回错误
     pub fn new(def: &str) -> MhResult<Self> {
         let resolved = ResolvedCrs::new(def)?;
-        let projection_type = resolved.epsg.and_then(|code| ProjectionType::from_epsg(code).ok());
+        let projection_type = match resolved.epsg {
+            Some(code) => Some(
+                ProjectionType::from_epsg(code)
+                    .map_err(|e| MhError::invalid_input(e.to_string()))?,
+            ),
+            None => None,
+        };
 
         Ok(Self {
             definition: def.into(),
@@ -340,7 +368,7 @@ impl Crs {
         Self {
             definition: "EPSG:4326".into(),
             resolved: ResolvedCrs::wgs84(),
-            projection_type: Some(ProjectionType::Geographic),
+            projection_type: Some(ProjectionType::Geographic { epsg: 4326 }),
         }
     }
 
@@ -352,17 +380,24 @@ impl Crs {
             resolved: ResolvedCrs {
                 definition: "EPSG:4490".into(),
                 epsg: Some(4490),
+                description: Some("CGCS2000".into()),
                 is_geographic: true,
                 unit_name: "degree".into(),
                 ellipsoid: Ellipsoid::CGCS2000,
             },
-            projection_type: Some(ProjectionType::Geographic),
+            projection_type: Some(ProjectionType::Geographic { epsg: 4490 }),
         }
     }
 
     /// 创建 UTM 投影 CRS
     #[must_use]
     pub fn utm(zone: u8, north: bool) -> MhResult<Self> {
+        if !(1..=60).contains(&zone) {
+            return Err(MhError::invalid_input(format!(
+                "UTM zone out of range: {} (expected 1..=60)",
+                zone
+            )));
+        }
         let code = if north {
             32600 + u32::from(zone)
         } else {
@@ -444,16 +479,33 @@ pub fn crs_from_epsg(code: u32) -> MhResult<Crs> {
 /// 根据经纬度自动选择合适的投影 CRS
 #[must_use]
 pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(MhError::invalid_input(format!("经度超出范围: {}", lon)));
+    }
+    if !(-90.0..=90.0).contains(&lat) {
+        return Err(MhError::invalid_input(format!("纬度超出范围: {}", lat)));
+    }
+    if lat > 84.0 || lat < -80.0 {
+        return Err(MhError::invalid_input(format!(
+            "UTM 不支持极区纬度: {} (有效范围 -80..=84)",
+            lat
+        )));
+    }
     // 中国区域使用 CGCS2000 高斯-克吕格
     if (73.0..=135.0).contains(&lon) && (3.0..=54.0).contains(&lat) {
-        let zone = (lon / 3.0).round() as u8;
-        let code = 4534 + u32::from(zone.saturating_sub(25));
+        let zone = auto_gk3_zone(lon);
+        let code = 4534 + u32::from(zone - 25);
         Crs::from_epsg(code)
-            .or_else(|_| Crs::utm(((lon + 180.0) / 6.0).floor() as u8 + 1, lat >= 0.0))
     } else {
         // 其他区域使用 UTM
         let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
-        Crs::utm(zone.clamp(1, 60), lat >= 0.0)
+        if !(1..=60).contains(&zone) {
+            return Err(MhError::invalid_input(format!(
+                "UTM 带号超出范围: {} (期望 1..=60)",
+                zone
+            )));
+        }
+        Crs::utm(zone, lat >= 0.0)
     }
 }
 
@@ -484,11 +536,11 @@ mod tests {
     #[test]
     fn test_auto_utm() {
         // 北京大约在 116°E, 40°N -> UTM 50N
-        let utm = CrsDefinition::auto_utm(116.0, 40.0);
+        let utm = CrsDefinition::auto_utm(116.0, 40.0).unwrap();
         assert_eq!(utm.epsg_code(), Some(32650));
 
         // 南半球
-        let utm_south = CrsDefinition::auto_utm(116.0, -35.0);
+        let utm_south = CrsDefinition::auto_utm(116.0, -35.0).unwrap();
         assert_eq!(utm_south.epsg_code(), Some(32750));
     }
 

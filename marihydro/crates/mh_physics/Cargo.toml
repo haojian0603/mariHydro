@@ -38,6 +38,10 @@ aligned-vec = "0.5"
 [features]
 # 并行计算支持
 parallel = ["rayon"]
+# 数据读取/外部耦合扩展（占位，用于 cfg 检查）
+netcdf = []
+# GPU CUDA 支持（占位，用于 cfg 检查）
+cuda = []
 default = ["parallel"]
 
 [lints]

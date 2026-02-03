@@ -185,7 +185,7 @@ mod tests {
         // 在另一个线程中故意 panic 来毒化 mutex
         let handle = thread::spawn(move || {
             let _guard = mutex_clone.lock().unwrap();
-            panic!("intentional panic to poison mutex");
+            std::panic::panic_any("intentional panic to poison mutex");
         });
 
         // 等待线程结束（会 panic）

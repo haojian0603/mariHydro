@@ -119,7 +119,7 @@ impl NumaTopology {
         }
         
         // 默认假设：超线程系统有一半是物理核心
-        logical / 2.max(1)
+        std::cmp::max(1, logical / 2)
     }
 
     /// 检测 NUMA 节点
@@ -212,12 +212,12 @@ impl NumaTopology {
         
         for line in s.lines() {
             if line.contains("MemTotal:") {
-                if let Some(val) = line.split_whitespace().nth(3) {
+                if let Some(val) = line.split_whitespace().nth(1) {
                     total = val.parse().unwrap_or(0) * 1024; // kB to bytes
                 }
             }
             if line.contains("MemFree:") {
-                if let Some(val) = line.split_whitespace().nth(3) {
+                if let Some(val) = line.split_whitespace().nth(1) {
                     free = val.parse().unwrap_or(0) * 1024;
                 }
             }
@@ -360,20 +360,62 @@ impl Default for NumaTopology {
 pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::io::AsRawFd;
-        
-        // 使用 libc 的 sched_setaffinity
-        // 这里使用简化实现，生产环境应使用 nix 或 libc crate
-        let _ = core;
-        // 占位：实际实现需要 libc::sched_setaffinity
+        use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
+
+        if core >= std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1) {
+            return Err(NumaError::InvalidCoreSet);
+        }
+
+        let mut set: cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            CPU_ZERO(&mut set);
+            CPU_SET(core, &mut set);
+        }
+
+        let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
+        if res != 0 {
+            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+        }
         return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
-        // Windows: SetThreadAffinityMask
-        let _ = core;
-        return Ok(());
+        use windows_sys::Win32::System::Threading::{
+            GetActiveProcessorCount, GetActiveProcessorGroupCount, GetCurrentThread,
+            SetThreadAffinityMask,
+        };
+
+        let group_count = unsafe { GetActiveProcessorGroupCount() } as usize;
+        if group_count == 0 {
+            return Err(NumaError::UnsupportedPlatform);
+        }
+
+        let group = core / 64;
+        let index = core % 64;
+        if group >= group_count {
+            return Err(NumaError::InvalidCoreSet);
+        }
+        let group_cores = unsafe { GetActiveProcessorCount(group as u16) } as usize;
+        if index >= group_cores {
+            return Err(NumaError::InvalidCoreSet);
+        }
+
+        let handle = unsafe { GetCurrentThread() };
+        // 对于单个处理器组，使用简单的亲和性掩码
+        // 多组支持需要更新的 windows-sys 版本
+        if group == 0 {
+            let mask: usize = 1usize << index;
+            let result = unsafe { SetThreadAffinityMask(handle, mask) };
+            if result == 0 {
+                return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            }
+            return Ok(());
+        }
+
+        // 多处理器组支持在当前 windows-sys 版本中不可用
+        // TODO: 升级 windows-sys 以支持 SetThreadGroupAffinity
+        return Err(NumaError::UnsupportedPlatform);
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -387,21 +429,102 @@ pub fn bind_thread_to_cores(cores: &[usize]) -> Result<(), NumaError> {
     if cores.is_empty() {
         return Err(NumaError::InvalidCoreSet);
     }
-    
-    // 简化：绑定到第一个核心
-    bind_thread_to_core(cores[0])
+
+    #[cfg(target_os = "linux")]
+    {
+        use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
+
+        let mut set: cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe { CPU_ZERO(&mut set) };
+        for &core in cores {
+            unsafe { CPU_SET(core, &mut set) };
+        }
+        let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
+        if res != 0 {
+            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::Threading::{
+            GetActiveProcessorCount, GetActiveProcessorGroupCount, GetCurrentThread,
+            SetThreadAffinityMask,
+        };
+        let group_count = unsafe { GetActiveProcessorGroupCount() } as usize;
+        if group_count == 0 {
+            return Err(NumaError::UnsupportedPlatform);
+        }
+
+        let mut group = cores[0] / 64;
+        let mut mask: usize = 0;
+        for &core in cores {
+            let g = core / 64;
+            let idx = core % 64;
+            if g != group {
+                // 跨处理器组的绑定需要 SetThreadGroupAffinity
+                // 当前 windows-sys 版本不支持
+                return Err(NumaError::InvalidCoreSet);
+            }
+            if g >= group_count {
+                return Err(NumaError::InvalidCoreSet);
+            }
+            let group_cores = unsafe { GetActiveProcessorCount(g as u16) } as usize;
+            if idx >= group_cores {
+                return Err(NumaError::InvalidCoreSet);
+            }
+            mask |= 1usize << idx;
+            group = g;
+        }
+
+        // 只支持第一个处理器组
+        if group != 0 {
+            return Err(NumaError::UnsupportedPlatform);
+        }
+
+        let handle = unsafe { GetCurrentThread() };
+        let result = unsafe { SetThreadAffinityMask(handle, mask) };
+        if result == 0 {
+            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        bind_thread_to_core(cores[0])
+    }
 }
 
 /// 解绑当前线程（恢复默认调度）
 pub fn unbind_thread() -> Result<(), NumaError> {
     #[cfg(target_os = "linux")]
     {
-        // 恢复所有核心的亲和性
+        use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
+        let total = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1);
+        let mut set: cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe { CPU_ZERO(&mut set) };
+        for core in 0..total {
+            unsafe { CPU_SET(core, &mut set) };
+        }
+        let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
+        if res != 0 {
+            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+        }
         return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
+        let total = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1);
+        let mask = if total >= 64 { usize::MAX } else { (1usize << total) - 1 };
+        let handle = unsafe { GetCurrentThread() };
+        let result = unsafe { SetThreadAffinityMask(handle, mask) };
+        if result == 0 {
+            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+        }
         return Ok(());
     }
 

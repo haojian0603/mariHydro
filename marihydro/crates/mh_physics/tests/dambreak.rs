@@ -1,20 +1,17 @@
 // crates/mh_physics/tests/dambreak.rs
 //! 溃堤测试
 //!
-//! 使用assets/mesh目录中的Gmsh网格文件测试溃堤场景
-
-use std::path::Path;
+//! 使用结构化网格测试溃堤场景
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-use mh_mesh::halfedge::HalfEdgeMesh;
-use mh_mesh::io::GmshLoader;
+use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
 use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
-use mh_runtime::{CpuBackend, CellIndex};
+use mh_runtime::{CpuBackend, CellIndex, Vector2D};
 
 /// 全局Backend实例
 static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());
@@ -41,49 +38,15 @@ mod test_harness {
 
 use test_harness::{create_state, create_solver};
 
-/// 从Gmsh文件加载网格并转换为PhysicsMesh
-fn load_mesh_from_gmsh<P: AsRef<Path>>(path: P) -> Result<PhysicsMesh, String> {
-    let gmsh_data = GmshLoader::load(path).map_err(|e| format!("加载网格失败: {}", e))?;
-    
-    let mut mesh: HalfEdgeMesh<(), ()> = HalfEdgeMesh::new();
-    let mut vertex_map = Vec::with_capacity(gmsh_data.nodes.len());
-
-    for (i, &node) in gmsh_data.nodes.iter().enumerate() {
-        let z = if i < gmsh_data.nodes_z.len() {
-            gmsh_data.nodes_z[i]
-        } else {
-            0.0
-        };
-        let v = mesh.add_vertex_xyz(node.x, node.y, z);
-        vertex_map.push(v);
+/// 构建结构化网格并转换为 PhysicsMesh
+fn build_structured_mesh(config: StructuredMeshConfig) -> Result<PhysicsMesh, String> {
+    if config.nx == 0 || config.ny == 0 || config.dx <= 0.0 || config.dy <= 0.0 {
+        return Err("结构化网格参数无效".to_string());
     }
-    
-    for cell_nodes in &gmsh_data.cells {
-        if cell_nodes.len() < 3 {
-            continue;
-        }
-        
-        match cell_nodes.len() {
-            3 => {
-                mesh.add_triangle(
-                    vertex_map[cell_nodes[0]],
-                    vertex_map[cell_nodes[1]],
-                    vertex_map[cell_nodes[2]],
-                );
-            }
-            4 => {
-                mesh.add_quad(
-                    vertex_map[cell_nodes[0]],
-                    vertex_map[cell_nodes[1]],
-                    vertex_map[cell_nodes[2]],
-                    vertex_map[cell_nodes[3]],
-                );
-            }
-            _ => {} // 跳过多边形
-        }
-    }
-    
-    let frozen = mesh.freeze();
+    let mesh = StructuredMesh::new(config);
+    let frozen = mesh
+        .freeze()
+        .map_err(|e| format!("结构化网格冻结失败: {}", e))?;
     Ok(PhysicsMesh::from_frozen(&frozen))
 }
 
@@ -94,7 +57,7 @@ fn setup_dambreak_initial_condition(
     h_right: f64,
     dam_x: f64,
 ) -> ShallowWaterState<CpuBackend<f64>> {
-    let n_cells = mesh.n_cells();
+    let n_cells = mesh.cell_count();
     let mut state = create_state(n_cells);
     
     for i in 0..n_cells {
@@ -102,7 +65,10 @@ fn setup_dambreak_initial_condition(
     }
     
     for i in 0..n_cells {
-        let (cx, _cy) = mesh.cell_center_tuple(i);
+        let center = mesh
+            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(i))
+            .expect("cell_center out of range");
+        let cx = center.x();
         state.h[i] = if cx < dam_x { h_left } else { h_right };
         state.hu[i] = 0.0; // 初始静止
         state.hv[i] = 0.0;
@@ -170,7 +136,8 @@ fn validate_state(state: &ShallowWaterState<CpuBackend<f64>>) -> Result<(), Stri
 
 /// 运行溃堤模拟
 fn run_dambreak_simulation(
-    mesh_path: &str,
+    mesh_label: &str,
+    mesh: PhysicsMesh,
     h_left: f64,
     h_right: f64,
     dam_x: f64,
@@ -178,14 +145,13 @@ fn run_dambreak_simulation(
     max_steps: usize,
 ) -> Result<(), String> {
     println!("\n========================================");
-    println!("溃堤测试: {}", mesh_path);
+    println!("溃堤测试: {}", mesh_label);
     println!("========================================");
     
-    let mesh = load_mesh_from_gmsh(mesh_path)?;
     println!("网格加载完成:");
-    println!("  - 单元数: {}", mesh.n_cells());
-    println!("  - 面数: {}", mesh.n_faces());
-    println!("  - 节点数: {}", mesh.n_nodes());
+    println!("  - 单元数: {}", mesh.cell_count());
+    println!("  - 面数: {}", mesh.face_count());
+    println!("  - 节点数: {}", mesh.node_count());
     
     let mut state = setup_dambreak_initial_condition(&mesh, h_left, h_right, dam_x);
     let initial_mass = compute_total_mass(&state, &mesh);
@@ -262,45 +228,14 @@ fn run_dambreak_simulation(
     Ok(())
 }
 
-/// 查找网格文件路径
-fn find_mesh_path(filename: &str) -> Option<std::path::PathBuf> {
-    let candidates = [
-        format!("../../assets/mesh/{}", filename),
-        format!("../../../assets/mesh/{}", filename),
-        format!("assets/mesh/{}", filename),
-        format!("../../assets/mesh/{}", filename),
-    ];
-    
-    for candidate in &candidates {
-        let path = std::path::PathBuf::from(candidate);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = std::path::PathBuf::from(manifest_dir);
-        let path = base.join("../../assets/mesh").join(filename);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    
-    None
-}
-
 #[test]
 fn test_dambreak_coarse() {
-    let mesh_path = match find_mesh_path("dambreak_coarse.msh") {
-        Some(p) => p,
-        None => {
-            println!("跳过测试: 找不到网格文件 dambreak_coarse.msh");
-            return;
-        }
-    };
-    
+    let config = StructuredMeshConfig::rectangular(80, 20, 0.25, 0.25);
+    let mesh = build_structured_mesh(config).expect("结构化网格创建失败");
+
     let result = run_dambreak_simulation(
-        mesh_path.to_string_lossy().as_ref(),
+        "structured_80x20",
+        mesh,
         2.0,   // 左侧水深 2m
         0.5,   // 右侧水深 0.5m
         10.0,  // 坝在 x=10m 处
@@ -313,53 +248,62 @@ fn test_dambreak_coarse() {
 
 #[test]
 fn test_dambreak_medium() {
-    println!("跳过 medium 测试 - 需要文件存在");
+    let config = StructuredMeshConfig::rectangular(120, 30, 0.2, 0.2);
+    let mesh = build_structured_mesh(config).expect("结构化网格创建失败");
+
+    let result = run_dambreak_simulation(
+        "structured_120x30",
+        mesh,
+        2.0,
+        0.5,
+        10.0,
+        0.3,
+        150,
+    );
+
+    assert!(result.is_ok(), "中等分辨率溃堤测试失败: {:?}", result);
 }
 
 #[test]
 fn test_dambreak_dry_bed() {
-    println!("跳过 dry_bed 测试 - 需要文件存在");
+    let config = StructuredMeshConfig::rectangular(60, 20, 0.3, 0.3);
+    let mesh = build_structured_mesh(config).expect("结构化网格创建失败");
+
+    let result = run_dambreak_simulation(
+        "structured_dry_bed",
+        mesh,
+        1.5,
+        1e-4,
+        8.0,
+        0.2,
+        120,
+    );
+
+    assert!(result.is_ok(), "干床溃堤测试失败: {:?}", result);
 }
 
 #[test]
 fn test_dambreak_slope() {
-    println!("跳过 slope 测试 - 需要文件存在");
+    let config = StructuredMeshConfig::rectangular(50, 20, 0.4, 0.4);
+    let mesh = build_structured_mesh(config).expect("结构化网格创建失败");
+
+    let result = run_dambreak_simulation(
+        "structured_slope",
+        mesh,
+        1.8,
+        0.6,
+        6.0,
+        0.2,
+        120,
+    );
+
+    assert!(result.is_ok(), "坡面溃堤测试失败: {:?}", result);
 }
 
 #[test]
 fn test_mesh_loading() {
-    let mesh_files = [
-        "dambreak_coarse.msh",
-        "dambreak_medium.msh",
-        "dambreak_fine.msh",
-    ];
-    
-    for filename in &mesh_files {
-        if let Some(path) = find_mesh_path(filename) {
-            let mesh = load_mesh_from_gmsh(&path);
-            assert!(mesh.is_ok(), "加载网格失败: {}", filename);
-            let mesh = mesh.unwrap();
-            assert!(mesh.n_cells() > 0, "网格单元数为零: {}", filename);
-            println!("加载 {}: {} 个单元", filename, mesh.n_cells());
-        } else {
-            println!("跳过不存在的网格: {}", filename);
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn main() {
-    println!("溃堤测试套件");
-    println!("============");
-    
-    if let Err(e) = run_dambreak_simulation(
-        "assets/mesh/dambreak_coarse.msh",
-        2.0,
-        0.5,
-        10.0,
-        1.0,
-        500,
-    ) {
-        eprintln!("测试失败: {}", e);
-    }
+    let config = StructuredMeshConfig::rectangular(10, 5, 1.0, 1.0);
+    let mesh = build_structured_mesh(config).expect("结构化网格创建失败");
+    assert!(mesh.cell_count() > 0, "结构化网格单元数为零");
+    assert!(mesh.node_count() > 0, "结构化网格节点数为零");
 }

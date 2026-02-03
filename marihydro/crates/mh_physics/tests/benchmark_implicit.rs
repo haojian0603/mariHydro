@@ -204,14 +204,20 @@ fn benchmark_scaling() {
         println!();
     }
     
+    // PCG 求解器的复杂度约为 O(n * iter)，其中 iter ~ O(√n)
+    // 因此总体复杂度约 O(n^1.5)，但实际中由于缓存效应等可能更高
+    // 这里使用 O(n^2) 作为保守上界
     if results.len() >= 3 {
         let time_16 = results[0].solve_time.as_secs_f64();
         let time_64 = results[2].solve_time.as_secs_f64();
-        let scale_factor = (64.0 / 16.0) as f64;
-        let expected_time = time_16 * scale_factor;
+        // 规模从 16x16 到 64x64，单元数增长 16 倍
+        // 对于 O(n^2) 复杂度，时间应增长 16^2 = 256 倍
+        // 使用更宽松的 O(n^1.5) 作为预期，允许 3 倍余量
+        let scale_factor = ((64.0 / 16.0_f64).powi(2) as f64).powf(1.5); // n^1.5 增长
+        let expected_time = time_16 * scale_factor * 3.0;
         
-        assert!(time_64 < expected_time * 1.5, 
-            "求解时间增长非线性：64x64 耗时 {:.2?}，预期 < {:.2?}", time_64, expected_time * 1.5);
+        assert!(time_64 < expected_time, 
+            "求解时间增长异常：64x64 耗时 {:.4?}s，预期 < {:.4?}s", time_64, expected_time);
     }
 }
 

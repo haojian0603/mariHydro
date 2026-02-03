@@ -651,33 +651,92 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 
     /// 提供类型安全的方式来构造不可变状态，推荐用于测试和初始化。
     /// 自动验证所有输入切片的长度一致性。
-    /// 
-    /// # Panics
-    /// 
-    /// 如果任意输入切片的长度与 `h` 的长度不一致时 panic。
     pub fn from_data(
         backend: B,
         h: impl Into<Vec<B::Scalar>>,
         hu: impl Into<Vec<B::Scalar>>,
         hv: impl Into<Vec<B::Scalar>>,
         z: impl Into<Vec<B::Scalar>>,
-    ) -> Self {
+    ) -> Result<Self, StateError<B::Scalar>> {
         let h_vec = h.into();
         let n_cells = h_vec.len();
         let hu_vec = hu.into();
         let hv_vec = hv.into();
         let z_vec = z.into();
-        
-        debug_assert_eq!(hu_vec.len(), n_cells, "hu length mismatch");
-        debug_assert_eq!(hv_vec.len(), n_cells, "hv length mismatch");
-        debug_assert_eq!(z_vec.len(), n_cells, "z length mismatch");
+
+        if hu_vec.len() != n_cells {
+            return Err(StateError::SizeMismatch {
+                expected: n_cells,
+                actual: hu_vec.len(),
+            });
+        }
+        if hv_vec.len() != n_cells {
+            return Err(StateError::SizeMismatch {
+                expected: n_cells,
+                actual: hv_vec.len(),
+            });
+        }
+        if z_vec.len() != n_cells {
+            return Err(StateError::SizeMismatch {
+                expected: n_cells,
+                actual: z_vec.len(),
+            });
+        }
+
+        for i in 0..n_cells {
+            let h_val = h_vec[i];
+            if !h_val.is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "h",
+                    cell: i,
+                    value: h_val,
+                    time: B::Scalar::ZERO,
+                });
+            }
+            if h_val < B::Scalar::ZERO {
+                return Err(StateError::NegativeDepth {
+                    cell: i,
+                    value: h_val,
+                    time: B::Scalar::ZERO,
+                });
+            }
+
+            let hu_val = hu_vec[i];
+            let hv_val = hv_vec[i];
+            let z_val = z_vec[i];
+
+            if !hu_val.is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "hu",
+                    cell: i,
+                    value: hu_val,
+                    time: B::Scalar::ZERO,
+                });
+            }
+            if !hv_val.is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "hv",
+                    cell: i,
+                    value: hv_val,
+                    time: B::Scalar::ZERO,
+                });
+            }
+            if !z_val.is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "z",
+                    cell: i,
+                    value: z_val,
+                    time: B::Scalar::ZERO,
+                });
+            }
+        }
 
         let mut state = Self::new_with_backend(backend, n_cells);
         state.h.copy_from_slice(&h_vec);
         state.hu.copy_from_slice(&hu_vec);
         state.hv.copy_from_slice(&hv_vec);
         state.z.copy_from_slice(&z_vec);
-        state
+        Ok(state)
     }
 
     /// 创建带标量的状态
@@ -751,6 +810,13 @@ impl<B: Backend> ShallowWaterState<B> {
     #[inline]
     pub fn tracer_count(&self) -> usize {
         self.tracers.count()
+    }
+
+    /// 同步示踪剂布局（名称与长度）
+    ///
+    /// 用于时间积分等内部复制前的布局对齐。
+    pub fn sync_tracer_layout_from(&mut self, other: &Self) {
+        self.tracers.match_layout(&other.tracers);
     }
 
     /// 获取所有示踪剂名称
@@ -921,8 +987,98 @@ impl<B: Backend> ShallowWaterState<B> {
     }
 
     /// 从另一个状态复制数据
-    pub fn copy_from(&mut self, other: &Self) {
-        debug_assert_eq!(self.n_cells(), other.n_cells());
+    ///
+    /// 返回错误用于上层统一处理。
+    pub fn copy_from(&mut self, other: &Self) -> Result<(), StateError<B::Scalar>> {
+        self.try_copy_from(other)
+    }
+
+    /// 从另一个状态复制数据（跳过数值校验）
+    ///
+    /// 仅在需要容忍中间态包含 NaN/Inf 的情况下使用。
+    /// 仍会检查尺寸与示踪剂布局一致性。
+    pub fn copy_from_unchecked(&mut self, other: &Self) -> Result<(), StateError<B::Scalar>> {
+        if self.n_cells() != other.n_cells() {
+            return Err(StateError::SizeMismatch {
+                expected: self.n_cells(),
+                actual: other.n_cells(),
+            });
+        }
+
+        if self.tracers.names != other.tracers.names {
+            self.tracers.match_layout(&other.tracers);
+        }
+
+        let h_slice = self.h_slice_mut();
+        h_slice.copy_from_slice(other.h_slice());
+
+        let hu_slice = self.hu_slice_mut();
+        hu_slice.copy_from_slice(other.hu_slice());
+
+        let hv_slice = self.hv_slice_mut();
+        hv_slice.copy_from_slice(other.hv_slice());
+
+        let z_slice = self.z_slice_mut();
+        z_slice.copy_from_slice(other.z_slice());
+
+        self.tracers.copy_from(&other.tracers);
+
+        Ok(())
+    }
+
+    /// 从另一个状态复制数据（带校验）
+    pub fn try_copy_from(&mut self, other: &Self) -> Result<(), StateError<B::Scalar>> {
+        if self.n_cells() != other.n_cells() {
+            return Err(StateError::SizeMismatch {
+                expected: self.n_cells(),
+                actual: other.n_cells(),
+            });
+        }
+
+        let time = B::Scalar::ZERO;
+        for i in 0..other.n_cells {
+            if !other.h[i].is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "h",
+                    cell: i,
+                    value: other.h[i],
+                    time,
+                });
+            }
+            if other.h[i] < B::Scalar::ZERO {
+                return Err(StateError::NegativeDepth {
+                    cell: i,
+                    value: other.h[i],
+                    time,
+                });
+            }
+            if !other.hu[i].is_finite() || !other.hv[i].is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "momentum",
+                    cell: i,
+                    value: if !other.hu[i].is_finite() {
+                        other.hu[i]
+                    } else {
+                        other.hv[i]
+                    },
+                    time,
+                });
+            }
+            if !other.z[i].is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "z",
+                    cell: i,
+                    value: other.z[i],
+                    time,
+                });
+            }
+        }
+
+        if self.tracers.names != other.tracers.names {
+            return Err(StateError::LayoutMismatch {
+                field: "tracers",
+            });
+        }
 
         // 复制主变量
         let h_slice = self.h_slice_mut();
@@ -939,6 +1095,8 @@ impl<B: Backend> ShallowWaterState<B> {
 
         // 复制示踪剂
         self.tracers.copy_from(&other.tracers);
+
+        Ok(())
     }
 
     /// 添加缩放的 RHS: self += scale * rhs
@@ -1000,6 +1158,13 @@ impl<B: Backend> ShallowWaterState<B> {
         time: B::Scalar,
         params: &NumericalParams<B::Scalar>,
     ) -> Result<(), StateError<B::Scalar>> {
+        if self.tracers.len() != self.n_cells {
+            return Err(StateError::SizeMismatch {
+                expected: self.n_cells,
+                actual: self.tracers.len(),
+            });
+        }
+
         for idx in 0..self.n_cells {
             // 检查 NaN/Inf
             if !self.h[idx].is_finite() {
@@ -1007,6 +1172,15 @@ impl<B: Backend> ShallowWaterState<B> {
                     field: "h",
                     cell: idx,
                     value: self.h[idx],
+                    time,
+                });
+            }
+
+            if !self.z[idx].is_finite() {
+                return Err(StateError::InvalidValue {
+                    field: "z",
+                    cell: idx,
+                    value: self.z[idx],
                     time,
                 });
             }
@@ -1047,6 +1221,35 @@ impl<B: Backend> ShallowWaterState<B> {
             }
         }
 
+        for (_tracer_idx, tracer) in self.tracers.data.iter().enumerate() {
+            if tracer.len() != self.n_cells {
+                return Err(StateError::SizeMismatch {
+                    expected: self.n_cells,
+                    actual: tracer.len(),
+                });
+            }
+
+            for (cell_idx, &value) in tracer.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(StateError::InvalidValue {
+                        field: "tracer",
+                        cell: cell_idx,
+                        value,
+                        time,
+                    });
+                }
+
+                if value < B::Scalar::ZERO {
+                    return Err(StateError::InvalidValue {
+                        field: "tracer",
+                        cell: cell_idx,
+                        value,
+                        time,
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -1078,6 +1281,10 @@ pub enum StateError<S> {
     SizeMismatch {
         expected: usize,
         actual: usize,
+    },
+    /// 布局不匹配
+    LayoutMismatch {
+        field: &'static str,
     },
 }
 
@@ -1124,6 +1331,9 @@ where
                     "Size mismatch: expected {} cells, got {}",
                     expected, actual
                 )
+            }
+            Self::LayoutMismatch { field } => {
+                write!(f, "Layout mismatch: {field}")
             }
         }
     }
@@ -1418,7 +1628,7 @@ mod tests {
             vec![0.1, 0.2, 0.3],
             vec![0.0, 0.0, 0.0],
             vec![-1.0, -2.0, -3.0],
-        );
+        ).unwrap();
 
         assert_eq!(state.n_cells(), 3);
         assert_eq!(state.h[0], 1.0);
@@ -1438,14 +1648,14 @@ mod tests {
             vec![0.0, 0.0],
             vec![0.0, 0.0],
             vec![0.0, 0.0],
-        );
+        ).unwrap();
         let state_b = ShallowWaterState::from_data(
             backend.clone(),
             vec![3.0, 4.0],
             vec![0.0, 0.0],
             vec![0.0, 0.0],
             vec![0.0, 0.0],
-        );
+        ).unwrap();
         let mut result = ShallowWaterState::new_with_backend(backend, 2);
 
         // 执行线性组合: result = 0.5 * state_a + 0.5 * state_b
@@ -1490,12 +1700,10 @@ mod tests {
         let result = state.validate(0.0, &params);
         assert!(result.is_err());
 
-        match result.unwrap_err() {
-            StateError::NegativeDepth { cell, .. } => {
-                assert_eq!(cell, 1);
-            }
-            _ => panic!("Expected NegativeDepth error"),
-        }
+        assert!(matches!(
+            result.unwrap_err(),
+            StateError::NegativeDepth { cell: 1, .. }
+        ));
     }
 
     #[test]

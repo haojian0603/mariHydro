@@ -43,6 +43,43 @@ use crate::traits::{MeshAccess, MeshTopology};
 use mh_geo::{Point2D, Point3D};
 use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use thiserror::Error;
+
+/// 冻结网格校验错误
+#[derive(Debug, Clone, Error)]
+pub enum FrozenMeshError {
+    #[error("字段 {field} 长度不匹配: expected={expected}, actual={actual}")]
+    LengthMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("偏移数组 {field} 非单调或越界: cell={cell}, start={start}, end={end}, total={total}")]
+    OffsetInvalid {
+        field: &'static str,
+        cell: usize,
+        start: usize,
+        end: usize,
+        total: usize,
+    },
+    #[error("索引越界: {field}={index}, limit={limit}")]
+    IndexOutOfRange {
+        field: &'static str,
+        index: usize,
+        limit: usize,
+    },
+    #[error("单元面积非正: cell={cell}, area={area}")]
+    NonPositiveArea { cell: usize, area: String },
+    #[error("面长度非正: face={face}, length={length}")]
+    NonPositiveFaceLength { face: usize, length: String },
+    #[error("单元节点重复: cell={cell}, node={node}")]
+    DuplicateCellNode { cell: usize, node: u32 },
+    #[error("几何数据包含非有限值: field={field}, index={index}")]
+    NonFiniteValue { field: &'static str, index: usize },
+    #[error("索引重复: field={field}, index={index}")]
+    DuplicateIndex { field: &'static str, index: usize },
+}
 
 /// 冻结网格（泛型版本）
 ///
@@ -475,9 +512,11 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 
     /// 计算网格统计信息（面积、边长等）
     pub fn statistics(&self) -> MeshStatistics<S> {
-        let mut min_area = S::MAX;
-        let mut max_area = S::ZERO;
-        let mut total_area = S::ZERO;
+        let (mut min_area, mut max_area, mut total_area) = if self.cell_area.is_empty() {
+            (S::ZERO, S::ZERO, S::ZERO)
+        } else {
+            (S::MAX, S::ZERO, S::ZERO)
+        };
 
         for &area in &self.cell_area {
             min_area = min_area.min(area);
@@ -485,8 +524,11 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             total_area = total_area + area;
         }
 
-        let mut min_length = S::MAX;
-        let mut max_length = S::ZERO;
+        let (mut min_length, mut max_length) = if self.face_length.is_empty() {
+            (S::ZERO, S::ZERO)
+        } else {
+            (S::MAX, S::ZERO)
+        };
 
         for &len in &self.face_length {
             min_length = min_length.min(len);
@@ -510,60 +552,228 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
     /// 验证网格完整性
     ///
     /// 检查数组长度和索引有效性，用于调试和测试。
-    pub fn validate(&self) -> Result<(), String> {
-        if self.cell_center.len() != self.n_cells {
-            return Err(format!(
-                "cell_center length {} != n_cells {}",
-                self.cell_center.len(),
-                self.n_cells
-            ));
+    pub fn validate(&self) -> Result<(), FrozenMeshError> {
+        let check_len = |field: &'static str, actual: usize, expected: usize| {
+            if actual != expected {
+                return Err(FrozenMeshError::LengthMismatch {
+                    field,
+                    expected,
+                    actual,
+                });
+            }
+            Ok(())
+        };
+
+        check_len("cell_center", self.cell_center.len(), self.n_cells)?;
+        check_len("cell_area", self.cell_area.len(), self.n_cells)?;
+        check_len("cell_z_bed", self.cell_z_bed.len(), self.n_cells)?;
+        check_len("node_coords", self.node_coords.len(), self.n_nodes)?;
+        check_len("face_center", self.face_center.len(), self.n_faces)?;
+        check_len("face_normal", self.face_normal.len(), self.n_faces)?;
+        check_len("face_length", self.face_length.len(), self.n_faces)?;
+        check_len("face_z_left", self.face_z_left.len(), self.n_faces)?;
+        check_len("face_z_right", self.face_z_right.len(), self.n_faces)?;
+        check_len("face_owner", self.face_owner.len(), self.n_faces)?;
+        check_len("face_neighbor", self.face_neighbor.len(), self.n_faces)?;
+        check_len("face_delta_owner", self.face_delta_owner.len(), self.n_faces)?;
+        check_len("face_delta_neighbor", self.face_delta_neighbor.len(), self.n_faces)?;
+        check_len("face_dist_o2n", self.face_dist_o2n.len(), self.n_faces)?;
+        check_len("face_boundary_id", self.face_boundary_id.len(), self.n_faces)?;
+        check_len("cell_node_offsets", self.cell_node_offsets.len(), self.n_cells + 1)?;
+        check_len("cell_face_offsets", self.cell_face_offsets.len(), self.n_cells + 1)?;
+        check_len("cell_neighbor_offsets", self.cell_neighbor_offsets.len(), self.n_cells + 1)?;
+
+        if let Some(last) = self.cell_node_offsets.last().copied() {
+            check_len("cell_node_indices", self.cell_node_indices.len(), last)?;
+        }
+        if let Some(last) = self.cell_face_offsets.last().copied() {
+            check_len("cell_face_indices", self.cell_face_indices.len(), last)?;
+        }
+        if let Some(last) = self.cell_neighbor_offsets.last().copied() {
+            check_len("cell_neighbor_indices", self.cell_neighbor_indices.len(), last)?;
         }
 
-        if self.node_coords.len() != self.n_nodes {
-            return Err(format!(
-                "node_coords length {} != n_nodes {}",
-                self.node_coords.len(),
-                self.n_nodes
-            ));
-        }
-
-        if self.face_center.len() != self.n_faces {
-            return Err(format!(
-                "face_center length {} != n_faces {}",
-                self.face_center.len(),
-                self.n_faces
-            ));
-        }
-
-        if self.face_owner.len() != self.n_faces {
-            return Err("face_owner length mismatch".into());
-        }
-
-        if self.face_neighbor.len() != self.n_faces {
-            return Err("face_neighbor length mismatch".into());
-        }
-
-        if self.face_length.len() != self.n_faces {
-            return Err("face_length length mismatch".into());
-        }
-
-        if self.cell_node_offsets.len() != self.n_cells + 1 {
-            return Err("cell_node_offsets length mismatch".to_string());
-        }
-
-        if self.cell_face_offsets.len() != self.n_cells + 1 {
-            return Err("cell_face_offsets mismatch".into());
-        }
-
-        for (i, &owner) in self.face_owner.iter().enumerate() {
-            if owner as usize >= self.n_cells {
-                return Err(format!("面 {} owner {} out of range", i, owner));
+        for (i, coord) in self.node_coords.iter().enumerate() {
+            if !coord.x.is_finite() || !coord.y.is_finite() || !coord.z.is_finite() {
+                return Err(FrozenMeshError::NonFiniteValue {
+                    field: "node_coords",
+                    index: i,
+                });
             }
         }
 
-        for (i, &neighbor) in self.face_neighbor.iter().enumerate() {
+        for (i, coord) in self.face_center.iter().enumerate() {
+            if !coord.x.is_finite() || !coord.y.is_finite() {
+                return Err(FrozenMeshError::NonFiniteValue {
+                    field: "face_center",
+                    index: i,
+                });
+            }
+        }
+
+        for (i, normal) in self.face_normal.iter().enumerate() {
+            if !normal.x.is_finite() || !normal.y.is_finite() || !normal.z.is_finite() {
+                return Err(FrozenMeshError::NonFiniteValue {
+                    field: "face_normal",
+                    index: i,
+                });
+            }
+        }
+
+        for (i, &area) in self.cell_area.iter().enumerate() {
+            if area <= S::ZERO {
+                return Err(FrozenMeshError::NonPositiveArea {
+                    cell: i,
+                    area: format!("{area:?}"),
+                });
+            }
+        }
+
+        for (i, &len) in self.face_length.iter().enumerate() {
+            if len <= S::ZERO {
+                return Err(FrozenMeshError::NonPositiveFaceLength {
+                    face: i,
+                    length: format!("{len:?}"),
+                });
+            }
+        }
+
+        for (_i, &owner) in self.face_owner.iter().enumerate() {
+            if owner as usize >= self.n_cells {
+                return Err(FrozenMeshError::IndexOutOfRange {
+                    field: "face_owner",
+                    index: owner as usize,
+                    limit: self.n_cells,
+                });
+            }
+        }
+
+        for (_i, &neighbor) in self.face_neighbor.iter().enumerate() {
             if neighbor != u32::MAX && neighbor as usize >= self.n_cells {
-                return Err(format!("面 {} neighbor {} out of range", i, neighbor));
+                return Err(FrozenMeshError::IndexOutOfRange {
+                    field: "face_neighbor",
+                    index: neighbor as usize,
+                    limit: self.n_cells,
+                });
+            }
+        }
+
+        let mut seen_boundary_faces = HashSet::new();
+        for (i, &face_idx) in self.boundary_face_indices.iter().enumerate() {
+            if face_idx as usize >= self.n_faces {
+                return Err(FrozenMeshError::IndexOutOfRange {
+                    field: "boundary_face_indices",
+                    index: face_idx as usize,
+                    limit: self.n_faces,
+                });
+            }
+            if !seen_boundary_faces.insert(face_idx) {
+                return Err(FrozenMeshError::DuplicateIndex {
+                    field: "boundary_face_indices",
+                    index: face_idx as usize,
+                });
+            }
+            if self.face_boundary_id[face_idx as usize].is_none() {
+                return Err(FrozenMeshError::IndexOutOfRange {
+                    field: "face_boundary_id",
+                    index: face_idx as usize,
+                    limit: self.n_faces,
+                });
+            }
+            let _ = i;
+        }
+
+        if !self.boundary_names.is_empty() {
+            for (face, id) in self.face_boundary_id.iter().enumerate() {
+                if let Some(bid) = id {
+                    if *bid as usize >= self.boundary_names.len() {
+                        return Err(FrozenMeshError::IndexOutOfRange {
+                            field: "boundary_names",
+                            index: *bid as usize,
+                            limit: self.boundary_names.len(),
+                        });
+                    }
+                }
+                let _ = face;
+            }
+        }
+
+        for cell in 0..self.n_cells {
+            let start = self.cell_node_offsets[cell];
+            let end = self.cell_node_offsets[cell + 1];
+            let total = self.cell_node_indices.len();
+            if start > end || end > total {
+                return Err(FrozenMeshError::OffsetInvalid {
+                    field: "cell_node_offsets",
+                    cell,
+                    start,
+                    end,
+                    total,
+                });
+            }
+
+            let mut seen = HashSet::new();
+            for &node in &self.cell_node_indices[start..end] {
+                let node_usize = node as usize;
+                if node_usize >= self.n_nodes {
+                    return Err(FrozenMeshError::IndexOutOfRange {
+                        field: "cell_node_indices",
+                        index: node_usize,
+                        limit: self.n_nodes,
+                    });
+                }
+                if !seen.insert(node) {
+                    return Err(FrozenMeshError::DuplicateCellNode { cell, node });
+                }
+            }
+        }
+
+        for cell in 0..self.n_cells {
+            let start = self.cell_face_offsets[cell];
+            let end = self.cell_face_offsets[cell + 1];
+            let total = self.cell_face_indices.len();
+            if start > end || end > total {
+                return Err(FrozenMeshError::OffsetInvalid {
+                    field: "cell_face_offsets",
+                    cell,
+                    start,
+                    end,
+                    total,
+                });
+            }
+            for &face in &self.cell_face_indices[start..end] {
+                let face_usize = face as usize;
+                if face_usize >= self.n_faces {
+                    return Err(FrozenMeshError::IndexOutOfRange {
+                        field: "cell_face_indices",
+                        index: face_usize,
+                        limit: self.n_faces,
+                    });
+                }
+            }
+        }
+
+        for cell in 0..self.n_cells {
+            let start = self.cell_neighbor_offsets[cell];
+            let end = self.cell_neighbor_offsets[cell + 1];
+            let total = self.cell_neighbor_indices.len();
+            if start > end || end > total {
+                return Err(FrozenMeshError::OffsetInvalid {
+                    field: "cell_neighbor_offsets",
+                    cell,
+                    start,
+                    end,
+                    total,
+                });
+            }
+            for &neighbor in &self.cell_neighbor_indices[start..end] {
+                if neighbor != u32::MAX && neighbor as usize >= self.n_cells {
+                    return Err(FrozenMeshError::IndexOutOfRange {
+                        field: "cell_neighbor_indices",
+                        index: neighbor as usize,
+                        limit: self.n_cells,
+                    });
+                }
             }
         }
 

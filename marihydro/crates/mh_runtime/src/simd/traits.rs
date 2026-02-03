@@ -55,10 +55,16 @@ impl SimdOps for f64 {
     }
 
     fn simd_max(x: &[Self]) -> Self {
+        if x.is_empty() {
+            return 0.0;
+        }
         x.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
     }
 
     fn simd_min(x: &[Self]) -> Self {
+        if x.is_empty() {
+            return 0.0;
+        }
         x.iter().cloned().fold(f64::INFINITY, f64::min)
     }
 
@@ -112,10 +118,16 @@ impl SimdOps for f32 {
     }
 
     fn simd_max(x: &[Self]) -> Self {
+        if x.is_empty() {
+            return 0.0;
+        }
         x.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
     }
 
     fn simd_min(x: &[Self]) -> Self {
+        if x.is_empty() {
+            return 0.0;
+        }
         x.iter().cloned().fold(f32::INFINITY, f32::min)
     }
 

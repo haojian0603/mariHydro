@@ -151,6 +151,39 @@ pub enum TideData {
 }
 
 impl TideProvider {
+    fn normalize_timeseries(times: Vec<f64>, levels: Vec<f64>) -> (Vec<f64>, Vec<f64>) {
+        let n = times.len().min(levels.len());
+        if n == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let mut tuples: Vec<(f64, f64)> = (0..n)
+            .filter_map(|i| {
+                let t = times[i];
+                let v = levels[i];
+                if t.is_finite() && v.is_finite() {
+                    Some((t, v))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        tuples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut out_t = Vec::with_capacity(tuples.len());
+        let mut out_v = Vec::with_capacity(tuples.len());
+        let mut last_t = None;
+        for (t, v) in tuples {
+            if last_t.map_or(true, |lt| t > lt) {
+                out_t.push(t);
+                out_v.push(v);
+                last_t = Some(t);
+            }
+        }
+
+        (out_t, out_v)
+    }
+
     /// 创建恒定水位
     pub fn constant(level: f64) -> Self {
         Self {
@@ -211,6 +244,7 @@ impl TideProvider {
 
     /// 创建时间序列
     pub fn time_series(times: Vec<f64>, levels: Vec<f64>) -> Self {
+        let (times, levels) = Self::normalize_timeseries(times, levels);
         let mean = if levels.is_empty() {
             0.0
         } else {
@@ -284,14 +318,19 @@ impl TideProvider {
             }
 
             TideData::TimeSeries { times, levels } => {
-                if times.len() < 2 {
+                let n = times.len().min(levels.len());
+                if n < 2 {
                     return 0.0;
                 }
 
                 // 简单差分
-                for i in 0..times.len() - 1 {
+                for i in 0..n - 1 {
                     if time >= times[i] && time < times[i + 1] {
-                        return (levels[i + 1] - levels[i]) / (times[i + 1] - times[i]);
+                        let dt = times[i + 1] - times[i];
+                        if dt.abs() < 1e-12 {
+                            return 0.0;
+                        }
+                        return (levels[i + 1] - levels[i]) / dt;
                     }
                 }
 
@@ -354,106 +393,11 @@ pub struct TideBoundary {
 }
 
 // ============================================================
-// 天文潮 68 分潮骨架（占位实现，可后续填充精确频率/节点因子）
+// 天文潮（转接到完整 astronomical_tide 实现）
 // ============================================================
 
-/// 预测结果
-#[derive(Debug, Clone, Copy)]
-pub struct TidePrediction {
-    /// 水位 [m]
-    pub level: f64,
-    /// 上升速率 [m/s]
-    pub rate: f64,
-    /// 预测精度估计（占位）
-    pub accuracy: f64,
-}
-
-/// 68 分潮条目（占位参数）
-#[derive(Debug, Clone)]
-pub struct AstronomicalConstituent {
-    pub name: String,
-    pub speed_rad_per_sec: f64,
-    pub nodal_factor: f64,
-    pub equilibrium_phase: f64,
-    pub amplitude: f64,
-    pub phase: f64,
-}
-
-impl AstronomicalConstituent {
-    pub fn new(name: impl Into<String>, speed_rad_per_sec: f64, amplitude: f64, phase: f64) -> Self {
-        Self {
-            name: name.into(),
-            speed_rad_per_sec,
-            nodal_factor: 1.0,
-            equilibrium_phase: 0.0,
-            amplitude,
-            phase,
-        }
-    }
-
-    #[inline]
-    pub fn value(&self, t_since_epoch: f64) -> (f64, f64) {
-        // 水位贡献与时间导数贡献
-        let theta = self.speed_rad_per_sec * t_since_epoch + self.phase + self.equilibrium_phase;
-        let level = self.nodal_factor * self.amplitude * theta.cos();
-        let rate = -self.nodal_factor * self.amplitude * self.speed_rad_per_sec * theta.sin();
-        (level, rate)
-    }
-}
-
-/// 68 分潮天文潮引擎（占位实现）
-#[derive(Debug, Clone)]
-pub struct AstronomicalTideEngine {
-    epoch_seconds: f64,
-    constituents: Vec<AstronomicalConstituent>,
-}
-
-impl AstronomicalTideEngine {
-    /// 创建包含 68 分潮的占位引擎。
-    ///
-    /// - 频率默认填充为 0（待后续补全真实值）
-    /// - 振幅/相位默认为 0，可通过 `with_constituents` 传入实测值
-    pub fn default_68(epoch_seconds: f64) -> Self {
-        // 使用占位名称 C01..C68，频率占位为 0
-        let constituents = (1..=68)
-            .map(|i| AstronomicalConstituent::new(format!("C{:02}", i), 0.0, 0.0, 0.0))
-            .collect();
-        Self {
-            epoch_seconds,
-            constituents,
-        }
-    }
-
-    /// 用用户提供的分潮表替换（便于未来接入 TPXO/手工参数）
-    pub fn with_constituents(epoch_seconds: f64, constituents: Vec<AstronomicalConstituent>) -> Self {
-        Self {
-            epoch_seconds,
-            constituents,
-        }
-    }
-
-    /// 更新节点因子/平衡相位（占位，未来可接入天文算法）
-    pub fn update_nodal_factors(&mut self, _current_seconds: f64) {
-        // 占位：留空，未来填充 18.6 年节点因子
-    }
-
-    /// 预测指定时刻的潮位和速率（秒）
-    pub fn predict(&self, seconds_since_epoch: f64) -> TidePrediction {
-        let mut level = 0.0;
-        let mut rate = 0.0;
-        let t = seconds_since_epoch - self.epoch_seconds;
-        for c in &self.constituents {
-            let (l, r) = c.value(t);
-            level += l;
-            rate += r;
-        }
-        TidePrediction {
-            level,
-            rate,
-            accuracy: 0.05, // 占位精度
-        }
-    }
-}
+pub type TidePrediction = super::astronomical_tide::TidePrediction;
+pub type AstronomicalTideEngine = super::astronomical_tide::AstronomicalTideEngine;
 
 impl TideBoundary {
     /// 创建均匀潮汐边界
@@ -578,6 +522,7 @@ impl TidalJointBoundary {
 }
 
 /// 分潮流速计算器
+#[derive(Debug, Clone)]
 pub struct TidalVelocityCalculator {
     constituents: Vec<TidalVelocityConstituent>,
 }

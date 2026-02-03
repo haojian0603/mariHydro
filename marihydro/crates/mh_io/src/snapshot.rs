@@ -26,6 +26,10 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use mh_runtime::RuntimeScalar;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 // ============================================================
 // 网格快照
@@ -136,6 +140,24 @@ impl MeshSnapshot {
         self
     }
 
+    /// 设置底床高程（Builder 方式）
+    ///
+    /// 用于在空快照上单独设置底床高程，而非在 `from_mesh_data` 中传入。
+    /// 确保 API 的对称性和灵活性。
+    ///
+    /// # 参数
+    /// - `elevations`: 每个单元的底床高程数组
+    ///
+    /// # 示例
+    /// ```ignore
+    /// let snapshot = MeshSnapshot::empty()
+    ///     .with_bed_elevations(vec![0.0; n_cells]);
+    /// ```
+    pub fn with_bed_elevations(mut self, elevations: Vec<f64>) -> Self {
+        self.bed_elevations = elevations;
+        self
+    }
+
     /// 添加元数据
     pub fn with_meta(mut self, meta: SnapshotMeta) -> Self {
         self.meta = Some(meta);
@@ -146,6 +168,61 @@ impl MeshSnapshot {
     pub fn with_crs(mut self, epsg: u32) -> Self {
         let meta = self.meta.get_or_insert_with(SnapshotMeta::default);
         meta.crs_epsg = Some(epsg);
+        self
+    }
+
+    /// 计算网格哈希（用于一致性校验）
+    pub fn compute_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.n_nodes.hash(&mut hasher);
+        self.n_cells.hash(&mut hasher);
+        for &(x, y) in &self.node_positions {
+            x.to_bits().hash(&mut hasher);
+            y.to_bits().hash(&mut hasher);
+        }
+        for nodes in &self.cell_nodes {
+            nodes.len().hash(&mut hasher);
+            for &n in nodes {
+                n.hash(&mut hasher);
+            }
+        }
+        for &a in &self.cell_areas {
+            a.to_bits().hash(&mut hasher);
+        }
+        for &z in &self.bed_elevations {
+            z.to_bits().hash(&mut hasher);
+        }
+        if let Some(faces) = &self.boundary_faces {
+            for &f in faces {
+                f.hash(&mut hasher);
+            }
+        }
+        if let Some(ids) = &self.boundary_ids {
+            for &id in ids {
+                id.hash(&mut hasher);
+            }
+        }
+        if let Some(names) = &self.boundary_names {
+            for name in names {
+                name.hash(&mut hasher);
+            }
+        }
+        if let Some(meta) = &self.meta {
+            if let Some(epsg) = meta.crs_epsg {
+                epsg.hash(&mut hasher);
+            }
+            if let Some(desc) = &meta.description {
+                desc.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    /// 写入哈希到元数据
+    pub fn with_hash(mut self) -> Self {
+        let hash = self.compute_hash();
+        let meta = self.meta.get_or_insert_with(SnapshotMeta::default);
+        meta.hash = Some(hash);
         self
     }
 
@@ -174,6 +251,11 @@ impl MeshSnapshot {
                 self.node_positions.len()
             ));
         }
+        for (i, (x, y)) in self.node_positions.iter().enumerate() {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(format!("节点 {} 坐标无效: ({}, {})", i, x, y));
+            }
+        }
         if self.cell_nodes.len() != self.n_cells {
             return Err(format!(
                 "单元数不匹配: 期望 {}, 实际 {}",
@@ -188,6 +270,11 @@ impl MeshSnapshot {
                 self.cell_areas.len()
             ));
         }
+        for (i, &area) in self.cell_areas.iter().enumerate() {
+            if !area.is_finite() || area < 0.0 {
+                return Err(format!("单元 {} 面积无效: {}", i, area));
+            }
+        }
         if self.bed_elevations.len() != self.n_cells {
             return Err(format!(
                 "高程数组长度不匹配: 期望 {}, 实际 {}",
@@ -195,20 +282,49 @@ impl MeshSnapshot {
                 self.bed_elevations.len()
             ));
         }
-        if let (Some(faces), Some(ids)) = (&self.boundary_faces, &self.boundary_ids) {
-            if faces.len() != ids.len() {
-                return Err("boundary length mismatch".into());
+        for (i, &z) in self.bed_elevations.iter().enumerate() {
+            if !z.is_finite() {
+                return Err(format!("单元 {} 床面高程无效: {}", i, z));
             }
         }
-        if let Some(names) = &self.boundary_names {
-            if let Some(ids) = &self.boundary_ids {
-                if names.len() != ids.len() {
-                    return Err("boundary name mismatch".into());
+        match (&self.boundary_faces, &self.boundary_ids) {
+            (Some(faces), Some(ids)) => {
+                if faces.len() != ids.len() {
+                    return Err("boundary length mismatch".into());
+                }
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err("boundary ids missing".into());
+            }
+            (None, None) => {}
+        }
+        if let (Some(names), Some(ids)) = (&self.boundary_names, &self.boundary_ids) {
+            let unique_ids: std::collections::HashSet<_> = ids.iter().copied().collect();
+            if names.len() != unique_ids.len() {
+                return Err("boundary name mismatch".into());
+            }
+        }
+        if let Some(meta) = &self.meta {
+            if let Some(expected) = meta.hash {
+                let actual = self.compute_hash();
+                if actual != expected {
+                    return Err("mesh hash mismatch".into());
                 }
             }
         }
         // 检查节点索引是否越界
         for (i, nodes) in self.cell_nodes.iter().enumerate() {
+            if nodes.len() < 3 {
+                return Err(format!("单元 {} 节点数不足: {}", i, nodes.len()));
+            }
+            {
+                let mut set = std::collections::HashSet::new();
+                for &idx in nodes {
+                    if !set.insert(idx) {
+                        return Err(format!("单元 {} 存在重复节点索引 {}", i, idx));
+                    }
+                }
+            }
             for &idx in nodes {
                 if idx >= self.n_nodes {
                     return Err(format!(
@@ -238,17 +354,18 @@ impl Default for MeshSnapshot {
 ///
 /// 包含浅水方程守恒变量的只读副本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateSnapshot {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
+pub struct StateSnapshot<S: RuntimeScalar = f64> {
     /// 水深 [m]
-    pub h: Vec<f64>,
+    pub h: Vec<S>,
     /// x 动量 [m²/s]
-    pub hu: Vec<f64>,
+    pub hu: Vec<S>,
     /// y 动量 [m²/s]
-    pub hv: Vec<f64>,
+    pub hv: Vec<S>,
     /// 底床高程（可选，用于完整状态恢复）
-    pub z: Option<Vec<f64>>,
+    pub z: Option<Vec<S>>,
     /// 标量场（可选，如示踪剂浓度）
-    pub scalars: Option<Vec<Vec<f64>>>,
+    pub scalars: Option<Vec<Vec<S>>>,
     /// 标量场名称（可选）
     pub scalar_names: Option<Vec<String>>,
     /// 元数据
@@ -264,9 +381,11 @@ pub struct StateSnapshotMeta {
     pub step: usize,
     /// 创建时间戳
     pub created_at: u64,
+    /// 数据哈希（用于校验）
+    pub hash: Option<u64>,
 }
 
-impl StateSnapshot {
+impl<S: RuntimeScalar> StateSnapshot<S> {
     /// 创建空快照
     pub fn empty() -> Self {
         Self {
@@ -281,7 +400,7 @@ impl StateSnapshot {
     }
 
     /// 从状态数据创建快照
-    pub fn from_state_data(h: Vec<f64>, hu: Vec<f64>, hv: Vec<f64>) -> Self {
+    pub fn from_state_data(h: Vec<S>, hu: Vec<S>, hv: Vec<S>) -> Self {
         Self {
             h,
             hu,
@@ -294,15 +413,20 @@ impl StateSnapshot {
     }
 
     /// 包含底床高程
-    pub fn with_bed(mut self, z: Vec<f64>) -> Self {
+    pub fn with_bed(mut self, z: Vec<S>) -> Self {
         self.z = Some(z);
         self
     }
 
     /// 添加标量场
-    pub fn with_scalar(mut self, name: &str, values: Vec<f64>) -> Self {
+    pub fn with_scalar(mut self, name: &str, values: Vec<S>) -> Result<Self, String> {
         if values.len() != self.n_cells() {
-            return self;
+            return Err(format!(
+                "标量场长度不匹配: name={}, 期望 {}, 实际 {}",
+                name,
+                self.n_cells(),
+                values.len()
+            ));
         }
         if self.scalars.is_none() {
             self.scalars = Some(Vec::new());
@@ -310,7 +434,7 @@ impl StateSnapshot {
         }
         self.scalars.as_mut().unwrap().push(values);
         self.scalar_names.as_mut().unwrap().push(name.to_string());
-        self
+        Ok(self)
     }
 
     /// 添加元数据
@@ -322,7 +446,47 @@ impl StateSnapshot {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            hash: None,
         });
+        self
+    }
+
+    /// 计算状态哈希（用于一致性校验）
+    pub fn compute_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.h.len().hash(&mut hasher);
+        for &v in &self.h {
+            v.to_f64().unwrap_or(0.0).to_bits().hash(&mut hasher);
+        }
+        for &v in &self.hu {
+            v.to_f64().unwrap_or(0.0).to_bits().hash(&mut hasher);
+        }
+        for &v in &self.hv {
+            v.to_f64().unwrap_or(0.0).to_bits().hash(&mut hasher);
+        }
+        if let Some(z) = &self.z {
+            for &v in z {
+                v.to_f64().unwrap_or(0.0).to_bits().hash(&mut hasher);
+            }
+        }
+        if let (Some(vals), Some(names)) = (&self.scalars, &self.scalar_names) {
+            for name in names {
+                name.hash(&mut hasher);
+            }
+            for scalar in vals {
+                for &v in scalar {
+                    v.to_f64().unwrap_or(0.0).to_bits().hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    /// 写入哈希到元数据
+    pub fn with_hash(mut self) -> Self {
+        let hash = self.compute_hash();
+        let meta = self.meta.get_or_insert_with(StateSnapshotMeta::default);
+        meta.hash = Some(hash);
         self
     }
 
@@ -333,12 +497,13 @@ impl StateSnapshot {
 
     /// 内存占用估计（字节）
     pub fn memory_usage(&self) -> usize {
-        let base = (self.h.len() + self.hu.len() + self.hv.len()) * 8;
-        let z_mem = self.z.as_ref().map_or(0, |v| v.len() * 8);
+        let elem_size = std::mem::size_of::<S>();
+        let base = (self.h.len() + self.hu.len() + self.hv.len()) * elem_size;
+        let z_mem = self.z.as_ref().map_or(0, |v| v.len() * elem_size);
         let scalars_mem = self
             .scalars
             .as_ref()
-            .map_or(0, |vecs| vecs.iter().map(|v| v.len() * 8).sum());
+            .map_or(0, |vecs| vecs.iter().map(|v| v.len() * elem_size).sum());
         base + z_mem + scalars_mem
     }
 
@@ -356,13 +521,35 @@ impl StateSnapshot {
                 return Err(format!("z 长度不匹配: 期望 {}, 实际 {}", n, z.len()));
             }
         }
-        if let (Some(vals), Some(names)) = (&self.scalars, &self.scalar_names) {
-            if vals.len() != names.len() {
-                return Err("scalar name mismatch".into());
+        match (&self.scalars, &self.scalar_names) {
+            (Some(vals), Some(names)) => {
+                if vals.len() != names.len() {
+                    return Err("scalar name mismatch".into());
+                }
+                {
+                    let mut set = std::collections::HashSet::new();
+                    for name in names {
+                        if !set.insert(name) {
+                            return Err("scalar name duplicate".into());
+                        }
+                    }
+                }
+                for v in vals {
+                    if v.len() != n {
+                        return Err("scalar length mismatch".into());
+                    }
+                }
             }
-            for v in vals {
-                if v.len() != n {
-                    return Err("scalar length mismatch".into());
+            (Some(_), None) | (None, Some(_)) => {
+                return Err("scalar names missing".into());
+            }
+            (None, None) => {}
+        }
+        if let Some(meta) = &self.meta {
+            if let Some(expected) = meta.hash {
+                let actual = self.compute_hash();
+                if actual != expected {
+                    return Err("state hash mismatch".into());
                 }
             }
         }
@@ -371,8 +558,37 @@ impl StateSnapshot {
             if !val.is_finite() {
                 return Err(format!("h[{}] = {} 非有限值", i, val));
             }
-            if val < 0.0 {
+            if val < S::ZERO {
                 return Err(format!("h[{}] = {} 为负值", i, val));
+            }
+        }
+        for (i, &val) in self.hu.iter().enumerate() {
+            if !val.is_finite() {
+                return Err(format!("hu[{}] = {} 非有限值", i, val));
+            }
+        }
+        for (i, &val) in self.hv.iter().enumerate() {
+            if !val.is_finite() {
+                return Err(format!("hv[{}] = {} 非有限值", i, val));
+            }
+        }
+        if let Some(z) = &self.z {
+            for (i, &val) in z.iter().enumerate() {
+                if !val.is_finite() {
+                    return Err(format!("z[{}] = {} 非有限值", i, val));
+                }
+            }
+        }
+        if let Some(scalars) = &self.scalars {
+            for (field_idx, values) in scalars.iter().enumerate() {
+                for (i, &val) in values.iter().enumerate() {
+                    if !val.is_finite() {
+                        return Err(format!(
+                            "scalar[{}][{}] = {} 非有限值",
+                            field_idx, i, val
+                        ));
+                    }
+                }
             }
         }
         Ok(())
@@ -385,9 +601,17 @@ impl StateSnapshot {
             return StateStatistics::default();
         }
 
-        let h_sum: f64 = self.h.iter().sum();
-        let h_min = self.h.iter().cloned().fold(f64::INFINITY, f64::min);
-        let h_max = self.h.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let h_sum: f64 = self.h.iter().map(|v| v.to_f64().unwrap_or(0.0)).sum();
+        let h_min = self
+            .h
+            .iter()
+            .map(|v| v.to_f64().unwrap_or(f64::INFINITY))
+            .fold(f64::INFINITY, f64::min);
+        let h_max = self
+            .h
+            .iter()
+            .map(|v| v.to_f64().unwrap_or(f64::NEG_INFINITY))
+            .fold(f64::NEG_INFINITY, f64::max);
 
         StateStatistics {
             n_cells: n,
@@ -398,7 +622,7 @@ impl StateSnapshot {
     }
 }
 
-impl Default for StateSnapshot {
+impl<S: RuntimeScalar> Default for StateSnapshot<S> {
     fn default() -> Self {
         Self::empty()
     }
@@ -479,7 +703,8 @@ mod tests {
             vec![0.0, 0.0],
         )
         .with_scalar("temperature", vec![20.0, 21.0])
-        .with_scalar("salinity", vec![35.0, 34.5]);
+        .and_then(|s| s.with_scalar("salinity", vec![35.0, 34.5]))
+        .expect("添加标量场失败");
 
         assert_eq!(snapshot.scalars.as_ref().unwrap().len(), 2);
         assert_eq!(

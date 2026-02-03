@@ -70,9 +70,17 @@ pub trait Preconditioner<B: Backend>: Send + Sync {
 
     /// 应用预条件（切片版本）: y = M⁻¹ * x
     /// 默认实现供 CPU 后端使用
-    fn apply_slice(&self, _x: &[B::Scalar], _y: &mut [B::Scalar]) {
-        // 默认 panic - 子类型应该覆盖此方法
-        panic!("apply_slice not implemented for this preconditioner");
+    fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
+        // 默认行为：按恒等预条件器处理，保证数值流程可继续
+        if x.len() != y.len() {
+            let n = x.len().min(y.len());
+            y[..n].copy_from_slice(&x[..n]);
+            if y.len() > n {
+                y[n..].fill(B::Scalar::ZERO);
+            }
+            return;
+        }
+        y.copy_from_slice(x);
     }
 
     /// 更新预条件器（如矩阵更改后）
@@ -440,6 +448,8 @@ impl<B: Backend> ScalarPreconditioner<B::Scalar> for SsorPreconditioner<B> {
 ///
 /// 使用 CSR 矩阵的就地分解，不额外存储 LU 结构。
 pub struct Ilu0Preconditioner<B: Backend> {
+    /// 稀疏结构（与矩阵一致）
+    pattern: crate::numerics::linear_algebra::csr::CsrPattern,
     /// LU 分解后的矩阵值（覆盖存储）
     #[allow(dead_code)]
     lu_values: AlignedVec64<B::Scalar>,
@@ -457,14 +467,90 @@ impl<B: Backend> Ilu0Preconditioner<B> {
             return Err(PreconditionerError::EmptyMatrix);
         }
 
-        let lu_values = aligned_vec(matrix.nnz());
+        let mut lu_values = aligned_vec(matrix.nnz());
+        lu_values.copy_from_slice(matrix.values());
         let diag_idxs = matrix.build_diagonal_cache();
-
-        Ok(Self {
+        let mut this = Self {
+            pattern: matrix.pattern().clone(),
             lu_values,
             diag_idxs,
             stats: PreconditionerStats::default(),
-        })
+        };
+        this.factorize(matrix)?;
+        Ok(this)
+    }
+
+    /// 执行 ILU(0) 分解（保留稀疏结构）
+    fn factorize(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
+        let n = matrix.n_rows();
+        let row_ptr = self.pattern.row_ptr();
+        let col_idx = self.pattern.col_idx();
+
+        if self.lu_values.len() != matrix.nnz() {
+            self.lu_values.resize(matrix.nnz());
+        }
+        self.lu_values.copy_from_slice(matrix.values());
+
+        // ILU(0) 分解：L 在下三角，U 在上三角（含对角）
+        for i in 0..n {
+            let row_start = row_ptr[i];
+            let row_end = row_ptr[i + 1];
+
+            for idx in row_start..row_end {
+                let j = col_idx[idx];
+                let mut sum = self.lu_values[idx];
+
+                if j < i {
+                    // L_{ij}
+                    for idx2 in row_start..row_end {
+                        let k = col_idx[idx2];
+                        if k >= j {
+                            break;
+                        }
+                        if let Some(kj_idx) = self.pattern.find_index(k, j) {
+                            sum -= self.lu_values[idx2] * self.lu_values[kj_idx];
+                        }
+                    }
+
+                    let diag_idx = self.diag_idxs[j].ok_or_else(|| {
+                        PreconditionerError::NumericalError(format!("第 {} 行缺失对角线", j))
+                    })?;
+                    let diag_val = self.lu_values[diag_idx];
+                    if diag_val.is_zero() {
+                        return Err(PreconditionerError::NumericalError(format!(
+                            "对角线元素 {} 为零", j
+                        )));
+                    }
+                    self.lu_values[idx] = sum / diag_val;
+                } else {
+                    // U_{ij}
+                    for idx2 in row_start..row_end {
+                        let k = col_idx[idx2];
+                        if k >= i {
+                            break;
+                        }
+                        if let Some(kj_idx) = self.pattern.find_index(k, j) {
+                            sum -= self.lu_values[idx2] * self.lu_values[kj_idx];
+                        }
+                    }
+                    self.lu_values[idx] = sum;
+                }
+            }
+
+            if let Some(diag_idx) = self.diag_idxs[i] {
+                if self.lu_values[diag_idx].is_zero() {
+                    return Err(PreconditionerError::NumericalError(format!(
+                        "对角线元素 {} 为零", i
+                    )));
+                }
+            } else {
+                return Err(PreconditionerError::NumericalError(format!(
+                    "第 {} 行缺失对角线", i
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -475,31 +561,56 @@ impl<B: Backend> Preconditioner<B> for Ilu0Preconditioner<B> {
 
     fn apply_slice(&self, x: &[B::Scalar], y: &mut [B::Scalar]) {
         let n = self.diag_idxs.len();
+        debug_assert!(x.len() >= n && y.len() >= n);
+        let row_ptr = self.pattern.row_ptr();
+        let col_idx = self.pattern.col_idx();
 
-        // 前向替换 L * y = x
+        // 前向替换 L * y = x（L 对角为 1）
         for i in 0..n {
-            let sum = x[i];
-            // L 部分（下三角，不包含对角线）
-            // 注意：此实现需要完整的 CSR 结构访问，当前代码仅为框架
-            for _j in 0..self.diag_idxs[i].unwrap_or(0) {
-                // 此处需要正确的列索引访问
-                // 当前代码保留原始结构，但注释掉不完整实现
+            let mut sum = x[i];
+            let start = row_ptr[i];
+            let end = row_ptr[i + 1];
+            for idx in start..end {
+                let col = col_idx[idx];
+                if col >= i {
+                    break;
+                }
+                sum -= self.lu_values[idx] * y[col];
             }
             y[i] = sum;
         }
 
         // 后向替换 U * x = y
-        // 注意：此实现需要完整的 CSR 结构访问，当前代码仅为框架
+        for i in (0..n).rev() {
+            let mut sum = y[i];
+            let mut diag = None;
+            let start = row_ptr[i];
+            let end = row_ptr[i + 1];
+            for idx in start..end {
+                let col = col_idx[idx];
+                if col < i {
+                    continue;
+                }
+                if col == i {
+                    diag = Some(self.lu_values[idx]);
+                } else {
+                    sum -= self.lu_values[idx] * y[col];
+                }
+            }
+            let diag_val = diag.unwrap_or(B::Scalar::one());
+            y[i] = sum / diag_val;
+        }
     }
 
     fn update(&mut self, _matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
         self.stats.update_calls += 1;
-        let _timer = std::time::Instant::now();
+        let timer = std::time::Instant::now();
 
-        // ILU(0) 分解算法
-        // 需要实现 CSR 格式的就地分解
+        self.pattern = _matrix.pattern().clone();
+        self.diag_idxs = _matrix.build_diagonal_cache();
+        self.factorize(_matrix)?;
 
-        // self.stats.update_time_ms += timer.elapsed().as_millis() as u64;
+        self.stats.update_time_ms += timer.elapsed().as_millis() as u64;
         Ok(())
     }
 

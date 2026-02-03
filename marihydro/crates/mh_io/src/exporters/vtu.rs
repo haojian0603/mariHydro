@@ -15,6 +15,9 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
+use base64::Engine;
+
 /// VTU 导出错误
 #[derive(Debug)]
 pub enum VtuError {
@@ -100,11 +103,62 @@ impl VtuExporter {
         state: &S,
         time: f64,
     ) -> Result<(), VtuError> {
+        let mut config = VtuExportConfig::default();
+        config.binary = self.binary;
+        config.h_dry = self.h_dry;
+        self.export_with_config(path, mesh, state, time, &config)
+    }
+
+    /// 导出单帧（带配置）
+    pub fn export_with_config<M: VtuMesh, S: VtuState>(
+        &self,
+        path: impl AsRef<Path>,
+        mesh: &M,
+        state: &S,
+        time: f64,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
+        if !time.is_finite() {
+            return Err(VtuError::InvalidData(format!("time 无效: {}", time)));
+        }
+        let n_cells = mesh.n_cells();
+        let state_cells = state.n_cells();
+        if state_cells != 0 && state_cells != n_cells {
+            return Err(VtuError::InvalidData(format!(
+                "状态单元数不一致: mesh={}, state={}",
+                n_cells, state_cells
+            )));
+        }
+        if config.precision == 0 || config.precision > 16 {
+            return Err(VtuError::InvalidData(format!(
+                "precision 无效: {} (应在 1..=16)",
+                config.precision
+            )));
+        }
+        if !config.h_dry.is_finite() || config.h_dry < 0.0 {
+            return Err(VtuError::InvalidData(format!(
+                "h_dry 无效: {}",
+                config.h_dry
+            )));
+        }
+        if !config.extra_scalars.is_empty() {
+            let available: std::collections::HashSet<_> =
+                state.available_scalars().into_iter().collect();
+            for name in &config.extra_scalars {
+                if !available.contains(name) {
+                    return Err(VtuError::InvalidData(format!(
+                        "请求的标量场不存在: {}",
+                        name
+                    )));
+                }
+            }
+        }
+
         let file = File::create(path.as_ref())?;
         let mut w = BufWriter::new(file);
 
-        self.write_header(&mut w, time)?;
-        self.write_piece(&mut w, mesh, state)?;
+        self.write_header_with_config(&mut w, time, config)?;
+        self.write_piece_with_config(&mut w, mesh, state, config)?;
         self.write_footer(&mut w)?;
 
         w.flush()?;
@@ -119,6 +173,21 @@ impl VtuExporter {
         mesh: &M,
         steps: &[(f64, S)],
     ) -> Result<(), VtuError> {
+        let mut config = VtuExportConfig::default();
+        config.binary = self.binary;
+        config.h_dry = self.h_dry;
+        self.export_series_with_config(dir, prefix, mesh, steps, &config)
+    }
+
+    /// 导出时间序列（带配置）
+    pub fn export_series_with_config<M: VtuMesh, S: VtuState>(
+        &self,
+        dir: impl AsRef<Path>,
+        prefix: &str,
+        mesh: &M,
+        steps: &[(f64, S)],
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         let dir = dir.as_ref();
         std::fs::create_dir_all(dir)?;
 
@@ -128,7 +197,7 @@ impl VtuExporter {
             let filename = format!("{}_{:06}.vtu", prefix, i);
             let path = dir.join(&filename);
 
-            self.export(&path, mesh, state, *time)?;
+            self.export_with_config(&path, mesh, state, *time, config)?;
             vtu_files.push((filename, *time));
         }
 
@@ -167,11 +236,29 @@ impl VtuExporter {
     }
 
     fn write_header(&self, w: &mut BufWriter<File>, time: f64) -> Result<(), VtuError> {
+        let mut config = VtuExportConfig::default();
+        config.binary = self.binary;
+        self.write_header_with_config(w, time, &config)
+    }
+
+    fn write_header_with_config(
+        &self,
+        w: &mut BufWriter<File>,
+        time: f64,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         writeln!(w, r#"<?xml version="1.0"?>"#)?;
-        writeln!(
-            w,
-            r#"<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">"#
-        )?;
+        if config.binary {
+            writeln!(
+                w,
+                r#"<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian" header_type="UInt32">"#
+            )?;
+        } else {
+            writeln!(
+                w,
+                r#"<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">"#
+            )?;
+        }
         writeln!(w, r#"  <UnstructuredGrid>"#)?;
         writeln!(w, r#"    <FieldData>"#)?;
         writeln!(
@@ -189,6 +276,17 @@ impl VtuExporter {
         mesh: &M,
         state: &S,
     ) -> Result<(), VtuError> {
+        let config = VtuExportConfig::default();
+        self.write_piece_with_config(w, mesh, state, &config)
+    }
+
+    fn write_piece_with_config<M: VtuMesh, S: VtuState>(
+        &self,
+        w: &mut BufWriter<File>,
+        mesh: &M,
+        state: &S,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         let n_nodes = mesh.n_nodes();
         let n_cells = mesh.n_cells();
 
@@ -198,72 +296,198 @@ impl VtuExporter {
             n_nodes, n_cells
         )?;
 
-        self.write_points(w, mesh)?;
-        self.write_cells(w, mesh)?;
-        self.write_cell_data(w, mesh, state)?;
+        self.write_points_with_config(w, mesh, config)?;
+        self.write_cells_with_config(w, mesh, config)?;
+        self.write_cell_data_with_config(w, mesh, state, config)?;
 
         writeln!(w, r#"    </Piece>"#)?;
         Ok(())
     }
 
     fn write_points<M: VtuMesh>(&self, w: &mut BufWriter<File>, mesh: &M) -> Result<(), VtuError> {
+        let config = VtuExportConfig::default();
+        self.write_points_with_config(w, mesh, &config)
+    }
+
+    fn write_points_with_config<M: VtuMesh>(
+        &self,
+        w: &mut BufWriter<File>,
+        mesh: &M,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         writeln!(w, r#"      <Points>"#)?;
-        writeln!(
-            w,
-            r#"        <DataArray type="Float64" NumberOfComponents="3" format="ascii">"#
-        )?;
+        if config.binary {
+            let mut payload = Vec::with_capacity(mesh.n_nodes() * 3 * 8);
+            for i in 0..mesh.n_nodes() {
+                let pos = mesh.node_position(i);
+                push_f64_bytes(&mut payload, pos[0]);
+                push_f64_bytes(&mut payload, pos[1]);
+                push_f64_bytes(&mut payload, pos[2]);
+            }
+            let encoded = encode_binary_payload(&payload);
+            writeln!(
+                w,
+                r#"        <DataArray type="Float64" NumberOfComponents="3" format="binary">"#
+            )?;
+            writeln!(w, "          {}", encoded)?;
+            writeln!(w, r#"        </DataArray>"#)?;
+        } else {
+            let precision = config.precision;
+            writeln!(
+                w,
+                r#"        <DataArray type="Float64" NumberOfComponents="3" format="ascii">"#
+            )?;
 
-        for i in 0..mesh.n_nodes() {
-            let pos = mesh.node_position(i);
-            writeln!(w, "          {:.6} {:.6} {:.6}", pos[0], pos[1], pos[2])?;
+            for i in 0..mesh.n_nodes() {
+                let pos = mesh.node_position(i);
+                writeln!(
+                    w,
+                    "          {:.*} {:.*} {:.*}",
+                    precision,
+                    pos[0],
+                    precision,
+                    pos[1],
+                    precision,
+                    pos[2]
+                )?;
+            }
+
+            writeln!(w, r#"        </DataArray>"#)?;
         }
-
-        writeln!(w, r#"        </DataArray>"#)?;
         writeln!(w, r#"      </Points>"#)?;
         Ok(())
     }
 
     fn write_cells<M: VtuMesh>(&self, w: &mut BufWriter<File>, mesh: &M) -> Result<(), VtuError> {
+        let config = VtuExportConfig::default();
+        self.write_cells_with_config(w, mesh, &config)
+    }
+
+    fn write_cells_with_config<M: VtuMesh>(
+        &self,
+        w: &mut BufWriter<File>,
+        mesh: &M,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         writeln!(w, r#"      <Cells>"#)?;
+        let n_nodes = mesh.n_nodes();
 
         // Connectivity
-        writeln!(
-            w,
-            r#"        <DataArray type="Int32" Name="connectivity" format="ascii">"#
-        )?;
-        for i in 0..mesh.n_cells() {
-            let nodes = mesh.cell_nodes(i);
-            let s: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
-            writeln!(w, "          {}", s.join(" "))?;
+        if config.binary {
+            let mut payload = Vec::new();
+            for i in 0..mesh.n_cells() {
+                let nodes = mesh.cell_nodes(i);
+                for &n in &nodes {
+                    if n >= n_nodes {
+                        return Err(VtuError::InvalidData(format!(
+                            "单元节点索引越界: node={}, n_nodes={} (cell={})",
+                            n, n_nodes, i
+                        )));
+                    }
+                    let v = i32::try_from(n).map_err(|_| {
+                        VtuError::InvalidData(format!("节点索引超出 Int32 范围: {}", n))
+                    })?;
+                    push_i32_bytes(&mut payload, v);
+                }
+            }
+            let encoded = encode_binary_payload(&payload);
+            writeln!(
+                w,
+                r#"        <DataArray type="Int32" Name="connectivity" format="binary">"#
+            )?;
+            writeln!(w, "          {}", encoded)?;
+            writeln!(w, r#"        </DataArray>"#)?;
+        } else {
+            writeln!(
+                w,
+                r#"        <DataArray type="Int32" Name="connectivity" format="ascii">"#
+            )?;
+            for i in 0..mesh.n_cells() {
+                let nodes = mesh.cell_nodes(i);
+                for &n in &nodes {
+                    if n >= n_nodes {
+                        return Err(VtuError::InvalidData(format!(
+                            "单元节点索引越界: node={}, n_nodes={} (cell={})",
+                            n, n_nodes, i
+                        )));
+                    }
+                }
+                let s: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
+                writeln!(w, "          {}", s.join(" "))?;
+            }
+            writeln!(w, r#"        </DataArray>"#)?;
         }
-        writeln!(w, r#"        </DataArray>"#)?;
 
         // Offsets
-        writeln!(
-            w,
-            r#"        <DataArray type="Int32" Name="offsets" format="ascii">"#
-        )?;
-        let mut offset = 0;
-        for i in 0..mesh.n_cells() {
-            offset += mesh.cell_nodes(i).len();
-            writeln!(w, "          {}", offset)?;
+        if config.binary {
+            let mut payload = Vec::with_capacity(mesh.n_cells() * 4);
+            let mut offset: usize = 0;
+            for i in 0..mesh.n_cells() {
+                offset = offset.saturating_add(mesh.cell_nodes(i).len());
+                let v = i32::try_from(offset).map_err(|_| {
+                    VtuError::InvalidData(format!("offset 超出 Int32 范围: {}", offset))
+                })?;
+                push_i32_bytes(&mut payload, v);
+            }
+            let encoded = encode_binary_payload(&payload);
+            writeln!(
+                w,
+                r#"        <DataArray type="Int32" Name="offsets" format="binary">"#
+            )?;
+            writeln!(w, "          {}", encoded)?;
+            writeln!(w, r#"        </DataArray>"#)?;
+        } else {
+            writeln!(
+                w,
+                r#"        <DataArray type="Int32" Name="offsets" format="ascii">"#
+            )?;
+            let mut offset = 0;
+            for i in 0..mesh.n_cells() {
+                offset += mesh.cell_nodes(i).len();
+                if offset > i32::MAX as usize {
+                    return Err(VtuError::InvalidData(format!(
+                        "offset 超出 Int32 范围: {}",
+                        offset
+                    )));
+                }
+                writeln!(w, "          {}", offset)?;
+            }
+            writeln!(w, r#"        </DataArray>"#)?;
         }
-        writeln!(w, r#"        </DataArray>"#)?;
 
         // Types
-        writeln!(
-            w,
-            r#"        <DataArray type="UInt8" Name="types" format="ascii">"#
-        )?;
-        for i in 0..mesh.n_cells() {
-            let cell_type = match mesh.cell_nodes(i).len() {
-                3 => VtuCellType::Triangle as u8,
-                4 => VtuCellType::Quad as u8,
-                _ => VtuCellType::Polygon as u8,
-            };
-            writeln!(w, "          {}", cell_type)?;
+        if config.binary {
+            let mut payload = Vec::with_capacity(mesh.n_cells());
+            for i in 0..mesh.n_cells() {
+                let cell_type = match mesh.cell_nodes(i).len() {
+                    3 => VtuCellType::Triangle as u8,
+                    4 => VtuCellType::Quad as u8,
+                    _ => VtuCellType::Polygon as u8,
+                };
+                payload.push(cell_type);
+            }
+            let encoded = encode_binary_payload(&payload);
+            writeln!(
+                w,
+                r#"        <DataArray type="UInt8" Name="types" format="binary">"#
+            )?;
+            writeln!(w, "          {}", encoded)?;
+            writeln!(w, r#"        </DataArray>"#)?;
+        } else {
+            writeln!(
+                w,
+                r#"        <DataArray type="UInt8" Name="types" format="ascii">"#
+            )?;
+            for i in 0..mesh.n_cells() {
+                let cell_type = match mesh.cell_nodes(i).len() {
+                    3 => VtuCellType::Triangle as u8,
+                    4 => VtuCellType::Quad as u8,
+                    _ => VtuCellType::Polygon as u8,
+                };
+                writeln!(w, "          {}", cell_type)?;
+            }
+            writeln!(w, r#"        </DataArray>"#)?;
         }
-        writeln!(w, r#"        </DataArray>"#)?;
 
         writeln!(w, r#"      </Cells>"#)?;
         Ok(())
@@ -275,50 +499,123 @@ impl VtuExporter {
         mesh: &M,
         state: &S,
     ) -> Result<(), VtuError> {
+        let config = VtuExportConfig::default();
+        self.write_cell_data_with_config(w, mesh, state, &config)
+    }
+
+    fn write_cell_data_with_config<M: VtuMesh, S: VtuState>(
+        &self,
+        w: &mut BufWriter<File>,
+        mesh: &M,
+        state: &S,
+        config: &VtuExportConfig,
+    ) -> Result<(), VtuError> {
         writeln!(w, r#"      <CellData>"#)?;
 
         let n_cells = mesh.n_cells();
-        let h_dry = self.h_dry;
+        let h_dry = config.h_dry;
+        let precision = config.precision;
+
+        for i in 0..n_cells {
+            let h = state.h(i);
+            if !h.is_finite() || h < 0.0 {
+                return Err(VtuError::InvalidData(format!(
+                    "水深无效: h[{}]={}",
+                    i, h
+                )));
+            }
+        }
 
         // 水深
-        self.write_scalar_field(w, "h", n_cells, |i| state.h(i))?;
+        self.write_scalar_field(w, "h", n_cells, precision, config.binary, |i| state.h(i))?;
 
         // 水面高程
-        self.write_scalar_field(w, "eta", n_cells, |i| state.h(i) + mesh.cell_z_bed(i))?;
+        if config.export_eta {
+            self.write_scalar_field(
+                w,
+                "eta",
+                n_cells,
+                precision,
+                config.binary,
+                |i| state.h(i) + mesh.cell_z_bed(i),
+            )?;
+        }
 
         // 速度分量
-        self.write_scalar_field(w, "u", n_cells, |i| {
-            let h = state.h(i);
-            if h > h_dry {
-                state.hu(i) / h
-            } else {
-                0.0
-            }
-        })?;
+        if config.export_velocity {
+            self.write_scalar_field(w, "u", n_cells, precision, config.binary, |i| {
+                let h = state.h(i);
+                if h > h_dry {
+                    state.hu(i) / h
+                } else {
+                    0.0
+                }
+            })?;
 
-        self.write_scalar_field(w, "v", n_cells, |i| {
-            let h = state.h(i);
-            if h > h_dry {
-                state.hv(i) / h
-            } else {
-                0.0
-            }
-        })?;
+            self.write_scalar_field(w, "v", n_cells, precision, config.binary, |i| {
+                let h = state.h(i);
+                if h > h_dry {
+                    state.hv(i) / h
+                } else {
+                    0.0
+                }
+            })?;
 
-        // 速度大小
-        self.write_scalar_field(w, "velocity_mag", n_cells, |i| {
-            let h = state.h(i);
-            if h > h_dry {
-                let u = state.hu(i) / h;
-                let v = state.hv(i) / h;
-                (u * u + v * v).sqrt()
-            } else {
-                0.0
-            }
-        })?;
+            self.write_scalar_field(w, "velocity_mag", n_cells, precision, config.binary, |i| {
+                let h = state.h(i);
+                if h > h_dry {
+                    let u = state.hu(i) / h;
+                    let v = state.hv(i) / h;
+                    (u * u + v * v).sqrt()
+                } else {
+                    0.0
+                }
+            })?;
+        }
 
         // 底床高程
-        self.write_scalar_field(w, "z_bed", n_cells, |i| mesh.cell_z_bed(i))?;
+        if config.export_bed {
+            self.write_scalar_field(w, "z_bed", n_cells, precision, config.binary, |i| {
+                mesh.cell_z_bed(i)
+            })?;
+        }
+
+        // 弗劳德数
+        if config.export_froude {
+            const GRAVITY: f64 = 9.81;
+            self.write_scalar_field(w, "froude", n_cells, precision, config.binary, |i| {
+                let h = state.h(i);
+                if h > h_dry {
+                    let u = state.hu(i) / h;
+                    let v = state.hv(i) / h;
+                    let vel = (u * u + v * v).sqrt();
+                    let c = (GRAVITY * h).sqrt();
+                    vel / c
+                } else {
+                    0.0
+                }
+            })?;
+        }
+
+        // 附加标量
+        if !config.extra_scalars.is_empty() {
+            for name in &config.extra_scalars {
+                let name = name.as_str();
+                let mut values = Vec::with_capacity(n_cells);
+                for i in 0..n_cells {
+                    match state.scalar(name, i) {
+                        Some(v) => values.push(v),
+                        None => {
+                            return Err(VtuError::InvalidData(format!(
+                                "标量场缺失: {} (cell={})",
+                                name, i
+                            )));
+                        }
+                    }
+                }
+                self.write_scalar_field_values(w, name, &values, precision, config.binary)?;
+            }
+        }
 
         writeln!(w, r#"      </CellData>"#)?;
         Ok(())
@@ -329,20 +626,60 @@ impl VtuExporter {
         w: &mut BufWriter<File>,
         name: &str,
         n: usize,
+        precision: usize,
+        binary: bool,
         f: F,
     ) -> Result<(), VtuError>
     where
         F: Fn(usize) -> f64,
     {
-        writeln!(
-            w,
-            r#"        <DataArray type="Float64" Name="{}" format="ascii">"#,
-            name
-        )?;
+        let mut values = Vec::with_capacity(n);
         for i in 0..n {
-            writeln!(w, "          {:.6}", f(i))?;
+            values.push(f(i));
         }
-        writeln!(w, r#"        </DataArray>"#)?;
+        self.write_scalar_field_values(w, name, &values, precision, binary)
+    }
+
+    fn write_scalar_field_values(
+        &self,
+        w: &mut BufWriter<File>,
+        name: &str,
+        values: &[f64],
+        precision: usize,
+        binary: bool,
+    ) -> Result<(), VtuError> {
+        for (i, &value) in values.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(VtuError::InvalidData(format!(
+                    "标量场 {} 包含非有限值: index={}, value={}",
+                    name, i, value
+                )));
+            }
+        }
+        if binary {
+            let mut payload = Vec::with_capacity(values.len() * 8);
+            for &value in values {
+                push_f64_bytes(&mut payload, value);
+            }
+            let encoded = encode_binary_payload(&payload);
+            writeln!(
+                w,
+                r#"        <DataArray type="Float64" Name="{}" format="binary">"#,
+                name
+            )?;
+            writeln!(w, "          {}", encoded)?;
+            writeln!(w, r#"        </DataArray>"#)?;
+        } else {
+            writeln!(
+                w,
+                r#"        <DataArray type="Float64" Name="{}" format="ascii">"#,
+                name
+            )?;
+            for &value in values {
+                writeln!(w, "          {:.*}", precision, value)?;
+            }
+            writeln!(w, r#"        </DataArray>"#)?;
+        }
         Ok(())
     }
 
@@ -505,6 +842,27 @@ pub trait VtuStateExt: VtuState {
 // 自动实现
 impl<T: VtuState + ?Sized> VtuStateExt for T {}
 
+// ============================================================
+// 二进制编码辅助
+// ============================================================
+
+fn encode_binary_payload(payload: &[u8]) -> String {
+    let mut buffer = Vec::with_capacity(4 + payload.len());
+    buffer.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    buffer.extend_from_slice(payload);
+    BASE64_STD.encode(buffer)
+}
+
+#[inline]
+fn push_f64_bytes(out: &mut Vec<u8>, value: f64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+#[inline]
+fn push_i32_bytes(out: &mut Vec<u8>, value: i32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 /// 为 FrozenMesh 实现 VtuMesh
 impl VtuMesh for mh_mesh::FrozenMesh {
     fn n_nodes(&self) -> usize {
@@ -615,7 +973,7 @@ impl<'a> VtuState for StateWithScalars<'a> {
         self.scalars
             .iter()
             .find(|(n, _)| *n == name)
-            .map(|(_, data)| data[idx])
+            .and_then(|(_, data)| data.get(idx).copied())
     }
 
     fn available_scalars(&self) -> Vec<String> {

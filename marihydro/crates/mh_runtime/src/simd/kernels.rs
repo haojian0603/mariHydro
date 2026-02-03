@@ -56,6 +56,17 @@ pub fn compute_flux_batch_f64(
     debug_assert_eq!(out_mom_x.len(), n);
     debug_assert_eq!(out_mom_y.len(), n);
 
+    if !g.is_finite()
+        || h.iter().any(|v| !v.is_finite())
+        || hu.iter().any(|v| !v.is_finite())
+        || hv.iter().any(|v| !v.is_finite())
+        || nx.iter().any(|v| !v.is_finite())
+        || ny.iter().any(|v| !v.is_finite())
+    {
+        compute_flux_scalar_f64(h, hu, hv, nx, ny, g, out_mass, out_mom_x, out_mom_y);
+        return;
+    }
+
     match simd_capability() {
         SimdCapability::Avx512 => {
             #[cfg(target_arch = "x86_64")]
@@ -104,7 +115,13 @@ fn compute_flux_scalar_f64(
     let n = h.len();
     for i in 0..n {
         let hi = h[i];
-        if hi <= 0.0 {
+        if !hi.is_finite()
+            || !hu[i].is_finite()
+            || !hv[i].is_finite()
+            || !nx[i].is_finite()
+            || !ny[i].is_finite()
+            || hi <= 0.0
+        {
             out_mass[i] = 0.0;
             out_mom_x[i] = 0.0;
             out_mom_y[i] = 0.0;
@@ -345,6 +362,22 @@ pub fn update_state_euler_f64(
     debug_assert_eq!(flux_hv.len(), n);
     debug_assert_eq!(areas.len(), n);
 
+    if !dt.is_finite() || !h_min.is_finite() {
+        return;
+    }
+
+    if h.iter().any(|v| !v.is_finite())
+        || hu.iter().any(|v| !v.is_finite())
+        || hv.iter().any(|v| !v.is_finite())
+        || flux_h.iter().any(|v| !v.is_finite())
+        || flux_hu.iter().any(|v| !v.is_finite())
+        || flux_hv.iter().any(|v| !v.is_finite())
+        || areas.iter().any(|v| !v.is_finite() || *v <= 0.0)
+    {
+        update_state_euler_scalar_f64(h, hu, hv, flux_h, flux_hu, flux_hv, areas, dt, h_min);
+        return;
+    }
+
     match simd_capability() {
         SimdCapability::Avx512 | SimdCapability::Avx2 => {
             #[cfg(target_arch = "x86_64")]
@@ -378,7 +411,33 @@ fn update_state_euler_scalar_f64(
     h_min: f64,
 ) {
     for i in 0..h.len() {
-        let inv_area = 1.0 / areas[i];
+        if !h[i].is_finite() {
+            h[i] = h_min;
+            hu[i] = 0.0;
+            hv[i] = 0.0;
+            continue;
+        }
+
+        if !flux_h[i].is_finite() || !flux_hu[i].is_finite() || !flux_hv[i].is_finite() {
+            h[i] = h[i].max(h_min);
+            if h[i] <= h_min {
+                hu[i] = 0.0;
+                hv[i] = 0.0;
+            }
+            continue;
+        }
+
+        let area = areas[i];
+        if !area.is_finite() || area <= 0.0 {
+            h[i] = h[i].max(h_min);
+            if h[i] <= h_min {
+                hu[i] = 0.0;
+                hv[i] = 0.0;
+            }
+            continue;
+        }
+
+        let inv_area = 1.0 / area;
         h[i] = (h[i] - dt * flux_h[i] * inv_area).max(h_min);
         hu[i] -= dt * flux_hu[i] * inv_area;
         hv[i] -= dt * flux_hv[i] * inv_area;
@@ -475,8 +534,12 @@ pub fn compute_wave_speed_batch_f64(
     out: &mut [f64],
 ) {
     let n = h.len();
+    if !g.is_finite() || !h_min.is_finite() {
+        out.fill(0.0);
+        return;
+    }
     for i in 0..n {
-        if h[i] <= h_min {
+        if !h[i].is_finite() || !hu[i].is_finite() || !hv[i].is_finite() || h[i] <= h_min {
             out[i] = 0.0;
         } else {
             let u = hu[i] / h[i];
@@ -497,8 +560,11 @@ pub fn max_wave_speed_f64(
     h_min: f64,
 ) -> f64 {
     let mut max_speed = 0.0;
+    if !g.is_finite() || !h_min.is_finite() {
+        return max_speed;
+    }
     for i in 0..h.len() {
-        if h[i] > h_min {
+        if h[i].is_finite() && hu[i].is_finite() && hv[i].is_finite() && h[i] > h_min {
             let u = hu[i] / h[i];
             let v = hv[i] / h[i];
             let vel = (u * u + v * v).sqrt();

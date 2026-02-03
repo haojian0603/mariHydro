@@ -282,12 +282,22 @@ impl MeshSpatialIndex {
 
         for i in 0..n_cells {
             let vertices = get_cell_vertices(i);
-            if !vertices.is_empty() {
-                if let Ok(env) = CellEnvelope::new(i, &vertices) {
+            if vertices.is_empty() {
+                eprintln!("[mh_mesh::spatial_index] cell {} has empty vertices; skipping envelope", i);
+                cell_vertices.push(vertices);
+                continue;
+            }
+
+            match CellEnvelope::new(i, &vertices) {
+                Ok(env) => {
                     envelopes.push(env);
+                    cell_vertices.push(vertices);
+                }
+                Err(err) => {
+                    eprintln!("[mh_mesh::spatial_index] invalid cell {}: {}", i, err);
+                    cell_vertices.push(vertices);
                 }
             }
-            cell_vertices.push(vertices);
         }
 
         Self {
@@ -366,6 +376,12 @@ impl MeshSpatialIndex {
     /// let index = MeshSpatialIndex::from_serializable(data);
     /// ```
     pub fn from_serializable(data: SpatialIndexData) -> Self {
+        if data.version != SPATIAL_INDEX_VERSION {
+            eprintln!(
+                "[mh_mesh::spatial_index] version mismatch: stored={}, current={}",
+                data.version, SPATIAL_INDEX_VERSION
+            );
+        }
         Self {
             tree: RTree::bulk_load(data.envelopes),
             cell_vertices: data.cell_vertices,
@@ -425,6 +441,9 @@ impl MeshSpatialIndex {
     /// # 返回
     /// 如果点在某个单元内，返回 Some(单元索引)；否则返回 None
     pub fn locate_point(&self, x: f64, y: f64) -> Option<usize> {
+        if self.tree.size() == 0 {
+            return None;
+        }
         // 首先用 R-Tree 快速筛选候选单元
         let candidates = self.tree.locate_all_at_point(&[x, y]);
 
@@ -432,6 +451,25 @@ impl MeshSpatialIndex {
         for envelope in candidates {
             let cell_idx = envelope.cell_index;
             if self.point_in_polygon(x, y, &self.cell_vertices[cell_idx]) {
+                return Some(cell_idx);
+            }
+        }
+
+        None
+    }
+
+    /// 查找包含指定点的单元（带容差）
+    ///
+    /// 当点落在边界附近时，允许使用容差判定为内部。
+    pub fn locate_point_with_tolerance(&self, x: f64, y: f64, tol: f64) -> Option<usize> {
+        if self.tree.size() == 0 {
+            return None;
+        }
+        let candidates = self.tree.locate_all_at_point(&[x, y]);
+
+        for envelope in candidates {
+            let cell_idx = envelope.cell_index;
+            if self.point_in_polygon_tol(x, y, &self.cell_vertices[cell_idx], tol) {
                 return Some(cell_idx);
             }
         }
@@ -451,6 +489,9 @@ impl MeshSpatialIndex {
     /// # 返回
     /// 最近单元的索引，如果索引为空则返回 None
     pub fn locate_nearest(&self, x: f64, y: f64) -> Option<usize> {
+        if self.tree.size() == 0 {
+            return None;
+        }
         self.tree
             .nearest_neighbor(&[x, y])
             .map(|env| env.cell_index)
@@ -527,20 +568,35 @@ impl MeshSpatialIndex {
             center_y + radius,
         );
 
-        // 然后精确过滤
+        // 然后精确过滤：包围盒与圆相交，再用多边形判断
         let r2 = radius * radius;
         candidates
             .into_iter()
             .filter(|&idx| {
-                // 检查单元是否与圆相交（简化：检查包围盒中心是否在圆内）
                 if let Some(env) = self.tree.iter().find(|e| e.cell_index == idx) {
-                    let center = env.center();
-                    let dx = center.x - center_x;
-                    let dy = center.y - center_y;
-                    dx * dx + dy * dy <= r2
-                } else {
-                    false
+                    // 粗略判定 AABB 与圆相交
+                    let nearest_x = center_x.clamp(env.min_x, env.max_x);
+                    let nearest_y = center_y.clamp(env.min_y, env.max_y);
+                    let dx = nearest_x - center_x;
+                    let dy = nearest_y - center_y;
+                    if dx * dx + dy * dy > r2 {
+                        return false;
+                    }
+                    // 精确多边形测试：任一顶点在圆内或包围盒中心在圆内
+                    let poly = &self.cell_vertices[idx];
+                    if poly.iter().any(|p| {
+                        let dx = p.x - center_x;
+                        let dy = p.y - center_y;
+                        dx * dx + dy * dy <= r2
+                    }) {
+                        return true;
+                    }
+                    let c = env.center();
+                    let dcx = c.x - center_x;
+                    let dcy = c.y - center_y;
+                    return dcx * dcx + dcy * dcy <= r2;
                 }
+                false
             })
             .collect()
     }
@@ -579,10 +635,41 @@ impl MeshSpatialIndex {
         inside
     }
 
+    fn point_in_polygon_tol(&self, x: f64, y: f64, vertices: &[Point2D], tol: f64) -> bool {
+        if self.point_in_polygon(x, y, vertices) {
+            return true;
+        }
+
+        if tol <= 0.0 {
+            return false;
+        }
+
+        let n = vertices.len();
+        if n < 2 {
+            return false;
+        }
+
+        for i in 0..n {
+            let a = &vertices[i];
+            let b = &vertices[(i + 1) % n];
+            if point_on_segment_tol(x, y, a, b, tol) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// 检查点是否在任意单元内
     #[inline]
     pub fn contains(&self, x: f64, y: f64) -> bool {
         self.locate_point(x, y).is_some()
+    }
+
+    /// 带容差的包含测试
+    #[inline]
+    pub fn contains_with_tolerance(&self, x: f64, y: f64, tol: f64) -> bool {
+        self.locate_point_with_tolerance(x, y, tol).is_some()
     }
 
     /// 批量定位点
@@ -592,6 +679,18 @@ impl MeshSpatialIndex {
         points
             .iter()
             .map(|&(x, y)| self.locate_point(x, y))
+            .collect()
+    }
+
+    /// 带容差的批量定位
+    pub fn locate_points_batch_with_tolerance(
+        &self,
+        points: &[(f64, f64)],
+        tol: f64,
+    ) -> Vec<Option<usize>> {
+        points
+            .iter()
+            .map(|&(x, y)| self.locate_point_with_tolerance(x, y, tol))
             .collect()
     }
 
@@ -609,6 +708,31 @@ impl MeshSpatialIndex {
     pub fn cell_vertices(&self, cell: usize) -> &[Point2D] {
         &self.cell_vertices[cell]
     }
+}
+
+fn point_on_segment_tol(x: f64, y: f64, a: &Point2D, b: &Point2D, tol: f64) -> bool {
+    let abx = b.x - a.x;
+    let aby = b.y - a.y;
+    let apx = x - a.x;
+    let apy = y - a.y;
+
+    let ab_len2 = abx * abx + aby * aby;
+    if ab_len2 <= 1e-30 {
+        let dx = x - a.x;
+        let dy = y - a.y;
+        return dx * dx + dy * dy <= tol * tol;
+    }
+
+    let t = (apx * abx + apy * aby) / ab_len2;
+    if t < 0.0 - tol || t > 1.0 + tol {
+        return false;
+    }
+
+    let proj_x = a.x + t * abx;
+    let proj_y = a.y + t * aby;
+    let dx = x - proj_x;
+    let dy = y - proj_y;
+    dx * dx + dy * dy <= tol * tol
 }
 
 #[cfg(test)]

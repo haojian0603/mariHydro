@@ -10,17 +10,18 @@
 //! # 设计原则
 //!
 //! 1. **全泛型**: 实现 `ReconstructorGeneric<S>` 支持任意 RuntimeScalar
-//! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
-//! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
+//! 2. **无 DVec2**: 所有几何操作使用 `Vector2D` 接口
+//! 3. **泛型标量**: 几何计算在 `S` 上完成
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
 
 use super::config::{GradientType, MusclConfig};
 use super::traits::{ReconstructedStateGeneric, ReconstructorGeneric};
 use crate::adapter::PhysicsMesh;
+use crate::types::{CellIndex, FaceIndex};
 use crate::numerics::gradient::{
     GradientMethodGeneric, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorageGeneric,
 };
@@ -67,7 +68,7 @@ enum GradientComputer {
 impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     /// 创建新的 MUSCL 重构器
     pub fn new(config: MusclConfig, mesh: Arc<PhysicsMesh>) -> Self {
-        let n_cells = mesh.n_cells();
+        let n_cells = mesh.cell_count();
         
         // 计算网格特征尺度
         let mesh_scale = compute_mesh_scale(&mesh);
@@ -127,7 +128,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     
     /// 计算并限制梯度
     fn compute_and_limit_gradients(&mut self, values: &[S]) {
-        let n_cells = self.mesh.n_cells();
+        let n_cells = self.mesh.cell_count();
         
         if !self.config.second_order {
             // 一阶精度：梯度为零
@@ -155,7 +156,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     
     /// 计算限制因子
     fn compute_limiters(&mut self, values: &[S]) {
-        let n_cells = self.mesh.n_cells();
+        let n_cells = self.mesh.cell_count();
         let dry_tol = S::from_f64(self.config.dry_tolerance).unwrap_or(S::EPSILON);
         
         for cell_id in 0..n_cells {
@@ -197,7 +198,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
         let mut min_val = cell_value;
         let mut max_val = cell_value;
         
-        for neighbor_id in self.mesh.cell_neighbors(mh_runtime::CellIndex(cell_id)) {
+        for neighbor_id in self.mesh.cell_neighbors(CellIndex::new(cell_id)) {
             let neighbor_value = values[neighbor_id.0];
             if neighbor_value < min_val {
                 min_val = neighbor_value;
@@ -213,24 +214,34 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     /// 计算最大梯度投影和距离
     fn compute_max_gradient_projection(&self, cell_id: usize) -> (S, S) {
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
-        let cell_center = self.mesh.cell_center_tuple(cell_id);
+        let cell_center = self
+            .mesh
+            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .expect("cell_center out of range");
+        let cell_center_x = cell_center.x();
+        let cell_center_y = cell_center.y();
         
         let mut max_projection = S::ZERO;
         let mut max_distance = S::ZERO;
         
-        for face_id in self.mesh.cell_faces(mh_runtime::CellIndex(cell_id)) {
-            let face_center = self.mesh.face_center_tuple(face_id.into());
-            
-            // 几何数据 f64 转换为 S
-            let dx = S::from_f64(face_center.0 - cell_center.0).unwrap_or(S::ZERO);
-            let dy = S::from_f64(face_center.1 - cell_center.1).unwrap_or(S::ZERO);
+        for face_id in self.mesh.cell_faces(CellIndex::new(cell_id)) {
+            let face_center = self
+                .mesh
+                .face_center_generic::<CpuBackend<f64>>(face_id)
+                .expect("face_center out of range");
+
+            let dx = face_center.x() - cell_center_x;
+            let dy = face_center.y() - cell_center_y;
             
             let distance = (dx * dx + dy * dy).sqrt();
-            let projection = (grad_x * dx + grad_y * dy).abs();
+            let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
+            let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
+            let projection = (grad_x * dx_s + grad_y * dy_s).abs();
+            let distance_s = S::from_f64(distance).unwrap_or(S::ZERO);
             
             if projection > max_projection {
                 max_projection = projection;
-                max_distance = distance;
+                max_distance = distance_s;
             }
         }
         
@@ -245,23 +256,34 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
         }
         
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
-        let cell_center = self.mesh.cell_center_tuple(cell_id);
+        let cell_center = self
+            .mesh
+            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .expect("cell_center out of range");
+        let cell_center_x = cell_center.x();
+        let cell_center_y = cell_center.y();
         
-        let faces: Vec<usize> = self.mesh.cell_faces(mh_runtime::CellIndex(cell_id))
+        let faces: Vec<usize> = self
+            .mesh
+            .cell_faces(CellIndex::new(cell_id))
             .map(|f| f.into())
             .collect();
         
         for face_id in faces {
-            let face_center = self.mesh.face_center_tuple(face_id);
+            let face_center = self
+                .mesh
+                .face_center_generic::<CpuBackend<f64>>(FaceIndex::new(face_id))
+                .expect("face_center out of range");
+
+            let dx = face_center.x() - cell_center_x;
+            let dy = face_center.y() - cell_center_y;
+            let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
+            let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
             
-            // 几何数据 f64 转换为 S
-            let dx = S::from_f64(face_center.0 - cell_center.0).unwrap_or(S::ZERO);
-            let dy = S::from_f64(face_center.1 - cell_center.1).unwrap_or(S::ZERO);
-            
-            let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx + grad_y * dy);
+            let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx_s + grad_y * dy_s);
             
             if reconstructed < S::ZERO {
-                let denominator = grad_x * dx + grad_y * dy;
+                let denominator = grad_x * dx_s + grad_y * dy_s;
                 let eps = S::from_f64(1e-12).unwrap_or(S::EPSILON);
                 if denominator.abs() > eps {
                     let alpha_safe = (-cell_value / denominator).abs();
@@ -277,17 +299,20 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     
     /// 重构面值
     fn reconstruct_at_face(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
-        let fi = mh_runtime::FaceIndex(face_id);
+        let fi = FaceIndex::new(face_id);
         let left_cell: usize = self.mesh.face_owner(fi).into();
         let right_cell: Option<usize> = self.mesh.face_neighbor(fi).map(|c| c.into());
-        let face_center = self.mesh.face_center_tuple(face_id);
+        let face_center = self
+            .mesh
+            .face_center_generic::<CpuBackend<f64>>(fi)
+            .expect("face_center out of range");
         
         // 左侧重构
-        let left_value = self.reconstruct_at_point(left_cell, face_center, values);
+        let left_value = self.reconstruct_at_point(left_cell, &face_center, values);
         
         // 右侧重构
         let right_value = if let Some(right_id) = right_cell {
-            self.reconstruct_at_point(right_id, face_center, values)
+            self.reconstruct_at_point(right_id, &face_center, values)
         } else {
             left_value
         };
@@ -296,20 +321,24 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 从单元中心重构到指定点
-    fn reconstruct_at_point(&self, cell_id: usize, point: (f64, f64), values: &[S]) -> S {
+    fn reconstruct_at_point(&self, cell_id: usize, point: &impl Vector2D<Scalar = f64>, values: &[S]) -> S {
         if !self.config.second_order {
             return values[cell_id];
         }
         
-        let cell_center = self.mesh.cell_center_tuple(cell_id);
+        let cell_center = self
+            .mesh
+            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .expect("cell_center out of range");
         
-        // 几何数据 f64 转换为 S
-        let dx = S::from_f64(point.0 - cell_center.0).unwrap_or(S::ZERO);
-        let dy = S::from_f64(point.1 - cell_center.1).unwrap_or(S::ZERO);
+        let dx = point.x() - cell_center.x();
+        let dy = point.y() - cell_center.y();
+        let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
+        let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
         
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
         
-        values[cell_id] + grad_x * dx + grad_y * dy
+        values[cell_id] + grad_x * dx_s + grad_y * dy_s
     }
 }
 
@@ -345,16 +374,16 @@ impl<S: RuntimeScalar> ReconstructorGeneric<S> for MusclReconstructorGeneric<S> 
 
 /// 计算网格特征尺度
 fn compute_mesh_scale(mesh: &PhysicsMesh) -> f64 {
-    if mesh.n_cells() == 0 {
+    if mesh.cell_count() == 0 {
         return 1.0;
     }
     
     // 使用平均单元面积的平方根作为特征尺度
-    let total_area: f64 = (0..mesh.n_cells())
-        .filter_map(|i| mesh.cell_area(mh_runtime::CellIndex(i)))
+    let total_area: f64 = (0..mesh.cell_count())
+        .filter_map(|i| mesh.cell_area(CellIndex::new(i)))
         .sum();
     
-    (total_area / mesh.n_cells() as f64).sqrt()
+    (total_area / mesh.cell_count() as f64).sqrt()
 }
 
 // ============================================================================

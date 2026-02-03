@@ -56,7 +56,7 @@ pub mod traits;
 pub mod types;
 pub mod vertical;
 
-// 待迁移模块（占位）
+// 业务功能模块（持续整理中）
 pub mod forcing;
 pub mod limiters;
 pub mod numerics;

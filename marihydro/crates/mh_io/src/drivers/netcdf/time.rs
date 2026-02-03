@@ -312,7 +312,38 @@ impl DateTime {
             (0, 0, 0.0)
         };
 
+        Self::validate_standard(year, month, day, hour, minute, second)?;
+
         Ok(Self::new(year, month, day, hour, minute, second))
+    }
+
+    fn validate_standard(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: f64,
+    ) -> CfTimeResult<()> {
+        if !(1..=12).contains(&month) {
+            return Err(CfTimeError::InvalidDate(format!("无效的月份: {}", month)));
+        }
+        if hour > 23 {
+            return Err(CfTimeError::InvalidDate(format!("无效的小时: {}", hour)));
+        }
+        if minute > 59 {
+            return Err(CfTimeError::InvalidDate(format!("无效的分钟: {}", minute)));
+        }
+        if !second.is_finite() || second < 0.0 || second >= 60.0 {
+            return Err(CfTimeError::InvalidDate(format!("无效的秒数: {}", second)));
+        }
+
+        let calendar = CfCalendar::Standard;
+        let max_day = calendar.days_in_month(year, month);
+        if day == 0 || day > max_day {
+            return Err(CfTimeError::InvalidDate(format!("无效的日期: {}-{}-{}", year, month, day)));
+        }
+        Ok(())
     }
 
     /// 格式化为字符串
@@ -436,6 +467,9 @@ impl CfTimeUnits {
 
     /// 在日期时间上增加秒数
     fn add_seconds_to_datetime(&self, base: &DateTime, seconds: f64) -> DateTime {
+        if !seconds.is_finite() {
+            return *base;
+        }
         let jd = self.datetime_to_julian_day(base);
         let new_jd = jd + seconds / 86400.0;
         self.julian_day_to_datetime(new_jd)

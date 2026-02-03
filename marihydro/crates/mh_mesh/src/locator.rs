@@ -170,7 +170,10 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 定位点
     pub fn locate(&self, x: f64, y: f64) -> LocateResult {
-        if let Some(cell_idx) = self.index.locate_point(x, y) {
+        if let Some(cell_idx) = self
+            .index
+            .locate_point_with_tolerance(x, y, self.tolerance.boundary_tol)
+        {
             let bary = self.compute_barycentric(cell_idx, x, y);
             return LocateResult::InCell {
                 cell_index: cell_idx,
@@ -192,13 +195,16 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     /// 快速判断点是否在网格内
     #[inline]
     pub fn contains(&self, x: f64, y: f64) -> bool {
-        self.index.locate_point(x, y).is_some()
+        self.index
+            .locate_point_with_tolerance(x, y, self.tolerance.boundary_tol)
+            .is_some()
     }
 
     /// 查找点所在的单元（仅返回单元索引）
     #[inline]
     pub fn find_cell(&self, x: f64, y: f64) -> Option<usize> {
-        self.index.locate_point(x, y)
+        self.index
+            .locate_point_with_tolerance(x, y, self.tolerance.boundary_tol)
     }
 
     /// 批量定位点
@@ -210,18 +216,16 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     pub fn compute_barycentric(&self, cell: usize, x: f64, y: f64) -> [f64; 3] {
         let vertices = self.mesh.get_cell_vertices(cell);
 
+        if vertices.len() < 3 {
+            return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
+        }
+
         if vertices.len() > 3 {
             for i in 1..vertices.len().saturating_sub(1) {
                 if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y) {
                     return bary;
                 }
             }
-        }
-
-        if vertices.len() != 3 {
-            let n = vertices.len() as f64;
-            let w = 1.0 / n.max(1.0);
-            return [w, w, 1.0 - 2.0 * w];
         }
 
         let (v0, v1, v2) = (&vertices[0], &vertices[1], &vertices[2]);
@@ -264,12 +268,23 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 在指定单元内插值
     pub fn interpolate_in_cell(&self, cell: usize, x: f64, y: f64, vertex_values: &[f64]) -> f64 {
-        let bary = self.compute_barycentric(cell, x, y);
-        if vertex_values.len() >= 3 {
-            bary[0] * vertex_values[0] + bary[1] * vertex_values[1] + bary[2] * vertex_values[2]
-        } else {
-            vertex_values.iter().sum::<f64>() / vertex_values.len() as f64
+        let vertices = self.mesh.get_cell_vertices(cell);
+        if vertices.len() >= 3 && vertex_values.len() == vertices.len() {
+            if vertices.len() == 3 {
+                let bary = self.compute_barycentric(cell, x, y);
+                return bary[0] * vertex_values[0]
+                    + bary[1] * vertex_values[1]
+                    + bary[2] * vertex_values[2];
+            }
+            for i in 1..vertices.len().saturating_sub(1) {
+                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y) {
+                    return bary[0] * vertex_values[0]
+                        + bary[1] * vertex_values[i]
+                        + bary[2] * vertex_values[i + 1];
+                }
+            }
         }
+        vertex_values.iter().sum::<f64>() / vertex_values.len().max(1) as f64
     }
 
     /// 获取网格引用
@@ -399,7 +414,7 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     /// 检查点是否在指定单元内
     fn point_in_cell(&self, cell: usize, x: f64, y: f64) -> bool {
         let vertices = get_cell_vertices_from_mesh(self.locator.mesh(), cell);
-        point_in_polygon(x, y, &vertices)
+        point_in_polygon_tol(x, y, &vertices, self.locator.tolerance().boundary_tol)
     }
 
     /// 获取缓存统计信息
@@ -473,6 +488,56 @@ fn point_in_polygon(x: f64, y: f64, vertices: &[Point2D]) -> bool {
     }
 
     inside
+}
+
+fn point_in_polygon_tol(x: f64, y: f64, vertices: &[Point2D], tol: f64) -> bool {
+    if point_in_polygon(x, y, vertices) {
+        return true;
+    }
+
+    if tol <= 0.0 {
+        return false;
+    }
+
+    let n = vertices.len();
+    if n < 2 {
+        return false;
+    }
+
+    for i in 0..n {
+        let a = &vertices[i];
+        let b = &vertices[(i + 1) % n];
+        if point_on_segment_tol(x, y, a, b, tol) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn point_on_segment_tol(x: f64, y: f64, a: &Point2D, b: &Point2D, tol: f64) -> bool {
+    let abx = b.x - a.x;
+    let aby = b.y - a.y;
+    let apx = x - a.x;
+    let apy = y - a.y;
+
+    let ab_len2 = abx * abx + aby * aby;
+    if ab_len2 <= 1e-30 {
+        let dx = x - a.x;
+        let dy = y - a.y;
+        return dx * dx + dy * dy <= tol * tol;
+    }
+
+    let t = (apx * abx + apy * aby) / ab_len2;
+    if t < 0.0 - tol || t > 1.0 + tol {
+        return false;
+    }
+
+    let proj_x = a.x + t * abx;
+    let proj_y = a.y + t * aby;
+    let dx = x - proj_x;
+    let dy = y - proj_y;
+    dx * dx + dy * dy <= tol * tol
 }
 
 #[cfg(test)]

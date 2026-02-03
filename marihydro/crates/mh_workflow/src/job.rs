@@ -159,7 +159,7 @@ pub struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            project_path: PathBuf::new(),
+            project_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             start_time: 0.0,
             end_time: 3600.0,
             output_interval: 60.0,
@@ -174,8 +174,8 @@ impl Default for SimulationConfig {
 impl SimulationConfig {
     /// 创建新配置
     pub fn new(project_path: impl Into<PathBuf>) -> Self {
-        Self {
-            project_path: project_path.into(),
+            Self {
+                project_path: project_path.into(),
             ..Default::default()
         }
     }
@@ -212,10 +212,17 @@ impl SimulationConfig {
         if self.end_time <= self.start_time {
             return Err("End time must be greater than start time".into());
         }
-        if self.output_interval <= 0.0 {
-            return Err("Output interval must be positive".into());
+        if !self.output_interval.is_finite() {
+            return Err("Output interval must be finite".into());
         }
-        if self.checkpoint_interval < 0.0 {
+        if self.enable_output {
+            if self.output_interval <= 0.0 {
+                return Err("Output interval must be positive when output enabled".into());
+            }
+        } else if self.output_interval != 0.0 {
+            return Err("Output interval must be 0 when output disabled".into());
+        }
+        if !self.checkpoint_interval.is_finite() || self.checkpoint_interval < 0.0 {
             return Err("Checkpoint interval must be non-negative".into());
         }
         if self.max_cfl <= 0.0 || self.max_cfl > 1.0 {
@@ -410,7 +417,9 @@ mod tests {
 
     #[test]
     fn test_simulation_job() {
-        let config = SimulationConfig::new("test.mhp")
+        let config = SimulationConfig::new(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        )
             .with_time_range(0.0, 3600.0);
 
         let mut job = SimulationJob::new("Test Job", config)

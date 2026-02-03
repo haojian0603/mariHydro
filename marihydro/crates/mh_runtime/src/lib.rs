@@ -61,7 +61,9 @@ pub use buffer::{
 };
 pub use indices::{
     CellIndex, FaceIndex, NodeIndex, EdgeIndex, BoundaryIndex, LayerIndex, VertexIndex,
-    HalfEdgeIndex, INVALID_INDEX
+    HalfEdgeIndex, INVALID_INDEX,
+    from_foundation_cell, from_foundation_face, from_foundation_node,
+    to_foundation_cell, to_foundation_face, to_foundation_node,
 };
 pub use tolerance::Tolerance;
 pub use arena_ext::{

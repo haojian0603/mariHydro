@@ -28,6 +28,7 @@
 //! ```
 
 mod adaptive;
+mod central;
 mod hllc;
 mod hlle;
 mod roe;
@@ -39,6 +40,9 @@ pub mod batch;
 pub use traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
+
+// 中心差分求解器
+pub use central::CentralSolver;
 
 // HLLC 求解器
 pub use hllc::HllcSolver;

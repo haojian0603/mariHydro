@@ -7,6 +7,7 @@ description = "MariHydro Config Layer - Precision, SolverConfig, DynSolver"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+mh_foundation = { path = "../mh_foundation" }
 mh_runtime = { path = "../mh_runtime" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

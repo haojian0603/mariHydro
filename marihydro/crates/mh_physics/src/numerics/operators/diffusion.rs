@@ -208,7 +208,7 @@ where
 
     /// 计算最小面距离平方
     fn compute_min_dist_sq(mesh: &PhysicsMesh, backend: &B) -> B::Scalar {
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
         let mut min_sq = B::Scalar::MAX;
         let eps = backend.scalar_from_f64(1e-14);
 
@@ -252,8 +252,8 @@ where
 
     /// 计算扩散通量
     fn compute_fluxes(&self, field: &[B::Scalar]) -> B::Buffer<B::Scalar> {
-        let n_cells = self.mesh.n_cells();
-        let n_faces = self.mesh.n_faces();
+        let n_cells = self.mesh.cell_count();
+        let n_faces = self.mesh.face_count();
         let nu = self.config.nu;
 
         let mut flux_sum = self.backend.alloc_init(n_cells, B::Scalar::ZERO);
@@ -344,7 +344,7 @@ where
     ) -> Result<(), DiffusionError> {
         self.validate_params(dt)?;
 
-        let n_cells = self.mesh.n_cells();
+        let n_cells = self.mesh.cell_count();
         if field.len() != n_cells || field_out.len() != n_cells {
             return Err(DiffusionError::SizeMismatch {
                 expected: n_cells,
@@ -483,8 +483,8 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
         nu: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
     ) -> Result<(), DiffusionError> {
-        let n_cells = self.mesh.n_cells();
-        let n_faces = self.mesh.n_faces();
+        let n_cells = self.mesh.cell_count();
+        let n_faces = self.mesh.face_count();
 
         if field.len() != n_cells || field_out.len() != n_cells || nu.len() != n_cells {
             return Err(DiffusionError::SizeMismatch {

@@ -103,7 +103,7 @@ impl SourceTerm for CoriolisConfig {
         ctx: &SourceContext,
     ) -> SourceContribution {
         let h = state.h[cell];
-        if ctx.is_dry(h) {
+        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= 0.0 || ctx.is_dry(h) {
             return SourceContribution::ZERO;
         }
 
@@ -255,7 +255,7 @@ macro_rules! impl_coriolis_generic {
                 ctx: &SourceContextGeneric<$scalar>,
             ) -> SourceContributionGeneric<$scalar> {
                 let h = state.h[cell];
-                if ctx.is_dry(h) {
+                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) || ctx.is_dry(h) {
                     return SourceContributionGeneric::default();
                 }
 

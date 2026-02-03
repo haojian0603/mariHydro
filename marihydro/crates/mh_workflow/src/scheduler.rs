@@ -42,8 +42,8 @@ pub enum HybridStrategy {
 impl std::fmt::Display for HybridStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CpuOnly => write!(f, "CPU Only"),
-            Self::Auto => write!(f, "Auto"),
+            Self::CpuOnly => write!(f, "仅 CPU"),
+            Self::Auto => write!(f, "自动"),
         }
     }
 }
@@ -101,16 +101,6 @@ impl DeviceSelection {
         }
     }
 
-    /// GPU选择 (legacy; remains for compatibility but unused)
-    pub fn gpu(device_type: DeviceType, reason: impl Into<String>, speedup: f64) -> Self {
-        Self {
-            device_type,
-            reason: reason.into(),
-            estimated_speedup: speedup,
-            is_fallback: false,
-        }
-    }
-
     /// 回退选择
     pub fn fallback(reason: impl Into<String>) -> Self {
         Self {
@@ -156,14 +146,14 @@ impl HybridScheduler {
     /// 选择计算设备
     pub fn select_device(&self, _num_cells: usize) -> DeviceSelection {
         // GPU support removed; always choose CPU for now.
-        DeviceSelection::cpu("GPU support removed; CPU only")
+        DeviceSelection::cpu("GPU 支持已移除，当前仅使用 CPU")
     }
 
     /// 自动选择设备
     // Automatic selection removed (CPU only)
     #[allow(dead_code)]
     fn auto_select(&self, _num_cells: usize) -> DeviceSelection {
-        DeviceSelection::cpu("GPU support removed; auto -> CPU")
+        DeviceSelection::cpu("GPU 支持已移除，自动选择回退为 CPU")
     }
 
     // 记录性能数据
@@ -367,7 +357,7 @@ impl HybridScheduler {
         // 回退相关建议
         if stats.fallback_rate() > 0.1 {
             recommendations.push(format!(
-                "回退率较高 ({:.1}%)，建议检查 GPU 内存配置或调整阈值",
+                "回退率较高（{:.1}%），建议检查任务划分或线程配置",
                 stats.fallback_rate() * 100.0
             ));
         }
@@ -394,10 +384,10 @@ impl HybridScheduler {
         println!("========== 调度器诊断报告 ==========");
         println!("配置: {}", diag.config_summary);
         println!();
-        // GPU support removed; skip GPU diagnostics
+        // GPU 支持已移除，无 GPU 诊断信息
         println!("性能统计:");
         println!("  CPU 调用: {}", diag.performance.cpu_invocations);
-        println!("  CPU 吞吐: {:.0} cells/s", diag.performance.avg_cpu_cells_per_sec);
+        println!("  CPU 吞吐: {:.0} 单元/秒", diag.performance.avg_cpu_cells_per_sec);
         if let Some(speedup) = diag.performance.actual_speedup() {
             println!("  实测加速比: {:.2}x", speedup);
         }
@@ -445,7 +435,7 @@ mod tests {
 
         let selection = scheduler.select_device(100_000);
         assert_eq!(selection.device_type, DeviceType::Cpu);
-        assert!(selection.reason.contains("GPU support removed"));
+        assert!(selection.reason.contains("GPU 支持已移除"));
     }
 
     // GPU-related tests removed — scheduler is now CPU-only.

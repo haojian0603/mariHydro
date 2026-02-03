@@ -28,6 +28,7 @@
 //! ```
 
 use mh_mesh::FrozenMesh;
+use mh_mesh::structured::StructuredMesh as StructuredMesh2D;
 use num_traits::FromPrimitive;
 use mh_runtime::Backend;
 use std::sync::Arc;
@@ -54,6 +55,18 @@ impl PhysicsMesh {
         Self { inner: frozen }
     }
 
+    /// 从结构化网格创建适配器
+    #[inline]
+    pub fn from_structured(mesh: &StructuredMesh2D) -> Result<Self, MhError> {
+        let frozen = mesh
+            .freeze()
+            .map_err(|e| MhError::invalid_input(format!("结构化网格冻结失败: {}", e)))?;
+        frozen
+            .validate()
+            .map_err(|e| MhError::invalid_input(format!("结构化网格冻结失败: {}", e)))?;
+        Ok(Self::new(Arc::new(frozen)))
+    }
+
     /// 从FrozenMesh引用创建（克隆数据）
     #[inline]
     pub fn from_frozen(frozen: &FrozenMesh) -> Self {
@@ -77,37 +90,64 @@ impl PhysicsMesh {
     }
 
     // =========================================================================
-    // 基本统计 (Legacy接口 - 保留usize，这些是数量统计而非索引)
+    // 基本统计（强制显式命名，避免旧接口残留）
     // =========================================================================
 
     /// 节点数量
     #[inline]
-    pub fn n_nodes(&self) -> usize {
+    pub fn node_count(&self) -> usize {
         self.inner.n_nodes
     }
 
+
     /// 单元数量
     #[inline]
-    pub fn n_cells(&self) -> usize {
+    pub fn cell_count(&self) -> usize {
         self.inner.n_cells
     }
 
+
     /// 面数量
     #[inline]
-    pub fn n_faces(&self) -> usize {
+    pub fn face_count(&self) -> usize {
         self.inner.n_faces
     }
 
+
     /// 内部面数量
     #[inline]
-    pub fn n_interior_faces(&self) -> usize {
+    pub fn interior_face_count(&self) -> usize {
         self.inner.n_interior_faces
     }
 
     /// 边界面数量
     #[inline]
-    pub fn n_boundary_faces(&self) -> usize {
+    pub fn boundary_face_count(&self) -> usize {
         self.inner.n_faces - self.inner.n_interior_faces
+    }
+
+    /// 单元索引迭代器
+    #[inline]
+    pub fn cell_indices(&self) -> impl Iterator<Item = CellIndex> + '_ {
+        (0..self.cell_count()).map(CellIndex::new)
+    }
+
+    /// 面索引迭代器
+    #[inline]
+    pub fn face_indices(&self) -> impl Iterator<Item = FaceIndex> + '_ {
+        (0..self.face_count()).map(FaceIndex::new)
+    }
+
+    /// 内部面索引迭代器
+    #[inline]
+    pub fn interior_face_indices(&self) -> impl Iterator<Item = FaceIndex> + '_ {
+        (0..self.interior_face_count()).map(FaceIndex::new)
+    }
+
+    /// 边界面索引迭代器
+    #[inline]
+    pub fn boundary_face_indices(&self) -> impl Iterator<Item = FaceIndex> + '_ {
+        (self.interior_face_count()..self.face_count()).map(FaceIndex::new)
     }
 
     // =========================================================================
@@ -118,8 +158,8 @@ impl PhysicsMesh {
     #[inline]
     pub fn cell_center_generic<B: Backend>(&self, cell: CellIndex) -> Result<B::Vector2D, MhError> {
         let idx = cell.get();
-        if idx >= self.n_cells() {
-            return Err(MhError::index_out_of_bounds("Cell", idx, self.n_cells()));
+        if idx >= self.cell_count() {
+            return Err(MhError::index_out_of_bounds("Cell", idx, self.cell_count()));
         }
         let p = self.inner.cell_center[idx];
         let x = B::Scalar::from_f64(p.x as f64)
@@ -127,13 +167,6 @@ impl PhysicsMesh {
         let y = B::Scalar::from_f64(p.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
         Ok(B::vec2_new(x, y))
-    }
-
-    /// 获取单元中心坐标（元组版 - usize索引）
-    #[inline]
-    pub fn cell_center_tuple(&self, cell: usize) -> (f64, f64) {
-        let p = self.inner.cell_center[cell];
-        (p.x, p.y)
     }
 
     /// 获取单元底床高程 [m]
@@ -157,7 +190,7 @@ impl PhysicsMesh {
     /// 获取单元面积（无边界检查 - 性能敏感场景使用）
     #[inline]
     pub fn cell_area_unchecked(&self, cell: CellIndex) -> f64 {
-        debug_assert!(cell.get() < self.n_cells(), "CellIndex越界: {}", cell.get());
+        debug_assert!(cell.get() < self.cell_count(), "CellIndex越界: {}", cell.get());
         self.inner.cell_area[cell.get()]
     }
 
@@ -219,8 +252,8 @@ impl PhysicsMesh {
     #[inline]
     pub fn face_center_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
-        if idx >= self.n_faces() {
-            return Err(MhError::index_out_of_bounds("Face", idx, self.n_faces()));
+        if idx >= self.face_count() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let p = self.inner.face_center[idx];
         let x = B::Scalar::from_f64(p.x as f64)
@@ -230,19 +263,12 @@ impl PhysicsMesh {
         Ok(B::vec2_new(x, y))
     }
 
-    /// 获取面中心坐标（元组版 - usize索引）
-    #[inline]
-    pub fn face_center_tuple(&self, face: usize) -> (f64, f64) {
-        let p = self.inner.face_center[face];
-        (p.x, p.y)
-    }
-
     /// 获取面法向量 (Backend几何类型 - Layer 3强制使用)
     #[inline]
     pub fn face_normal_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
         let idx = face.get();
-        if idx >= self.n_faces() {
-            return Err(MhError::index_out_of_bounds("Face", idx, self.n_faces()));
+        if idx >= self.face_count() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let n = self.inner.face_normal[idx];
         let x = B::Scalar::from_f64(n.x as f64)
@@ -250,20 +276,6 @@ impl PhysicsMesh {
         let y = B::Scalar::from_f64(n.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("法向量y={}转换失败：超出目标类型范围", n.y)))?;
         Ok(B::vec2_new(x, y))
-    }
-
-    /// 获取面法向量 (3D元组 - Legacy接口)
-    #[inline]
-    pub fn face_normal_3d(&self, face: FaceIndex) -> (f64, f64, f64) {
-        let n = self.inner.face_normal[face.get()];
-        (n.x, n.y, n.z)
-    }
-
-    /// 获取面法向量 (2D元组)
-    #[inline]
-    pub fn face_normal_2d_tuple(&self, face: usize) -> (f64, f64) {
-        let n = self.inner.face_normal[face];
-        (n.x, n.y)
     }
 
     /// 获取面长度 [m]
@@ -310,42 +322,6 @@ impl PhysicsMesh {
         self.inner.face_neighbor[idx] != u32::MAX
     }
 
-    /// 获取面左侧高程 [m]
-    #[inline]
-    pub fn face_z_left(&self, face: FaceIndex) -> f64 {
-        self.inner.face_z_left[face.get()]
-    }
-
-    /// 获取面右侧高程 [m]
-    #[inline]
-    pub fn face_z_right(&self, face: FaceIndex) -> f64 {
-        self.inner.face_z_right[face.get()]
-    }
-
-    /// 获取面到owner的向量 (Backend几何类型 - Layer 3强制使用)
-    #[inline]
-    pub fn face_delta_owner_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
-        let idx = face.get();
-        let d = self.inner.face_delta_owner[idx];
-        let x = B::Scalar::from_f64(d.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("向量x={}转换失败：超出目标类型范围", d.x)))?;
-        let y = B::Scalar::from_f64(d.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("向量y={}转换失败：超出目标类型范围", d.y)))?;
-        Ok(B::vec2_new(x, y))
-    }
-
-    /// 获取面到neighbor的向量 (Backend几何类型)
-    #[inline]
-    pub fn face_delta_neighbor_generic<B: Backend>(&self, face: FaceIndex) -> Result<B::Vector2D, MhError> {
-        let idx = face.get();
-        let d = self.inner.face_delta_neighbor[idx];
-        let x = B::Scalar::from_f64(d.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("向量x={}转换失败：超出目标类型范围", d.x)))?;
-        let y = B::Scalar::from_f64(d.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("向量y={}转换失败：超出目标类型范围", d.y)))?;
-        Ok(B::vec2_new(x, y))
-    }
-
     /// 获取owner到neighbor的距离 [m]
     #[inline]
     pub fn face_dist_o2n(&self, face: FaceIndex) -> f64 {
@@ -361,6 +337,18 @@ impl PhysicsMesh {
         } else {
             None
         }
+    }
+
+    /// 获取面左侧床面高程 [m]
+    #[inline]
+    pub fn face_z_left(&self, face: FaceIndex) -> f64 {
+        self.inner.face_z_left[face.get()]
+    }
+
+    /// 获取面右侧床面高程 [m]
+    #[inline]
+    pub fn face_z_right(&self, face: FaceIndex) -> f64 {
+        self.inner.face_z_right[face.get()]
     }
 
     /// 判断是否为边界面
@@ -403,45 +391,6 @@ impl PhysicsMesh {
     // 范围迭代器 (usize是合理的，因为Range本身就是usize)
     // =========================================================================
 
-    /// 内部面索引范围
-    #[inline]
-    pub fn interior_faces(&self) -> std::ops::Range<usize> {
-        0..self.inner.n_interior_faces
-    }
-
-    /// 边界面索引范围
-    #[inline]
-    pub fn boundary_faces(&self) -> std::ops::Range<usize> {
-        self.inner.n_interior_faces..self.inner.n_faces
-    }
-
-    /// 单元索引范围
-    #[inline]
-    pub fn cells(&self) -> std::ops::Range<usize> {
-        0..self.inner.n_cells
-    }
-
-    /// 面索引范围
-    #[inline]
-    pub fn faces(&self) -> std::ops::Range<usize> {
-        0..self.inner.n_faces
-    }
-
-    // =========================================================================
-    // 统计信息 (Legacy接口)
-    // =========================================================================
-
-    /// 最小单元尺寸 [m]
-    #[inline]
-    pub fn min_cell_size(&self) -> f64 {
-        self.inner.min_cell_size
-    }
-
-    /// 最大单元尺寸 [m]
-    #[inline]
-    pub fn max_cell_size(&self) -> f64 {
-        self.inner.max_cell_size
-    }
 }
 
 // ============================================================================
@@ -450,11 +399,11 @@ impl PhysicsMesh {
 
 impl mh_io::exporters::vtu::VtuMesh for PhysicsMesh {
     fn n_nodes(&self) -> usize {
-        self.n_nodes()
+        self.node_count()
     }
 
     fn n_cells(&self) -> usize {
-        self.n_cells()
+        self.cell_count()
     }
 
     fn node_position(&self, idx: usize) -> [f64; 3] {
@@ -497,9 +446,9 @@ mod tests {
         let frozen = FrozenMesh::empty();
         let mesh = PhysicsMesh::from_frozen(&frozen);
 
-        assert_eq!(mesh.n_cells(), 0);
-        assert_eq!(mesh.n_faces(), 0);
-        assert_eq!(mesh.n_nodes(), 0);
+        assert_eq!(mesh.cell_count(), 0);
+        assert_eq!(mesh.face_count(), 0);
+        assert_eq!(mesh.node_count(), 0);
     }
 
     #[test]

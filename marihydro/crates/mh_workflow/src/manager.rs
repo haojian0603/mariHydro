@@ -11,6 +11,7 @@ use parking_lot::RwLock;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use thiserror::Error;
+use mh_foundation::MhError;
 
 /// 工作流错误
 #[derive(Debug, Error)]
@@ -39,9 +40,38 @@ pub enum WorkflowError {
     #[error("Job already exists: {0}")]
     AlreadyExists(JobId),
 
+    /// 运行失败
+    #[error("Execution failed: {0}")]
+    ExecutionFailed(String),
+
     /// 其他错误
     #[error("{0}")]
     Other(String),
+}
+
+impl From<WorkflowError> for MhError {
+    fn from(err: WorkflowError) -> Self {
+        match err {
+            WorkflowError::Storage(storage) => storage.into(),
+            WorkflowError::NotFound(job_id) => MhError::not_found(format!("job:{job_id}")),
+            WorkflowError::InvalidTransition(from, to) => MhError::invalid_input(format!(
+                "任务状态非法转换: {from:?} -> {to:?}"
+            )),
+            WorkflowError::InvalidConfig(message) => {
+                MhError::invalid_input(format!("任务配置无效: {message}"))
+            }
+            WorkflowError::ConfigError(message) => {
+                MhError::invalid_input(format!("任务配置错误: {message}"))
+            }
+            WorkflowError::AlreadyExists(job_id) => {
+                MhError::invalid_input(format!("任务已存在: {job_id}"))
+            }
+            WorkflowError::ExecutionFailed(message) => {
+                MhError::internal(format!("任务执行失败: {message}"))
+            }
+            WorkflowError::Other(message) => MhError::internal(format!("工作流错误: {message}")),
+        }
+    }
 }
 
 /// 任务优先级队列项
@@ -479,11 +509,18 @@ mod tests {
 
     fn create_manager() -> WorkflowManager<MemoryStorage> {
         let storage = MemoryStorage::new();
-        WorkflowManager::new(storage)
+        WorkflowManager::with_config(
+            storage,
+            ManagerConfig {
+                max_concurrent: 4,
+                auto_start: false,
+                timeout_secs: 0,
+            },
+        )
     }
 
     fn create_job(name: &str) -> SimulationJob {
-        let config = SimulationConfig::new("test.mhp");
+        let config = SimulationConfig::new(".");
         SimulationJob::new(name, config)
     }
 

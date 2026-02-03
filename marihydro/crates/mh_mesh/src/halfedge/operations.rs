@@ -173,7 +173,7 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
             Some(h) => h.clone(),
             None => return TopologyResult::InvalidInput,
         };
-        let he_prev = match self.halfedge(he_data.prev) {
+        let _he_prev = match self.halfedge(he_data.prev) {
             Some(h) => h.clone(),
             None => return TopologyResult::InvalidInput,
         };
@@ -181,7 +181,7 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
             Some(h) => h.clone(),
             None => return TopologyResult::InvalidInput,
         };
-        let tw_prev = match self.halfedge(twin_data.prev) {
+        let _tw_prev = match self.halfedge(twin_data.prev) {
             Some(h) => h.clone(),
             None => return TopologyResult::InvalidInput,
         };
@@ -194,95 +194,57 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
         // 获取四个顶点
         let v0 = he_data.origin;
         let v1 = twin_data.origin;
-        let v2 = he_next.origin; // he.next 起点 = he 终点的下一个 = 第三个顶点
+        let v2 = he_next.origin;
         let v3 = tw_next.origin;
 
-        // 更新顶点出发边（如果它们指向被修改的边）
-        if let Some(v) = self.vertex(v0) {
-            if v.halfedge == he {
-                if let Some(vm) = self.vertex_mut(v0) {
-                    vm.halfedge = tw_prev.prev; // 指向另一条边
-                }
-            }
-        }
-        if let Some(v) = self.vertex(v1) {
-            if v.halfedge == twin {
-                if let Some(vm) = self.vertex_mut(v1) {
-                    vm.halfedge = he_prev.prev;
-                }
-            }
-        }
-
-        // 翻转边：he 从 v0->v1 变成 v3->v2
-        //        twin 从 v1->v0 变成 v2->v3
         let face0 = he_data.face;
         let face1 = twin_data.face;
 
-        // 更新 he
-        if let Some(h) = self.halfedge_mut(he) {
-            h.origin = v3;
-            h.next = he_prev.prev; // he_prev (原来的prev)
-            h.prev = twin_data.next;
-        }
-
-        // 更新 twin
-        if let Some(h) = self.halfedge_mut(twin) {
-            h.origin = v2;
-            h.next = tw_prev.prev;
-            h.prev = he_data.next;
-        }
-
-        // 更新周围半边的链接
-        // face0: he -> he_prev -> he_next (变成 he -> tw_next -> he_next 的一部分)
-        // 实际上需要重新组织
-
-        // 简化版本：直接重新设置所有链接
         let he_next_idx = he_data.next;
         let he_prev_idx = he_data.prev;
         let tw_next_idx = twin_data.next;
         let tw_prev_idx = twin_data.prev;
 
-        // Face 0 新组成: he (v3->v2), he_next (v2->?), tw_prev (->v3)
-        // 但这变复杂了，需要正确处理
-
-        // 更简单的实现：
-        // he: v3 -> v2
-        // twin: v2 -> v3
-
-        // face0 包含: he, tw_prev, he_next 中的某些边
-        // face1 包含: twin, he_prev, tw_next 中的某些边
-
-        // 正确的链接：
-        // Face0: tw_next -> he -> he_prev
-        // Face1: he_next -> twin -> tw_prev
-
-        if let Some(h) = self.halfedge_mut(tw_next_idx) {
-            h.next = he;
-            h.face = face0;
-        }
+        // 翻转边：he 从 v0->v1 变成 v2->v3
+        //        twin 从 v1->v0 变成 v3->v2
         if let Some(h) = self.halfedge_mut(he) {
-            h.next = he_prev_idx;
-            h.prev = tw_next_idx;
-            h.face = face0;
-        }
-        if let Some(h) = self.halfedge_mut(he_prev_idx) {
-            h.prev = he;
-            h.next = tw_next_idx;
-            h.face = face0;
-        }
-
-        if let Some(h) = self.halfedge_mut(he_next_idx) {
-            h.next = twin;
-            h.face = face1;
+            h.origin = v2;
         }
         if let Some(h) = self.halfedge_mut(twin) {
+            h.origin = v3;
+        }
+
+        // 重新连接 face0: he (v2->v3) -> tw_prev (v3->v1) -> he_next (v1->v2)
+        if let Some(h) = self.halfedge_mut(he) {
             h.next = tw_prev_idx;
             h.prev = he_next_idx;
-            h.face = face1;
+            h.face = face0;
         }
         if let Some(h) = self.halfedge_mut(tw_prev_idx) {
-            h.prev = twin;
             h.next = he_next_idx;
+            h.prev = he;
+            h.face = face0;
+        }
+        if let Some(h) = self.halfedge_mut(he_next_idx) {
+            h.next = he;
+            h.prev = tw_prev_idx;
+            h.face = face0;
+        }
+
+        // 重新连接 face1: twin (v3->v2) -> he_prev (v2->v0) -> tw_next (v0->v3)
+        if let Some(h) = self.halfedge_mut(twin) {
+            h.next = he_prev_idx;
+            h.prev = tw_next_idx;
+            h.face = face1;
+        }
+        if let Some(h) = self.halfedge_mut(he_prev_idx) {
+            h.next = tw_next_idx;
+            h.prev = twin;
+            h.face = face1;
+        }
+        if let Some(h) = self.halfedge_mut(tw_next_idx) {
+            h.next = twin;
+            h.prev = he_prev_idx;
             h.face = face1;
         }
 
@@ -294,7 +256,52 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
             f.halfedge = twin;
         }
 
-        // 标记为脏
+        // 修正顶点出发边（确保 origin 匹配）
+        if let Some(v) = self.vertex(v0) {
+            if v.halfedge.is_valid() {
+                if let Some(he0) = self.halfedge(v.halfedge) {
+                    if he0.origin != v0 {
+                        if let Some(vm) = self.vertex_mut(v0) {
+                            vm.halfedge = he_prev_idx;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(v) = self.vertex(v1) {
+            if v.halfedge.is_valid() {
+                if let Some(he1) = self.halfedge(v.halfedge) {
+                    if he1.origin != v1 {
+                        if let Some(vm) = self.vertex_mut(v1) {
+                            vm.halfedge = he_next_idx;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(v) = self.vertex(v2) {
+            if v.halfedge.is_valid() {
+                if let Some(he2) = self.halfedge(v.halfedge) {
+                    if he2.origin != v2 {
+                        if let Some(vm) = self.vertex_mut(v2) {
+                            vm.halfedge = he;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(v) = self.vertex(v3) {
+            if v.halfedge.is_valid() {
+                if let Some(he3) = self.halfedge(v.halfedge) {
+                    if he3.origin != v3 {
+                        if let Some(vm) = self.vertex_mut(v3) {
+                            vm.halfedge = twin;
+                        }
+                    }
+                }
+            }
+        }
+
         self.mark_face_dirty(face0);
         self.mark_face_dirty(face1);
         self.mark_vertex_dirty(v0);
@@ -321,6 +328,25 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
         let he_data = self.halfedge(he)?.clone();
         let twin = he_data.twin;
 
+        if twin.is_invalid() {
+            return None;
+        }
+
+        if !self.can_collapse_edge(he) {
+            return None;
+        }
+
+        let face0 = he_data.face;
+        let face1 = self.halfedge(twin).map(|h| h.face).unwrap_or(FaceIndex::INVALID);
+
+        // 仅处理两个三角形共享边的情况，避免产生非流形
+        if face0.is_invalid() || face1.is_invalid() {
+            return None;
+        }
+        if self.face_vertex_count(face0) != 3 || self.face_vertex_count(face1) != 3 {
+            return None;
+        }
+
         let v_keep = if keep_origin {
             he_data.origin
         } else {
@@ -332,28 +358,20 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
             he_data.origin
         };
 
-        // 收集要删除的面
-        let face0 = he_data.face;
-        let face1 = self.halfedge(twin).map(|h| h.face).unwrap_or(FaceIndex::INVALID);
+        // 将 v_remove 的所有出发边重定向到 v_keep（排除即将移除的半边）
+        let removed_halfedges: std::collections::HashSet<HalfEdgeIndex> =
+            [he, he_data.next, he_data.prev, twin]
+                .into_iter()
+                .chain(self.halfedge(twin).map(|h| [h.next, h.prev]).unwrap_or([HalfEdgeIndex::INVALID, HalfEdgeIndex::INVALID]))
+                .collect();
 
-        // 将 v_remove 的所有出发边重定向到 v_keep
         let outgoing: Vec<HalfEdgeIndex> = self.vertex_outgoing(v_remove).collect();
         for out_he in outgoing {
-            if out_he == he || (twin.is_valid() && out_he == twin) {
-                continue; // 跳过要删除的边
+            if removed_halfedges.contains(&out_he) {
+                continue;
             }
-
             if let Some(h) = self.halfedge_mut(out_he) {
                 h.origin = v_keep;
-            }
-
-            // 更新入射边的 twin 的终点
-            if let Some(h) = self.halfedge(out_he) {
-                let twin_of_out = h.twin;
-                if twin_of_out.is_valid() {
-                    // twin 的终点（即 next 的 origin）应该指向 v_keep
-                    // 这已经通过 origin 的更改自动处理
-                }
             }
         }
 
@@ -367,78 +385,60 @@ impl<V: Default + Clone, F: Default + Clone> HalfEdgeMesh<V, F> {
             }
         }
 
-        // 修复边界：绕过删除的边
-        // he 的 prev 的 next 应该指向 he 的 next
-        if he_data.prev.is_valid() && he_data.next.is_valid() {
-            if let Some(h) = self.halfedge_mut(he_data.prev) {
-                h.next = he_data.next;
+        // 断开被删除半边的 twin，避免悬垂引用
+        let detach_twin = |mesh: &mut HalfEdgeMesh<V, F>, he_idx: HalfEdgeIndex| {
+            if let Some(he_data) = mesh.halfedge(he_idx).cloned() {
+                if he_data.twin.is_valid() {
+                    if let Some(twin_he) = mesh.halfedge_mut(he_data.twin) {
+                        twin_he.twin = HalfEdgeIndex::INVALID;
+                    }
+                }
             }
-            if let Some(h) = self.halfedge_mut(he_data.next) {
-                h.prev = he_data.prev;
-            }
-        }
+        };
 
-        // twin 同样处理
+        detach_twin(self, he_data.next);
+        detach_twin(self, he_data.prev);
         if let Some(twin_data) = self.halfedge(twin).cloned() {
-            if twin_data.prev.is_valid() && twin_data.next.is_valid() {
-                if let Some(h) = self.halfedge_mut(twin_data.prev) {
-                    h.next = twin_data.next;
-                }
-                if let Some(h) = self.halfedge_mut(twin_data.next) {
-                    h.prev = twin_data.prev;
+            detach_twin(self, twin_data.next);
+            detach_twin(self, twin_data.prev);
+        }
+
+        // 删除两个面及其半边
+        let face0_halfedges: Vec<_> = self.face_halfedges(face0).collect();
+        let face1_halfedges: Vec<_> = self.face_halfedges(face1).collect();
+
+        for he_idx in face0_halfedges.into_iter().chain(face1_halfedges.into_iter()) {
+            self.remove_halfedge(he_idx);
+        }
+
+        self.remove_face(face0);
+        if face1 != face0 {
+            self.remove_face(face1);
+        }
+
+        // 更新 v_keep 的出发边（确保有效且 origin 匹配）
+        if let Some(v) = self.vertex(v_keep) {
+            if v.halfedge.is_valid() {
+                if let Some(he_data) = self.halfedge(v.halfedge) {
+                    if he_data.origin != v_keep {
+                        if let Some(vm) = self.vertex_mut(v_keep) {
+                            vm.halfedge = HalfEdgeIndex::INVALID;
+                        }
+                    }
                 }
             }
         }
-
-        // 更新 v_keep 的出发边（确保不指向删除的边）
         if let Some(v) = self.vertex(v_keep) {
-            if v.halfedge == he || v.halfedge == twin {
-                // 找一条新的出发边
-                for out_he in self.vertex_outgoing(v_keep) {
-                    if out_he != he && out_he != twin {
-                        if let Some(vm) = self.vertex_mut(v_keep) {
-                            vm.halfedge = out_he;
-                        }
-                        break;
+            if v.halfedge.is_invalid() {
+                if let Some(out_he) = self.vertex_outgoing(v_keep).next() {
+                    if let Some(vm) = self.vertex_mut(v_keep) {
+                        vm.halfedge = out_he;
                     }
                 }
             }
         }
 
-        // 删除元素
-        self.remove_halfedge(he);
-        if twin.is_valid() {
-            self.remove_halfedge(twin);
-        }
         self.remove_vertex(v_remove);
-
-        // 如果面变成退化（少于3个顶点），删除
-        if face0.is_valid() {
-            let count = self.face_vertex_count(face0);
-            if count < 3 {
-                // 删除面及其半边
-                let halfedges: Vec<_> = self.face_halfedges(face0).collect();
-                for he_idx in halfedges {
-                    self.remove_halfedge(he_idx);
-                }
-                self.remove_face(face0);
-            } else {
-                self.mark_face_dirty(face0);
-            }
-        }
-
-        if face1.is_valid() && face1 != face0 {
-            let count = self.face_vertex_count(face1);
-            if count < 3 {
-                let halfedges: Vec<_> = self.face_halfedges(face1).collect();
-                for he_idx in halfedges {
-                    self.remove_halfedge(he_idx);
-                }
-                self.remove_face(face1);
-            } else {
-                self.mark_face_dirty(face1);
-            }
-        }
 
         self.mark_vertex_dirty(v_keep);
 

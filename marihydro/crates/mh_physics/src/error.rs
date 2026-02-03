@@ -27,6 +27,7 @@
 //! ```
 
 use thiserror::Error;
+use mh_foundation::MhError;
 
 // ============================================================================
 // 主错误类型
@@ -305,6 +306,78 @@ impl From<mh_foundation::MhError> for PhysicsError {
     fn from(err: mh_foundation::MhError) -> Self {
         Self::Internal {
             message: err.to_string(),
+        }
+    }
+}
+
+impl From<PhysicsError> for MhError {
+    fn from(err: PhysicsError) -> Self {
+        match err {
+            PhysicsError::InvalidParameter { name, value, reason } => {
+                MhError::invalid_input(format!("物理参数无效 [{name}={value}]: {reason}"))
+            }
+            PhysicsError::Configuration { message } => {
+                MhError::invalid_input(format!("物理配置错误: {message}"))
+            }
+            PhysicsError::NumericalOverflow { context } => {
+                MhError::internal(format!("数值溢出: {context}"))
+            }
+            PhysicsError::NotConverged { iterations, residual } => {
+                MhError::internal(format!(
+                    "数值不收敛: iterations={iterations}, residual={residual}"
+                ))
+            }
+            PhysicsError::NonPhysical { description } => {
+                MhError::internal(format!("非物理状态: {description}"))
+            }
+            PhysicsError::DivisionByZero { context } => {
+                MhError::internal(format!("除零错误: {context}"))
+            }
+            PhysicsError::MeshError { message } => {
+                MhError::invalid_input(format!("网格错误: {message}"))
+            }
+            PhysicsError::InvalidIndex { index_type, index, max } => {
+                MhError::invalid_input(format!(
+                    "索引越界: {index_type}={index}, 最大值 {max}"
+                ))
+            }
+            PhysicsError::BoundaryError { message } => {
+                MhError::invalid_input(format!("边界条件错误: {message}"))
+            }
+            PhysicsError::MissingBoundaryData { boundary_name, time } => {
+                MhError::invalid_input(format!(
+                    "缺少边界强迫数据: {boundary_name} @ t={time}"
+                ))
+            }
+            PhysicsError::SolverFailed { stage, message } => {
+                MhError::internal(format!("求解器失败 [{stage}]: {message}"))
+            }
+            PhysicsError::CflViolation { cfl, max_cfl } => {
+                MhError::internal(format!("CFL违反: {cfl} > {max_cfl}"))
+            }
+            PhysicsError::TimestepTooSmall { dt, min_dt } => {
+                MhError::internal(format!("时间步过小: dt={dt}, min_dt={min_dt}"))
+            }
+            PhysicsError::IoError(source) => {
+                MhError::io_with_source("物理计算 IO 失败", source)
+            }
+            PhysicsError::ConservationViolation { quantity, change, tolerance } => {
+                MhError::internal(format!(
+                    "守恒性违反: {quantity}, change={change}, tolerance={tolerance}"
+                ))
+            }
+            PhysicsError::EnergyIncreased { before, after, relative_increase } => {
+                MhError::internal(format!(
+                    "能量非物理增加: before={before}, after={after}, rel={relative_increase}"
+                ))
+            }
+            PhysicsError::LockFailed { resource } => {
+                MhError::internal(format!("锁获取失败: {resource}"))
+            }
+            PhysicsError::NotImplemented { feature } => {
+                MhError::internal(format!("功能未实现: {feature}"))
+            }
+            PhysicsError::Internal { message } => MhError::internal(message),
         }
     }
 }

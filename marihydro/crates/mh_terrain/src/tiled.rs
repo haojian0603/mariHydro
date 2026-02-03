@@ -27,7 +27,7 @@
 //! };
 //!
 //! let source = FileSystemTileSource::new("tiles/", ".tif");
-//! let mut terrain = TiledTerrain::new(config, Box::new(source));
+//! let mut terrain = TiledTerrain::new(config, Box::new(source)).unwrap();
 //!
 //! // 查询单点
 //! let z = terrain.get_elevation(500.0, 300.0)?;
@@ -38,6 +38,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// 瓦片配置
@@ -71,30 +72,71 @@ impl Default for TileConfig {
 }
 
 impl TileConfig {
-    /// 计算覆盖范围
-    pub fn bounds(&self) -> [f64; 4] {
-        let width = self.tile_size as f64 * self.resolution * self.num_tiles.0 as f64;
-        let height = self.tile_size as f64 * self.resolution * self.num_tiles.1 as f64;
-        [
+    /// 计算覆盖范围（带校验）
+    pub fn try_bounds(&self) -> mh_foundation::error::MhResult<[f64; 4]> {
+        let width = self
+            .tile_size
+            .checked_mul(self.num_tiles.0)
+            .ok_or_else(|| mh_foundation::error::MhError::invalid_input("tile_size*num_tiles 溢出"))?;
+        let height = self
+            .tile_size
+            .checked_mul(self.num_tiles.1)
+            .ok_or_else(|| mh_foundation::error::MhError::invalid_input("tile_size*num_tiles 溢出"))?;
+        let width = width as f64 * self.resolution;
+        let height = height as f64 * self.resolution;
+        if !width.is_finite() || !height.is_finite() {
+            return Err(mh_foundation::error::MhError::invalid_input("bounds 非有限值"));
+        }
+        Ok([
             self.origin.0,
             self.origin.1,
             self.origin.0 + width,
             self.origin.1 + height,
-        ]
+        ])
+    }
+
+    /// 计算覆盖范围
+    pub fn bounds(&self) -> [f64; 4] {
+        self.try_bounds().unwrap_or([f64::NAN; 4])
     }
 
     pub fn validate(&self) -> mh_foundation::error::MhResult<()> {
         if self.tile_size == 0 {
             return Err(mh_foundation::error::MhError::invalid_input("tile_size=0"));
         }
-        if self.resolution <= 0.0 {
+        if !self.resolution.is_finite() || self.resolution <= 0.0 {
             return Err(mh_foundation::error::MhError::invalid_input("resolution<=0"));
         }
+        if self.num_tiles.0 == 0 || self.num_tiles.1 == 0 {
+            return Err(mh_foundation::error::MhError::invalid_input("num_tiles=0"));
+        }
+        if self.max_cache_tiles == 0 {
+            return Err(mh_foundation::error::MhError::invalid_input("max_cache_tiles=0"));
+        }
+        if !self.nodata.is_finite() {
+            return Err(mh_foundation::error::MhError::invalid_input("nodata 非有限值"));
+        }
+        if !self.origin.0.is_finite() || !self.origin.1.is_finite() {
+            return Err(mh_foundation::error::MhError::invalid_input("origin 非有限值"));
+        }
+        let width = self.tile_size.checked_mul(self.num_tiles.0).ok_or_else(|| {
+            mh_foundation::error::MhError::invalid_input("tile_size*num_tiles 溢出")
+        })?;
+        let height = self.tile_size.checked_mul(self.num_tiles.1).ok_or_else(|| {
+            mh_foundation::error::MhError::invalid_input("tile_size*num_tiles 溢出")
+        })?;
+        if width == 0 || height == 0 {
+            return Err(mh_foundation::error::MhError::invalid_input("覆盖范围为零"));
+        }
+        self.try_bounds()?;
         Ok(())
     }
 
     /// 获取瓦片坐标
     pub fn tile_coords(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
         let dx = x - self.origin.0;
         let dy = y - self.origin.1;
 
@@ -103,6 +145,9 @@ impl TileConfig {
         }
 
         let tile_world_size = self.tile_size as f64 * self.resolution;
+        if !tile_world_size.is_finite() || tile_world_size <= 0.0 {
+            return None;
+        }
         let tx = (dx / tile_world_size) as usize;
         let ty = (dy / tile_world_size) as usize;
 
@@ -115,8 +160,14 @@ impl TileConfig {
 
     /// 获取瓦片内局部坐标
     pub fn local_coords(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
         self.tile_coords(x, y)?;
         let tile_world_size = self.tile_size as f64 * self.resolution;
+        if !tile_world_size.is_finite() || tile_world_size <= 0.0 {
+            return None;
+        }
         let dx = x - self.origin.0;
         let dy = y - self.origin.1;
 
@@ -142,13 +193,21 @@ pub struct Tile {
 
 impl Tile {
     /// 创建空瓦片
-    pub fn empty(coords: (usize, usize), size: usize, nodata: f64) -> Self {
-        Self {
+    pub fn try_empty(coords: (usize, usize), size: usize, nodata: f64) -> mh_foundation::error::MhResult<Self> {
+        let len = size
+            .checked_mul(size)
+            .ok_or_else(|| mh_foundation::error::MhError::invalid_input("tile size overflow"))?;
+        Ok(Self {
             coords,
-            data: vec![nodata; size * size],
+            data: vec![nodata; len],
             size,
             nodata,
-        }
+        })
+    }
+
+    /// 创建空瓦片（简化接口）
+    pub fn empty(coords: (usize, usize), size: usize, nodata: f64) -> Self {
+        Self::try_empty(coords, size, nodata).expect("invalid tile size")
     }
 
     /// 获取像素值
@@ -157,7 +216,10 @@ impl Tile {
             return None;
         }
         let val = self.data[row * self.size + col];
-        if (val - self.nodata).abs() < 1e-6 {
+        if !val.is_finite() {
+            return None;
+        }
+        if self.nodata.is_finite() && (val - self.nodata).abs() < 1e-6 {
             None
         } else {
             Some(val)
@@ -166,6 +228,9 @@ impl Tile {
 
     /// 设置像素值
     pub fn set(&mut self, col: usize, row: usize, value: f64) {
+        if !value.is_finite() {
+            return;
+        }
         if col < self.size && row < self.size {
             self.data[row * self.size + col] = value;
         }
@@ -180,6 +245,15 @@ impl Tile {
     }
 
     fn interpolate_internal(&self, x: f64, y: f64) -> Option<f64> {
+        if self.size == 0 {
+            return None;
+        }
+        if self.size == 1 {
+            return self.get(0, 0);
+        }
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
         let col = x.floor() as isize;
         let row = y.floor() as isize;
 
@@ -285,19 +359,20 @@ pub struct TiledTerrain {
     source: Arc<dyn TileSource>,
     /// 瓦片缓存
     cache: HashMap<(usize, usize), Tile>,
-    /// 缓存访问顺序（用于 LRU）
-    cache_order: Vec<(usize, usize)>,
+    /// 缓存访问顺序（用于 LRU）- 使用VecDeque实现O(1)淘汰
+    cache_order: VecDeque<(usize, usize)>,
 }
 
 impl TiledTerrain {
     /// 创建新的分块地形
-    pub fn new(config: TileConfig, source: Arc<dyn TileSource>) -> Self {
-        Self {
+    pub fn new(config: TileConfig, source: Arc<dyn TileSource>) -> mh_foundation::error::MhResult<Self> {
+        config.validate()?;
+        Ok(Self {
             config,
             source,
             cache: HashMap::new(),
-            cache_order: Vec::new(),
-        }
+            cache_order: VecDeque::new(),
+        })
     }
 
     /// 获取配置
@@ -310,8 +385,19 @@ impl TiledTerrain {
         let (tx, ty) = self.config.tile_coords(x, y)?;
         let (lx, ly) = self.config.local_coords(x, y)?;
 
-        let tile = self.get_tile(tx, ty)?;
-        Some(tile.interpolate(lx, ly, self.config.nodata))
+        let nodata = self.config.nodata;
+        let value = {
+            let tile = self.get_tile(tx, ty)?;
+            tile.interpolate(lx, ly, nodata)
+        };
+        if !value.is_finite() {
+            return None;
+        }
+        if nodata.is_finite() && (value - nodata).abs() < 1e-6 {
+            None
+        } else {
+            Some(value)
+        }
     }
 
     /// 批量获取高程
@@ -329,6 +415,13 @@ impl TiledTerrain {
             // 加载瓦片
             match self.source.load_tile(tx, ty) {
                 Ok(tile) => {
+                    if tile.size != self.config.tile_size {
+                        return None;
+                    }
+                    let expected_len = tile.size.checked_mul(tile.size)?;
+                    if tile.data.len() != expected_len {
+                        return None;
+                    }
                     self.insert_cache(tx, ty, tile);
                 }
                 Err(_) => return None,
@@ -352,22 +445,21 @@ impl TiledTerrain {
         }
 
         self.cache.insert((tx, ty), tile);
-        self.cache_order.push((tx, ty));
+        self.cache_order.push_back((tx, ty));
     }
 
     /// 更新 LRU 顺序
     fn update_cache_order(&mut self, tx: usize, ty: usize) {
         if let Some(pos) = self.cache_order.iter().position(|&c| c == (tx, ty)) {
             self.cache_order.remove(pos);
-            self.cache_order.push((tx, ty));
+            self.cache_order.push_back((tx, ty));
         }
     }
 
-    /// 淘汰最旧的缓存
+    /// 淘汰最旧的缓存 - O(1)操作
     fn evict_oldest(&mut self) {
-        if let Some(oldest) = self.cache_order.first().copied() {
+        if let Some(oldest) = self.cache_order.pop_front() {
             self.cache.remove(&oldest);
-            self.cache_order.remove(0);
         }
     }
 
@@ -379,6 +471,12 @@ impl TiledTerrain {
 
     /// 预加载指定范围的瓦片
     pub fn preload_region(&mut self, min_x: f64, min_y: f64, max_x: f64, max_y: f64) {
+        if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+            return;
+        }
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
         if let (Some((tx0, ty0)), Some((tx1, ty1))) = (
             self.config.tile_coords(min_x, min_y),
             self.config.tile_coords(max_x, max_y),
@@ -447,7 +545,13 @@ impl MultiLodTerrain {
         &mut self,
         level: LodLevel,
         source: Arc<dyn TileSource>,
-    ) {
+    ) -> mh_foundation::error::MhResult<()> {
+        if level.tile_size == 0 || level.num_tiles.0 == 0 || level.num_tiles.1 == 0 {
+            return Err(mh_foundation::error::MhError::invalid_input("LOD tile_size/num_tiles 无效"));
+        }
+        if !level.resolution.is_finite() || level.resolution <= 0.0 {
+            return Err(mh_foundation::error::MhError::invalid_input("LOD resolution 无效"));
+        }
         let config = TileConfig {
             tile_size: level.tile_size,
             resolution: level.resolution,
@@ -456,9 +560,10 @@ impl MultiLodTerrain {
             nodata: -9999.0,
             max_cache_tiles: 50,
         };
-        let terrain = TiledTerrain::new(config, source);
+        let terrain = TiledTerrain::new(config, source)?;
         self.levels.push((level, terrain));
         self.levels.sort_by_key(|(l, _)| l.level);
+        Ok(())
     }
 
     /// 根据请求分辨率选择合适的 LOD 级别
@@ -543,7 +648,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut terrain = TiledTerrain::new(config, Arc::new(source));
+        let mut terrain = TiledTerrain::new(config, Arc::new(source)).unwrap();
 
         let z = terrain.get_elevation(0.5, 0.5);
         assert!(z.is_some());
@@ -567,7 +672,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut terrain = TiledTerrain::new(config, Arc::new(source));
+        let mut terrain = TiledTerrain::new(config, Arc::new(source)).unwrap();
 
         // 加载超过缓存限制的瓦片
         for tx in 0..5 {

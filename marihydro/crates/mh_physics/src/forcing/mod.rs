@@ -73,5 +73,5 @@ pub use spatial::{SpatialTimeSeries, SpatialVectorTimeSeries};
 
 // 强迫数据与耦合导出
 pub use data::{ForcingDataReader, ForcingDataError, ForcingMetadata, ForcingField, CFConventions};
-pub use coupling::{SpatialInterpolation, ForcingMeshCoupler, InterpolationWeights, SpatioTemporalForcing};
+pub use coupling::{SpatialInterpolation, ForcingMeshCoupler, InterpolationWeights, SpatioTemporalForcing, compute_interpolation_weights};
 

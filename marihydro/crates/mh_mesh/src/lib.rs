@@ -19,7 +19,7 @@
 //! - [`halfedge`]: 半边网格核心实现
 //! - [`frozen`]: 冻结网格
 //! - [`traits`]: 网格抽象接口
-//! - [`compat`]: 兼容层转换
+//! - [`converter`]: 格式转换与简化数据
 //! - [`io`]: 网格 IO (GMSH, GeoJSON, MHB)
 //!
 //! # 示例
@@ -38,13 +38,10 @@
 //! // 添加三角形
 //! mesh.add_triangle(v0, v1, v2);
 //!
-//! // 冻结为只读网格
-//! let frozen = mesh.freeze();
-//! assert_eq!(frozen.n_cells(), 1);
+//! // 继续进行拓扑编辑或导出
 //! ```
 
 pub mod attributes;
-pub mod compat;
 pub mod error;
 
 pub mod frozen;

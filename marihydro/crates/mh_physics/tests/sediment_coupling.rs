@@ -39,8 +39,9 @@ fn test_mass_conservation() {
     manager.set_initial_concentration(&[0.0, 0.0, 0.0, 0.0]);
 
     let cell_areas = vec![1.0; 4];
+    let manning_n = vec![0.03; 4];
     let before: f64 = manager.state().bed_mass.iter().sum();
-    let _ = manager.step(&state, &cell_areas, 1.0);
+    let _ = manager.step(&state, &cell_areas, &manning_n, 1.0);
     let after: f64 = manager.state().bed_mass.iter().sum();
     assert!((after - before).abs() < 1e-6);
 }

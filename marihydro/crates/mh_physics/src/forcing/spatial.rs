@@ -151,6 +151,8 @@ impl SpatialTimeSeries {
             return self.stations[0].series.get_value(time);
         }
 
+        let power = if self.power.is_finite() { self.power.max(0.5) } else { 2.0 };
+        let min_dist = if self.min_distance.is_finite() { self.min_distance.max(1e-10) } else { 1e-6 };
         let mut sum_weight = 0.0;
         let mut sum_weighted_value = 0.0;
 
@@ -162,11 +164,11 @@ impl SpatialTimeSeries {
             let dist = (dx * dx + dy * dy).sqrt();
 
             // 距离极小时直接返回该站点值
-            if dist < self.min_distance {
+            if dist < min_dist {
                 return station.series.get_value(time);
             }
 
-            let weight = 1.0 / dist.powf(self.power);
+            let weight = 1.0 / dist.powf(power);
             sum_weight += weight;
             sum_weighted_value += weight * station.series.get_value(time);
         }
@@ -189,6 +191,8 @@ impl SpatialTimeSeries {
             return self.stations[0].series.get_value(time);
         }
 
+        let power = if self.power.is_finite() { self.power.max(0.5) } else { 2.0 };
+        let min_dist = if self.min_distance.is_finite() { self.min_distance.max(1e-10) } else { 1e-6 };
         // Kahan 求和状态
         let mut sum_weight = 0.0;
         let mut comp_weight = 0.0;
@@ -203,11 +207,11 @@ impl SpatialTimeSeries {
             let dist = (dx * dx + dy * dy).sqrt();
 
             // 距离极小时直接返回该站点值
-            if dist < self.min_distance {
+            if dist < min_dist {
                 return station.series.get_value(time);
             }
 
-            let weight = 1.0 / dist.powf(self.power);
+            let weight = 1.0 / dist.powf(power);
             let value = station.series.get_value(time);
 
             // Kahan 本: 权重求和
@@ -274,13 +278,15 @@ impl SpatialTimeSeries {
     pub fn compute_weights(&self, pos: (f64, f64)) -> Vec<f64> {
         let mut weights = Vec::with_capacity(self.stations.len());
         let mut sum = 0.0;
+        let power = if self.power.is_finite() { self.power.max(0.5) } else { 2.0 };
+        let min_dist = if self.min_distance.is_finite() { self.min_distance.max(1e-10) } else { 1e-6 };
 
         for station in &self.stations {
             let loc = station.position();
             let dx = pos.0 - loc.0;
             let dy = pos.1 - loc.1;
-            let dist = (dx * dx + dy * dy).sqrt().max(self.min_distance);
-            let w = 1.0 / dist.powf(self.power);
+            let dist = (dx * dx + dy * dy).sqrt().max(min_dist);
+            let w = 1.0 / dist.powf(power);
             weights.push(w);
             sum += w;
         }

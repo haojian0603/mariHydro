@@ -11,7 +11,6 @@ use mh_physics::core::CpuBackend;
 
 /// 测试策略可以被创建
 #[test]
-#[allow(deprecated)]
 fn test_strategy_creation() {
     let _explicit: ExplicitStrategy<CpuBackend<f64>> =
         ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());
@@ -24,7 +23,6 @@ fn test_strategy_creation() {
 
 /// 测试策略名称
 #[test]
-#[allow(deprecated)]
 fn test_strategy_names() {
     let explicit: ExplicitStrategy<CpuBackend<f64>> =
         ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());
@@ -40,7 +38,6 @@ fn test_strategy_names() {
 
 /// 测试策略CFL支持
 #[test]
-#[allow(deprecated)]
 fn test_cfl_support() {
     let explicit: ExplicitStrategy<CpuBackend<f64>> =
         ExplicitStrategy::new_with_backend(CpuBackend::<f64>::new(), ExplicitConfig::default());

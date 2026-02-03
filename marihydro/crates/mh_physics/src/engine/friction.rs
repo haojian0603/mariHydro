@@ -240,14 +240,14 @@ where
         h: &[B::Scalar],
         hu: &[B::Scalar],
         hv: &[B::Scalar],
-        _manning_n: &[B::Scalar],
+        manning_n: &[B::Scalar],
         use_uniform_n: bool,
         uniform_n: B::Scalar,
         source_hu: &mut [B::Scalar],
         source_hv: &mut [B::Scalar],
     ) {
         for i in 0..h.len() {
-            let n_val = if use_uniform_n { uniform_n } else { B::Scalar::ZERO };
+            let n_val = if use_uniform_n { uniform_n } else { manning_n[i] };
             let (s_hu, s_hv) = self.compute_explicit_source(h[i], hu[i], hv[i], n_val);
             source_hu[i] = source_hu[i] + s_hu;
             source_hv[i] = source_hv[i] + s_hv;
@@ -259,7 +259,7 @@ where
         h: &[B::Scalar],
         hu: &[B::Scalar],
         hv: &[B::Scalar],
-        _manning_n: &[B::Scalar],
+        manning_n: &[B::Scalar],
         use_uniform_n: bool,
         uniform_n: B::Scalar,
         source_hu: &mut [B::Scalar],
@@ -273,7 +273,7 @@ where
             .zip(hv.par_iter())
             .enumerate()
             .for_each(|(_i, ((((s_hu, s_hv), &h_i), &hu_i), &hv_i))| {
-                let n_val = if use_uniform_n { uniform_n } else { B::Scalar::ZERO };
+                let n_val = if use_uniform_n { uniform_n } else { manning_n[_i] };
                 let (src_hu, src_hv) = self.compute_explicit_source(h_i, hu_i, hv_i, n_val);
                 *s_hu = *s_hu + src_hu;
                 *s_hv = *s_hv + src_hv;

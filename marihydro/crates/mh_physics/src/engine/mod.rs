@@ -4,6 +4,7 @@
 //! 本模块属于Layer 3(Engine层)，所有数值类型使用RuntimeScalar泛型参数。
 
 pub mod flux_accumulator;
+pub mod friction;
 pub mod parallel;
 pub mod pcg;
 pub mod solver;
@@ -38,7 +39,7 @@ pub use strategy::{
     TimeIntegrationStrategy, StrategyKind, StepResult,
     ExplicitStrategy, ExplicitConfig,
     SemiImplicitStrategyGeneric, SemiImplicitConfig as SemiImplicitStrategyConfig,
-    SolverWorkspaceGeneric,
+    SolverWorkspaceGeneric as StrategyWorkspace,
 };
 
 // 从numerics模块重导出CsrMatrix

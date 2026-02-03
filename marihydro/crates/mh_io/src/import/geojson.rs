@@ -401,6 +401,9 @@ impl GeoJsonReader {
         }
         let x = arr[0].as_f64().ok_or(GeoJsonError::InvalidCoordinates)?;
         let y = arr[1].as_f64().ok_or(GeoJsonError::InvalidCoordinates)?;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(GeoJsonError::InvalidCoordinates);
+        }
         Ok((x, y))
     }
 
@@ -514,19 +517,29 @@ impl GeoJsonReader {
         let mut result = Vec::new();
 
         for feature in &self.features {
-            let (exterior, holes) = match &feature.geometry {
-                GeometryData::Polygon { exterior, holes } => (exterior.clone(), holes.clone()),
-                _ => continue,
-            };
-
             let name = feature.get_string("name").unwrap_or("zone").to_string();
-
-            result.push(ZoneProperties {
-                name,
-                exterior,
-                holes,
-                properties: feature.properties.clone(),
-            });
+            match &feature.geometry {
+                GeometryData::Polygon { exterior, holes } => {
+                    result.push(ZoneProperties {
+                        name,
+                        exterior: exterior.clone(),
+                        holes: holes.clone(),
+                        properties: feature.properties.clone(),
+                    });
+                }
+                GeometryData::MultiPolygon { polygons } => {
+                    for (idx, (exterior, holes)) in polygons.iter().enumerate() {
+                        let zonename = format!("{}_{}", name, idx + 1);
+                        result.push(ZoneProperties {
+                            name: zonename,
+                            exterior: exterior.clone(),
+                            holes: holes.clone(),
+                            properties: feature.properties.clone(),
+                        });
+                    }
+                }
+                _ => continue,
+            }
         }
 
         result
@@ -642,7 +655,12 @@ fn point_in_polygon(x: f64, y: f64, polygon: &[(f64, f64)]) -> bool {
         let (xi, yi) = polygon[i];
         let (xj, yj) = polygon[j];
 
-        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+        if ((yi > y) != (yj > y)) && (yj - yi).abs() > 1e-12 {
+            let x_intersect = (xj - xi) * (y - yi) / (yj - yi) + xi;
+            if x < x_intersect {
+                inside = !inside;
+            }
+        } else if ((yi > y) != (yj > y)) && (yj - yi).abs() <= 1e-12 {
             inside = !inside;
         }
         j = i;
@@ -673,13 +691,11 @@ mod tests {
         assert_eq!(reader.len(), 1);
 
         let f = &reader.features()[0];
-        match &f.geometry {
-            GeometryData::Point { x, y } => {
-                assert!((x - 100.0).abs() < 1e-10);
-                assert!((y - 0.5).abs() < 1e-10);
-            }
-            _ => panic!("Expected Point geometry"),
-        }
+        assert!(matches!(
+            &f.geometry,
+            GeometryData::Point { x, y }
+                if (*x - 100.0).abs() < 1e-10 && (*y - 0.5).abs() < 1e-10
+        ));
 
         assert_eq!(f.get_string("name"), Some("test_point"));
         assert_eq!(f.get_f64("value"), Some(42.0));

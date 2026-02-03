@@ -126,7 +126,11 @@ pub fn gk6_central_meridian(zone: u8) -> f64 {
 /// 从经度计算 3度带带号
 #[must_use]
 pub fn auto_gk3_zone(lon: f64) -> u8 {
-    let zone = (lon / 3.0).round() as i32;
+    if !lon.is_finite() {
+        return 39;
+    }
+    // 以 1.5° 为分界，保证带号稳定性与中央子午线匹配
+    let zone = ((lon + 1.5) / 3.0).floor() as i32;
     zone.clamp(25, 45) as u8
 }
 

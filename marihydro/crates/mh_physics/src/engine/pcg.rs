@@ -4,7 +4,10 @@
 //! 主要用于半隐式时间积分中的压力泊松方程求解。
 
 use crate::core::Backend;
+use crate::mesh::{MeshTopology, MeshGeometry};
+use crate::numerics::linear_algebra::csr::{CsrBuilder, CsrMatrix};
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
+use mh_foundation::{MhError, MhResult};
 use num_traits::{FromPrimitive, Float};
 
 /// PCG 求解器配置（Layer 4，保持 f64）
@@ -97,6 +100,37 @@ pub struct PcgResult<S: RuntimeScalar> {
 pub trait SparseMvp<B: Backend> {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>);
     fn dimension(&self) -> usize;
+}
+
+impl<B: Backend> SparseMvp<B> for CsrMatrix<B::Scalar>
+where
+    B::Buffer<B::Scalar>: Send + Sync,
+    B::Scalar: RuntimeScalar,
+{
+    fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
+        let x_slice = x.as_slice();
+        let y_slice = y.as_slice_mut();
+        y_slice.fill(B::Scalar::ZERO);
+
+        let row_ptr = self.row_ptr();
+        let col_idx = self.pattern().col_idx();
+        let values = self.values();
+
+        for row in 0..self.n_rows() {
+            let start = row_ptr[row];
+            let end = row_ptr[row + 1];
+            let mut sum = B::Scalar::ZERO;
+            for idx in start..end {
+                let col = col_idx[idx];
+                sum = sum + values[idx] * x_slice[col];
+            }
+            y_slice[row] = sum;
+        }
+    }
+
+    fn dimension(&self) -> usize {
+        self.n_rows()
+    }
 }
 
 /// 对角矩阵（用于 Jacobi 预处理）
@@ -470,28 +504,40 @@ impl PoissonMatrixBuilder {
         theta: B::Scalar,
         h: &[B::Scalar],
         h_min: B::Scalar,
-    ) -> DiagonalMatrix<B>
+    ) -> MhResult<DiagonalMatrix<B>>
     where
         B::Buffer<B::Scalar>: Send + Sync,
         B::Scalar: RuntimeScalar + FromPrimitive + Float,
     {
-        assert_eq!(cell_areas.len(), self.n_cells, "cell_areas 长度不匹配");
-        assert_eq!(h.len(), self.n_cells, "h 长度不匹配");
+        if cell_areas.len() != self.n_cells {
+            return Err(MhError::size_mismatch("cell_areas", self.n_cells, cell_areas.len()));
+        }
+        if h.len() != self.n_cells {
+            return Err(MhError::size_mismatch("h", self.n_cells, h.len()));
+        }
 
         if let Err((idx, val)) = B::Scalar::validate_slice(cell_areas) {
-            panic!("cell_areas 第 {} 项为非法值: {:?}", idx, val);
+            return Err(MhError::invalid_input(format!(
+                "cell_areas 第 {} 项为非法值: {:?}", idx, val
+            )));
         }
         if let Err((idx, val)) = B::Scalar::validate_slice(h) {
-            panic!("h 第 {} 项为非法值: {:?}", idx, val);
+            return Err(MhError::invalid_input(format!(
+                "h 第 {} 项为非法值: {:?}", idx, val
+            )));
         }
 
         let g_min = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
-        assert!(gravity > g_min, "重力加速度过小，可能导致数值不稳定");
+        if gravity <= g_min {
+            return Err(MhError::invalid_input(
+                "重力加速度过小，可能导致数值不稳定".to_string(),
+            ));
+        }
 
         let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
         let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
 
-        DiagonalMatrix::from_fn(backend.clone(), self.n_cells, |i| {
+        Ok(DiagonalMatrix::from_fn(backend.clone(), self.n_cells, |i| {
             let area = cell_areas[i];
             let h_eff = h[i].max(h_min);
             let denom = gravity * theta_safe * dt * dt * h_eff;
@@ -500,7 +546,76 @@ impl PoissonMatrixBuilder {
             } else {
                 B::Scalar::ZERO
             }
-        })
+        }))
+    }
+
+    /// 构建稀疏泊松矩阵（CSR）
+    ///
+    /// 使用面邻接离散拉普拉斯项并叠加质量项，形成对称正定矩阵。
+    pub fn build_csr<B: Backend + Clone>(
+        &self,
+        mesh: &dyn MeshTopology<B>,
+        cell_areas: &[B::Scalar],
+        dt: B::Scalar,
+        gravity: B::Scalar,
+        theta: B::Scalar,
+        h: &[B::Scalar],
+        h_min: B::Scalar,
+    ) -> CsrMatrix<B::Scalar>
+    where
+        B::Buffer<B::Scalar>: Send + Sync,
+        B::Scalar: RuntimeScalar + FromPrimitive + Float,
+    {
+        assert_eq!(cell_areas.len(), self.n_cells, "cell_areas 长度不匹配");
+        assert_eq!(h.len(), self.n_cells, "h 长度不匹配");
+
+        let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
+        let alpha = gravity * theta_safe * dt * dt;
+
+        let mut builder = CsrBuilder::<B::Scalar>::new_square(self.n_cells);
+
+        for i in 0..self.n_cells {
+            let area = cell_areas[i];
+            let h_eff = h[i].max(h_min);
+            let denom = alpha * h_eff;
+            let diag_mass = if denom.abs() > eps { area / denom } else { B::Scalar::ZERO };
+            builder.add(i, i, diag_mass);
+        }
+
+            for face_id in 0..mesh.n_faces() {
+            let owner = mesh.face_owner(face_id);
+            let neighbor = match mesh.face_neighbor(face_id) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            let length = mesh.face_length(face_id);
+            if !length.is_finite() || length <= B::Scalar::ZERO {
+                continue;
+            }
+
+            let center_o = mesh.cell_center(owner);
+            let center_n = mesh.cell_center(neighbor);
+            let dist = MeshGeometry::distance(center_o, center_n);
+            if !dist.is_finite() || dist <= B::Scalar::ZERO {
+                continue;
+            }
+            let h_face = (h[owner] + h[neighbor]) * B::Scalar::HALF;
+            let h_face = h_face.max(h_min);
+
+            let coeff = alpha * h_face * length / dist;
+            if coeff.abs() <= eps {
+                continue;
+            }
+
+            builder.add(owner, owner, coeff);
+            builder.add(neighbor, neighbor, coeff);
+            builder.add(owner, neighbor, -coeff);
+            builder.add(neighbor, owner, -coeff);
+        }
+
+        builder.build()
     }
 }
 

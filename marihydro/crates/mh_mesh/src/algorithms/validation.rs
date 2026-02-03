@@ -109,6 +109,17 @@ pub enum ValidationError {
     /// 顶点坐标无效（NaN或无穷）
     #[error("Vertex {0} has invalid coordinates")]
     InvalidCoordinates(usize),
+
+    /// 面包含无效顶点索引
+    #[error("Face {face} has invalid vertex index {vertex} (max {max})")]
+    InvalidVertexIndex {
+        /// 面索引
+        face: usize,
+        /// 顶点索引
+        vertex: usize,
+        /// 最大合法索引
+        max: usize,
+    },
 }
 
 /// 验证警告类型
@@ -343,10 +354,28 @@ impl MeshValidator {
 
         // 检查边长度
         let mut edge_set: HashSet<(usize, usize)> = HashSet::new();
-        for face in face_vertices {
+        for (face_idx, face) in face_vertices.iter().enumerate() {
             for i in 0..face.len() {
                 let v0 = face[i];
                 let v1 = face[(i + 1) % face.len()];
+                if v0 >= positions.len() || v1 >= positions.len() {
+                    let max = positions.len().saturating_sub(1);
+                    if v0 >= positions.len() {
+                        result.add_error(ValidationError::InvalidVertexIndex {
+                            face: face_idx,
+                            vertex: v0,
+                            max,
+                        });
+                    }
+                    if v1 >= positions.len() {
+                        result.add_error(ValidationError::InvalidVertexIndex {
+                            face: face_idx,
+                            vertex: v1,
+                            max,
+                        });
+                    }
+                    continue;
+                }
                 let key = if v0 < v1 { (v0, v1) } else { (v1, v0) };
                 
                 if !edge_set.contains(&key) {
@@ -375,6 +404,20 @@ impl MeshValidator {
         for (face_idx, face) in face_vertices.iter().enumerate() {
             if face.len() < 3 {
                 result.add_error(ValidationError::DegenerateFace(face_idx, 0.0));
+                continue;
+            }
+
+            if face.iter().any(|&v| v >= positions.len()) {
+                let max = positions.len().saturating_sub(1);
+                for &v in face {
+                    if v >= positions.len() {
+                        result.add_error(ValidationError::InvalidVertexIndex {
+                            face: face_idx,
+                            vertex: v,
+                            max,
+                        });
+                    }
+                }
                 continue;
             }
 

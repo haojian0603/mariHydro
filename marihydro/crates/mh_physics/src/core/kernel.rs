@@ -1,6 +1,9 @@
 //! Kernel 接口规范
 //!
-//! 定义 GPU kernel 的 Rust 侧接口。
+//! 定义 GPU kernel 的 Rust 侧接口，并提供 CPU 侧实现作为默认执行路径。
+
+use crate::numerics::linear_algebra::csr::CsrMatrix;
+use mh_runtime::RuntimeScalar;
 
 /// Kernel 优先级
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +61,7 @@ pub const CORE_KERNELS: &[KernelSpec] = &[
         name: "spmv",
         priority: KernelPriority::Medium,
         expected_speedup: 5.0,
-        implemented: false,
+        implemented: true,
     },
     KernelSpec {
         name: "profile_restore",
@@ -90,4 +93,30 @@ pub fn unimplemented_kernels() -> Vec<&'static KernelSpec> {
 /// 获取按优先级排序的 kernel
 pub fn kernels_by_priority(priority: KernelPriority) -> Vec<&'static KernelSpec> {
     CORE_KERNELS.iter().filter(|k| k.priority == priority).collect()
+}
+
+// ============================================================================
+// CPU Kernel 实现
+// ============================================================================
+
+/// 稀疏矩阵乘向量 (SpMV) kernel: y = A * x
+pub fn spmv_kernel<S: RuntimeScalar>(matrix: &CsrMatrix<S>, x: &[S], y: &mut [S]) {
+    let n_rows = matrix.n_rows();
+    assert_eq!(x.len(), matrix.n_cols(), "x 长度必须等于矩阵列数");
+    assert_eq!(y.len(), n_rows, "y 长度必须等于矩阵行数");
+
+    let row_ptr = matrix.row_ptr();
+    let col_idx = matrix.col_idx();
+    let values = matrix.values();
+
+    for row in 0..n_rows {
+        let start = row_ptr[row];
+        let end = row_ptr[row + 1];
+        let mut sum = S::ZERO;
+        for idx in start..end {
+            let col = col_idx[idx];
+            sum += values[idx] * x[col];
+        }
+        y[row] = sum;
+    }
 }

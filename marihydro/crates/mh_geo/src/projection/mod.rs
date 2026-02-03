@@ -51,8 +51,11 @@ use mh_foundation::error::{MhResult};
 /// 支持的投影类型
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProjectionType {
-    /// WGS84 地理坐标 (经纬度)
-    Geographic,
+    /// 地理坐标 (经纬度)
+    Geographic {
+        /// EPSG 代码（如 4326/4490）
+        epsg: u32,
+    },
     /// UTM 投影
     Utm {
         /// UTM 带号 (1-60)
@@ -81,7 +84,7 @@ impl ProjectionType {
     /// 如果 EPSG 代码不支持则返回错误
     pub fn from_epsg(code: u32) -> GeoResult<Self> {
         match code {
-            4326 => Ok(Self::Geographic),
+            4326 | 4490 => Ok(Self::Geographic { epsg: code }),
             3857 | 900913 => Ok(Self::WebMercator),
             // UTM 北半球 32601-32660
             32601..=32660 => Ok(Self::Utm {
@@ -101,9 +104,9 @@ impl ProjectionType {
             4502..=4512 => Ok(Self::GaussKruger6 {
                 zone: (code - 4502 + 13) as u8,
             }),
-            _ => Err(GeoError::unsupported_epsg(  
+            _ => Err(GeoError::unsupported_epsg(
                 code,
-                "4326, 3857, 32601-32660, 32701-32760, 4502-4512, 4534-4554"
+                "4326, 4490, 3857, 32601-32660, 32701-32760, 4502-4512, 4534-4554",
             )),
         }
     }
@@ -112,7 +115,7 @@ impl ProjectionType {
     #[must_use]
     pub fn to_epsg(&self) -> Option<u32> {
         match self {
-            Self::Geographic => Some(4326),
+            Self::Geographic { epsg } => Some(*epsg),
             Self::WebMercator => Some(3857),
             Self::Utm { zone, north } => {
                 if *north {
@@ -141,14 +144,14 @@ impl ProjectionType {
     /// 是否为地理坐标系
     #[must_use]
     pub fn is_geographic(&self) -> bool {
-        matches!(self, Self::Geographic)
+        matches!(self, Self::Geographic { .. })
     }
 
     /// 获取中央子午线
     #[must_use]
     pub fn central_meridian(&self) -> Option<f64> {
         match self {
-            Self::Geographic | Self::WebMercator => None,
+            Self::Geographic { .. } | Self::WebMercator => None,
             Self::Utm { zone, .. } => Some(f64::from(*zone) * 6.0 - 183.0),
             Self::GaussKruger3 { zone } => Some(f64::from(*zone) * 3.0),
             Self::GaussKruger6 { zone } => Some(f64::from(*zone) * 6.0 - 3.0),
@@ -169,8 +172,7 @@ impl ProjectionType {
     /// 自动从经度确定高斯-克吕格 3度带
     #[must_use]
     pub fn auto_gk3(lon: f64) -> Self {
-        let zone = (lon / 3.0).floor() as u8;
-        let zone = zone.clamp(25, 45);
+        let zone = auto_gk3_zone(lon);
         Self::GaussKruger3 { zone }
     }
 
@@ -186,7 +188,13 @@ impl ProjectionType {
     #[must_use]
     pub fn to_fast_projection(&self) -> FastProjection {
         match self {
-            Self::Geographic => FastProjection::Geographic(Ellipsoid::WGS84),
+            Self::Geographic { epsg } => {
+                let ellipsoid = match epsg {
+                    4490 => Ellipsoid::CGCS2000,
+                    _ => Ellipsoid::WGS84,
+                };
+                FastProjection::Geographic(ellipsoid)
+            }
             Self::Utm { zone, north } => {
                 FastProjection::TransverseMercator(TransverseMercatorParams::utm(*zone, *north))
             }
@@ -337,6 +345,15 @@ pub fn web_mercator_to_wgs84(x: f64, y: f64) -> MhResult<(f64, f64)> {
 /// # Errors
 /// 如果坐标超出有效范围则返回错误
 pub fn wgs84_to_auto_utm(lon: f64, lat: f64) -> MhResult<(f64, f64, u8, bool)> {
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(GeoError::coordinate_out_of_range("经度", lon, -180.0, 180.0).into());
+    }
+    if !(-90.0..=90.0).contains(&lat) {
+        return Err(GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0).into());
+    }
+    if lat > 84.0 || lat < -80.0 {
+        return Err(GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0).into());
+    }
     let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
     let zone = zone.clamp(1, 60);
     let north = lat >= 0.0;
@@ -372,7 +389,7 @@ mod tests {
     fn test_projection_type_from_epsg() {
         assert_eq!(
             ProjectionType::from_epsg(4326).expect("4326"),
-            ProjectionType::Geographic
+            ProjectionType::Geographic { epsg: 4326 }
         );
         assert_eq!(
             ProjectionType::from_epsg(3857).expect("3857"),
@@ -396,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_projection_type_to_epsg() {
-        assert_eq!(ProjectionType::Geographic.to_epsg(), Some(4326));
+        assert_eq!(ProjectionType::Geographic { epsg: 4326 }.to_epsg(), Some(4326));
         assert_eq!(ProjectionType::WebMercator.to_epsg(), Some(3857));
         assert_eq!(
             ProjectionType::Utm {
@@ -450,7 +467,10 @@ mod tests {
 
     #[test]
     fn test_identity_projection() {
-        let proj = Projection::new(ProjectionType::Geographic, ProjectionType::Geographic);
+        let proj = Projection::new(
+            ProjectionType::Geographic { epsg: 4326 },
+            ProjectionType::Geographic { epsg: 4326 },
+        );
         assert!(proj.is_identity());
 
         let (x, y) = proj.forward(116.0, 40.0).expect("forward");

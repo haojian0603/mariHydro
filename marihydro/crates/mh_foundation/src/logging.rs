@@ -22,7 +22,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::io::Write;
+use std::time::SystemTime;
 use serde_json;
+
+#[cfg(feature = "tracing")]
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+#[cfg(feature = "tracing")]
+use tracing_subscriber::fmt::writer::MakeWriter;
 
 /// 日志配置
 #[derive(Debug, Clone)]
@@ -172,6 +178,17 @@ pub enum LogOutput {
     Both,
 }
 
+/// 日志元信息
+#[derive(Debug, Clone, Copy)]
+pub struct LogMeta {
+    /// 目标模块路径
+    pub target: &'static str,
+    /// 源文件路径
+    pub file: &'static str,
+    /// 行号
+    pub line: u32,
+}
+
 /// 构建 EnvFilter 字符串
 fn build_filter_string(config: &LogConfig) -> String {
     let mut parts = vec![config.level.as_str().to_string()];
@@ -204,6 +221,7 @@ fn store_log_config(config: &LogConfig) {
     let _ = LOG_CONFIG.set(config.clone());
 }
 
+#[allow(dead_code)]
 fn current_log_config() -> Option<&'static LogConfig> {
     LOG_CONFIG.get()
 }
@@ -214,10 +232,12 @@ fn store_log_file(file: std::fs::File) -> Arc<Mutex<std::fs::File>> {
     handle
 }
 
+#[allow(dead_code)]
 fn current_log_file() -> Option<&'static Arc<Mutex<std::fs::File>>> {
     LOG_FILE.get()
 }
 
+#[allow(dead_code)]
 pub(crate) fn level_from_ident(level: &str) -> LogLevel {
     match level {
         "trace" => LogLevel::Trace,
@@ -229,18 +249,45 @@ pub(crate) fn level_from_ident(level: &str) -> LogLevel {
     }
 }
 
-pub(crate) fn emit_log(level: LogLevel, fields: Vec<(String, String)>, msg: &str) {
+#[allow(dead_code)]
+pub(crate) fn emit_log(level: LogLevel, mut fields: Vec<(String, String)>, msg: &str, meta: Option<LogMeta>) {
     let config = current_log_config().cloned().unwrap_or_default();
     if level < config.level || config.level == LogLevel::Off {
         return;
     }
 
+    if let Some(meta) = meta {
+        if config.targets {
+            fields.push(("target".to_string(), meta.target.to_string()));
+        }
+        if config.file_locations {
+            fields.push((
+                "file".to_string(),
+                format!("{}:{}", meta.file, meta.line),
+            ));
+        }
+    }
+
+    let timestamp = if config.timestamps {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| format!("{}.{}", d.as_secs(), d.subsec_millis()))
+    } else {
+        None
+    };
+
     let line = if config.json {
         let mut json = String::new();
-        json.push_str("{\"level\":\"");
+        json.push('{');
+        json.push_str("\"level\":\"");
         json.push_str(level.as_str());
         json.push_str("\",\"message\":");
         json.push_str(&serde_json::to_string(msg).unwrap_or_else(|_| "\"\"".into()));
+        if let Some(ts) = &timestamp {
+            json.push_str(",\"timestamp\":");
+            json.push_str(&serde_json::to_string(ts).unwrap_or_else(|_| "\"\"".into()));
+        }
         json.push_str(",\"fields\":{");
         for (i, (k, v)) in fields.iter().enumerate() {
             if i > 0 {
@@ -254,9 +301,18 @@ pub(crate) fn emit_log(level: LogLevel, fields: Vec<(String, String)>, msg: &str
         json
     } else {
         let mut s = String::new();
+        if let Some(ts) = &timestamp {
+            s.push('[');
+            s.push_str(ts);
+            s.push(']');
+            if !config.compact {
+                s.push(' ');
+            }
+        }
         s.push('[');
         s.push_str(level.as_str());
-        s.push_str("] ");
+        s.push(']');
+        s.push(' ');
         s.push_str(msg);
         if !fields.is_empty() {
             s.push(' ');
@@ -342,7 +398,99 @@ pub fn init_logging(config: &LogConfig) -> Result<LogGuard, String> {
         },
     };
 
+    #[cfg(feature = "tracing")]
+    {
+        let filter = EnvFilter::try_new(_filter.clone())
+            .unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
+
+        let make_layer = |writer| {
+            let mut layer = fmt::layer().with_writer(writer);
+
+            if config.targets {
+                layer = layer.with_target(true);
+            } else {
+                layer = layer.with_target(false);
+            }
+
+            if config.file_locations {
+                layer = layer.with_file(true).with_line_number(true);
+            } else {
+                layer = layer.with_file(false).with_line_number(false);
+            }
+
+            if config.compact {
+                layer = layer.compact();
+            }
+
+            if !config.ansi_colors {
+                layer = layer.with_ansi(false);
+            }
+
+            if !config.timestamps {
+                layer = layer.without_time();
+            }
+
+            if config.json {
+                layer.json()
+            } else {
+                layer
+            }
+        };
+
+        match config.output {
+            LogOutput::Stdout => {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(make_layer(std::io::stdout))
+                    .try_init()
+                    .map_err(|e| format!("日志初始化失败: {}", e))?;
+            }
+            LogOutput::Stderr => {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(make_layer(std::io::stderr))
+                    .try_init()
+                    .map_err(|e| format!("日志初始化失败: {}", e))?;
+            }
+            LogOutput::File => {
+                let file = current_log_file().ok_or_else(|| "日志文件未初始化".to_string())?;
+                let writer = FileMakeWriter { file: file.clone() };
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(make_layer(writer))
+                    .try_init()
+                    .map_err(|e| format!("日志初始化失败: {}", e))?;
+            }
+            LogOutput::Both => {
+                let file = current_log_file().ok_or_else(|| "日志文件未初始化".to_string())?;
+                let file_writer = FileMakeWriter { file: file.clone() };
+                let stderr_layer = make_layer(std::io::stderr);
+                let file_layer = make_layer(file_writer);
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(stderr_layer)
+                    .with(file_layer)
+                    .try_init()
+                    .map_err(|e| format!("日志初始化失败: {}", e))?;
+            }
+        }
+    }
+
     Ok(guard)
+}
+
+#[cfg(feature = "tracing")]
+struct FileMakeWriter {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+#[cfg(feature = "tracing")]
+impl<'a> MakeWriter<'a> for FileMakeWriter {
+    type Writer = std::sync::MutexGuard<'a, std::fs::File>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.file.lock().expect("日志文件锁被占用")
+    }
 }
 
 /// 日志宏（结构化日志）
@@ -352,13 +500,25 @@ pub fn init_logging(config: &LogConfig) -> Result<LogGuard, String> {
 macro_rules! log_event {
     ($level:ident, $($field:ident = $value:expr),* ; $msg:expr) => {
         {
-            let _fields = vec![
-                $(
-                    (stringify!($field).to_string(), format!("{:?}", $value)),
-                )*
-            ];
-            let _level = $crate::logging::level_from_ident(stringify!($level));
-            $crate::logging::emit_log(_level, _fields, $msg);
+            #[cfg(feature = "tracing")]
+            {
+                tracing::$level!($($field = $value),*, "{}", $msg);
+            }
+            #[cfg(not(feature = "tracing"))]
+            {
+                let _fields = vec![
+                    $(
+                        (stringify!($field).to_string(), format!("{:?}", $value)),
+                    )*
+                ];
+                let _level = $crate::logging::level_from_ident(stringify!($level));
+                let _meta = $crate::logging::LogMeta {
+                    target: module_path!(),
+                    file: file!(),
+                    line: line!(),
+                };
+                $crate::logging::emit_log(_level, _fields, $msg, Some(_meta));
+            }
         }
     };
 }
@@ -398,7 +558,7 @@ impl Drop for PerfSpan {
         if elapsed.as_micros() > 100 {
             // 只记录 > 100μs 的操作
             eprintln!(
-                "[PERF] {} completed in {:.3}ms",
+                "[性能] {} 耗时 {:.3} 毫秒",
                 self.name,
                 elapsed.as_secs_f64() * 1000.0
             );

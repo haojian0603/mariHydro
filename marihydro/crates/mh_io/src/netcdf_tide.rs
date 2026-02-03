@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 // ============================================================================
 // 潮汐数据元数据
@@ -97,17 +98,48 @@ pub struct TidalGrid {
 impl TidalGrid {
     /// 获取插值索引和权重
     pub fn interpolation_indices(&self, lon: f64, lat: f64) -> Option<InterpolationIndices> {
+        if !lon.is_finite() || !lat.is_finite() {
+            return None;
+        }
+        if !self.lon_range.0.is_finite()
+            || !self.lon_range.1.is_finite()
+            || !self.lat_range.0.is_finite()
+            || !self.lat_range.1.is_finite()
+        {
+            return None;
+        }
+        if self.lon_range.1 <= self.lon_range.0 {
+            return None;
+        }
+        if !self.lon_resolution.is_finite() || !self.lat_resolution.is_finite() {
+            return None;
+        }
+        if self.lon_resolution <= 0.0 || self.lat_resolution <= 0.0 {
+            return None;
+        }
+
         // 归一化经度到 [0, 360)
-        let lon_normalized = if lon < 0.0 { lon + 360.0 } else { lon };
+        let mut lon_normalized = lon.rem_euclid(360.0);
+        if lon_normalized < self.lon_range.0 {
+            lon_normalized += 360.0;
+        }
         
         // 检查范围
+        if self.lat_range.0 > self.lat_range.1 {
+            return None;
+        }
         if lat < self.lat_range.0 || lat > self.lat_range.1 {
             return None;
         }
         
         // 计算索引
-        let i_lon = ((lon_normalized - self.lon_range.0) / self.lon_resolution).floor() as usize;
-        let j_lat = ((lat - self.lat_range.0) / self.lat_resolution).floor() as usize;
+        let i_lon = ((lon_normalized - self.lon_range.0) / self.lon_resolution).floor() as isize;
+        let j_lat = ((lat - self.lat_range.0) / self.lat_resolution).floor() as isize;
+        if i_lon < 0 || j_lat < 0 {
+            return None;
+        }
+        let i_lon = i_lon as usize;
+        let j_lat = j_lat as usize;
         
         if i_lon >= self.n_lon - 1 || j_lat >= self.n_lat - 1 {
             return None;
@@ -118,6 +150,9 @@ impl TidalGrid {
             / self.lon_resolution;
         let y = (lat - self.lat_range.0 - (j_lat as f64) * self.lat_resolution)
             / self.lat_resolution;
+
+        let x = x.clamp(0.0, 1.0);
+        let y = y.clamp(0.0, 1.0);
         
         Some(InterpolationIndices {
             i: [i_lon, i_lon + 1, i_lon, i_lon + 1],
@@ -206,7 +241,7 @@ pub struct TpxoReader {
     /// 可用分潮
     constituents: Vec<String>,
     /// 缓存的数据（分潮名 -> (振幅, 相位)）
-    cache: HashMap<String, (Vec<Vec<f64>>, Vec<Vec<f64>>)>,
+    cache: RwLock<HashMap<String, (Vec<Vec<f64>>, Vec<Vec<f64>>) >>,
 }
 
 impl TpxoReader {
@@ -231,7 +266,7 @@ impl TpxoReader {
             model_type,
             grid,
             constituents,
-            cache: HashMap::new(),
+            cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -262,21 +297,31 @@ impl TpxoReader {
 
     /// 加载分潮数据到缓存
     #[allow(dead_code)]
-    fn load_constituent(&mut self, name: &str) -> Result<(), TidalIoError> {
-        if self.cache.contains_key(name) {
+    fn load_constituent(&self, name: &str) -> Result<(), TidalIoError> {
+        if !self.constituents.iter().any(|c| c == name) {
+            return Err(TidalIoError::ConstituentNotFound(name.to_string()));
+        }
+        if self.cache.read().map(|c| c.contains_key(name)).unwrap_or(false) {
             return Ok(());
         }
         
         // 模拟数据加载
         // 实际实现需要从 NetCDF 读取
+        const MAX_CACHE_CELLS: usize = 5_000_000;
         let n_lon = self.grid.n_lon;
         let n_lat = self.grid.n_lat;
+        let total = n_lon.saturating_mul(n_lat);
+
+        // 生成模拟数据（测试用），避免超大内存分配
+        let (amplitude, phase) = if total == 0 || total > MAX_CACHE_CELLS {
+            (Vec::new(), Vec::new())
+        } else {
+            (vec![vec![0.0; n_lon]; n_lat], vec![vec![0.0; n_lon]; n_lat])
+        };
         
-        // 生成模拟数据（测试用）
-        let amplitude = vec![vec![0.0; n_lon]; n_lat];
-        let phase = vec![vec![0.0; n_lon]; n_lat];
-        
-        self.cache.insert(name.to_lowercase(), (amplitude, phase));
+        if let Ok(mut cache) = self.cache.write() {
+            cache.insert(name.to_lowercase(), (amplitude, phase));
+        }
         
         Ok(())
     }
@@ -314,23 +359,31 @@ impl TidalDataReader for TpxoReader {
     
     fn read_constituent(&self, name: &str, _lon: f64, _lat: f64) -> Result<(f64, f64), TidalIoError> {
         let name_lower = name.to_lowercase();
-        
         if !self.constituents.iter().any(|c| c == &name_lower) {
             return Err(TidalIoError::ConstituentNotFound(name.to_string()));
+        }
+
+        if !_lon.is_finite() || !_lat.is_finite() {
+            return Err(TidalIoError::OutOfBounds { lon: _lon, lat: _lat });
         }
         
         let indices = self.grid.interpolation_indices(_lon, _lat)
             .ok_or(TidalIoError::OutOfBounds { lon: _lon, lat: _lat })?;
         
-        // 从缓存读取或返回默认值
-        if let Some((amp_data, phase_data)) = self.cache.get(&name_lower) {
-            let amp = self.interpolate(amp_data, &indices);
-            let phase = self.interpolate(phase_data, &indices);
-            Ok((amp, phase))
-        } else {
-            // 未加载，返回 0
-            Ok((0.0, 0.0))
+        if self.cache.read().map(|c| !c.contains_key(&name_lower)).unwrap_or(true) {
+            self.load_constituent(&name_lower)?;
         }
+
+        // 从缓存读取或返回默认值
+        if let Ok(cache) = self.cache.read() {
+            if let Some((amp_data, phase_data)) = cache.get(&name_lower) {
+                let amp = self.interpolate(amp_data, &indices);
+                let phase = self.interpolate(phase_data, &indices);
+                return Ok((amp, phase));
+            }
+        }
+
+        Ok((0.0, 0.0))
     }
     
     fn read_constituent_batch(
@@ -360,10 +413,8 @@ impl TidalDataReader for TpxoReader {
     ) -> Result<((f64, f64), (f64, f64)), TidalIoError> {
         // U 分量和 V 分量
         // 实际实现需要从 NetCDF 的 u/v 变量读取
-        let (amp_u, phase_u) = self.read_constituent(&format!("{}_u", name), lon, lat)
-            .unwrap_or((0.0, 0.0));
-        let (amp_v, phase_v) = self.read_constituent(&format!("{}_v", name), lon, lat)
-            .unwrap_or((0.0, 0.0));
+        let (amp_u, phase_u) = self.read_constituent(&format!("{}_u", name), lon, lat)?;
+        let (amp_v, phase_v) = self.read_constituent(&format!("{}_v", name), lon, lat)?;
         
         Ok(((amp_u, phase_u), (amp_v, phase_v)))
     }
@@ -555,7 +606,13 @@ impl BoundaryTidalConstants {
         
         for (name, data) in &self.constants {
             if let Some(&freq) = frequencies.get(name) {
+                if !freq.is_finite() || !time_hours.is_finite() {
+                    continue;
+                }
                 for (i, &(amp, phase)) in data.iter().enumerate() {
+                    if i >= self.n_points {
+                        break;
+                    }
                     let phase_rad = phase.to_radians();
                     levels[i] += amp * (freq * time_hours - phase_rad).cos();
                 }

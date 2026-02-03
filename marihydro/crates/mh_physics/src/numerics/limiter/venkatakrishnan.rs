@@ -40,7 +40,12 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// - `mesh_scale`: 网格特征尺度
     #[inline]
     pub fn new(k: S, mesh_scale: S) -> Self {
-        let kh = k * mesh_scale;
+        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+            mesh_scale
+        } else {
+            S::ONE
+        };
+        let kh = k * scale;
         let eps_squared = kh * kh * kh;
         
         Self {
@@ -53,7 +58,12 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// 创建具有自定义容差的限制器
     #[inline]
     pub fn with_tolerance(k: S, mesh_scale: S, tol: S) -> Self {
-        let kh = k * mesh_scale;
+        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+            mesh_scale
+        } else {
+            S::ONE
+        };
+        let kh = k * scale;
         let eps_squared = kh * kh * kh;
         
         Self {
@@ -102,7 +112,12 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
     /// 更新网格尺度
     #[inline]
     pub fn update_mesh_scale(&mut self, mesh_scale: S) {
-        let kh = self.k * mesh_scale;
+        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+            mesh_scale
+        } else {
+            S::ONE
+        };
+        let kh = self.k * scale;
         self.eps_squared = kh * kh * kh;
     }
 

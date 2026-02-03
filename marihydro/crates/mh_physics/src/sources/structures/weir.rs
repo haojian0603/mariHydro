@@ -21,6 +21,7 @@
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
+use mh_foundation::error::MhResult;
 use mh_foundation::AlignedVec;
 use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
@@ -105,24 +106,24 @@ pub struct WeirFlow {
 
 impl WeirFlow {
     /// 创建新的堰流源项
-    pub fn new(n_cells: usize, config: WeirConfig) -> Self {
+    pub fn new(n_cells: usize, config: WeirConfig) -> MhResult<Self> {
         let cd_default = config.weir_type.discharge_coefficient();
-        Self {
+        Ok(Self {
             config: config.clone(),
             constants: config.constants,
             n_cells,
-            crest_elevation: AlignedVec::from_vec(vec![f64::INFINITY; n_cells]), // 默认无堰
+            crest_elevation: AlignedVec::from_vec(vec![f64::INFINITY; n_cells])?, // 默认无堰
             weir_width: AlignedVec::zeros(n_cells),
-            cd_field: AlignedVec::from_vec(vec![cd_default; n_cells]),
-            normal_x: AlignedVec::from_vec(vec![1.0; n_cells]), // 默认 x 方向
+            cd_field: AlignedVec::from_vec(vec![cd_default; n_cells])?,
+            normal_x: AlignedVec::from_vec(vec![1.0; n_cells])?, // 默认 x 方向
             normal_y: AlignedVec::zeros(n_cells),
-            cell_area: AlignedVec::from_vec(vec![1.0; n_cells]), // 默认单位面积
+            cell_area: AlignedVec::from_vec(vec![1.0; n_cells])?, // 默认单位面积
             discharge: AlignedVec::zeros(n_cells),
-        }
+        })
     }
 
     /// 使用默认配置创建
-    pub fn with_defaults(n_cells: usize) -> Self {
+    pub fn with_defaults(n_cells: usize) -> MhResult<Self> {
         Self::new(n_cells, WeirConfig::default())
     }
 
@@ -307,20 +308,20 @@ mod tests {
 
     #[test]
     fn test_weir_creation() {
-        let weir = WeirFlow::with_defaults(10);
+        let weir = WeirFlow::with_defaults(10).unwrap();
         assert_eq!(weir.n_cells, 10);
     }
 
     #[test]
     fn test_no_weir() {
-        let weir = WeirFlow::with_defaults(10);
+        let weir = WeirFlow::with_defaults(10).unwrap();
         let q = weir.compute_discharge(0, 5.0);
         assert!((q).abs() < 1e-10); // 无堰
     }
 
     #[test]
     fn test_with_weir() {
-        let mut weir = WeirFlow::with_defaults(10);
+        let mut weir = WeirFlow::with_defaults(10).unwrap();
         weir.set_weir(0, 2.0, 10.0, None, (1.0, 0.0)); // 堰顶2m，宽10m
 
         let q = weir.compute_discharge(0, 3.0); // 水位3m，水头1m
@@ -332,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_submerged_flow() {
-        let mut weir = WeirFlow::with_defaults(10);
+        let mut weir = WeirFlow::with_defaults(10).unwrap();
         weir.set_weir(0, 2.0, 10.0, None, (1.0, 0.0));
 
         let q_free = weir.compute_discharge_from_head(0, 1.0);

@@ -113,6 +113,9 @@ impl VegetationType {
     /// 返回 C_d * A_v [1/m]
     // ALLOW_F64: 源项计算
     pub fn effective_drag(&self, water_depth: f64, velocity: f64) -> f64 {
+        if !water_depth.is_finite() || water_depth <= 0.0 || !velocity.is_finite() {
+            return 0.0;
+        }
         match *self {
             Self::None => 0.0,
             Self::Rigid { cd, diameter, density, height } => {
@@ -250,7 +253,7 @@ impl SourceTerm for VegetationConfig {
         let h = state.h[cell];
 
         // 干单元不计算
-        if h < self.h_min || ctx.is_dry(h) {
+        if !h.is_finite() || h < self.h_min || ctx.is_dry(h) {
             return SourceContribution::ZERO;
         }
 
@@ -262,6 +265,10 @@ impl SourceTerm for VegetationConfig {
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
         let vel = (u * u + v * v).sqrt();
+
+        if !u.is_finite() || !v.is_finite() || !vel.is_finite() {
+            return SourceContribution::ZERO;
+        }
 
         if vel < self.vel_min {
             return SourceContribution::ZERO;
@@ -329,11 +336,14 @@ impl VegetationImplicit {
     /// 返回 exp(-Δt * 0.5 * C_d * A_v * |u|)
     // ALLOW_F64: 时间参数与模拟进度配合
     pub fn compute_decay_factors(&mut self, state: &ShallowWaterState<CpuBackend<f64>>, dt: f64) {
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {
             let h = state.h[i];
-            if h < self.config.h_min {
+            if !h.is_finite() || h < self.config.h_min {
                 self.decay_factors[i] = 1.0;
                 continue;
             }
@@ -347,6 +357,11 @@ impl VegetationImplicit {
             let u = state.hu[i] / h;
             let v = state.hv[i] / h;
             let vel = (u * u + v * v).sqrt();
+
+            if !u.is_finite() || !v.is_finite() || !vel.is_finite() {
+                self.decay_factors[i] = 1.0;
+                continue;
+            }
 
             let cd_av = veg.effective_drag(h, vel);
             let decay_rate = 0.5 * cd_av * vel;
@@ -400,14 +415,13 @@ mod tests {
     #[test]
     fn test_vegetation_type_rigid() {
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
-        match veg {
-            VegetationType::Rigid { cd, diameter, density, height } => {
-                assert!((cd - 1.0).abs() < 1e-10);
-                assert!((diameter - 0.01).abs() < 1e-10);
-                assert!((density - 100.0).abs() < 1e-10);
-                assert!((height - 1.0).abs() < 1e-10);
-            }
-            _ => panic!("Expected Rigid type"),
+        if let VegetationType::Rigid { cd, diameter, density, height } = veg {
+            assert!((cd - 1.0).abs() < 1e-10);
+            assert!((diameter - 0.01).abs() < 1e-10);
+            assert!((density - 100.0).abs() < 1e-10);
+            assert!((height - 1.0).abs() < 1e-10);
+        } else {
+            assert!(false, "Expected Rigid type");
         }
     }
 

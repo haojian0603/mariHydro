@@ -129,12 +129,21 @@ impl GeoTransform {
     /// 地理坐标转栅格坐标
     #[inline]
     pub fn geo_to_pixel(&self, x: f64, y: f64) -> (f64, f64) {
+        self.geo_to_pixel_checked(x, y).unwrap_or((0.0, 0.0))
+    }
+
+    /// 地理坐标转栅格坐标（带退化检查）
+    #[inline]
+    pub fn geo_to_pixel_checked(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         let det = self.pixel_width * self.pixel_height - self.rotation_x * self.rotation_y;
+        if det.abs() < 1e-12 {
+            return None;
+        }
         let dx = x - self.origin_x;
         let dy = y - self.origin_y;
         let px = (dx * self.pixel_height - dy * self.rotation_x) / det;
         let py = (-dx * self.rotation_y + dy * self.pixel_width) / det;
-        (px, py)
+        Some((px, py))
     }
 
     /// 栅格坐标转地理坐标
@@ -243,7 +252,10 @@ impl SpatialInterpolator {
         src_h: usize,
         method: InterpolationMethod,
     ) -> Vec<Weight> {
-        let (px, py) = transform.geo_to_pixel(point.x, point.y);
+        let (px, py) = match transform.geo_to_pixel_checked(point.x, point.y) {
+            Some(v) => v,
+            None => return Vec::new(),
+        };
 
         match method {
             InterpolationMethod::NearestNeighbor => {

@@ -7,7 +7,7 @@
 //! - [`buffer`]: AlignedVec 的 DeviceBuffer 实现（扩展 mh_runtime）
 //! - [`dimension`]: 维度标记 (2D/3D)
 //! - [`kernel`]: GPU Kernel 接口规范
-//! - [`gpu`]: GPU 后端占位符
+//! - [`gpu`]: GPU 后端模拟实现
 //!
 //! # 设计原则
 //!

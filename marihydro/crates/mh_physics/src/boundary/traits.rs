@@ -372,6 +372,8 @@ pub struct TidalLevel<S> {
     pub phase: S,
     /// 床面高程 [m]
     pub bed_level: S,
+    /// 干湿阈值 [m]
+    pub h_dry: S,
 }
 
 impl<S: RuntimeScalar> TidalLevel<S> {
@@ -389,12 +391,42 @@ impl<S: RuntimeScalar> TidalLevel<S> {
             period,
             phase: S::zero(),
             bed_level,
+            h_dry: S::epsilon(),
         }
+    }
+
+    /// 带校验创建
+    pub fn try_new(base_level: S, amplitude: S, period: S, bed_level: S) -> Result<Self, BoundaryParseError> {
+        if !base_level.is_finite() || !amplitude.is_finite() || !period.is_finite() || !bed_level.is_finite() {
+            return Err(BoundaryParseError::InvalidParameterValue(
+                "tidal".to_string(),
+                "non-finite parameter".to_string(),
+            ));
+        }
+        if period <= S::epsilon() {
+            return Err(BoundaryParseError::InvalidParameterValue(
+                "period".to_string(),
+                "period must be positive".to_string(),
+            ));
+        }
+        if amplitude < S::zero() {
+            return Err(BoundaryParseError::InvalidParameterValue(
+                "amplitude".to_string(),
+                "amplitude must be >= 0".to_string(),
+            ));
+        }
+        Ok(Self::new(base_level, amplitude, period, bed_level))
     }
 
     /// 设置初始相位
     pub fn with_phase(mut self, phase: S) -> Self {
         self.phase = phase;
+        self
+    }
+
+    /// 设置干湿阈值
+    pub fn with_h_dry(mut self, h_dry: S) -> Self {
+        self.h_dry = h_dry;
         self
     }
 }
@@ -414,6 +446,9 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for TidalLevel<S> {
         let omega = two * pi / period_safe;
         let eta = self.base_level + self.amplitude * (omega * time + self.phase).sin();
         let h = (eta - self.bed_level).max(S::zero());
+        if h <= self.h_dry {
+            return CellState::dry();
+        }
 
         CellState {
             h,
@@ -445,6 +480,8 @@ pub struct FlatherBoundary<S> {
     pub gravity: S,
     /// 床面高程 [m]
     pub bed_level: S,
+    /// 干湿阈值 [m]
+    pub h_dry: S,
 }
 
 impl<S: RuntimeScalar> FlatherBoundary<S> {
@@ -454,7 +491,31 @@ impl<S: RuntimeScalar> FlatherBoundary<S> {
             external_level,
             gravity,
             bed_level,
+            h_dry: S::epsilon(),
         }
+    }
+
+    /// 带校验创建
+    pub fn try_new(external_level: S, gravity: S, bed_level: S) -> Result<Self, BoundaryParseError> {
+        if !external_level.is_finite() || !gravity.is_finite() || !bed_level.is_finite() {
+            return Err(BoundaryParseError::InvalidParameterValue(
+                "flather".to_string(),
+                "non-finite parameter".to_string(),
+            ));
+        }
+        if gravity <= S::zero() {
+            return Err(BoundaryParseError::InvalidParameterValue(
+                "gravity".to_string(),
+                "gravity must be positive".to_string(),
+            ));
+        }
+        Ok(Self::new(external_level, gravity, bed_level))
+    }
+
+    /// 设置干湿阈值
+    pub fn with_h_dry(mut self, h_dry: S) -> Self {
+        self.h_dry = h_dry;
+        self
     }
 }
 
@@ -469,11 +530,23 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for FlatherBoundary<S> {
         // 外部水位
         let eta_ext = self.external_level;
         // 水深
-        let h = (self.external_level - self.bed_level).max(S::epsilon());
+        let h = (self.external_level - self.bed_level).max(S::zero());
+        if h <= self.h_dry {
+            // 干单元：退化为透射
+            return CellState {
+                h: S::zero(),
+                u: S::zero(),
+                v: S::zero(),
+            };
+        }
         // 波速
         let c = (self.gravity * h).sqrt();
         // Flather 校正
         let un_int = interior.u * normal[0] + interior.v * normal[1];
+        if un_int.abs() >= c {
+            // 超临界：退化为透射
+            return *interior;
+        }
         let un_ext = un_int + c * (eta_int - eta_ext) / h;
 
         // 计算速度分量
@@ -615,16 +688,21 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
                 .ok_or_else(|| BoundaryParseError::MissingParameter("period".to_string()))?;
             let bed_level = config.get("bed_level").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let phase = config.get("phase").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let h_dry = config.get("h_dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-            Ok(Arc::new(
-                TidalLevel::new(
-                    S::from_f64(base_level).unwrap_or(S::one()),
-                    S::from_f64(amplitude).unwrap_or(S::one()),
-                    S::from_f64(period).unwrap_or(S::one()),
-                    S::from_f64(bed_level).unwrap_or(S::zero()),
-                )
-                .with_phase(S::from_f64(phase).unwrap_or(S::zero())),
-            ))
+            let mut tidal = TidalLevel::try_new(
+                S::from_f64(base_level).unwrap_or(S::one()),
+                S::from_f64(amplitude).unwrap_or(S::one()),
+                S::from_f64(period).unwrap_or(S::one()),
+                S::from_f64(bed_level).unwrap_or(S::zero()),
+            )?
+            .with_phase(S::from_f64(phase).unwrap_or(S::zero()));
+
+            if h_dry > 0.0 {
+                tidal = tidal.with_h_dry(S::from_f64(h_dry).unwrap_or(S::epsilon()));
+            }
+
+            Ok(Arc::new(tidal))
         });
 
         // FlatherBoundary
@@ -635,12 +713,19 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
                 .ok_or_else(|| BoundaryParseError::MissingParameter("external_level".to_string()))?;
             let gravity = config.get("gravity").and_then(|v| v.as_f64()).unwrap_or(9.81);
             let bed_level = config.get("bed_level").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let h_dry = config.get("h_dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-            Ok(Arc::new(FlatherBoundary::new(
+            let mut flather = FlatherBoundary::try_new(
                 S::from_f64(external_level).unwrap_or(S::one()),
                 S::from_f64(gravity).unwrap_or(S::from_f64(9.81).unwrap_or(S::one())),
                 S::from_f64(bed_level).unwrap_or(S::zero()),
-            )))
+            )?;
+
+            if h_dry > 0.0 {
+                flather = flather.with_h_dry(S::from_f64(h_dry).unwrap_or(S::epsilon()));
+            }
+
+            Ok(Arc::new(flather))
         });
     }
 

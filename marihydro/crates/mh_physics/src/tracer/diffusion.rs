@@ -1,4 +1,87 @@
-﻿//! marihydro\crates\mh_physics\src\tracer\diffusion.rs
+﻿/*
+    #[test]
+    fn test_constant_coefficient() {
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Constant(10.0);
+        assert!((coef.effective_at(0, None) - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variable_coefficient() {
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Variable(vec![1.0, 2.0, 3.0]);
+        assert!((coef.effective_at(0, None) - 1.0).abs() < 1e-10);
+        assert!((coef.effective_at(1, None) - 2.0).abs() < 1e-10);
+        assert!((coef.effective_at(2, None) - 3.0).abs() < 1e-10);
+        assert!((coef.effective_at(10, None)).abs() < 1e-10); // 越界返回 0
+    }
+
+    #[test]
+    fn test_anisotropic_coefficient() {
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Anisotropic {
+            longitudinal: 100.0,
+            transverse: 10.0,
+        };
+        let effective = coef.effective_at(0, None);
+        // 几何平均 = sqrt(100 * 10) ≈ 31.62
+        assert!((effective - 31.622776601683793).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_turbulent_coefficient() {
+        let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Turbulent {
+            molecular: 1.0,
+            schmidt_number: 0.7,
+        };
+
+        // 无涡粘度时只有分子扩散
+        assert!((coef.effective_at(0, None) - 1.0).abs() < 1e-10);
+
+        // 有涡粘度时 = molecular + nu_t / Sc
+        let nu_t = 7.0;
+        let expected = 1.0 + 7.0 / 0.7; // = 11.0
+        assert!((coef.effective_at(0, Some(nu_t)) - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_harmonic_mean() {
+        assert!((harmonic_mean(2.0_f64, 2.0_f64) - 2.0_f64).abs() < 1e-10);
+        assert!((harmonic_mean(1.0_f64, 3.0_f64) - 1.5_f64).abs() < 1e-10);
+        assert!(harmonic_mean(0.0_f64, 1.0_f64).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_config_disabled() {
+        let config = DiffusionConfig::disabled();
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn test_config_constant_f64_to_f32() {
+        let config = DiffusionConfig::constant(10.0);
+        let operator = DiffusionOperator::<f32>::new(100, 200, config);
+        assert_eq!(operator.face_diffusivity().len(), 200);
+    }
+
+    #[test]
+    fn test_config_f64_to_f32_conversion() {
+        let config = DiffusionConfig {
+            coefficient: DiffusionCoefficientConfig::turbulent(1.5, 0.8),
+            enabled: true,
+            min_diffusivity: 0.1,
+            max_diffusivity: 100.0,
+        };
+        
+        let operator_f64 = DiffusionOperator::<f64>::new(50, 100, config.clone());
+        let operator_f32 = DiffusionOperator::<f32>::new(50, 100, config);
+        
+        // f64 版本
+        assert_eq!(operator_f64.face_diffusivity().len(), 100);
+        
+        // f32 版本
+        assert_eq!(operator_f32.face_diffusivity().len(), 100);
+    }
+}
+*/
+//! marihydro\crates\mh_physics\src\tracer\diffusion.rs
 //! 扩散算子模块
 //!
 //! 提供示踪剂输运的扩散计算，支持：
@@ -31,7 +114,7 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::types::FaceIndex;
-use mh_runtime::RuntimeScalar as Scalar;
+use mh_runtime::{CpuBackend, RuntimeScalar as Scalar, Vector2D};
 use bytemuck::Pod;
 use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
@@ -289,7 +372,7 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
             return;
         }
 
-        for face_idx in 0..mesh.n_faces() {
+        for face_idx in 0..mesh.face_count() {
             let face = FaceIndex::new(face_idx);
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
@@ -334,7 +417,7 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
             return self.face_flux.as_slice();
         }
 
-        for face_idx in 0..mesh.n_faces() {
+        for face_idx in 0..mesh.face_count() {
             let face = FaceIndex::new(face_idx);
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
@@ -384,7 +467,7 @@ impl<S: Scalar + Pod + Default> DiffusionOperator<S> {
         self.cell_diffusion.as_mut_slice().fill(S::ZERO);
 
         // 累加面通量到单元
-        for face_idx in 0..mesh.n_faces() {
+        for face_idx in 0..mesh.face_count() {
             let face = FaceIndex::new(face_idx);
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
@@ -455,15 +538,17 @@ impl<S: Scalar + Pod + Default> AnisotropicDiffusionOperator<S> {
         velocity_x: &[S],
         velocity_y: &[S],
     ) -> &[S] {
-        for face_idx in 0..mesh.n_faces() {
+        for face_idx in 0..mesh.face_count() {
             let face = FaceIndex::new(face_idx);
             let owner = mesh.face_owner(face);
             let neighbor = mesh.face_neighbor(face);
 
             let flux = if let Some(neigh) = neighbor {
-                let (nx, ny) = mesh.face_normal_2d_tuple(face_idx);
-                let normal_x = S::from_f64(nx).unwrap_or(S::ZERO);
-                let normal_y = S::from_f64(ny).unwrap_or(S::ZERO);
+                let normal = mesh
+                    .face_normal_generic::<CpuBackend<f64>>(face)
+                    .expect("face_normal out of range");
+                let normal_x = S::from_f64(normal.x()).unwrap_or(S::ZERO);
+                let normal_y = S::from_f64(normal.y()).unwrap_or(S::ZERO);
                 let length = S::from_f64(mesh.face_length(face)).unwrap_or(S::ZERO);
                 let dist = S::from_f64(mesh.face_dist_o2n(face)).unwrap_or(S::ZERO);
 

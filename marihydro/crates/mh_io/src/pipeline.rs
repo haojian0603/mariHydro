@@ -17,8 +17,10 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use serde_json;
 
 use crate::snapshot::{MeshSnapshot, StateSnapshot};
+use crate::checkpoint::Checkpoint;
 use crate::vtu::binary::write_vtu_binary;
 
 // ============================================================
@@ -124,7 +126,7 @@ pub enum OutputRequest {
         data: Vec<u8>,
     },
     /// 刷新所有待处理请求
-    Flush,
+    Flush { ack: Sender<()> },
     /// 关闭管道
     Shutdown,
 }
@@ -380,13 +382,14 @@ impl IoPipeline {
 
     /// 刷新待处理请求
     pub fn flush(&self) -> crate::error::IoResult<()> {
-        if self.wait_for_completion(Duration::from_secs(30)) {
-            Ok(())
-        } else {
-            Err(crate::error::IoError::PipelineFailed {
+        let (tx, rx) = channel();
+        self.submit(OutputRequest::Flush { ack: tx })?;
+        match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(crate::error::IoError::PipelineFailed {
                 stage: "flush".into(),
                 message: "timeout".into(),
-            })
+            }),
         }
     }
 
@@ -417,8 +420,27 @@ impl IoPipeline {
 
     /// 显式关闭管道
     pub fn shutdown(&mut self) {
-        let _ = self.wait_for_completion(Duration::from_secs(30));
+        self.shutdown_graceful(Duration::from_secs(30));
+    }
+
+    /// 优雅关闭（等待队列清空）
+    pub fn shutdown_graceful(&mut self, timeout: Duration) {
+        let _ = self.flush();
+        let _ = self.wait_for_completion(timeout);
         self.shutdown_flag.store(true, Ordering::SeqCst);
+        let _ = self.sender.send(OutputRequest::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+
+    /// 立即关闭（不等待队列）
+    pub fn shutdown_immediate(&mut self) {
+        self.shutdown_flag.store(true, Ordering::SeqCst);
+        self.pending_count.store(0, Ordering::SeqCst);
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.current_queue_length = 0;
+        }
         let _ = self.sender.send(OutputRequest::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -433,24 +455,46 @@ impl IoPipeline {
         _shutdown_flag: Arc<AtomicBool>,
         write_timeout_ms: u64,
     ) {
+        let decrement_pending = |pending: &AtomicUsize| {
+            let _ = pending.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                Some(v.saturating_sub(1))
+            });
+        };
+
         while let Ok(request) = receiver.recv() {
             if matches!(request, OutputRequest::Shutdown) {
                 break;
             }
 
-            if matches!(request, OutputRequest::Flush) {
-                pending_count.fetch_sub(1, Ordering::SeqCst);
+            if let OutputRequest::Flush { ack } = request {
+                decrement_pending(&pending_count);
+                {
+                    // Flush 视为成功完成一次请求
+                    let mut s = stats.lock().unwrap_or_else(|poisoned| {
+                        eprintln!("[mh_io::pipeline] Stats mutex poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    s.completed_requests += 1;
+                    s.current_queue_length = pending_count.load(Ordering::SeqCst);
+                }
+                let _ = ack.send(());
                 continue;
             }
 
             let start = Instant::now();
             let mut result = Self::process_request(&request)
                 .map_err(|e| e.into_io_error("process_request"));
-            if write_timeout_ms > 0 && start.elapsed().as_millis() as u64 > write_timeout_ms {
-                result = Err(PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
-                    .into_io_error("process_request"));
-            }
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            if write_timeout_ms > 0 && elapsed_ms as u64 > write_timeout_ms {
+                if result.is_ok() {
+                    eprintln!(
+                        "[mh_io::pipeline] 写入超时警告: elapsed_ms={elapsed_ms:.2}, limit_ms={write_timeout_ms}"
+                    );
+                } else {
+                    result = Err(PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
+                        .into_io_error("process_request"));
+                }
+            }
 
             {
                 let mut s = stats.lock().unwrap_or_else(|poisoned| {
@@ -470,7 +514,7 @@ impl IoPipeline {
                     (s.average_write_time_ms * (total - 1) as f64 + elapsed_ms) / total as f64;
             }
 
-            pending_count.fetch_sub(1, Ordering::SeqCst);
+            decrement_pending(&pending_count);
             {
                 let mut s = stats.lock().unwrap_or_else(|poisoned| {
                     eprintln!("[mh_io::pipeline] Stats mutex poisoned, recovering");
@@ -495,11 +539,15 @@ impl IoPipeline {
             }
             OutputRequest::WritePvd { path, entries } => Self::write_pvd_impl(path, entries),
             OutputRequest::WriteRaw { path, data } => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
                 let mut file = File::create(path)?;
                 file.write_all(data)?;
+                file.sync_all()?;
                 Ok(())
             }
-            OutputRequest::Flush | OutputRequest::Shutdown => Ok(()),
+            OutputRequest::Flush { .. } | OutputRequest::Shutdown => Ok(()),
         }
     }
 
@@ -542,6 +590,37 @@ impl IoPipeline {
         )?;
         writeln!(writer, "          {}", time)?;
         writeln!(writer, r#"        </DataArray>"#)?;
+        if let (Some(faces), Some(ids)) = (&mesh.boundary_faces, &mesh.boundary_ids) {
+            writeln!(
+                writer,
+                r#"        <DataArray type="Int32" Name="boundary_faces" format="ascii">"#
+            )?;
+            writeln!(
+                writer,
+                "          {}",
+                faces.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            )?;
+            writeln!(writer, r#"        </DataArray>"#)?;
+            writeln!(
+                writer,
+                r#"        <DataArray type="Int32" Name="boundary_ids" format="ascii">"#
+            )?;
+            writeln!(
+                writer,
+                "          {}",
+                ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            )?;
+            writeln!(writer, r#"        </DataArray>"#)?;
+        }
+        if let Some(names) = &mesh.boundary_names {
+            let serialized = serde_json::to_string(names).unwrap_or_else(|_| "[]".into());
+            writeln!(
+                writer,
+                r#"        <DataArray type="String" Name="boundary_names" NumberOfTuples="1" format="ascii">"#
+            )?;
+            writeln!(writer, "          {}", serialized)?;
+            writeln!(writer, r#"        </DataArray>"#)?;
+        }
         writeln!(writer, r#"      </FieldData>"#)?;
 
         writeln!(writer, r#"      <Points>"#)?;
@@ -666,6 +745,7 @@ impl IoPipeline {
         writeln!(writer, r#"</VTKFile>"#)?;
 
         writer.flush()?;
+        writer.get_ref().sync_all()?;
         Ok(())
     }
 
@@ -693,6 +773,7 @@ impl IoPipeline {
             .map_err(|e| PipelineError::Serialization(format!("二进制编码失败: {}", e)))?;
 
         writer.flush()?;
+        writer.get_ref().sync_all()?;
         Ok(())
     }
 
@@ -704,43 +785,21 @@ impl IoPipeline {
         time: f64,
         step: usize,
     ) -> PipelineResult<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if let Err(err) = state.validate() {
+            return Err(PipelineError::Serialization(format!(
+                "state snapshot invalid: {err}"
+            )));
         }
 
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
-
-        writer.write_all(b"MHCK")?;
-        writer.write_all(&2u32.to_le_bytes())?;
-        writer.write_all(&time.to_le_bytes())?;
-        writer.write_all(&(step as u64).to_le_bytes())?;
-
-        let n_cells = state.h.len();
-        writer.write_all(&(n_cells as u64).to_le_bytes())?;
-
-        for &h in &state.h {
-            writer.write_all(&h.to_le_bytes())?;
-        }
-        for &hu in &state.hu {
-            writer.write_all(&hu.to_le_bytes())?;
-        }
-        for &hv in &state.hv {
-            writer.write_all(&hv.to_le_bytes())?;
+        let mut checkpoint = Checkpoint::new(time, step, state.clone());
+        if let Some(mesh) = mesh {
+            checkpoint = checkpoint.with_mesh_snapshot(mesh);
         }
 
-        let has_z = state.z.is_some() as u8;
-        writer.write_all(&[has_z])?;
-        if let Some(z) = &state.z {
-            for &val in z {
-                writer.write_all(&val.to_le_bytes())?;
-            }
-        }
+        checkpoint
+            .save(path)
+            .map_err(|e| PipelineError::Serialization(format!("checkpoint save failed: {e}")))?;
 
-        let mesh_hash: u64 = mesh.map_or(0, |m| m.n_cells as u64 ^ m.n_nodes as u64);
-        writer.write_all(&mesh_hash.to_le_bytes())?;
-
-        writer.flush()?;
         Ok(())
     }
 
@@ -769,6 +828,7 @@ impl IoPipeline {
         writeln!(writer, r#"</VTKFile>"#)?;
 
         writer.flush()?;
+        writer.get_ref().sync_all()?;
         Ok(())
     }
 }
@@ -781,11 +841,7 @@ impl Default for IoPipeline {
 
 impl Drop for IoPipeline {
     fn drop(&mut self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
-        let _ = self.sender.send(OutputRequest::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        self.shutdown_graceful(Duration::from_secs(30));
     }
 }
 
@@ -854,6 +910,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_write_timeout() {
         let config = PipelineConfig {
@@ -889,5 +946,16 @@ mod tests {
         assert!(pipeline.wait_for_completion(Duration::from_secs(10)));
         let elapsed = start.elapsed();
         assert!(elapsed < Duration::from_secs(5));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn test_write_timeout() {
+        let config = PipelineConfig {
+            write_timeout_ms: 1,
+            ..Default::default()
+        };
+        let pipeline = IoPipeline::with_config(config);
+        assert_eq!(pipeline.pending_count(), 0);
     }
 }

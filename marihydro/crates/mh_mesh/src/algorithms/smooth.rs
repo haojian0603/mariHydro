@@ -18,6 +18,24 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use thiserror::Error;
+
+/// 光顺输入校验错误
+#[derive(Debug, Clone, Error)]
+pub enum SmoothError {
+    #[error("顶点/邻接长度不一致: vertices={vertices}, neighbors={neighbors}")]
+    LengthMismatch { vertices: usize, neighbors: usize },
+    #[error("邻接索引越界: vertex={vertex}, neighbor={neighbor}, n_vertices={n_vertices}")]
+    NeighborOutOfRange {
+        vertex: usize,
+        neighbor: usize,
+        n_vertices: usize,
+    },
+    #[error("lambda 超出范围 (0,1]: lambda={lambda}")]
+    InvalidLambda { lambda: f64 },
+    #[error("权重归一化失败: vertex={vertex}")]
+    InvalidWeightSum { vertex: usize },
+}
 
 /// 光顺配置
 #[derive(Debug, Clone)]
@@ -28,6 +46,8 @@ pub struct SmoothConfig {
     pub lambda: f64,
     /// 是否固定边界
     pub fix_boundary: bool,
+    /// 保持整体质心不变（防止整体漂移）
+    pub preserve_centroid: bool,
     /// 平滑方法
     pub method: SmoothMethod,
 }
@@ -38,6 +58,7 @@ impl Default for SmoothConfig {
             iterations: 10,
             lambda: 0.5,
             fix_boundary: true,
+            preserve_centroid: false,
             method: SmoothMethod::Laplacian,
         }
     }
@@ -107,6 +128,18 @@ impl Smoother {
         neighbors: &[Vec<usize>],
         boundary: &std::collections::HashSet<usize>,
     ) {
+        self.smooth_2d_checked(vertices, neighbors, boundary)
+            .expect("smooth_2d 输入无效");
+    }
+
+    /// 光顺2D点集（带校验）
+    pub fn smooth_2d_checked(
+        &self,
+        vertices: &mut [[f64; 2]],
+        neighbors: &[Vec<usize>],
+        boundary: &std::collections::HashSet<usize>,
+    ) -> Result<(), SmoothError> {
+        self.validate_inputs(vertices.len(), neighbors)?;
         match self.config.method {
             SmoothMethod::Laplacian => {
                 self.laplacian_smooth_2d(vertices, neighbors, boundary);
@@ -116,9 +149,10 @@ impl Smoother {
             }
             SmoothMethod::CotangentWeighted => {
                 // 对于2D，使用基于边长的权重
-                self.weighted_smooth_2d(vertices, neighbors, boundary);
+                self.weighted_smooth_2d(vertices, neighbors, boundary)?;
             }
         }
+        Ok(())
     }
 
     /// 光顺3D点集
@@ -133,6 +167,18 @@ impl Smoother {
         neighbors: &[Vec<usize>],
         boundary: &std::collections::HashSet<usize>,
     ) {
+        self.smooth_3d_checked(vertices, neighbors, boundary)
+            .expect("smooth_3d 输入无效");
+    }
+
+    /// 光顺3D点集（带校验）
+    pub fn smooth_3d_checked(
+        &self,
+        vertices: &mut [[f64; 3]],
+        neighbors: &[Vec<usize>],
+        boundary: &std::collections::HashSet<usize>,
+    ) -> Result<(), SmoothError> {
+        self.validate_inputs(vertices.len(), neighbors)?;
         match self.config.method {
             SmoothMethod::Laplacian => {
                 self.laplacian_smooth_3d(vertices, neighbors, boundary);
@@ -141,9 +187,39 @@ impl Smoother {
                 self.taubin_smooth_3d(vertices, neighbors, boundary, mu);
             }
             SmoothMethod::CotangentWeighted => {
-                self.weighted_smooth_3d(vertices, neighbors, boundary);
+                self.weighted_smooth_3d(vertices, neighbors, boundary)?;
             }
         }
+        Ok(())
+    }
+
+    fn validate_inputs(&self, n_vertices: usize, neighbors: &[Vec<usize>]) -> Result<(), SmoothError> {
+        if n_vertices != neighbors.len() {
+            return Err(SmoothError::LengthMismatch {
+                vertices: n_vertices,
+                neighbors: neighbors.len(),
+            });
+        }
+
+        if !(self.config.lambda > 0.0 && self.config.lambda <= 1.0) {
+            return Err(SmoothError::InvalidLambda {
+                lambda: self.config.lambda,
+            });
+        }
+
+        for (i, neigh) in neighbors.iter().enumerate() {
+            for &j in neigh {
+                if j >= n_vertices {
+                    return Err(SmoothError::NeighborOutOfRange {
+                        vertex: i,
+                        neighbor: j,
+                        n_vertices,
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// 2D Laplacian 光顺
@@ -185,10 +261,27 @@ impl Smoother {
                 displacements[i][1] = lambda * (center[1] - vertices[i][1]);
             }
 
-            // 应用位移
-            for i in 0..n {
-                vertices[i][0] += displacements[i][0];
-                vertices[i][1] += displacements[i][1];
+            let shift = if self.config.preserve_centroid {
+                let (cx0, cy0) = Self::centroid_2d(vertices);
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                }
+                let (cx1, cy1) = Self::centroid_2d(vertices);
+                [cx0 - cx1, cy0 - cy1]
+            } else {
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                }
+                [0.0, 0.0]
+            };
+
+            if self.config.preserve_centroid {
+                for i in 0..n {
+                    vertices[i][0] += shift[0];
+                    vertices[i][1] += shift[1];
+                }
             }
         }
     }
@@ -231,10 +324,30 @@ impl Smoother {
                 displacements[i][2] = lambda * (center[2] - vertices[i][2]);
             }
 
-            for i in 0..n {
-                vertices[i][0] += displacements[i][0];
-                vertices[i][1] += displacements[i][1];
-                vertices[i][2] += displacements[i][2];
+            let shift = if self.config.preserve_centroid {
+                let (cx0, cy0, cz0) = Self::centroid_3d(vertices);
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                    vertices[i][2] += displacements[i][2];
+                }
+                let (cx1, cy1, cz1) = Self::centroid_3d(vertices);
+                [cx0 - cx1, cy0 - cy1, cz0 - cz1]
+            } else {
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                    vertices[i][2] += displacements[i][2];
+                }
+                [0.0, 0.0, 0.0]
+            };
+
+            if self.config.preserve_centroid {
+                for i in 0..n {
+                    vertices[i][0] += shift[0];
+                    vertices[i][1] += shift[1];
+                    vertices[i][2] += shift[2];
+                }
             }
         }
     }
@@ -361,7 +474,7 @@ impl Smoother {
         vertices: &mut [[f64; 2]],
         neighbors: &[Vec<usize>],
         boundary: &std::collections::HashSet<usize>,
-    ) {
+    ) -> Result<(), SmoothError> {
         let lambda = self.config.lambda;
         let n = vertices.len();
 
@@ -391,8 +504,8 @@ impl Smoother {
                     weight_sum += w;
                 }
 
-                if weight_sum <= 0.0 {
-                    continue;
+                if !weight_sum.is_finite() || weight_sum <= 0.0 {
+                    return Err(SmoothError::InvalidWeightSum { vertex: i });
                 }
 
                 // 加权平均
@@ -407,11 +520,30 @@ impl Smoother {
                 displacements[i][1] = lambda * (center[1] - vertices[i][1]);
             }
 
-            for i in 0..n {
-                vertices[i][0] += displacements[i][0];
-                vertices[i][1] += displacements[i][1];
+            let shift = if self.config.preserve_centroid {
+                let (cx0, cy0) = Self::centroid_2d(vertices);
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                }
+                let (cx1, cy1) = Self::centroid_2d(vertices);
+                [cx0 - cx1, cy0 - cy1]
+            } else {
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                }
+                [0.0, 0.0]
+            };
+
+            if self.config.preserve_centroid {
+                for i in 0..n {
+                    vertices[i][0] += shift[0];
+                    vertices[i][1] += shift[1];
+                }
             }
         }
+        Ok(())
     }
 
     /// 加权 3D 光顺
@@ -420,7 +552,7 @@ impl Smoother {
         vertices: &mut [[f64; 3]],
         neighbors: &[Vec<usize>],
         boundary: &std::collections::HashSet<usize>,
-    ) {
+    ) -> Result<(), SmoothError> {
         let lambda = self.config.lambda;
         let n = vertices.len();
 
@@ -450,8 +582,8 @@ impl Smoother {
                     weight_sum += w;
                 }
 
-                if weight_sum <= 0.0 {
-                    continue;
+                if !weight_sum.is_finite() || weight_sum <= 0.0 {
+                    return Err(SmoothError::InvalidWeightSum { vertex: i });
                 }
 
                 let mut center = [0.0, 0.0, 0.0];
@@ -467,12 +599,57 @@ impl Smoother {
                 displacements[i][2] = lambda * (center[2] - vertices[i][2]);
             }
 
-            for i in 0..n {
-                vertices[i][0] += displacements[i][0];
-                vertices[i][1] += displacements[i][1];
-                vertices[i][2] += displacements[i][2];
+            let shift = if self.config.preserve_centroid {
+                let (cx0, cy0, cz0) = Self::centroid_3d(vertices);
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                    vertices[i][2] += displacements[i][2];
+                }
+                let (cx1, cy1, cz1) = Self::centroid_3d(vertices);
+                [cx0 - cx1, cy0 - cy1, cz0 - cz1]
+            } else {
+                for i in 0..n {
+                    vertices[i][0] += displacements[i][0];
+                    vertices[i][1] += displacements[i][1];
+                    vertices[i][2] += displacements[i][2];
+                }
+                [0.0, 0.0, 0.0]
+            };
+
+            if self.config.preserve_centroid {
+                for i in 0..n {
+                    vertices[i][0] += shift[0];
+                    vertices[i][1] += shift[1];
+                    vertices[i][2] += shift[2];
+                }
             }
         }
+        Ok(())
+    }
+
+    fn centroid_2d(vertices: &[[f64; 2]]) -> (f64, f64) {
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        let n = vertices.len().max(1) as f64;
+        for v in vertices {
+            cx += v[0];
+            cy += v[1];
+        }
+        (cx / n, cy / n)
+    }
+
+    fn centroid_3d(vertices: &[[f64; 3]]) -> (f64, f64, f64) {
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        let mut cz = 0.0;
+        let n = vertices.len().max(1) as f64;
+        for v in vertices {
+            cx += v[0];
+            cy += v[1];
+            cz += v[2];
+        }
+        (cx / n, cy / n, cz / n)
     }
 }
 

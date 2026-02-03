@@ -12,14 +12,16 @@
 //! # 设计原则
 //!
 //! 1. **全泛型**: 实现 `GradientMethodGeneric<S>` 支持任意 RuntimeScalar
-//! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
-//! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
+//! 2. **无 DVec2**: 所有几何操作使用 `Vector2D` 接口
+//! 3. **泛型标量**: 几何与梯度计算在 `S` 上完成
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
+use rayon::prelude::*;
 
 use super::traits::{GradientMethodGeneric, ScalarGradientStorageGeneric, VectorGradientStorageGeneric};
 use super::green_gauss::GreenGaussGradient;
 use crate::adapter::PhysicsMesh;
+use crate::types::CellIndex;
 use crate::types::NumericalParams;
 
 // ============================================================
@@ -151,7 +153,11 @@ impl LeastSquaresGradient {
         mesh: &PhysicsMesh,
     ) -> Option<(S, S)> {
         let cell_idx = mh_runtime::CellIndex(cell);
-        let cell_center = mesh.cell_center_tuple(cell);
+        let cell_center = mesh
+            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell))
+            .expect("cell_center out of range");
+        let cell_center_x = cell_center.x();
+        let cell_center_y = cell_center.y();
         let phi_c = field[cell];
 
         let mut a11 = S::ZERO;
@@ -176,61 +182,66 @@ impl LeastSquaresGradient {
             if let Some(neighbor) = neighbor_opt {
                 // 内部面：使用邻居单元
                 let other = if is_owner { neighbor } else { owner };
-                let other_center = mesh.cell_center_tuple(other.get());
+                let other_center = mesh
+                    .cell_center_generic::<CpuBackend<f64>>(other)
+                    .expect("cell_center out of range");
 
-                let dx_f64 = other_center.0 - cell_center.0;
-                let dy_f64 = other_center.1 - cell_center.1;
+                let dx = other_center.x() - cell_center_x;
+                let dy = other_center.y() - cell_center_y;
                 let dphi = field[other.get()] - phi_c;
 
-                let dist_sq_f64 = dx_f64 * dx_f64 + dy_f64 * dy_f64;
-                if dist_sq_f64 < 1e-20 {
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < 1e-20 {
                     continue;
                 }
 
-                // 转换为 S
-                let dx = S::from_f64(dx_f64).unwrap_or(S::ZERO);
-                let dy = S::from_f64(dy_f64).unwrap_or(S::ZERO);
-                let w = S::from_f64(1.0 / dist_sq_f64).unwrap_or(S::ONE);
+                let w = S::from_f64(1.0 / dist_sq).unwrap_or(S::ZERO);
+                let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
+                let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
 
-                a11 = a11 + w * dx * dx;
-                a12 = a12 + w * dx * dy;
-                a22 = a22 + w * dy * dy;
-                b1 = b1 + w * dx * dphi;
-                b2 = b2 + w * dy * dphi;
+                a11 = a11 + w * dx_s * dx_s;
+                a12 = a12 + w * dx_s * dy_s;
+                a22 = a22 + w * dy_s * dy_s;
+                b1 = b1 + w * dx_s * dphi;
+                b2 = b2 + w * dy_s * dphi;
                 neighbor_count += 1;
             } else if self.config.use_boundary_contributions {
                 // 边界面：使用镜像点策略
-                let face_center = mesh.face_center_tuple(face.get());
-                let (nx, ny) = mesh.face_normal_2d_tuple(face.get());
+                let face_center = mesh
+                    .face_center_generic::<CpuBackend<f64>>(face)
+                    .expect("face_center out of range");
+                let normal = mesh
+                    .face_normal_generic::<CpuBackend<f64>>(face)
+                    .expect("face_normal out of range");
 
                 // 单元中心到面的距离
-                let to_face_x = face_center.0 - cell_center.0;
-                let to_face_y = face_center.1 - cell_center.1;
-                let dist_to_face = to_face_x * nx + to_face_y * ny;
+                let to_face_x = face_center.x() - cell_center_x;
+                let to_face_y = face_center.y() - cell_center_y;
+                let dist_to_face = to_face_x * normal.x() + to_face_y * normal.y();
 
                 if dist_to_face.abs() < 1e-14 {
                     continue;
                 }
 
                 // 虚拟点：面的另一侧镜像
-                let ghost_x = face_center.0 + nx * dist_to_face.abs();
-                let ghost_y = face_center.1 + ny * dist_to_face.abs();
-                let dx_f64 = ghost_x - cell_center.0;
-                let dy_f64 = ghost_y - cell_center.1;
-                let dist_sq_f64 = dx_f64 * dx_f64 + dy_f64 * dy_f64;
+                let abs_dist = dist_to_face.abs();
+                let ghost_x = face_center.x() + normal.x() * abs_dist;
+                let ghost_y = face_center.y() + normal.y() * abs_dist;
+                let dx = ghost_x - cell_center_x;
+                let dy = ghost_y - cell_center_y;
+                let dist_sq = dx * dx + dy * dy;
 
-                if dist_sq_f64 < 1e-20 {
+                if dist_sq < 1e-20 {
                     continue;
                 }
 
-                // 转换为 S
-                let dx = S::from_f64(dx_f64).unwrap_or(S::ZERO);
-                let dy = S::from_f64(dy_f64).unwrap_or(S::ZERO);
-                let w = S::from_f64(1.0 / dist_sq_f64).unwrap_or(S::ONE);
+                let w = S::from_f64(1.0 / dist_sq).unwrap_or(S::ZERO);
+                let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
+                let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
 
-                a11 = a11 + w * dx * dx;
-                a12 = a12 + w * dx * dy;
-                a22 = a22 + w * dy * dy;
+                a11 = a11 + w * dx_s * dx_s;
+                a12 = a12 + w * dx_s * dy_s;
+                a22 = a22 + w * dy_s * dy_s;
                 // b1, b2 不变（dphi = 0 对于零梯度边界条件）
                 neighbor_count += 1;
             }
@@ -257,24 +268,38 @@ impl<S: RuntimeScalar> GradientMethodGeneric<S> for LeastSquaresGradient {
         mesh: &PhysicsMesh,
         output: &mut ScalarGradientStorageGeneric<S>,
     ) {
-        if output.len() != mesh.n_cells() {
-            output.resize(mesh.n_cells());
+        if output.len() != mesh.cell_count() {
+            output.resize(mesh.cell_count());
         }
         output.reset();
 
+        let use_parallel = self.config.parallel && mesh.cell_count() >= self.config.parallel_threshold;
+
         let mut fallback_cells = Vec::new();
 
-        // 计算所有单元梯度
-        for cell in 0..mesh.n_cells() {
-            match self.compute_cell_gradient(cell, field, mesh) {
-                Some(g) => output.set_tuple(cell, g),
-                None => fallback_cells.push(cell),
+        if use_parallel {
+            let grads: Vec<Option<(S, S)>> = (0..mesh.cell_count())
+                .into_par_iter()
+                .map(|cell| self.compute_cell_gradient(cell, field, mesh))
+                .collect();
+
+            for (cell, grad) in grads.into_iter().enumerate() {
+                match grad {
+                    Some(g) => output.set_tuple(cell, g),
+                    None => fallback_cells.push(cell),
+                }
+            }
+        } else {
+            for cell in 0..mesh.cell_count() {
+                match self.compute_cell_gradient(cell, field, mesh) {
+                    Some(g) => output.set_tuple(cell, g),
+                    None => fallback_cells.push(cell),
+                }
             }
         }
 
-        // 回退处理奇异单元
         if !fallback_cells.is_empty() {
-            let mut fb = ScalarGradientStorageGeneric::<S>::new(mesh.n_cells());
+            let mut fb = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
             self.fallback.compute_scalar_gradient(field, mesh, &mut fb);
             for cell in fallback_cells {
                 output.set_tuple(cell, fb.get_tuple(cell));
@@ -289,13 +314,13 @@ impl<S: RuntimeScalar> GradientMethodGeneric<S> for LeastSquaresGradient {
         mesh: &PhysicsMesh,
         output: &mut VectorGradientStorageGeneric<S>,
     ) {
-        if output.len() != mesh.n_cells() {
-            output.resize(mesh.n_cells());
+        if output.len() != mesh.cell_count() {
+            output.resize(mesh.cell_count());
         }
 
         // 分别计算 u 和 v 的梯度
-        let mut grad_u = ScalarGradientStorageGeneric::<S>::new(mesh.n_cells());
-        let mut grad_v = ScalarGradientStorageGeneric::<S>::new(mesh.n_cells());
+        let mut grad_u = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
+        let mut grad_v = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
 
         self.compute_scalar_gradient(field_u, mesh, &mut grad_u);
         self.compute_scalar_gradient(field_v, mesh, &mut grad_v);

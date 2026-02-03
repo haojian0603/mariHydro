@@ -15,4 +15,4 @@ pub mod mhb;
 
 pub use fields::{DataType, Compression, FieldDescriptor, FieldIndex};
 pub use gmsh::{BoundaryKind, GmshLoader, GmshMeshData, GmshWriter};
-pub use mhb::{MhbHeader, MhbReader, MhbWriter, load_mhb};
+pub use mhb::{load_mhb, save_mhb, MhbHeader, MhbReader, MhbWriter};

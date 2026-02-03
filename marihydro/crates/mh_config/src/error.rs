@@ -2,6 +2,8 @@
 
 //! 配置层错误类型
 
+use mh_foundation::MhError;
+
 /// 配置错误
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -31,6 +33,20 @@ pub enum ConfigError {
     /// 构建错误
     #[error("构建错误: {0}")]
     Build(String),
+}
+
+impl From<ConfigError> for MhError {
+    fn from(err: ConfigError) -> Self {
+        match err {
+            ConfigError::Io(source) => MhError::io_with_source("配置读取失败", source),
+            ConfigError::Parse(message) => MhError::invalid_input(format!("配置解析失败: {message}")),
+            ConfigError::InvalidValue { key, value, reason } => MhError::invalid_input(format!(
+                "配置无效 [{key}={value}]: {reason}"
+            )),
+            ConfigError::Missing(key) => MhError::invalid_input(format!("缺失配置项: {key}")),
+            ConfigError::Build(message) => MhError::internal(format!("配置构建失败: {message}")),
+        }
+    }
 }
 
 #[cfg(test)]

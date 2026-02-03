@@ -12,7 +12,7 @@ use std::ops::{Deref, DerefMut};
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
 use crate::error::{RuntimeError, RuntimeResult};
-use num_traits::FromPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 
 /// 密封模块，限制 Backend 只能在库内部实现
 mod private {
@@ -81,12 +81,26 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     /// 从配置 f64 转换到标量类型
     #[inline]
     fn scalar_from_f64(&self, v: f64) -> Self::Scalar {
-        Self::Scalar::from_f64(v).unwrap_or(Self::Scalar::ZERO)
+        match self.try_scalar_from_f64(v) {
+            Ok(val) => val,
+            Err(err) => {
+                eprintln!("[mh_runtime::backend] scalar_from_f64 fallback: {err}");
+                Self::Scalar::ZERO
+            }
+        }
     }
 
+    /// 尝试从 f64 转换到标量类型（失败返回错误）
     #[inline]
     fn try_scalar_from_f64(&self, v: f64) -> RuntimeResult<Self::Scalar> {
-        Self::Scalar::from_f64(v).ok_or(RuntimeError::NonFinite { value: v })
+        if !v.is_finite() {
+            return Err(RuntimeError::NonFinite { value: v });
+        }
+        Self::Scalar::from_f64(v).ok_or_else(|| {
+            let min = Self::Scalar::MIN.to_f64().unwrap_or(f64::MIN);
+            let max = Self::Scalar::MAX.to_f64().unwrap_or(f64::MAX);
+            RuntimeError::out_of_range(v, min, max)
+        })
     }
 
     /// 同步操作（GPU 后端需要）
@@ -99,6 +113,20 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
         x: &Self::Buffer<Self::Scalar>,
         y: &mut Self::Buffer<Self::Scalar>,
     );
+
+    /// y = alpha * x + y (AXPY) with length check
+    fn axpy_checked(
+        &self,
+        alpha: Self::Scalar,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &mut Self::Buffer<Self::Scalar>,
+    ) -> RuntimeResult<()> {
+        if x.len() != y.len() {
+            return Err(RuntimeError::size_mismatch("axpy", x.len(), y.len()));
+        }
+        self.axpy(alpha, x, y);
+        Ok(())
+    }
     
     /// 点积: sum(x[i] * y[i])
     fn dot(
@@ -106,6 +134,18 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
         x: &Self::Buffer<Self::Scalar>,
         y: &Self::Buffer<Self::Scalar>,
     ) -> Self::Scalar;
+
+    /// 点积（带长度检查）
+    fn dot_checked(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+    ) -> RuntimeResult<Self::Scalar> {
+        if x.len() != y.len() {
+            return Err(RuntimeError::size_mismatch("dot", x.len(), y.len()));
+        }
+        Ok(self.dot(x, y))
+    }
     
     /// 复制: dst = src
     fn copy(
@@ -113,6 +153,19 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
         src: &Self::Buffer<Self::Scalar>,
         dst: &mut Self::Buffer<Self::Scalar>,
     );
+
+    /// 复制（带长度检查）
+    fn copy_checked(
+        &self,
+        src: &Self::Buffer<Self::Scalar>,
+        dst: &mut Self::Buffer<Self::Scalar>,
+    ) -> RuntimeResult<()> {
+        if src.len() != dst.len() {
+            return Err(RuntimeError::size_mismatch("copy", src.len(), dst.len()));
+        }
+        self.copy(src, dst);
+        Ok(())
+    }
     
     /// 缩放: x = alpha * x
     fn scale(&self, alpha: Self::Scalar, x: &mut Self::Buffer<Self::Scalar>);
@@ -201,20 +254,38 @@ macro_rules! impl_cpu_backend {
             }
 
             fn axpy(&self, alpha: $scalar, x: &Vec<$scalar>, y: &mut Vec<$scalar>) {
-                let n = x.len().min(y.len());
-                for (yi, xi) in y.iter_mut().take(n).zip(x.iter().take(n)) {
+                if x.len() != y.len() {
+                    panic!(
+                        "[mh_runtime::backend] axpy length mismatch: x={}, y={}",
+                        x.len(),
+                        y.len()
+                    );
+                }
+                for (yi, xi) in y.iter_mut().zip(x.iter()) {
                     *yi += alpha * xi;
                 }
             }
 
             fn dot(&self, x: &Vec<$scalar>, y: &Vec<$scalar>) -> $scalar {
-                let n = x.len().min(y.len());
-                x.iter().take(n).zip(y.iter().take(n)).map(|(a, b)| a * b).sum()
+                if x.len() != y.len() {
+                    panic!(
+                        "[mh_runtime::backend] dot length mismatch: x={}, y={}",
+                        x.len(),
+                        y.len()
+                    );
+                }
+                x.iter().zip(y.iter()).map(|(a, b)| a * b).sum()
             }
 
             fn copy(&self, src: &Vec<$scalar>, dst: &mut Vec<$scalar>) {
-                let n = src.len().min(dst.len());
-                dst[..n].copy_from_slice(&src[..n]);
+                if src.len() != dst.len() {
+                    panic!(
+                        "[mh_runtime::backend] copy length mismatch: src={}, dst={}",
+                        src.len(),
+                        dst.len()
+                    );
+                }
+                dst.copy_from_slice(src);
             }
 
             fn scale(&self, alpha: $scalar, x: &mut Vec<$scalar>) {
@@ -224,10 +295,16 @@ macro_rules! impl_cpu_backend {
             }
 
             fn reduce_max(&self, x: &Vec<$scalar>) -> $scalar {
+                if x.is_empty() {
+                    return <$scalar>::ZERO;
+                }
                 x.iter().cloned().fold(<$scalar>::NEG_INFINITY, <$scalar>::max)
             }
 
             fn reduce_min(&self, x: &Vec<$scalar>) -> $scalar {
+                if x.is_empty() {
+                    return <$scalar>::ZERO;
+                }
                 x.iter().cloned().fold(<$scalar>::INFINITY, <$scalar>::min)
             }
 
@@ -236,6 +313,9 @@ macro_rules! impl_cpu_backend {
             }
 
             fn norm2(&self, x: &Vec<$scalar>) -> $scalar {
+                if x.is_empty() {
+                    return <$scalar>::ZERO;
+                }
                 self.dot(x, x).sqrt()
             }
 
@@ -298,6 +378,16 @@ macro_rules! impl_cpu_backend {
                     return;
                 }
                 let len = sources[0].len();
+                for (i, field) in sources.iter().enumerate() {
+                    if field.len() != len {
+                        panic!(
+                            "[mh_runtime::backend] copy_interleaved length mismatch: field[0]={}, field[{}]={}",
+                            len,
+                            i,
+                            field.len()
+                        );
+                    }
+                }
                 dst.clear();
                 dst.reserve(len * n_fields);
                 for i in 0..len {

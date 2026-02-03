@@ -7,8 +7,10 @@
 use crate::job::{JobId, SimulationJob};
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use mh_foundation::MhError;
 
 /// 存储错误
 #[derive(Debug, Error)]
@@ -32,6 +34,20 @@ pub enum StorageError {
     /// 其他错误
     #[error("{0}")]
     Other(String),
+}
+
+impl From<StorageError> for MhError {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::Io(source) => MhError::io_with_source("存储 IO 失败", source),
+            StorageError::Serialization(message) => {
+                MhError::internal(format!("存储序列化失败: {message}"))
+            }
+            StorageError::NotFound(job_id) => MhError::not_found(format!("job:{job_id}")),
+            StorageError::Full => MhError::internal("存储已满".to_string()),
+            StorageError::Other(message) => MhError::internal(format!("存储错误: {message}")),
+        }
+    }
 }
 
 /// 存储后端trait
@@ -211,7 +227,9 @@ impl FileStorage {
         let json = serde_json::to_string_pretty(job)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
         if let Err(e) = std::fs::rename(&tmp, &path) {
             if path.exists() {
                 let _ = std::fs::remove_file(&path);
@@ -342,7 +360,7 @@ mod tests {
     use crate::job::SimulationConfig;
 
     fn create_test_job(name: &str) -> SimulationJob {
-        let config = SimulationConfig::new("test.mhp");
+        let config = SimulationConfig::new(".");
         SimulationJob::new(name, config)
     }
 

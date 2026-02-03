@@ -14,12 +14,13 @@
 //! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
 //! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
 use rayon::prelude::*;
 use log::debug;
 
 use super::traits::{GradientMethodGeneric, ScalarGradientStorageGeneric, VectorGradientStorageGeneric};
 use crate::adapter::PhysicsMesh;
+use crate::types::CellIndex;
 
 // ============================================================
 // 配置
@@ -118,16 +119,16 @@ impl GreenGaussGradient {
     ///
     /// 预计算后每次梯度计算可节省O(N×F)的检测时间。
     pub fn with_boundary_cache(mut self, mesh: &PhysicsMesh) -> Self {
-        let boundary_cells: Vec<usize> = (0..mesh.n_cells())
+        let boundary_cells: Vec<usize> = (0..mesh.cell_count())
             .filter(|&cell| {
-                let cell_idx = mh_runtime::CellIndex(cell);
+                let cell_idx = CellIndex::new(cell);
                 mesh.cell_faces(cell_idx)
-                    .all(|face| mesh.face_neighbor(face).is_none())
+                    .any(|face| mesh.face_neighbor(face).is_none())
             })
             .collect();
 
         debug!("Cached {} boundary cells out of {} total cells", 
-            boundary_cells.len(), mesh.n_cells());
+            boundary_cells.len(), mesh.cell_count());
 
         self.boundary_cells = Some(boundary_cells);
         self
@@ -139,9 +140,9 @@ impl GreenGaussGradient {
         if let Some(ref boundary_cells) = self.boundary_cells {
             boundary_cells.contains(&cell)
         } else {
-            let cell_idx = mh_runtime::CellIndex(cell);
+            let cell_idx = CellIndex::new(cell);
             mesh.cell_faces(cell_idx)
-                .all(|face| mesh.face_neighbor(face).is_none())
+                .any(|face| mesh.face_neighbor(face).is_none())
         }
     }
 
@@ -154,7 +155,7 @@ impl GreenGaussGradient {
         field: &[S],
         mesh: &PhysicsMesh,
     ) -> (S, S) {
-        let cell_idx = mh_runtime::CellIndex(cell);
+        let cell_idx = CellIndex::new(cell);
         let area_f64 = mesh.cell_area_unchecked(cell_idx);
         
         if area_f64 < 1e-14 {
@@ -166,7 +167,11 @@ impl GreenGaussGradient {
             return (S::ZERO, S::ZERO);
         }
 
-        let cell_center = mesh.cell_center_tuple(cell);
+        let cell_center = mesh
+            .cell_center_generic::<CpuBackend<f64>>(cell_idx)
+            .expect("cell_center out of range");
+        let cell_center_x = cell_center.x();
+        let cell_center_y = cell_center.y();
         let phi_c = field[cell];
         let mut grad_x = S::ZERO;
         let mut grad_y = S::ZERO;
@@ -183,13 +188,13 @@ impl GreenGaussGradient {
             }
 
             // 几何数据 (f64)
-            let (nx, ny) = mesh.face_normal_2d_tuple(face.get());
+            let normal = mesh
+                .face_normal_generic::<CpuBackend<f64>>(face)
+                .expect("face_normal out of range");
             let length = mesh.face_length(face);
             let sign = if is_owner { 1.0 } else { -1.0 };
-            
-            // 转换为 S
-            let ds_x = S::from_f64(nx * length * sign).unwrap_or(S::ZERO);
-            let ds_y = S::from_f64(ny * length * sign).unwrap_or(S::ZERO);
+            let ds_x = S::from_f64(normal.x() * length * sign).unwrap_or(S::ZERO);
+            let ds_y = S::from_f64(normal.y() * length * sign).unwrap_or(S::ZERO);
 
             // 计算面值
             let phi_face = if let Some(neigh) = neighbor {
@@ -200,18 +205,26 @@ impl GreenGaussGradient {
                         S::HALF * (phi_c + field[other.get()])
                     }
                     FaceInterpolation::DistanceWeighted => {
-                        let face_center = mesh.face_center_tuple(face.get());
-                        let other_center = mesh.cell_center_tuple(other.get());
-                        
-                        let d_self = ((face_center.0 - cell_center.0).powi(2) 
-                            + (face_center.1 - cell_center.1).powi(2)).sqrt();
-                        let d_other = ((face_center.0 - other_center.0).powi(2) 
-                            + (face_center.1 - other_center.1).powi(2)).sqrt();
-                        
+                        let face_center = mesh
+                            .face_center_generic::<CpuBackend<f64>>(face)
+                            .expect("face_center out of range");
+                        let other_center = mesh
+                            .cell_center_generic::<CpuBackend<f64>>(other)
+                            .expect("cell_center out of range");
+
+                        let dx_self = face_center.x() - cell_center_x;
+                        let dy_self = face_center.y() - cell_center_y;
+                        let d_self = (dx_self * dx_self + dy_self * dy_self).sqrt();
+
+                        let dx_other = face_center.x() - other_center.x();
+                        let dy_other = face_center.y() - other_center.y();
+                        let d_other = (dx_other * dx_other + dy_other * dy_other).sqrt();
+
                         Self::distance_weighted_interpolate(
-                            phi_c, field[other.get()], 
+                            phi_c,
+                            field[other.get()],
                             S::from_f64(d_self).unwrap_or(S::ONE),
-                            S::from_f64(d_other).unwrap_or(S::ONE)
+                            S::from_f64(d_other).unwrap_or(S::ONE),
                         )
                     }
                 }
@@ -249,7 +262,7 @@ impl GreenGaussGradient {
         output: &mut ScalarGradientStorageGeneric<S>,
     ) {
         output.reset();
-        for cell in 0..mesh.n_cells() {
+        for cell in 0..mesh.cell_count() {
             let grad = self.compute_cell_gradient(cell, field, mesh);
             output.set_tuple(cell, grad);
         }
@@ -262,7 +275,7 @@ impl GreenGaussGradient {
         mesh: &PhysicsMesh,
         output: &mut ScalarGradientStorageGeneric<S>,
     ) {
-        let grads: Vec<(S, S)> = (0..mesh.n_cells())
+        let grads: Vec<(S, S)> = (0..mesh.cell_count())
             .into_par_iter()
             .map(|cell| self.compute_cell_gradient(cell, field, mesh))
             .collect();
@@ -290,11 +303,11 @@ impl<S: RuntimeScalar> GradientMethodGeneric<S> for GreenGaussGradient {
         mesh: &PhysicsMesh,
         output: &mut ScalarGradientStorageGeneric<S>,
     ) {
-        if output.len() != mesh.n_cells() {
-            output.resize(mesh.n_cells());
+        if output.len() != mesh.cell_count() {
+            output.resize(mesh.cell_count());
         }
 
-        if self.config.parallel && mesh.n_cells() >= self.config.parallel_threshold {
+        if self.config.parallel && mesh.cell_count() >= self.config.parallel_threshold {
             self.compute_scalar_parallel(field, mesh, output);
         } else {
             self.compute_scalar_serial(field, mesh, output);
@@ -308,13 +321,13 @@ impl<S: RuntimeScalar> GradientMethodGeneric<S> for GreenGaussGradient {
         mesh: &PhysicsMesh,
         output: &mut VectorGradientStorageGeneric<S>,
     ) {
-        if output.len() != mesh.n_cells() {
-            output.resize(mesh.n_cells());
+        if output.len() != mesh.cell_count() {
+            output.resize(mesh.cell_count());
         }
 
         // 分别计算 u 和 v 的梯度
-        let mut grad_u = ScalarGradientStorageGeneric::<S>::new(mesh.n_cells());
-        let mut grad_v = ScalarGradientStorageGeneric::<S>::new(mesh.n_cells());
+        let mut grad_u = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
+        let mut grad_v = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
 
         self.compute_scalar_gradient(field_u, mesh, &mut grad_u);
         self.compute_scalar_gradient(field_v, mesh, &mut grad_v);

@@ -5,7 +5,7 @@
 //! 在 HLL 基础上使用更稳健的 Einfeldt 波速估计，
 //! 对强间断和干湿过渡具有更好的稳定性。
 
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 

@@ -1,6 +1,6 @@
-//! 结构化网格（骨架实现）
+//! 结构化网格实现
 //!
-//! 预留结构化网格支持，当前仅提供 trait 实现骨架。
+//! 提供完整的结构化网格拓扑与几何计算。
 //!
 //! # 设计说明
 //!
@@ -11,7 +11,8 @@
 use crate::core::Backend;
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
 use num_traits::FromPrimitive;
-use super::topology::{MeshKind, MeshTopology};
+use num_traits::{Float, ToPrimitive};
+use super::topology::{MeshKind, MeshTopology, MeshValidationError};
 
 /// 结构化网格
 ///
@@ -66,7 +67,7 @@ where
     /// use mh_runtime::CpuBackend;
     ///
     /// let backend = CpuBackend::<f64>::new();
-    /// let mesh = StructuredMesh::new_with_backend(&backend, 100, 100, 1.0, 1.0);
+    /// let mesh = StructuredMesh::new_with_backend(&backend, 100, 100, 1.0, 1.0)?;
     /// ```
     pub fn new_with_backend(
         backend: &B,
@@ -74,10 +75,28 @@ where
         ny: usize,
         dx: B::Scalar,
         dy: B::Scalar,
-    ) -> Self {
-        assert!(nx > 0 && ny > 0, "StructuredMesh: nx/ny 必须为正");
-        assert!(dx.is_finite() && dx > B::Scalar::ZERO, "StructuredMesh: dx 必须为正且有限");
-        assert!(dy.is_finite() && dy > B::Scalar::ZERO, "StructuredMesh: dy 必须为正且有限");
+    ) -> Result<Self, MeshValidationError> {
+        if nx == 0 || ny == 0 {
+            return Err(MeshValidationError::InvalidCounts {
+                n_cells: nx.saturating_mul(ny),
+                n_faces: 0,
+                n_interior_faces: 0,
+            });
+        }
+
+        if !dx.is_finite() || dx <= B::Scalar::ZERO {
+            return Err(MeshValidationError::InvalidSpacing {
+                axis: "dx",
+                value: dx.to_f64().unwrap_or(f64::NAN),
+            });
+        }
+
+        if !dy.is_finite() || dy <= B::Scalar::ZERO {
+            return Err(MeshValidationError::InvalidSpacing {
+                axis: "dy",
+                value: dy.to_f64().unwrap_or(f64::NAN),
+            });
+        }
 
         let n_cells = nx * ny;
         let n_faces = Self::compute_n_faces(nx, ny);
@@ -139,11 +158,9 @@ where
             cell_faces_cache,
         };
 
-        if let Err(err) = mesh.validate() {
-            panic!("StructuredMesh 校验失败: {err}");
-        }
+        mesh.validate()?;
 
-        mesh
+        Ok(mesh)
     }
     
     /// 计算总面数
@@ -447,7 +464,7 @@ mod tests {
     #[test]
     fn test_structured_mesh_creation() {
         let backend = test_backend();
-        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0);
+        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0).unwrap();
         
         assert_eq!(mesh.n_cells(), 100);
         assert_eq!(mesh.n_nodes(), 121);
@@ -456,7 +473,7 @@ mod tests {
     #[test]
     fn test_cell_indexing() {
         let backend = test_backend();
-        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0);
+        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0).unwrap();
         
         assert_eq!(mesh.cell_index(0, 0), 0);
         assert_eq!(mesh.cell_index(9, 9), 99);
@@ -466,7 +483,7 @@ mod tests {
     #[test]
     fn test_cell_neighbors() {
         let backend = test_backend();
-        let mesh = StructuredMesh::new_with_backend(&backend, 5, 5, 1.0, 1.0);
+        let mesh = StructuredMesh::new_with_backend(&backend, 5, 5, 1.0, 1.0).unwrap();
         
         // 角落单元
         let neighbors = mesh.cell_neighbors(0);
@@ -480,7 +497,7 @@ mod tests {
     #[test]
     fn test_cell_center() {
         let backend = test_backend();
-        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0);
+        let mesh = StructuredMesh::new_with_backend(&backend, 10, 10, 1.0, 1.0).unwrap();
         
         let center = mesh.cell_center(0);
         assert!((center[0] - 0.5).abs() < 1e-10);

@@ -22,7 +22,7 @@
 //! use mh_runtime::CpuBackend;
 //!
 //! let backend = CpuBackend::<f64>::new();
-//! let adapter = UnstructuredMeshAdapter::from_physics_mesh_with_backend(&backend, mesh);
+//! let adapter = UnstructuredMeshAdapter::from_physics_mesh_with_backend(&backend, mesh)?;
 //! ```
 
 pub mod topology;

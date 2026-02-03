@@ -6,7 +6,7 @@
 //! 支持f32/f64精度切换和GPU后端扩展。
 
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use super::state::{TracerField, TracerState};
 

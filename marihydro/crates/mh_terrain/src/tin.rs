@@ -105,6 +105,25 @@ impl SpatialGrid {
         let coord = self.grid_coord(x, y);
         self.cells.get(&coord).map(|v| v.as_slice()).unwrap_or(&[])
     }
+
+    /// 查询指定半径内的候选三角形
+    fn query_with_radius(&self, x: f64, y: f64, radius: usize) -> Vec<usize> {
+        let (gx, gy) = self.grid_coord(x, y);
+        let mut result = Vec::new();
+        let min_x = gx.saturating_sub(radius);
+        let min_y = gy.saturating_sub(radius);
+        let max_x = (gx + radius).min(self.dims.0.saturating_sub(1));
+        let max_y = (gy + radius).min(self.dims.1.saturating_sub(1));
+
+        for ix in min_x..=max_x {
+            for iy in min_y..=max_y {
+                if let Some(list) = self.cells.get(&(ix, iy)) {
+                    result.extend(list.iter().copied());
+                }
+            }
+        }
+        result
+    }
 }
 
 /// TIN 构建错误
@@ -278,9 +297,11 @@ impl TinTerrain {
             }
         }
 
-        // 如果空间索引未命中，进行全局搜索（较慢）
-        for (tri_idx, &(i0, i1, i2)) in self.triangles.iter().enumerate() {
-            if !candidates.contains(&tri_idx) {
+        // 如果空间索引未命中，扩大搜索半径（避免全局扫描）
+        for radius in 1..=2 {
+            let expanded = self.grid_index.query_with_radius(x, y, radius);
+            for tri_idx in expanded {
+                let (i0, i1, i2) = self.triangles[tri_idx];
                 let (x0, y0, z0) = self.vertices[i0];
                 let (x1, y1, z1) = self.vertices[i1];
                 let (x2, y2, z2) = self.vertices[i2];

@@ -27,6 +27,7 @@ use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 
 use log::info;
+use mh_foundation::MhResult;
 use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
 use num_traits::{Float, FromPrimitive};
 use rayon::prelude::*;
@@ -242,7 +243,8 @@ where
             crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&config.params, config.g);
         Self {
             riemann: HllcSolver::<B>::new(&riemann_params, config.g),
-            wetting_drying: WettingDryingHandler::<B>::from_params(&config.params),
+            wetting_drying: WettingDryingHandler::<B>::from_params(&config.params)
+                .expect("WettingDryingHandler 初始化失败"),
             hydrostatic: HydrostaticReconstruction::<B>::new(&riemann_params, config.g),
             metrics: FluxComputeMetrics::default(),
             face_colors: None,
@@ -257,7 +259,7 @@ where
     /// 此方法必须在首次使用`Colored`策略前调用。
     pub fn setup_face_coloring(&mut self, mesh: &PhysicsMesh) {
         let _start = Instant::now();
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
 
         if n_faces == 0 {
             self.face_colors = Some(Vec::new());
@@ -291,7 +293,7 @@ where
     ) -> Vec<std::collections::HashSet<usize>> {
         use std::collections::{HashMap, HashSet};
 
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
         let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
 
         for face_idx in 0..n_faces {
@@ -378,7 +380,7 @@ where
         source_hu: &mut B::Buffer<B::Scalar>,
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
         let start = Instant::now();
 
         let (max_speed, is_parallel) = match self.config.strategy {
@@ -453,7 +455,7 @@ where
         source_hu.fill(zero);
         source_hv.fill(zero);
 
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
         let mut max_wave_speed = zero;
 
         for face_idx in 0..n_faces {
@@ -500,8 +502,8 @@ where
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
         let zero = B::Scalar::ZERO;
-        let n_faces = mesh.n_faces();
-        let n_cells = mesh.n_cells();
+        let n_faces = mesh.face_count();
+        let n_cells = mesh.cell_count();
 
         let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(zero);
         let flux_h_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
@@ -657,7 +659,7 @@ where
         source_hv: &mut B::Buffer<B::Scalar>,
     ) -> B::Scalar {
         let zero = B::Scalar::ZERO;
-        let n_cells = mesh.n_cells();
+        let n_cells = mesh.cell_count();
         let color_faces = match &self.face_colors {
             Some(cf) => cf,
             None => return zero,
@@ -729,10 +731,12 @@ where
         let length = B::Scalar::from_f64(length_f64).unwrap_or(B::Scalar::ZERO);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
+        let z_l_face = B::Scalar::from_f64(mesh.face_z_left(face_idx)).unwrap_or(B::Scalar::ZERO);
+        let z_r_face = B::Scalar::from_f64(mesh.face_z_right(face_idx)).unwrap_or(B::Scalar::ZERO);
 
         let owner_idx = owner.get();
         let h_l = state.h[owner_idx];
-        let z_l = state.z[owner_idx];
+        let z_l = z_l_face;
         let (u_l, v_l) = self.config.params.safe_velocity_components(
             state.hu[owner_idx], state.hv[owner_idx], h_l,
         );
@@ -744,12 +748,12 @@ where
             let (u, v) = self.config.params.safe_velocity_components(
                 state.hu[neigh_idx], state.hv[neigh_idx], h,
             );
-            (h, B::vec2_new(u, v), state.z[neigh_idx])
+            (h, B::vec2_new(u, v), z_r_face)
         } else {
             let vn = B::vec2_dot(&vel_l, &normal);
             let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
             let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
-            (h_l, vel_r, z_l)
+            (h_l, vel_r, z_r_face)
         };
 
         let recon_state = if self.config.use_hydrostatic_reconstruction {
@@ -859,8 +863,8 @@ impl<B: Backend> ParallelFluxCalculatorBuilder<B> {
     }
 
     /// 构建计算器
-    pub fn build(self) -> ParallelFluxCalculator<B> {
-        ParallelFluxCalculator::new(self.config, self.backend)
+    pub fn build(self) -> MhResult<ParallelFluxCalculator<B>> {
+        Ok(ParallelFluxCalculator::new(self.config, self.backend))
     }
 }
 
@@ -919,6 +923,7 @@ mod tests {
             .build();
 
         let calc = ParallelFluxCalculator::<CpuBackend<f32>>::new(config, backend);
+        assert!((calc.config().g - 10.0f32).abs() < 1e-6);
         assert!((calc.config().g - 10.0f32).abs() < 1e-6);
     }
 }

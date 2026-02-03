@@ -115,7 +115,7 @@ pub fn run_from_config<P: AsRef<Path>>(config_path: P) -> Result<RunResult, Work
     let start = std::time::Instant::now();
     match runner.run(job_id) {
         Ok(()) => Ok(RunResult::success(job_id, start.elapsed().as_secs_f64())),
-        Err(e) => Ok(RunResult::failure(job_id, e.to_string())),
+        Err(e) => Err(WorkflowError::ExecutionFailed(e.to_string())),
     }
 }
 

@@ -349,13 +349,11 @@ mod tests {
     #[test]
     fn test_unsupported_epsg_error() {
         let err = GeoError::unsupported_epsg(99999, "EPSG:4326, EPSG:3857");
-        match &err {
-            GeoError::UnsupportedEpsg { code, supported } => {
-                assert_eq!(*code, 99999);
-                assert_eq!(*supported, "EPSG:4326, EPSG:3857");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::UnsupportedEpsg { code, supported }
+                if *code == 99999 && *supported == "EPSG:4326, EPSG:3857"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("99999"));
         assert!(msg.contains("EPSG:4326, EPSG:3857"));
@@ -364,15 +362,11 @@ mod tests {
     #[test]
     fn test_coordinate_out_of_range_error() {
         let err = GeoError::coordinate_out_of_range("纬度", 95.5, -90.0, 90.0);
-        match &err {
-            GeoError::CoordinateOutOfRange { coord_type, value, min, max } => {
-                assert_eq!(*coord_type, "纬度");
-                assert_eq!(*value, 95.5);
-                assert_eq!(*min, -90.0);
-                assert_eq!(*max, 90.0);
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::CoordinateOutOfRange { coord_type, value, min, max }
+                if *coord_type == "纬度" && *value == 95.5 && *min == -90.0 && *max == 90.0
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("纬度"));
         assert!(msg.contains("95.5"));
@@ -381,12 +375,7 @@ mod tests {
     #[test]
     fn test_invalid_utm_zone_error() {
         let err = GeoError::invalid_utm_zone(0);
-        match &err {
-            GeoError::InvalidUtmZone { zone } => {
-                assert_eq!(*zone, 0);
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(&err, GeoError::InvalidUtmZone { zone } if *zone == 0));
         let msg = format!("{}", err);
         assert!(msg.contains("0"));
         assert!(msg.contains("1-60"));
@@ -395,14 +384,11 @@ mod tests {
     #[test]
     fn test_invalid_gauss_kruger_zone_error() {
         let err = GeoError::invalid_gauss_kruger_zone(100, 1, 23);
-        match &err {
-            GeoError::InvalidGaussKrugerZone { zone, min_zone, max_zone } => {
-                assert_eq!(*zone, 100);
-                assert_eq!(*min_zone, 1);
-                assert_eq!(*max_zone, 23);
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::InvalidGaussKrugerZone { zone, min_zone, max_zone }
+                if *zone == 100 && *min_zone == 1 && *max_zone == 23
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("100"));
         assert!(msg.contains("1-23"));
@@ -411,13 +397,11 @@ mod tests {
     #[test]
     fn test_projection_failed_error() {
         let err = GeoError::projection_failed("正向投影", "参数无效");
-        match &err {
-            GeoError::ProjectionFailed { operation, message } => {
-                assert_eq!(*operation, "正向投影");
-                assert_eq!(message, "参数无效");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::ProjectionFailed { operation, message }
+                if *operation == "正向投影" && *message == "参数无效"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("正向投影"));
         assert!(msg.contains("参数无效"));
@@ -426,13 +410,11 @@ mod tests {
     #[test]
     fn test_crs_parse_failed_error() {
         let err = GeoError::crs_parse_failed("EPSG:4326", "未知格式");
-        match &err {
-            GeoError::CrsParseFailed { definition, reason } => {
-                assert_eq!(definition, "EPSG:4326");
-                assert_eq!(reason, "未知格式");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::CrsParseFailed { definition, reason }
+                if *definition == "EPSG:4326" && *reason == "未知格式"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("EPSG:4326"));
         assert!(msg.contains("未知格式"));
@@ -441,13 +423,11 @@ mod tests {
     #[test]
     fn test_geometry_computation_failed_error() {
         let err = GeoError::geometry_computation_failed("Vincenty距离", "反余弦参数超出[-1,1]范围");
-        match &err {
-            GeoError::GeometryComputationFailed { operation, message } => {
-                assert_eq!(*operation, "Vincenty距离");
-                assert_eq!(message, "反余弦参数超出[-1,1]范围");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::GeometryComputationFailed { operation, message }
+                if *operation == "Vincenty距离" && *message == "反余弦参数超出[-1,1]范围"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("Vincenty距离"));
         assert!(msg.contains("反余弦参数"));
@@ -456,10 +436,7 @@ mod tests {
     #[test]
     fn test_vincenty_not_converged_error() {
         let err = GeoError::vincenty_not_converged();
-        match err {
-            GeoError::VincentyNotConverged => {},
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(err, GeoError::VincentyNotConverged));
         let msg = format!("{}", err);
         assert!(msg.contains("Vincenty"));
         assert!(msg.contains("不收敛"));
@@ -468,13 +445,11 @@ mod tests {
     #[test]
     fn test_spatial_index_error() {
         let err = GeoError::spatial_index_error("最近邻搜索", "R树为空");
-        match &err {
-            GeoError::SpatialIndexError { operation, message } => {
-                assert_eq!(*operation, "最近邻搜索");
-                assert_eq!(message, "R树为空");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::SpatialIndexError { operation, message }
+                if *operation == "最近邻搜索" && *message == "R树为空"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("最近邻搜索"));
     }
@@ -482,10 +457,7 @@ mod tests {
     #[test]
     fn test_singular_transform_error() {
         let err = GeoError::singular_transform();
-        match err {
-            GeoError::SingularTransform => {},
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(err, GeoError::SingularTransform));
         let msg = format!("{}", err);
         assert!(msg.contains("奇异"));
         assert!(msg.contains("行列式"));
@@ -494,12 +466,11 @@ mod tests {
     #[test]
     fn test_convergence_angle_error() {
         let err = GeoError::convergence_angle_error("子午线计算溢出");
-        match &err {
-            GeoError::ConvergenceAngleError { message } => {
-                assert_eq!(message, "子午线计算溢出");
-            }
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(
+            &err,
+            GeoError::ConvergenceAngleError { message }
+                if *message == "子午线计算溢出"
+        ));
         let msg = format!("{}", err);
         assert!(msg.contains("收敛角"));
         assert!(msg.contains("子午线计算溢出"));
@@ -515,10 +486,7 @@ mod tests {
     fn test_ensure_failure() {
         let result = GeoError::ensure(false, GeoError::invalid_utm_zone(99));
         assert!(result.is_err());
-        match result.unwrap_err() {
-            GeoError::InvalidUtmZone { zone } => assert_eq!(zone, 99),
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(result.unwrap_err(), GeoError::InvalidUtmZone { zone: 99 }));
     }
 
     #[test]
@@ -531,10 +499,7 @@ mod tests {
     fn test_check_epsg_failure() {
         let result = GeoError::check_epsg(3000, 4000, 5000);
         assert!(result.is_err());
-        match result.unwrap_err() {
-            GeoError::UnsupportedEpsg { code, .. } => assert_eq!(code, 3000),
-            _ => panic!("错误的错误类型"),
-        }
+        assert!(matches!(result.unwrap_err(), GeoError::UnsupportedEpsg { code: 3000, .. }));
     }
 
     #[test]
@@ -573,13 +538,11 @@ mod tests {
         let geo_err = GeoError::unsupported_epsg(99999, "EPSG:4326");
         let mh_err: MhError = geo_err.into();
         
-        match mh_err {
-            MhError::InvalidInput { message } => {
-                assert!(message.contains("99999"));
-                assert!(message.contains("EPSG:4326"));
-            }
-            _ => panic!("错误的MhError类型"),
-        }
+        assert!(matches!(
+            mh_err,
+            MhError::InvalidInput { ref message }
+                if message.contains("99999") && message.contains("EPSG:4326")
+        ));
     }
 
     #[test]
@@ -587,13 +550,11 @@ mod tests {
         let geo_err = GeoError::coordinate_out_of_range("纬度", 95.5, -90.0, 90.0);
         let mh_err: MhError = geo_err.into();
         
-        match mh_err {
-            MhError::InvalidInput { message } => {
-                assert!(message.contains("纬度"));
-                assert!(message.contains("95.5"));
-            }
-            _ => panic!("错误的MhError类型"),
-        }
+        assert!(matches!(
+            mh_err,
+            MhError::InvalidInput { ref message }
+                if message.contains("纬度") && message.contains("95.5")
+        ));
     }
 
     #[test]
@@ -601,13 +562,11 @@ mod tests {
         let geo_err = GeoError::projection_failed("逆向投影", "迭代发散");
         let mh_err: MhError = geo_err.into();
         
-        match mh_err {
-            MhError::Internal { message } => {
-                assert!(message.contains("逆向投影"));
-                assert!(message.contains("迭代发散"));
-            }
-            _ => panic!("错误的MhError类型"),
-        }
+        assert!(matches!(
+            mh_err,
+            MhError::Internal { ref message }
+                if message.contains("逆向投影") && message.contains("迭代发散")
+        ));
     }
 
     #[test]
@@ -624,7 +583,7 @@ mod tests {
             let mh_err: MhError = geo_err.into();
             match mh_err {
                 MhError::Internal { .. } => {},
-                _ => panic!("应转换为Internal类型"),
+                _ => assert!(false, "应转换为Internal类型"),
             }
         }
     }
@@ -644,7 +603,7 @@ mod tests {
             let mh_err: MhError = geo_err.into();
             match mh_err {
                 MhError::InvalidInput { .. } => {},
-                _ => panic!("应转换为InvalidInput类型"),
+                _ => assert!(false, "应转换为InvalidInput类型"),
             }
         }
     }

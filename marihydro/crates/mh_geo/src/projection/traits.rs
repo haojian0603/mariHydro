@@ -61,6 +61,7 @@ pub trait MapProjection: Send + Sync {
 ///
 /// 使用 enum 而非 trait object 以避免动态分发开销
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum FastProjection {
     /// 地理坐标（恒等变换）
     Geographic(Ellipsoid),

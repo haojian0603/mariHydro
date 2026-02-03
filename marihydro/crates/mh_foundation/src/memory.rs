@@ -29,6 +29,27 @@ use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, realloc, Layout};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
+#[derive(Debug, Clone)]
+pub enum AlignedVecError {
+    AllocationFailed { size: usize, align: usize },
+    CapacityOverflow,
+}
+
+impl std::fmt::Display for AlignedVecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlignedVecError::AllocationFailed { size, align } => {
+                write!(f, "内存分配失败: size={}, align={}", size, align)
+            }
+            AlignedVecError::CapacityOverflow => {
+                write!(f, "容量溢出")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AlignedVecError {}
+
 /// Alignment requirement.
 pub trait Alignment: 'static {
     /// Requested byte alignment.
@@ -97,6 +118,16 @@ unsafe impl<T: Pod + Default + Send, A: Alignment> Send for AlignedVec<T, A> {}
 unsafe impl<T: Pod + Default + Sync, A: Alignment> Sync for AlignedVec<T, A> {}
 
 impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
+    /// 创建空的对齐向量
+    pub fn new() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+            _align: PhantomData,
+        }
+    }
+
     /// Create zero-initialized buffer of length len.
     pub fn zeros(len: usize) -> Self {
         if len == 0 {
@@ -132,14 +163,22 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
     }
 
     /// Re-align from an existing Vec.
-    pub fn from_vec(vec: Vec<T>) -> Self {
+    pub fn from_vec(vec: Vec<T>) -> Result<Self, AlignedVecError> {
+        Self::try_from_vec(vec)
+    }
+
+    /// Re-align from an existing Vec (checked).
+    pub fn try_from_vec(vec: Vec<T>) -> Result<Self, AlignedVecError> {
         let len = vec.len();
-        let mut aligned = Self::with_capacity(len);
+        if len == 0 {
+            return Ok(Self::new());
+        }
+        let mut aligned = Self::with_capacity_checked(len)?;
         unsafe {
             std::ptr::copy_nonoverlapping(vec.as_ptr(), aligned.ptr, len);
         }
         aligned.len = len;
-        aligned
+        Ok(aligned)
     }
 
     /// 并行只读迭代器
@@ -278,6 +317,32 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
         .expect("Invalid layout")
     }
 
+    #[inline]
+    fn layout_for_checked(capacity: usize) -> Result<Layout, AlignedVecError> {
+        let size = capacity
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(AlignedVecError::CapacityOverflow)?;
+        let align = A::ALIGN.max(std::mem::align_of::<T>());
+        Layout::from_size_align(size, align)
+            .map_err(|_| AlignedVecError::AllocationFailed { size, align })
+    }
+
+    fn with_capacity_checked(capacity: usize) -> Result<Self, AlignedVecError> {
+        if capacity == 0 {
+            return Ok(Self { ptr: std::ptr::null_mut(), len: 0, capacity: 0, _align: PhantomData });
+        }
+
+        let layout = Self::layout_for_checked(capacity)?;
+        let ptr = unsafe { alloc_zeroed(layout) as *mut T };
+        if ptr.is_null() {
+            return Err(AlignedVecError::AllocationFailed { size: layout.size(), align: layout.align() });
+        }
+
+        debug_assert_eq!((ptr as usize) % layout.align(), 0, "Alignment guarantee violated");
+
+        Ok(Self { ptr, len: 0, capacity, _align: PhantomData })
+    }
+
     fn next_capacity(&self) -> usize {
         if self.capacity == 0 { 4 } else { self.capacity * 2 }
     }
@@ -308,6 +373,21 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
             slice.fill(T::default());
         }
         self.capacity = new_cap;
+    }
+}
+
+impl From<AlignedVecError> for crate::error::MhError {
+    fn from(err: AlignedVecError) -> Self {
+        match err {
+            AlignedVecError::AllocationFailed { size, align } => {
+                crate::error::MhError::internal(format!(
+                    "AlignedVec 分配失败: size={size}, align={align}"
+                ))
+            }
+            AlignedVecError::CapacityOverflow => {
+                crate::error::MhError::invalid_input("AlignedVec 容量溢出")
+            }
+        }
     }
 }
 
@@ -361,7 +441,9 @@ impl<T: Pod + Default, A: Alignment> Drop for AlignedVec<T, A> {
 impl<T: Pod + Default, A: Alignment> FromIterator<T> for AlignedVec<T, A> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let vec: Vec<T> = iter.into_iter().collect();
-        Self::from_vec(vec)
+        Self::try_from_vec(vec).unwrap_or_else(|err| {
+            panic!("AlignedVec::from_iter failed: {err:?}")
+        })
     }
 }
 
@@ -380,7 +462,7 @@ impl<'de, T: Pod + Default + Deserialize<'de>, A: Alignment> Deserialize<'de> fo
         D: Deserializer<'de>,
     {
         let vec = Vec::<T>::deserialize(deserializer)?;
-        Ok(Self::from_vec(vec))
+        Self::try_from_vec(vec).map_err(serde::de::Error::custom)
     }
 }
 

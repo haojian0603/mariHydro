@@ -150,7 +150,7 @@ pub fn limiter_mc(r: f64) -> f64 {
 #[inline]
 pub fn apply_limiter(limiter_type: LimiterType, r: f64) -> f64 {
     match limiter_type {
-        LimiterType::None => 0.0,
+        LimiterType::None => 1.0,
         LimiterType::Minmod => limiter_minmod(r),
         LimiterType::Superbee => limiter_superbee(r),
         LimiterType::VanLeer => limiter_van_leer(r),

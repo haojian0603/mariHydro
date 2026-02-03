@@ -44,6 +44,10 @@
 //! let neighbors = mesh.cell_neighbors(50, 25);
 //! ```
 
+use mh_geo::{Point2D, Point3D};
+use crate::error::{MeshError, MeshResult};
+use crate::FrozenMesh;
+
 /// 结构化网格配置
 #[derive(Debug, Clone, Copy)]
 pub struct StructuredMeshConfig {
@@ -408,6 +412,314 @@ impl StructuredMesh {
             ox + self.config.nx as f64 * self.config.dx,
             oy + self.config.ny as f64 * self.config.dy,
         ]
+    }
+
+    /// 冻结为计算用网格（FrozenMesh）
+    ///
+    /// 将结构化网格转换为 SoA 布局的只读网格，供物理引擎直接使用。
+    pub fn freeze(&self) -> MeshResult<FrozenMesh<f64>> {
+        let nx = self.config.nx;
+        let ny = self.config.ny;
+        let dx = self.config.dx;
+        let dy = self.config.dy;
+        let (ox, oy) = self.config.origin;
+
+        if nx == 0 || ny == 0 {
+            return Err(MeshError::invalid_topology(
+                "freeze",
+                format!("structured grid has zero size: nx={}, ny={}", nx, ny),
+            ));
+        }
+        if dx <= 0.0 || dy <= 0.0 || !dx.is_finite() || !dy.is_finite() {
+            return Err(MeshError::invalid_topology(
+                "freeze",
+                format!("invalid cell size: dx={}, dy={}", dx, dy),
+            ));
+        }
+
+        let to_u32 = |value: usize, name: &str| -> MeshResult<u32> {
+            u32::try_from(value).map_err(|_| {
+                MeshError::invalid_topology(
+                    "freeze",
+                    format!("{}超过u32上限: {}", name, value),
+                )
+            })
+        };
+
+        let n_cells = nx * ny;
+        let n_nodes = (nx + 1) * (ny + 1);
+        let n_h_interior = (nx - 1) * ny;
+        let n_v_interior = nx * (ny - 1);
+        let boundary_start = n_h_interior + n_v_interior;
+        let n_faces = boundary_start + 2 * (nx + ny);
+
+        let mut node_coords = Vec::with_capacity(n_nodes);
+        for j in 0..=ny {
+            for i in 0..=nx {
+                node_coords.push(Point3D::new(ox + i as f64 * dx, oy + j as f64 * dy, 0.0));
+            }
+        }
+
+        let mut cell_center = Vec::with_capacity(n_cells);
+        let mut cell_area = Vec::with_capacity(n_cells);
+        let mut cell_z_bed = Vec::with_capacity(n_cells);
+        for j in 0..ny {
+            for i in 0..nx {
+                cell_center.push(Point2D::new(
+                    ox + (i as f64 + 0.5) * dx,
+                    oy + (j as f64 + 0.5) * dy,
+                ));
+                cell_area.push(dx * dy);
+                let bed = self.bed_elevation(i + j * nx).unwrap_or(0.0);
+                cell_z_bed.push(bed);
+            }
+        }
+
+        let mut cell_node_offsets = Vec::with_capacity(n_cells + 1);
+        let mut cell_node_indices = Vec::with_capacity(n_cells * 4);
+        cell_node_offsets.push(0);
+        for j in 0..ny {
+            for i in 0..nx {
+                let n0 = to_u32(j * (nx + 1) + i, "节点索引")?;
+                let n1 = to_u32(j * (nx + 1) + (i + 1), "节点索引")?;
+                let n2 = to_u32((j + 1) * (nx + 1) + (i + 1), "节点索引")?;
+                let n3 = to_u32((j + 1) * (nx + 1) + i, "节点索引")?;
+                cell_node_indices.extend_from_slice(&[n0, n1, n2, n3]);
+                cell_node_offsets.push(cell_node_indices.len());
+            }
+        }
+
+        let mut face_center = Vec::with_capacity(n_faces);
+        let mut face_normal = Vec::with_capacity(n_faces);
+        let mut face_length = Vec::with_capacity(n_faces);
+        let mut face_z_left = Vec::with_capacity(n_faces);
+        let mut face_z_right = Vec::with_capacity(n_faces);
+        let mut face_owner = Vec::with_capacity(n_faces);
+        let mut face_neighbor = Vec::with_capacity(n_faces);
+        let mut face_delta_owner = Vec::with_capacity(n_faces);
+        let mut face_delta_neighbor = Vec::with_capacity(n_faces);
+        let mut face_dist_o2n = Vec::with_capacity(n_faces);
+        let mut boundary_face_indices = Vec::with_capacity(2 * (nx + ny));
+        let mut face_boundary_id = Vec::with_capacity(n_faces);
+
+        let cell_index = |i: usize, j: usize| -> usize { j * nx + i };
+
+        // 内部垂直面（左右相邻）
+        for j in 0..ny {
+            for i in 0..nx - 1 {
+                let owner = to_u32(cell_index(i, j), "单元索引")?;
+                let neighbor = to_u32(cell_index(i + 1, j), "单元索引")?;
+                let center = Point2D::new(ox + (i as f64 + 1.0) * dx, oy + (j as f64 + 0.5) * dy);
+                let normal = Point3D::new(1.0, 0.0, 0.0);
+                let owner_center = cell_center[owner as usize];
+                let neighbor_center = cell_center[neighbor as usize];
+                face_center.push(center);
+                face_normal.push(normal);
+                face_length.push(dy);
+                face_z_left.push(cell_z_bed[owner as usize]);
+                face_z_right.push(cell_z_bed[neighbor as usize]);
+                face_owner.push(owner);
+                face_neighbor.push(neighbor);
+                face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
+                face_delta_neighbor.push(Point2D::new(center.x - neighbor_center.x, center.y - neighbor_center.y));
+                face_dist_o2n.push(dx);
+                face_boundary_id.push(None);
+            }
+        }
+
+        // 内部水平面（上下相邻）
+        for j in 0..ny - 1 {
+            for i in 0..nx {
+                let owner = to_u32(cell_index(i, j), "单元索引")?;
+                let neighbor = to_u32(cell_index(i, j + 1), "单元索引")?;
+                let center = Point2D::new(ox + (i as f64 + 0.5) * dx, oy + (j as f64 + 1.0) * dy);
+                let normal = Point3D::new(0.0, 1.0, 0.0);
+                let owner_center = cell_center[owner as usize];
+                let neighbor_center = cell_center[neighbor as usize];
+                face_center.push(center);
+                face_normal.push(normal);
+                face_length.push(dx);
+                face_z_left.push(cell_z_bed[owner as usize]);
+                face_z_right.push(cell_z_bed[neighbor as usize]);
+                face_owner.push(owner);
+                face_neighbor.push(neighbor);
+                face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
+                face_delta_neighbor.push(Point2D::new(center.x - neighbor_center.x, center.y - neighbor_center.y));
+                face_dist_o2n.push(dy);
+                face_boundary_id.push(None);
+            }
+        }
+
+        // 边界面：南、北、西、东
+        let mut push_boundary = |center: Point2D, normal: Point3D, length: f64, owner: u32, boundary_id: u32| {
+            let owner_center = cell_center[owner as usize];
+            face_center.push(center);
+            face_normal.push(normal);
+            face_length.push(length);
+            face_z_left.push(cell_z_bed[owner as usize]);
+            face_z_right.push(cell_z_bed[owner as usize]);
+            face_owner.push(owner);
+            face_neighbor.push(u32::MAX);
+            face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
+            face_delta_neighbor.push(Point2D::new(0.0, 0.0));
+            face_dist_o2n.push(0.0);
+            face_boundary_id.push(Some(boundary_id));
+            boundary_face_indices.push(to_u32(face_center.len() - 1, "边界面索引")?);
+        };
+
+        // South
+        for i in 0..nx {
+            let owner = to_u32(cell_index(i, 0), "单元索引")?;
+            let center = Point2D::new(ox + (i as f64 + 0.5) * dx, oy);
+            push_boundary(center, Point3D::new(0.0, -1.0, 0.0), dx, owner, 0);
+        }
+        // North
+        for i in 0..nx {
+            let owner = to_u32(cell_index(i, ny - 1), "单元索引")?;
+            let center = Point2D::new(ox + (i as f64 + 0.5) * dx, oy + ny as f64 * dy);
+            push_boundary(center, Point3D::new(0.0, 1.0, 0.0), dx, owner, 1);
+        }
+        // West
+        for j in 0..ny {
+            let owner = to_u32(cell_index(0, j), "单元索引")?;
+            let center = Point2D::new(ox, oy + (j as f64 + 0.5) * dy);
+            push_boundary(center, Point3D::new(-1.0, 0.0, 0.0), dy, owner, 2);
+        }
+        // East
+        for j in 0..ny {
+            let owner = to_u32(cell_index(nx - 1, j), "单元索引")?;
+            let center = Point2D::new(ox + nx as f64 * dx, oy + (j as f64 + 0.5) * dy);
+            push_boundary(center, Point3D::new(1.0, 0.0, 0.0), dy, owner, 3);
+        }
+
+        let mut cell_face_offsets = Vec::with_capacity(n_cells + 1);
+        let mut cell_face_indices = Vec::with_capacity(n_cells * 4);
+        cell_face_offsets.push(0);
+        for j in 0..ny {
+            for i in 0..nx {
+                let left = if i == 0 {
+                    boundary_start + 2 * nx + j
+                } else {
+                    j * (nx - 1) + (i - 1)
+                };
+                let right = if i == nx - 1 {
+                    boundary_start + 2 * nx + ny + j
+                } else {
+                    j * (nx - 1) + i
+                };
+                let bottom = if j == 0 {
+                    boundary_start + i
+                } else {
+                    n_h_interior + (j - 1) * nx + i
+                };
+                let top = if j == ny - 1 {
+                    boundary_start + nx + i
+                } else {
+                    n_h_interior + j * nx + i
+                };
+                cell_face_indices.extend_from_slice(&[
+                    to_u32(left as usize, "单元面索引")?,
+                    to_u32(right as usize, "单元面索引")?,
+                    to_u32(bottom as usize, "单元面索引")?,
+                    to_u32(top as usize, "单元面索引")?,
+                ]);
+                cell_face_offsets.push(cell_face_indices.len());
+            }
+        }
+
+        let mut cell_neighbor_offsets = Vec::with_capacity(n_cells + 1);
+        let mut cell_neighbor_indices = Vec::with_capacity(n_cells * 4);
+        cell_neighbor_offsets.push(0);
+        for j in 0..ny {
+            for i in 0..nx {
+                let west = if i > 0 {
+                    to_u32(cell_index(i - 1, j), "邻居单元索引")?
+                } else {
+                    u32::MAX
+                };
+                let east = if i + 1 < nx {
+                    to_u32(cell_index(i + 1, j), "邻居单元索引")?
+                } else {
+                    u32::MAX
+                };
+                let south = if j > 0 {
+                    to_u32(cell_index(i, j - 1), "邻居单元索引")?
+                } else {
+                    u32::MAX
+                };
+                let north = if j + 1 < ny {
+                    to_u32(cell_index(i, j + 1), "邻居单元索引")?
+                } else {
+                    u32::MAX
+                };
+                cell_neighbor_indices.extend_from_slice(&[west, east, south, north]);
+                cell_neighbor_offsets.push(cell_neighbor_indices.len());
+            }
+        }
+
+        let mut face_original_id = Vec::with_capacity(n_faces);
+        for i in 0..n_faces {
+            face_original_id.push(to_u32(i, "面索引")?);
+        }
+        let mut cell_original_id = Vec::with_capacity(n_cells);
+        let mut cell_permutation = Vec::with_capacity(n_cells);
+        let mut cell_inv_permutation = Vec::with_capacity(n_cells);
+        for i in 0..n_cells {
+            cell_original_id.push(to_u32(i, "单元索引")?);
+            cell_permutation.push(to_u32(i, "单元索引")?);
+            cell_inv_permutation.push(to_u32(i, "单元索引")?);
+        }
+
+        let min_cell_size = dx.min(dy);
+        let max_cell_size = dx.max(dy);
+
+        let cell_parent = (0..n_cells)
+            .map(|i| to_u32(i, "单元索引"))
+            .collect::<MeshResult<Vec<u32>>>()?;
+
+        Ok(FrozenMesh {
+            n_nodes,
+            node_coords,
+            n_cells,
+            cell_center,
+            cell_area,
+            cell_z_bed,
+            cell_node_offsets,
+            cell_node_indices,
+            cell_face_offsets,
+            cell_face_indices,
+            cell_neighbor_offsets,
+            cell_neighbor_indices,
+            n_faces,
+            n_interior_faces: n_h_interior + n_v_interior,
+            face_center,
+            face_normal,
+            face_length,
+            face_z_left,
+            face_z_right,
+            face_owner,
+            face_neighbor,
+            face_delta_owner,
+            face_delta_neighbor,
+            face_dist_o2n,
+            boundary_face_indices,
+            boundary_names: vec![
+                "south".to_string(),
+                "north".to_string(),
+                "west".to_string(),
+                "east".to_string(),
+            ],
+            face_boundary_id,
+            min_cell_size,
+            max_cell_size,
+            cell_refinement_level: vec![0; n_cells],
+            cell_parent,
+            ghost_capacity: 0,
+            cell_original_id,
+            face_original_id,
+            cell_permutation,
+            cell_inv_permutation,
+        })
     }
 
     /// 生成所有单元中心坐标

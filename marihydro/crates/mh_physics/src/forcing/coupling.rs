@@ -2,17 +2,24 @@
 //! 强迫场与网格耦合与时空插值
 
 use crate::adapter::PhysicsMesh;
+use crate::types::CellIndex;
+use mh_runtime::{CpuBackend, Vector2D};
 
 use super::data::ForcingField;
 
 /// 空间插值方法
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub enum SpatialInterpolation {
     /// 最近邻
     NearestNeighbor,
     /// 反距离加权
-    #[default]
     InverseDistanceWeighting { power: f64 },
+}
+
+impl Default for SpatialInterpolation {
+    fn default() -> Self {
+        Self::InverseDistanceWeighting { power: 2.0 }
+    }
 }
 
 /// 插值权重（预计算）
@@ -22,6 +29,28 @@ pub struct InterpolationWeights {
     pub source_indices: Vec<Vec<usize>>,
     /// 对应的权重
     pub weights: Vec<Vec<f64>>,
+}
+
+impl InterpolationWeights {
+    pub fn apply(&self, source_values: &[f64]) -> Vec<f64> {
+        let n_cells = self.source_indices.len();
+        let mut result = vec![0.0; n_cells];
+
+        for cell_idx in 0..n_cells {
+            let indices = &self.source_indices[cell_idx];
+            let weights = &self.weights[cell_idx];
+            let mut value = 0.0;
+            for (&idx, &w) in indices.iter().zip(weights.iter()) {
+                if idx >= source_values.len() {
+                    continue;
+                }
+                value += source_values[idx] * w;
+            }
+            result[cell_idx] = value;
+        }
+
+        result
+    }
 }
 
 /// 强迫-网格耦合器
@@ -43,18 +72,30 @@ impl<'m> ForcingMeshCoupler<'m> {
         }
     }
 
+    pub fn weights(&self) -> &InterpolationWeights {
+        &self.weights
+    }
+
+    pub fn into_weights(self) -> InterpolationWeights {
+        self.weights
+    }
+
     /// 预计算插值权重（针对给定源点）
     pub fn precompute_weights(&mut self, source_positions: &[(f64, f64)]) {
         if source_positions.is_empty() {
             self.weights = InterpolationWeights::default();
             return;
         }
-        let n_cells = self.mesh.n_cells();
+        let n_cells = self.mesh.cell_count();
         let mut source_indices = Vec::with_capacity(n_cells);
         let mut weights = Vec::with_capacity(n_cells);
 
         for cell_idx in 0..n_cells {
-            let centroid = self.mesh.cell_center_tuple(cell_idx);
+            let center = self
+                .mesh
+                .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_idx))
+                .expect("cell_center out of range");
+            let centroid = (center.x(), center.y());
             let (indices, w) = self.compute_weights_for_point(centroid, source_positions);
             source_indices.push(indices);
             weights.push(w);
@@ -142,7 +183,7 @@ impl<'m> ForcingMeshCoupler<'m> {
 
     /// 将源场值映射到网格
     pub fn interpolate_to_mesh(&self, source_values: &[f64]) -> Vec<f64> {
-        let n_cells = self.mesh.n_cells();
+        let n_cells = self.mesh.cell_count();
         let mut result = vec![0.0; n_cells];
 
         for cell_idx in 0..n_cells {
@@ -161,6 +202,16 @@ impl<'m> ForcingMeshCoupler<'m> {
 
         result
     }
+}
+
+pub fn compute_interpolation_weights(
+    mesh: &PhysicsMesh,
+    method: SpatialInterpolation,
+    source_positions: &[(f64, f64)],
+) -> InterpolationWeights {
+    let mut coupler = ForcingMeshCoupler::new(mesh, method);
+    coupler.precompute_weights(source_positions);
+    coupler.into_weights()
 }
 
 /// 时空强迫数据管理器
@@ -182,6 +233,9 @@ impl SpatioTemporalForcing {
     /// 添加时刻数据
     pub fn add_field(&mut self, field: ForcingField) {
         let time = field.time;
+        if !time.is_finite() {
+            return;
+        }
         match self.times.binary_search_by(|t| t.partial_cmp(&time).unwrap()) {
             Ok(pos) => {
                 self.times[pos] = time;
@@ -209,6 +263,12 @@ impl SpatioTemporalForcing {
     }
 
     fn find_time_bracket(&self, time: f64) -> Option<(usize, usize, f64)> {
+        if !time.is_finite() {
+            return None;
+        }
+        if self.times.iter().any(|t| !t.is_finite()) {
+            return None;
+        }
         if self.times.len() == 1 {
             return Some((0, 0, 0.0));
         }

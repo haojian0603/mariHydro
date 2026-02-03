@@ -130,9 +130,6 @@ impl<V, F> Default for HalfEdgeMesh<V, F> {
 }
 
 impl<V, F> HalfEdgeMesh<V, F> {
-    pub type VertexIndex = SafeIdx<VertexTag>;
-    pub type HalfEdgeIndex = SafeIdx<HalfEdgeTag>;
-    pub type FaceIndex = SafeIdx<FaceTag>;
     /// 创建空网格
     pub fn new() -> Self {
         Self {
@@ -227,7 +224,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
     }
 
     pub fn remove_vertex_safe(&mut self, idx: VertexIndex) -> Result<(), crate::error::MeshError> {
-        if self.vertex_halfedges(idx).next().is_some() {
+        if self.vertex_outgoing(idx).next().is_some() {
             return Err(crate::error::MeshError::invalid_topology("remove_vertex", "vertex still referenced"));
         }
         self.dirty_vertices.remove(&idx);
@@ -413,6 +410,49 @@ impl<V, F> HalfEdgeMesh<V, F> {
         false
     }
 
+    /// 尝试为指定半边建立对偶关系（若已存在反向边）
+    fn link_twin_if_found(&mut self, he_idx: HalfEdgeIndex) {
+        let Some(he) = self.halfedge(he_idx) else {
+            return;
+        };
+        if he.twin.is_valid() {
+            return;
+        }
+
+        let origin = he.origin;
+        let target = match self.halfedge_target(he_idx) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let mut twin_idx = None;
+        for (idx, other) in self.halfedges.iter() {
+            if idx == he_idx {
+                continue;
+            }
+            if other.origin != target {
+                continue;
+            }
+            let other_target = match self.halfedge_target(idx) {
+                Some(t) => t,
+                None => continue,
+            };
+            if other_target == origin {
+                twin_idx = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(twin) = twin_idx {
+            if let Some(he_mut) = self.halfedge_mut(he_idx) {
+                he_mut.twin = twin;
+            }
+            if let Some(twin_mut) = self.halfedge_mut(twin) {
+                twin_mut.twin = he_idx;
+            }
+        }
+    }
+
     // =========================================================================
     // 脏标记系统
     // =========================================================================
@@ -570,6 +610,11 @@ impl<V: Default, F: Default> HalfEdgeMesh<V, F> {
             }
         }
 
+        // 尝试链接对偶半边（若已有反向边）
+        self.link_twin_if_found(he0);
+        self.link_twin_if_found(he1);
+        self.link_twin_if_found(he2);
+
         Some(face_idx)
     }
 
@@ -631,6 +676,12 @@ impl<V: Default, F: Default> HalfEdgeMesh<V, F> {
                 }
             }
         }
+
+        // 尝试链接对偶半边（若已有反向边）
+        self.link_twin_if_found(he0);
+        self.link_twin_if_found(he1);
+        self.link_twin_if_found(he2);
+        self.link_twin_if_found(he3);
 
         Some(face_idx)
     }

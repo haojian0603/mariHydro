@@ -169,6 +169,58 @@ impl TimeStepConfig {
             ..Default::default()
         }
     }
+
+    /// 归一化配置，修正非法或不一致的参数
+    pub fn normalized(&self) -> Self {
+        let mut cfg = self.clone();
+
+        if !cfg.min_dt.is_finite() || cfg.min_dt <= 0.0 {
+            cfg.min_dt = 1e-6;
+        }
+        if !cfg.max_dt.is_finite() || cfg.max_dt < cfg.min_dt {
+            cfg.max_dt = cfg.min_dt;
+        }
+        if !cfg.initial_dt.is_finite() {
+            cfg.initial_dt = cfg.min_dt;
+        }
+        cfg.initial_dt = cfg.initial_dt.clamp(cfg.min_dt, cfg.max_dt);
+
+        if !cfg.target_cfl.is_finite() || cfg.target_cfl <= 0.0 {
+            cfg.target_cfl = 0.5;
+        }
+        if !cfg.max_cfl.is_finite() || cfg.max_cfl < cfg.target_cfl {
+            cfg.max_cfl = cfg.target_cfl;
+        }
+
+        if !cfg.safety_factor.is_finite() || cfg.safety_factor <= 0.0 {
+            cfg.safety_factor = 0.9;
+        }
+        if cfg.safety_factor > 1.0 {
+            cfg.safety_factor = 1.0;
+        }
+
+        if !cfg.max_growth.is_finite() || cfg.max_growth < 1.0 {
+            cfg.max_growth = 1.0;
+        }
+        if !cfg.max_shrink.is_finite() || cfg.max_shrink <= 0.0 {
+            cfg.max_shrink = 0.5;
+        }
+        if cfg.max_shrink > 1.0 {
+            cfg.max_shrink = 1.0;
+        }
+
+        if !cfg.error_tolerance.is_finite() || cfg.error_tolerance <= 0.0 {
+            cfg.error_tolerance = 1e-4;
+        }
+        if !cfg.rejection_shrink.is_finite() || cfg.rejection_shrink <= 0.0 {
+            cfg.rejection_shrink = 0.5;
+        }
+        if cfg.rejection_shrink > 1.0 {
+            cfg.rejection_shrink = 1.0;
+        }
+
+        cfg
+    }
 }
 
 // ============================================================================
@@ -225,6 +277,7 @@ pub struct TimeStepController {
 impl TimeStepController {
     /// 创建控制器
     pub fn new(config: TimeStepConfig) -> Self {
+        let config = config.normalized();
         let initial_dt = config.initial_dt;
         Self {
             config,
@@ -261,7 +314,7 @@ impl TimeStepController {
     /// * `min_cell_size` - 最小网格尺寸 (m)
     pub fn compute_dt_from_cfl(&self, max_wave_speed: f64, min_cell_size: f64) -> f64 {
         if max_wave_speed <= 0.0 || min_cell_size <= 0.0 {
-            return self.config.max_dt;
+            return self.config.min_dt;
         }
 
         let dt_cfl = self.config.target_cfl * min_cell_size / max_wave_speed;

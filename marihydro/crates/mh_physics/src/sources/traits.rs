@@ -219,12 +219,6 @@ pub trait SourceTerm: Send + Sync {
         false
     }
 
-    /// 是否需要隐式处理（已废弃，使用 is_locally_implicit）
-    #[deprecated(since = "0.5.0", note = "use is_locally_implicit() instead")]
-    fn requires_implicit_treatment(&self) -> bool {
-        self.is_locally_implicit()
-    }
-
     // ========== 半隐式分裂方法 ==========
 
     /// 计算预测步源项贡献
@@ -307,6 +301,12 @@ impl SourceHelpers {
     #[inline]
     // ALLOW_F64: 与 ConservedState 配合
     pub fn smooth_transition(h: f64, h_dry: f64, h_wet: f64) -> f64 {
+        if !h.is_finite() || !h_dry.is_finite() || !h_wet.is_finite() {
+            return 0.0;
+        }
+        if h_wet <= h_dry {
+            return if h >= h_wet { 1.0 } else { 0.0 };
+        }
         if h <= h_dry {
             0.0
         } else if h >= h_wet {

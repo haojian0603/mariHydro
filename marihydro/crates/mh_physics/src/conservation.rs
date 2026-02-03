@@ -132,6 +132,8 @@ pub struct ConservationConfig {
     pub error_threshold: f64,
     /// 检查间隔（步数）
     pub check_interval: usize,
+    /// 轻量检查间隔（步数）
+    pub lightweight_interval: usize,
     /// 是否输出详细报告
     pub verbose: bool,
 }
@@ -145,6 +147,7 @@ impl Default for ConservationConfig {
             warning_threshold: 1e-6,
             error_threshold: 1e-3,
             check_interval: 100,
+            lightweight_interval: 1,
             verbose: false,
         }
     }
@@ -215,12 +218,47 @@ impl ConservationMonitor {
         }
         
         self.current = Some(snapshot);
-        
-        // 检查守恒性
-        if self.step_count % self.config.check_interval == 0 {
-            self.check_conservation()
-        } else {
+
+        let mut result = ConservationResult::Ok;
+
+        if self.config.lightweight_interval > 0
+            && self.step_count % self.config.lightweight_interval == 0
+        {
+            result = Self::merge_results(result, self.check_lightweight());
+        }
+
+        // 检查守恒性（完整）
+        if self.config.check_interval > 0 && self.step_count % self.config.check_interval == 0 {
+            result = Self::merge_results(result, self.check_conservation());
+        }
+
+        result
+    }
+
+    /// 轻量级守恒检查（每步可用）
+    fn check_lightweight(&mut self) -> ConservationResult {
+        let Some(initial) = &self.initial else {
+            return ConservationResult::NotInitialized;
+        };
+
+        let Some(current) = &self.current else {
+            return ConservationResult::NotInitialized;
+        };
+
+        let mut errors = Vec::new();
+
+        if self.config.check_mass {
+            if let Some(e) = self.compute_error(ConservationType::Mass, initial, current) {
+                errors.push(e);
+            }
+        }
+
+        if errors.is_empty() {
             ConservationResult::Ok
+        } else if errors.iter().any(|e| e.relative_error > self.config.error_threshold) {
+            ConservationResult::Error(errors)
+        } else {
+            ConservationResult::Warning(errors)
         }
     }
 
@@ -363,6 +401,26 @@ impl ConservationMonitor {
     pub fn reset_cumulative(&mut self) {
         self.cumulative_boundary_flux.clear();
         self.cumulative_sources.clear();
+    }
+
+    fn merge_results(a: ConservationResult, b: ConservationResult) -> ConservationResult {
+        match (a, b) {
+            (ConservationResult::Error(mut ea), ConservationResult::Error(eb)) => {
+                ea.extend(eb);
+                ConservationResult::Error(ea)
+            }
+            (ConservationResult::Error(ea), _) => ConservationResult::Error(ea),
+            (_, ConservationResult::Error(eb)) => ConservationResult::Error(eb),
+            (ConservationResult::Warning(mut wa), ConservationResult::Warning(wb)) => {
+                wa.extend(wb);
+                ConservationResult::Warning(wa)
+            }
+            (ConservationResult::Warning(wa), _) => ConservationResult::Warning(wa),
+            (_, ConservationResult::Warning(wb)) => ConservationResult::Warning(wb),
+            (ConservationResult::NotInitialized, other) => other,
+            (other, ConservationResult::NotInitialized) => other,
+            _ => ConservationResult::Ok,
+        }
     }
 }
 
@@ -605,6 +663,24 @@ pub struct ConservationReport {
     pub warning_count: usize,
 }
 
+/// 质量平衡闭合状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureStatus {
+    /// 正常
+    Ok,
+    /// 期望变化近似为零
+    ExpectedZero,
+    /// 初始量过小
+    InitialZero,
+}
+
+/// 质量平衡闭合结果
+#[derive(Debug, Clone, Copy)]
+pub struct ClosureResult {
+    pub value: f64,
+    pub status: ClosureStatus,
+}
+
 impl ConservationReport {
     /// 质量变化
     pub fn mass_change(&self) -> f64 {
@@ -613,15 +689,29 @@ impl ConservationReport {
 
     /// 质量平衡闭合
     pub fn mass_balance_closure(&self) -> f64 {
+        self.mass_balance_closure_result().value
+    }
+
+    /// 质量平衡闭合（带状态）
+    pub fn mass_balance_closure_result(&self) -> ClosureResult {
         let expected_change = self.cumulative_inflow + self.cumulative_sources;
         let actual_change = self.mass_change();
-        
+
         if expected_change.abs() > 1e-10 {
-            (actual_change - expected_change) / expected_change
+            ClosureResult {
+                value: (actual_change - expected_change) / expected_change,
+                status: ClosureStatus::Ok,
+            }
         } else if actual_change.abs() > 1e-10 {
-            f64::INFINITY
+            ClosureResult {
+                value: f64::INFINITY,
+                status: ClosureStatus::ExpectedZero,
+            }
         } else {
-            0.0
+            ClosureResult {
+                value: 0.0,
+                status: ClosureStatus::InitialZero,
+            }
         }
     }
 }
@@ -641,7 +731,8 @@ impl std::fmt::Display for ConservationReport {
         )?;
         writeln!(f, "累计流入: {:.6e} m³", self.cumulative_inflow)?;
         writeln!(f, "累计源项: {:.6e} m³", self.cumulative_sources)?;
-        writeln!(f, "质量平衡闭合: {:.2e}", self.mass_balance_closure())?;
+        let closure = self.mass_balance_closure_result();
+        writeln!(f, "质量平衡闭合: {:.2e} ({:?})", closure.value, closure.status)?;
         writeln!(f, "最大相对误差: {:.2e}", self.max_relative_error)?;
         writeln!(f, "警告/错误: {}/{}", self.warning_count, self.error_count)?;
         Ok(())

@@ -187,7 +187,6 @@ impl GhostStateCalculator {
     {
         let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
         let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ONE);
-        let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
 
         let h_int = interior.h.max(h_min);
         if h_int <= h_min {
@@ -200,18 +199,22 @@ impl GhostStateCalculator {
         let ny = normal.y();
         let un_int = u_int * nx + v_int * ny;
 
+        let u_ext = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO);
+        let v_ext = B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        let un_ext = u_ext * nx + v_ext * ny;
+
         let eta_ext = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO);
         let h_ext = (eta_ext - z_bed).max(h_min);
         let c_int = (g * h_int).sqrt();
-        let c_ext = (g * h_ext).sqrt();
+        let _c_ext = (g * h_ext).sqrt();
 
         let lambda_out = un_int - c_int;
         let un_ghost = if lambda_out > B::Scalar::ZERO {
             // 超临界/流出，纯辐射
             un_int - (c_int / h_int) * (h_int - h_ext)
         } else {
-            // 亚临界：外部强迫 + 辐射修正
-            two * c_ext - un_int - (c_int / h_int) * (h_int - h_ext)
+            // 亚临界：Flather 条件，融合外部速度与水位
+            un_ext + (c_int / h_int) * (h_int - h_ext)
         };
 
         let ut_int = -u_int * ny + v_int * nx; // 切向分量标量

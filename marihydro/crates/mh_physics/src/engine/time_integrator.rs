@@ -7,7 +7,7 @@
 
 use crate::state::{RhsBuffers, ShallowWaterStateGeneric as ShallowWaterState};
 use crate::Backend;
-use mh_foundation::MhResult;
+use mh_foundation::{MhError, MhResult};
 use mh_runtime::RuntimeScalar;
 use num_traits::{Float, FromPrimitive};
 
@@ -79,7 +79,7 @@ where
     }
 
     fn ensure_size(&mut self, n_cells: usize, n_tracers: usize) {
-        if self.rhs.n_cells() != n_cells {
+        if self.rhs.n_cells() != n_cells || self.rhs.n_tracers() != n_tracers {
             self.rhs.resize(n_cells, n_tracers);
         }
     }
@@ -148,6 +148,9 @@ where
             self.state_1 = ShallowWaterState::<B>::new_with_backend(backend, n_cells);
             self.rhs_1.resize(n_cells, n_tracers);
             self.rhs_2.resize(n_cells, n_tracers);
+        } else if self.rhs_1.n_tracers() != n_tracers || self.rhs_2.n_tracers() != n_tracers {
+            self.rhs_1.resize(n_cells, n_tracers);
+            self.rhs_2.resize(n_cells, n_tracers);
         }
     }
 
@@ -162,7 +165,10 @@ where
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
-        self.state_1.copy_from(state);
+        self.state_1.sync_tracer_layout_from(state);
+        self.state_1
+            .copy_from_unchecked(state)
+            .map_err(|err| MhError::invalid_input(format!("时间积分状态复制失败: {err}")))?;
         self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 
@@ -234,6 +240,13 @@ where
             self.rhs_1.resize(n_cells, n_tracers);
             self.rhs_2.resize(n_cells, n_tracers);
             self.rhs_3.resize(n_cells, n_tracers);
+        } else if self.rhs_1.n_tracers() != n_tracers
+            || self.rhs_2.n_tracers() != n_tracers
+            || self.rhs_3.n_tracers() != n_tracers
+        {
+            self.rhs_1.resize(n_cells, n_tracers);
+            self.rhs_2.resize(n_cells, n_tracers);
+            self.rhs_3.resize(n_cells, n_tracers);
         }
     }
 
@@ -252,7 +265,11 @@ where
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
-        self.state_1.copy_from(state);
+        self.state_1.sync_tracer_layout_from(state);
+        self.state_2.sync_tracer_layout_from(state);
+        self.state_1
+            .copy_from_unchecked(state)
+            .map_err(|err| MhError::invalid_input(format!("时间积分状态复制失败: {err}")))?;
         self.state_1.add_scaled_rhs(&self.rhs_1, dt);
         self.state_1.enforce_positivity();
 

@@ -9,8 +9,8 @@
 //!
 //! # 设计原则
 //!
-//! 1. **无 DVec2**: 所有法向使用 `(f64, f64)` 元组
-//! 2. **元组几何接口**: 使用 `cell_center_tuple`、`face_normal_2d_tuple` 等方法
+//! 1. **无 DVec2**: 法向与几何使用 `Vector2D` 接口读取
+//! 2. **强类型索引**: 几何访问使用 `CellIndex`/`FaceIndex`
 //!
 //! # 使用示例
 //!
@@ -28,7 +28,8 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use mh_runtime::Backend;
+use crate::types::{CellIndex, FaceIndex};
+use mh_runtime::{Backend, CpuBackend, Vector2D};
 
 /// 邻居信息
 #[derive(Debug, Clone, Copy)]
@@ -95,16 +96,16 @@ pub struct CellFaceTopology {
 impl CellFaceTopology {
     /// 从物理网格构建拓扑
     pub fn from_mesh(mesh: &PhysicsMesh) -> Self {
-        let n_cells = mesh.n_cells();
-        let n_faces = mesh.n_faces();
+        let n_cells = mesh.cell_count();
+        let n_faces = mesh.face_count();
 
         // 统计每个单元的面数
         let mut cell_face_count = vec![0usize; n_cells];
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
-            cell_face_count[owner.0] += 1;
-            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
-                cell_face_count[neigh.0] += 1;
+            let owner = mesh.face_owner(FaceIndex::new(face_idx));
+            cell_face_count[owner.get()] += 1;
+            if let Some(neigh) = mesh.face_neighbor(FaceIndex::new(face_idx)) {
+                cell_face_count[neigh.get()] += 1;
             }
         }
 
@@ -123,13 +124,13 @@ impl CellFaceTopology {
         current_pos.pop(); // 移除最后一个
 
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(mh_runtime::FaceIndex(face_idx));
-            cell_face_idx[current_pos[owner.0]] = face_idx;
-            current_pos[owner.0] += 1;
+            let owner = mesh.face_owner(FaceIndex::new(face_idx));
+            cell_face_idx[current_pos[owner.get()]] = face_idx;
+            current_pos[owner.get()] += 1;
 
-            if let Some(neigh) = mesh.face_neighbor(mh_runtime::FaceIndex(face_idx)) {
-                cell_face_idx[current_pos[neigh.0]] = face_idx;
-                current_pos[neigh.0] += 1;
+            if let Some(neigh) = mesh.face_neighbor(FaceIndex::new(face_idx)) {
+                cell_face_idx[current_pos[neigh.get()]] = face_idx;
+                current_pos[neigh.get()] += 1;
             }
         }
 
@@ -139,10 +140,13 @@ impl CellFaceTopology {
         let mut boundary_faces = Vec::new();
 
         for face_idx in 0..n_faces {
-            let fi = mh_runtime::FaceIndex(face_idx);
+            let fi = FaceIndex::new(face_idx);
             let owner = mesh.face_owner(fi);
             let neighbor = mesh.face_neighbor(fi);
-            let normal = mesh.face_normal_2d_tuple(face_idx);
+            let normal_vec = mesh
+                .face_normal_generic::<CpuBackend<f64>>(fi)
+                .expect("face_normal out of range");
+            let normal = (normal_vec.x(), normal_vec.y());
             let length = mesh.face_length(fi);
             let dist_o2n = mesh.face_dist_o2n(fi);
 
@@ -336,10 +340,14 @@ impl CellFaceTopology {
         let face = &self.face_info[face_idx];
         
         if let Some(neigh) = face.neighbor {
-            let owner_center = mesh.cell_center_tuple(face.owner);
-            let neigh_center = mesh.cell_center_tuple(neigh);
-            let delta_x = neigh_center.0 - owner_center.0;
-            let delta_y = neigh_center.1 - owner_center.1;
+            let owner_center = mesh
+                .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(face.owner))
+                .expect("cell_center out of range");
+            let neigh_center = mesh
+                .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(neigh))
+                .expect("cell_center out of range");
+            let delta_x = neigh_center.x() - owner_center.x();
+            let delta_y = neigh_center.y() - owner_center.y();
             
             // 投影到面法向
             let (nx, ny) = face.normal;
@@ -357,10 +365,14 @@ impl CellFaceTopology {
         let face = &self.face_info[face_idx];
         
         if let Some(neigh) = face.neighbor {
-            let owner_center = mesh.cell_center_tuple(face.owner);
-            let neigh_center = mesh.cell_center_tuple(neigh);
-            let delta_x = neigh_center.0 - owner_center.0;
-            let delta_y = neigh_center.1 - owner_center.1;
+            let owner_center = mesh
+                .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(face.owner))
+                .expect("cell_center out of range");
+            let neigh_center = mesh
+                .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(neigh))
+                .expect("cell_center out of range");
+            let delta_x = neigh_center.x() - owner_center.x();
+            let delta_y = neigh_center.y() - owner_center.y();
             let delta_len = (delta_x * delta_x + delta_y * delta_y).sqrt();
             
             if delta_len < 1e-14 {

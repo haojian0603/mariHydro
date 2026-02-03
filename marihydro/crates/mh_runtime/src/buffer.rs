@@ -242,9 +242,19 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
 
     /// 从池中获取缓冲区
     pub fn acquire(&self, len: usize, initial_value: T) -> RuntimeResult<PooledBuffer<'_, T>> {
-        let requested = len * std::mem::size_of::<T>();
-        let current = self.current_bytes.load(std::sync::atomic::Ordering::Relaxed);
-        if current + requested > self.config.max_memory_bytes {
+        let element_size = std::mem::size_of::<T>();
+        if len == 0 {
+            self.active_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(PooledBuffer {
+                buffer: Some(Vec::new()),
+                pool: self,
+            });
+        }
+        let requested_bytes = len
+            .checked_mul(element_size)
+            .ok_or_else(|| RuntimeError::buffer("buffer size overflow"))?;
+        if requested_bytes > self.config.max_memory_bytes {
             return Err(RuntimeError::buffer("buffer pool OOM"));
         }
         let buffer = {
@@ -267,9 +277,25 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
             }
         };
 
-        let buffer = buffer.unwrap_or_else(|| vec![initial_value; len]);
+        let mut buffer = match buffer {
+            Some(buf) => buf,
+            None => {
+                let mut buf = vec![initial_value; len];
+                let mut reserved = buf.capacity() * element_size;
+                if reserved > self.config.max_memory_bytes {
+                    buf.shrink_to_fit();
+                    reserved = buf.capacity() * element_size;
+                }
+                if reserved > self.config.max_memory_bytes {
+                    return Err(RuntimeError::buffer("buffer pool OOM"));
+                }
+                if !self.try_reserve_bytes(reserved) {
+                    return Err(RuntimeError::buffer("buffer pool OOM"));
+                }
+                buf
+            }
+        };
         self.active_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.current_bytes.fetch_add(requested, std::sync::atomic::Ordering::Relaxed);
 
         Ok(PooledBuffer {
             buffer: Some(buffer),
@@ -280,21 +306,35 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
     /// 归还缓冲区
     fn release(&self, mut buffer: Vec<T>) {
         self.active_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        let released = buffer.len() * std::mem::size_of::<T>();
-        self.current_bytes.fetch_sub(released, std::sync::atomic::Ordering::Relaxed);
-        
+        let element_size = std::mem::size_of::<T>();
+        let old_bytes = buffer.capacity() * element_size;
+
         if self.config.enable_reuse {
             let mut free = self.free_buffers.lock().unwrap_or_else(|poisoned| {
                 eprintln!("[mh_runtime::buffer] BufferPool mutex poisoned, recovering");
                 poisoned.into_inner()
             });
-            if buffer.capacity() > self.config.max_memory_bytes / 4 {
-                buffer.shrink_to_fit();
-            }
             if free.len() < self.config.max_buffers {
-                free.push(buffer);
+                if buffer.capacity() > self.config.max_memory_bytes / 4 {
+                    buffer.shrink_to_fit();
+                }
+                let new_bytes = buffer.capacity() * element_size;
+                if new_bytes <= self.config.max_memory_bytes {
+                    if new_bytes < old_bytes {
+                        self.current_bytes.fetch_sub(
+                            old_bytes - new_bytes,
+                            std::sync::atomic::Ordering::Release,
+                        );
+                    }
+                    free.push(buffer);
+                    return;
+                }
+                self.current_bytes.fetch_sub(old_bytes, std::sync::atomic::Ordering::Release);
+                return;
             }
         }
+
+        self.current_bytes.fetch_sub(old_bytes, std::sync::atomic::Ordering::Release);
     }
 
     /// 获取活跃缓冲区数量
@@ -311,9 +351,39 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
 
     /// 清除所有空闲缓冲区
     pub fn clear_free(&self) {
-        self.free_buffers.lock().unwrap_or_else(|poisoned| {
-            poisoned.into_inner()
-        }).clear();
+        let element_size = std::mem::size_of::<T>();
+        let freed_bytes = {
+            let mut free = self.free_buffers.lock().unwrap_or_else(|poisoned| {
+                poisoned.into_inner()
+            });
+            let bytes = free
+                .iter()
+                .map(|b| b.capacity() * element_size)
+                .sum();
+            free.clear();
+            bytes
+        };
+        if freed_bytes > 0 {
+            self.current_bytes
+                .fetch_sub(freed_bytes, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    fn try_reserve_bytes(&self, bytes: usize) -> bool {
+        let max = self.config.max_memory_bytes;
+        self.current_bytes
+            .fetch_update(
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+                |current| {
+                    if current.saturating_add(bytes) <= max {
+                        Some(current + bytes)
+                    } else {
+                        None
+                    }
+                },
+            )
+            .is_ok()
     }
 }
 

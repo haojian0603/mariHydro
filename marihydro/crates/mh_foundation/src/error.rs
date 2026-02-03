@@ -34,6 +34,7 @@
 //! ```
 
 use std::{fmt, io, path::PathBuf, sync::PoisonError, sync::mpsc::SendError};
+use crate::hydro_error::HydroError;
 
 /// 统一结果类型别名
 ///
@@ -162,7 +163,7 @@ pub enum MhError {
 
     /// 功能未实现
     ///
-    /// 用于占位符或条件编译场景。
+    /// 用于条件编译或功能未启用的场景。
     NotImplemented {
         /// 未实现的功能描述
         feature: String,
@@ -517,7 +518,7 @@ mod tests {
         // 在闭包中持有锁并 panic，使锁被 poison
         let _ = std::panic::catch_unwind(|| {
             let _g = lock.lock().unwrap();
-            panic!("poison");
+            std::panic::panic_any("poison");
         });
         
         // 现在主线程尝试获取锁会得到 PoisonError
@@ -538,5 +539,52 @@ mod tests {
         assert!(success().is_ok());
         assert_eq!(success().unwrap(), 42);
         assert!(failure().is_err());
+    }
+}
+
+impl From<HydroError> for MhError {
+    fn from(err: HydroError) -> Self {
+        // 保留 HydroError 的语义分类，根据 ErrorCategory 映射到对应的 MhError 变体
+        use crate::hydro_error::ErrorCategory;
+        let message = err.to_string();
+        let ctx_usize = |key: &str| -> Option<usize> {
+            err.context()
+                .iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.parse::<usize>().ok())
+        };
+
+        match err.category() {
+            ErrorCategory::Configuration => MhError::InvalidInput { message },
+            ErrorCategory::Mesh => {
+                if let (Some(index), Some(len)) = (ctx_usize("index"), ctx_usize("len")) {
+                    MhError::IndexOutOfBounds {
+                        index_type: "mesh",
+                        index,
+                        len,
+                    }
+                } else {
+                    MhError::InvalidInput { message }
+                }
+            }
+            ErrorCategory::Memory => {
+                if let (Some(expected), Some(actual)) =
+                    (ctx_usize("expected"), ctx_usize("actual"))
+                {
+                    MhError::SizeMismatch {
+                        name: "memory",
+                        expected,
+                        actual,
+                    }
+                } else {
+                    MhError::Internal { message }
+                }
+            }
+            ErrorCategory::Io => MhError::Io {
+                message,
+                source: None,
+            },
+            _ => MhError::Internal { message },
+        }
     }
 }

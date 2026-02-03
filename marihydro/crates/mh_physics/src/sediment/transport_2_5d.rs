@@ -14,6 +14,7 @@ use num_traits::{Float, FromPrimitive};
 /// 2.5D 泥沙输运求解器
 pub struct Transport2_5D<B: Backend> {
     /// 剖面恢复器
+    #[allow(dead_code)]
     profile_restorer: ProfileRestorer<B>,
     /// 垂向剖面缓存
     profile: VerticalProfile<B>,

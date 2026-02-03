@@ -598,11 +598,10 @@ mod tests {
         let result = manager.register_face(0, 0, CpuBackend::<f64>::vec2_new(0.0, 1.0), 1.0, "unknown");
 
         assert!(result.is_err());
-        if let Err(BoundaryError::ConditionNotFound(name)) = result {
-            assert_eq!(name, "unknown");
-        } else {
-            panic!("Expected ConditionNotFound error");
-        }
+        assert!(matches!(
+            result,
+            Err(BoundaryError::ConditionNotFound(name)) if name == "unknown"
+        ));
     }
 
     #[test]

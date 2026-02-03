@@ -366,7 +366,13 @@ pub trait BatchRiemannSolver<S: RuntimeScalar>: RiemannSolver<Scalar = S, Vector
         if n < min_parallel_size {
             // 串行求解
             let mut fluxes = BatchFluxes::zeros(n);
-            self.solve_batch(left_states, right_states, normals, &mut fluxes)?;
+            <Self as BatchRiemannSolver<S>>::solve_batch(
+                self,
+                left_states,
+                right_states,
+                normals,
+                &mut fluxes,
+            )?;
             return Ok(fluxes);
         }
 
@@ -402,7 +408,7 @@ pub trait BatchRiemannSolver<S: RuntimeScalar>: RiemannSolver<Scalar = S, Vector
         normals: &BatchNormals<S>,
         fluxes: &mut BatchFluxes<S>,
     ) -> Result<S, RiemannError> {
-        self.solve_batch(left_states, right_states, normals, fluxes)?;
+        <Self as BatchRiemannSolver<S>>::solve_batch(self, left_states, right_states, normals, fluxes)?;
         Ok(fluxes.global_max_wave_speed())
     }
 }

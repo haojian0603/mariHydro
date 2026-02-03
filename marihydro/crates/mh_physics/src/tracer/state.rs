@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
+use num_traits::Float;
 
 use mh_runtime::{Backend, CpuBackend, DeviceBuffer, RuntimeScalar as Scalar};
 
@@ -267,12 +268,16 @@ impl<B: Backend> TracerField<B> {
         let background = properties.background_value;
         let mut concentration = backend.alloc(n_cells);
         concentration.fill(background);
+        let mut conserved = backend.alloc(n_cells);
+        conserved.fill(B::Scalar::ZERO);
+        let mut rhs = backend.alloc(n_cells);
+        rhs.fill(B::Scalar::ZERO);
         
         Self {
             properties,
             concentration,
-            conserved: backend.alloc(n_cells),
-            rhs: backend.alloc(n_cells),
+            conserved,
+            rhs,
             n_cells,
             backend,
         }
@@ -543,9 +548,51 @@ impl<B: Backend> TracerState<B> {
             return Err(TracerError::DuplicateType(tracer_type));
         }
 
+        if let TracerType::Custom(id) = tracer_type {
+            if self.types.iter().any(|t| matches!(t, TracerType::Custom(existing) if *existing == id)) {
+                return Err(TracerError::DuplicateCustomId(id));
+            }
+        }
+
+        // 尺寸一致性保护
+        if self.n_cells == 0 {
+            return Err(TracerError::SizeMismatch { expected: 0, actual: 0 });
+        }
+
         let field = TracerField::new_with_backend(self.backend.clone(), properties, self.n_cells);
         self.fields.insert(tracer_type, field);
         self.types.push(tracer_type);
+        Ok(())
+    }
+
+    /// 校验示踪剂状态
+    pub fn validate(&self) -> Result<(), TracerError> {
+        for (tracer_type, field) in &self.fields {
+            if field.len() != self.n_cells {
+                return Err(TracerError::SizeMismatch {
+                    expected: self.n_cells,
+                    actual: field.len(),
+                });
+            }
+
+            if let Some(conc) = field.concentration().try_as_slice() {
+                if conc.iter().any(|v| !v.is_finite()) {
+                    return Err(TracerError::NonFiniteValue { tracer: *tracer_type });
+                }
+            }
+
+            if let Some(conserved) = field.conserved().try_as_slice() {
+                if conserved.iter().any(|v| !v.is_finite()) {
+                    return Err(TracerError::NonFiniteValue { tracer: *tracer_type });
+                }
+            }
+
+            if let Some(rhs) = field.rhs().try_as_slice() {
+                if rhs.iter().any(|v| !v.is_finite()) {
+                    return Err(TracerError::NonFiniteValue { tracer: *tracer_type });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -637,6 +684,10 @@ pub enum TracerError {
     #[error("示踪剂类型 {0:?} 已存在")]
     DuplicateType(TracerType),
 
+    /// 重复的自定义示踪剂 ID
+    #[error("自定义示踪剂 ID {0} 已存在")]
+    DuplicateCustomId(u16),
+
     /// 示踪剂未找到
     #[error("示踪剂类型 {0:?} 未找到")]
     NotFound(TracerType),
@@ -648,6 +699,10 @@ pub enum TracerError {
     /// 无效的浓度值
     #[error("无效的浓度值: {0}")]
     InvalidValue(f64),
+
+    /// 非有限值
+    #[error("示踪剂 {tracer:?} 包含非有限值")]
+    NonFiniteValue { tracer: TracerType },
 }
 
 // ============================================================
@@ -764,11 +819,10 @@ mod tests {
         let result = state.add_tracer(TracerProperties::salinity());
 
         assert!(result.is_err());
-        if let Err(TracerError::DuplicateType(t)) = result {
-            assert_eq!(t, TracerType::Salinity);
-        } else {
-            panic!("Expected DuplicateType error");
-        }
+        assert!(matches!(
+            result,
+            Err(TracerError::DuplicateType(TracerType::Salinity))
+        ));
     }
 
     #[test]

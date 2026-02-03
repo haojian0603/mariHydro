@@ -216,6 +216,10 @@ impl SourceTerm for InflowConfig {
                 let area = self.cell_area.get(cell).copied().unwrap_or(1.0);
                 let direction = self.inflow_direction.get(cell).copied().unwrap_or(0.0);
 
+                if !q.is_finite() || !area.is_finite() || area <= 0.0 || !direction.is_finite() {
+                    return SourceContribution::ZERO;
+                }
+
                 // 水深变化率 = Q / A [m/s]
                 let s_h = q / area;
 
@@ -231,6 +235,9 @@ impl SourceTerm for InflowConfig {
             }
 
             InflowType::ConstantVelocity { velocity, direction } => {
+                if !velocity.is_finite() || !direction.is_finite() {
+                    return SourceContribution::ZERO;
+                }
                 let h = state.h[cell];
                 if h < self.h_min {
                     return SourceContribution::ZERO;
@@ -245,13 +252,21 @@ impl SourceTerm for InflowConfig {
 
             InflowType::UniformFlux(flux) => {
                 // 均匀面源只影响水深
-                SourceContribution::mass(flux)
+                if flux.is_finite() {
+                    SourceContribution::mass(flux)
+                } else {
+                    SourceContribution::ZERO
+                }
             }
 
             InflowType::TimeVarying => {
                 let q = self.current_discharge.get(cell).copied().unwrap_or(0.0);
                 let area = self.cell_area.get(cell).copied().unwrap_or(1.0);
                 let direction = self.inflow_direction.get(cell).copied().unwrap_or(0.0);
+
+                if !q.is_finite() || !area.is_finite() || area <= 0.0 || !direction.is_finite() {
+                    return SourceContribution::ZERO;
+                }
 
                 let s_h = q / area;
 
@@ -324,8 +339,14 @@ impl RainfallConfig {
     // ALLOW_F64: 源项计算
     pub fn net_intensity(&self, cell: usize) -> f64 {
         let rain = self.intensity.get(cell).copied().unwrap_or(0.0);
+        if !rain.is_finite() {
+            return 0.0;
+        }
         if self.with_infiltration {
             let infil = self.infiltration_rate.get(cell).copied().unwrap_or(0.0);
+            if !infil.is_finite() {
+                return rain.max(0.0);
+            }
             (rain - infil).max(0.0)
         } else {
             rain
@@ -416,6 +437,9 @@ impl SourceTerm for EvaporationConfig {
         }
 
         let rate = self.rate.get(cell).copied().unwrap_or(0.0);
+        if !rate.is_finite() {
+            return SourceContribution::ZERO;
+        }
         // 蒸发为负值（水深减少）
         SourceContribution::mass(-rate)
     }
@@ -491,36 +515,19 @@ mod tests {
     #[test]
     fn test_inflow_type_discharge() {
         let inflow = InflowType::constant_discharge(10.0);
-        match inflow {
-            InflowType::ConstantDischarge(q) => {
-                assert!((q - 10.0).abs() < 1e-10);
-            }
-            _ => panic!("Expected ConstantDischarge"),
-        }
+        assert!(matches!(inflow, InflowType::ConstantDischarge(q) if (q - 10.0).abs() < 1e-10));
     }
 
     #[test]
     fn test_inflow_type_rainfall() {
         let inflow = InflowType::rainfall(36.0); // 36 mm/hr
-        match inflow {
-            InflowType::UniformFlux(flux) => {
-                // 36 mm/hr = 36 / (1000 * 3600) m/s = 1e-5 m/s
-                assert!((flux - 1e-5).abs() < 1e-10);
-            }
-            _ => panic!("Expected UniformFlux"),
-        }
+        assert!(matches!(inflow, InflowType::UniformFlux(flux) if (flux - 1e-5).abs() < 1e-10));
     }
 
     #[test]
     fn test_inflow_type_evaporation() {
         let inflow = InflowType::evaporation(3.6); // 3.6 mm/hr
-        match inflow {
-            InflowType::UniformFlux(flux) => {
-                // -3.6 mm/hr = -1e-6 m/s
-                assert!((flux - (-1e-6)).abs() < 1e-12);
-            }
-            _ => panic!("Expected UniformFlux"),
-        }
+        assert!(matches!(inflow, InflowType::UniformFlux(flux) if (flux - (-1e-6)).abs() < 1e-12));
     }
 
     #[test]
@@ -535,12 +542,10 @@ mod tests {
         let mut config = InflowConfig::new(10);
         config.add_point_source(0, 5.0, 45.0);
 
-        match config.inflow_type[0] {
-            InflowType::ConstantDischarge(q) => {
-                assert!((q - 5.0).abs() < 1e-10);
-            }
-            _ => panic!("Expected ConstantDischarge"),
-        }
+        assert!(matches!(
+            config.inflow_type[0],
+            InflowType::ConstantDischarge(q) if (q - 5.0).abs() < 1e-10
+        ));
     }
 
     #[test]

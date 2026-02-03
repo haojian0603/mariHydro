@@ -349,28 +349,34 @@ impl GeoTransformer {
     /// 返回从真北到网格北的顺时针角度（弧度）
     #[must_use]
     pub fn compute_convergence_angle(&self, x: f64, y: f64) -> f64 {
+        self.compute_convergence_angle_checked(x, y)
+            .unwrap_or(0.0)
+    }
+
+    /// 计算投影收敛角（返回错误信息）
+    pub fn compute_convergence_angle_checked(&self, x: f64, y: f64) -> MhResult<f64> {
         if self.is_identity || self.target_crs.is_geographic() {
-            return 0.0;
+            return Ok(0.0);
         }
 
-        let (lon, lat) = match self.source_proj.inverse(x, y) {
-            Ok(p) => p,
-            Err(_) => return 0.0,
-        };
+        let (lon, lat) = self
+            .source_proj
+            .inverse(x, y)
+            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
 
         let delta_lat = 1e-5;
-        let (px, py) = match self.target_proj.forward(lon, lat) {
-            Ok(p) => p,
-            Err(_) => return 0.0,
-        };
-        let (px_n, py_n) = match self.target_proj.forward(lon, lat + delta_lat) {
-            Ok(p) => p,
-            Err(_) => return 0.0,
-        };
+        let (px, py) = self
+            .target_proj
+            .forward(lon, lat)
+            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
+        let (px_n, py_n) = self
+            .target_proj
+            .forward(lon, lat + delta_lat)
+            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
 
         let dx = px_n - px;
         let dy = py_n - py;
-        dx.atan2(dy)
+        Ok(dy.atan2(dx))
     }
 
     /// 旋转矢量以补偿投影收敛角
@@ -386,16 +392,23 @@ impl GeoTransformer {
     }
 
     /// 批量旋转矢量
-    pub fn rotate_vectors(&self, u: &mut [f64], v: &mut [f64], x: &[f64], y: &[f64]) {
+    pub fn rotate_vectors(&self, u: &mut [f64], v: &mut [f64], x: &[f64], y: &[f64]) -> MhResult<()> {
         if self.is_identity {
-            return;
+            return Ok(());
         }
-        let n = u.len().min(v.len()).min(x.len()).min(y.len());
-        for i in 0..n {
+        if u.len() != v.len() || u.len() != x.len() || u.len() != y.len() {
+            return Err(mh_foundation::error::MhError::size_mismatch(
+                "rotate_vectors",
+                u.len(),
+                u.len().min(v.len()).min(x.len()).min(y.len()),
+            ));
+        }
+        for i in 0..u.len() {
             let (nu, nv) = self.rotate_vector(u[i], v[i], x[i], y[i]);
             u[i] = nu;
             v[i] = nv;
         }
+        Ok(())
     }
 
     /// 获取源 CRS

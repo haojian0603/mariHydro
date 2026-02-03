@@ -53,6 +53,9 @@ impl<S: RuntimeScalar> Tolerance<S> {
     /// 安全除法
     #[inline]
     pub fn safe_divide(&self, num: S, den: S) -> S {
+        if !num.is_finite() || !den.is_finite() || !self.safe_div.is_finite() {
+            return S::ZERO;
+        }
         if den.abs() < self.safe_div { 
             S::ZERO 
         } else { 
@@ -63,6 +66,9 @@ impl<S: RuntimeScalar> Tolerance<S> {
     /// 限制速度范围
     #[inline]
     pub fn clamp_velocity(&self, v: S) -> S {
+        if !v.is_finite() || !self.velocity_cap.is_finite() {
+            return S::ZERO;
+        }
         if v.abs() > self.velocity_cap {
             v.signum() * self.velocity_cap
         } else {
@@ -73,7 +79,10 @@ impl<S: RuntimeScalar> Tolerance<S> {
     /// 检查是否收敛
     #[inline]
     pub fn is_converged(&self, residual: S) -> bool {
-        residual < self.convergence
+        if !residual.is_finite() || !self.convergence.is_finite() {
+            return false;
+        }
+        residual.abs() < self.convergence
     }
 
     /// 从 f64 配置创建
@@ -85,6 +94,25 @@ impl<S: RuntimeScalar> Tolerance<S> {
         safe_div: f64,
         convergence: f64,
     ) -> Option<Self> {
+        if !epsilon.is_finite()
+            || !h_min.is_finite()
+            || !h_dry.is_finite()
+            || !velocity_cap.is_finite()
+            || !safe_div.is_finite()
+            || !convergence.is_finite()
+        {
+            return None;
+        }
+        if epsilon <= 0.0
+            || h_min < 0.0
+            || h_dry < 0.0
+            || velocity_cap <= 0.0
+            || safe_div <= 0.0
+            || convergence <= 0.0
+            || h_min > h_dry
+        {
+            return None;
+        }
         Some(Self {
             epsilon: S::from_f64(epsilon)?,
             h_min: S::from_f64(h_min)?,

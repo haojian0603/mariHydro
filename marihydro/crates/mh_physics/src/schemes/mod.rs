@@ -11,7 +11,7 @@ pub mod wetting_drying;
 
 // 重导出常用类型
 pub use riemann::{
-	HllcSolver, HlleSolver, RoeSolver, RusanovSolver, AdaptiveSolver,
+	CentralSolver, HllcSolver, HlleSolver, RoeSolver, RusanovSolver, AdaptiveSolver,
 	RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
 pub use wetting_drying::{WetState, WettingDryingConfig, WettingDryingHandler};

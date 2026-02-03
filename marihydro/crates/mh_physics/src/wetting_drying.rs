@@ -189,6 +189,10 @@ impl WetDryHandler {
     /// * `h` - 水深数组
     pub fn update_states(&mut self, h: &[f64]) {
         self.stats.reset_frame();
+
+        if self.states.len() != h.len() {
+            self.states.resize(h.len(), WetDryState::Wet);
+        }
         
         for (i, &h_val) in h.iter().enumerate() {
             let old_state = self.states.get(i).copied().unwrap_or(WetDryState::Dry);
@@ -276,6 +280,9 @@ impl WetDryHandler {
     ///
     /// 返回 [0, 1] 之间的值，用于平滑过渡
     pub fn transition_factor(&self, h: f64) -> f64 {
+        if self.config.wet_threshold <= self.config.dry_threshold {
+            return if h > self.config.dry_threshold { 1.0 } else { 0.0 };
+        }
         if h <= self.config.dry_threshold {
             0.0
         } else if h >= self.config.wet_threshold {
@@ -318,9 +325,36 @@ impl WetDryHandler {
         hu: &mut [f64],
         hv: &mut [f64],
     ) -> usize {
-        self.negative_count = 0;
+        // 没有邻居信息时回退到截断策略
+        self.correct_negative_depth_with_neighbors(h, hu, hv, None)
+    }
 
-        for i in 0..h.len() {
+    /// 修正负水深（带邻居信息，支持真正的重分配）
+    ///
+    /// # 参数
+    /// - `h`, `hu`, `hv`: 水深和动量数组
+    /// - `neighbors`: 邻居索引回调函数，返回给定单元的邻居索引列表
+    ///
+    /// # Redistribute策略详解
+    /// 当单元i出现负水深时，将负水量平均分配到有正水深的邻居单元。
+    /// 这保证了质量守恒，避免简单截断造成的质量丢失。
+    pub fn correct_negative_depth_with_neighbors<F>(
+        &mut self,
+        h: &mut [f64],
+        hu: &mut [f64],
+        hv: &mut [f64],
+        neighbors: Option<F>,
+    ) -> usize
+    where
+        F: Fn(usize) -> Vec<usize>,
+    {
+        self.negative_count = 0;
+        let n = h.len();
+
+        // 第一遍：统计负水深单元并记录重分配信息
+        let mut redistribute_info: Vec<(usize, f64, f64, f64)> = Vec::new(); // (cell, deficit, hu, hv)
+
+        for i in 0..n {
             if h[i] < 0.0 {
                 self.negative_count += 1;
 
@@ -339,10 +373,19 @@ impl WetDryHandler {
                         }
                     }
                     NegativeDepthStrategy::Redistribute => {
-                        // 重分配需要邻居信息，这里简化为截断
-                        h[i] = 0.0;
-                        hu[i] = 0.0;
-                        hv[i] = 0.0;
+                        if neighbors.is_some() {
+                            // 记录需要重分配的负水深单元
+                            redistribute_info.push((i, -h[i], hu[i], hv[i]));
+                            // 先将本单元清零
+                            h[i] = 0.0;
+                            hu[i] = 0.0;
+                            hv[i] = 0.0;
+                        } else {
+                            // 无邻居信息时回退到截断
+                            h[i] = 0.0;
+                            hu[i] = 0.0;
+                            hv[i] = 0.0;
+                        }
                     }
                     NegativeDepthStrategy::ReduceTimestep => {
                         // 标记但不修改，由上层减小时间步
@@ -356,6 +399,47 @@ impl WetDryHandler {
                 if h[i] < self.config.dry_threshold {
                     hu[i] = 0.0;
                     hv[i] = 0.0;
+                }
+            }
+        }
+
+        // 第二遍：执行重分配（如果有邻居信息）
+        if let Some(ref get_neighbors) = neighbors {
+            for (cell, deficit, _hu_deficit, _hv_deficit) in redistribute_info {
+                let neighbor_ids = get_neighbors(cell);
+                
+                // 筛选有正水深的邻居
+                let valid_neighbors: Vec<usize> = neighbor_ids
+                    .iter()
+                    .copied()
+                    .filter(|&n| n < h.len() && h[n] > self.config.min_depth)
+                    .collect();
+
+                if valid_neighbors.is_empty() {
+                    // 无可用邻居，质量丢失（边界条件）
+                    continue;
+                }
+
+                // 平均分配缺失的水量到邻居
+                let deficit_per_neighbor = deficit / valid_neighbors.len() as f64;
+                for &neighbor in &valid_neighbors {
+                    // 从邻居扣除缺失量，但不能让邻居变负
+                    let available = (h[neighbor] - self.config.min_depth).max(0.0);
+                    let actual_transfer = deficit_per_neighbor.min(available);
+                    if actual_transfer <= 0.0 {
+                        continue;
+                    }
+
+                    let old_h = h[neighbor];
+                    h[neighbor] -= actual_transfer;
+                    let new_h = h[neighbor];
+                    
+                    // 简化处理：动量按水量比例调整
+                    if old_h > self.config.min_depth {
+                        let ratio = if old_h > 0.0 { new_h / old_h } else { 0.0 };
+                        hu[neighbor] *= ratio;
+                        hv[neighbor] *= ratio;
+                    }
                 }
             }
         }

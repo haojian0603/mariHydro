@@ -12,6 +12,14 @@
 //! 3. **无代际**: 索引仅包含位置信息，不包含代际验证
 //! 4. **自动转换**: 支持从usize隐式转换，兼容旧代码
 //!
+//! # 索引分层
+//!
+//! - **基础层（L1）**：`mh_foundation::index::Idx<T>`，u32 索引，轻量且可序列化
+//! - **运行时层（L2）**：本模块的 `*Index`，usize 索引，计算路径友好
+//! - **安全层（L2+）**：`mh_runtime::SafeIdx`，带代际验证
+//!
+//! 本模块提供与基础层索引的显式转换函数，避免不同层级混用导致的隐患。
+//!
 //! # 示例
 //!
 //! ```rust
@@ -25,6 +33,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use mh_foundation::index as foundation_index;
 use std::fmt;
 use std::hash::Hash;
 
@@ -208,6 +217,46 @@ pub const fn boundary(idx: usize) -> BoundaryIndex { BoundaryIndex::new(idx) }
 /// 创建层索引
 #[inline]
 pub const fn layer(idx: usize) -> LayerIndex { LayerIndex::new(idx) }
+
+// =============================================================================
+// 分层索引转换（基础层 <-> 运行时层）
+// =============================================================================
+
+/// 基础层 CellIndex -> 运行时 CellIndex
+#[inline]
+pub fn from_foundation_cell(idx: foundation_index::CellIndex) -> CellIndex {
+    CellIndex::new(idx.as_usize())
+}
+
+/// 基础层 FaceIndex -> 运行时 FaceIndex
+#[inline]
+pub fn from_foundation_face(idx: foundation_index::FaceIndex) -> FaceIndex {
+    FaceIndex::new(idx.as_usize())
+}
+
+/// 基础层 NodeIndex -> 运行时 NodeIndex
+#[inline]
+pub fn from_foundation_node(idx: foundation_index::NodeIndex) -> NodeIndex {
+    NodeIndex::new(idx.as_usize())
+}
+
+/// 运行时 CellIndex -> 基础层 CellIndex（带溢出检查）
+#[inline]
+pub fn to_foundation_cell(idx: CellIndex) -> Result<foundation_index::CellIndex, mh_foundation::error::MhError> {
+    foundation_index::CellIndex::try_from_usize(idx.get())
+}
+
+/// 运行时 FaceIndex -> 基础层 FaceIndex（带溢出检查）
+#[inline]
+pub fn to_foundation_face(idx: FaceIndex) -> Result<foundation_index::FaceIndex, mh_foundation::error::MhError> {
+    foundation_index::FaceIndex::try_from_usize(idx.get())
+}
+
+/// 运行时 NodeIndex -> 基础层 NodeIndex（带溢出检查）
+#[inline]
+pub fn to_foundation_node(idx: NodeIndex) -> Result<foundation_index::NodeIndex, mh_foundation::error::MhError> {
+    foundation_index::NodeIndex::try_from_usize(idx.get())
+}
 
 // =============================================================================
 // Vec索引扩展trait - 替代SliceIndex的稳定方案

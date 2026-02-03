@@ -1,6 +1,7 @@
 // crates/mh_agent/src/assimilation.rs
 
 use crate::{AiError, AIAgent, Assimilable, PhysicsSnapshot};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Nudging同化配置
@@ -59,6 +60,18 @@ impl Observation {
         for (&v, &u) in self.values.iter().zip(self.uncertainty.iter()) {
             if !v.is_finite() || !u.is_finite() || u < 0.0 {
                 return Err(AiError::InvalidObservation("观测值/不确定度非法".into()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_with_bounds(&self, n_cells: usize) -> Result<(), AiError> {
+        self.validate()?;
+        for &idx in &self.cell_indices {
+            if idx >= n_cells {
+                return Err(AiError::InvalidObservation(format!(
+                    "观测索引超出范围: {idx} >= {n_cells}"
+                )));
             }
         }
         Ok(())
@@ -200,17 +213,40 @@ impl NudgingAssimilator {
 
 fn build_neighbors(centers: &[[f64; 2]], radius: f64) -> Vec<Vec<usize>> {
     let n = centers.len();
+    if n == 0 || radius <= 0.0 {
+        return vec![Vec::new(); n];
+    }
+
     let r2 = radius * radius;
+    let cell_size = radius;
+
+    let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, c) in centers.iter().enumerate() {
+        let gx = (c[0] / cell_size).floor() as i32;
+        let gy = (c[1] / cell_size).floor() as i32;
+        grid.entry((gx, gy)).or_default().push(i);
+    }
+
     let mut neighbors = vec![Vec::new(); n];
-    for i in 0..n {
-        for j in 0..n {
-            let dx = centers[i][0] - centers[j][0];
-            let dy = centers[i][1] - centers[j][1];
-            if dx * dx + dy * dy <= r2 {
-                neighbors[i].push(j);
+    for (i, c) in centers.iter().enumerate() {
+        let gx = (c[0] / cell_size).floor() as i32;
+        let gy = (c[1] / cell_size).floor() as i32;
+
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(bucket) = grid.get(&(gx + dx, gy + dy)) {
+                    for &j in bucket {
+                        let dx = c[0] - centers[j][0];
+                        let dy = c[1] - centers[j][1];
+                        if dx * dx + dy * dy <= r2 {
+                            neighbors[i].push(j);
+                        }
+                    }
+                }
             }
         }
     }
+
     neighbors
 }
 
@@ -281,7 +317,7 @@ impl NudgingAssimilator {
         observation: &Observation,
         current_time: f64,
     ) -> Result<AssimilationResult, AiError> {
-        observation.validate()?;
+        observation.validate_with_bounds(state.n_cells())?;
 
         let mut depth = state.get_depth_mut();
         let n_cells = depth.len();
@@ -307,11 +343,6 @@ impl NudgingAssimilator {
             .zip(observation.values.iter())
             .zip(observation.uncertainty.iter())
         {
-            if idx >= n_cells {
-                return Err(AiError::InvalidObservation(format!(
-                    "观测索引超出范围: {idx} >= {n_cells}"
-                )));
-            }
             let simulated = depth[idx];
             let corr = self.compute_correction(simulated, obs_val, uncertainty)
                 * temporal_factor;

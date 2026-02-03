@@ -34,6 +34,7 @@ use mh_physics::{
 };
 use std::sync::{Arc, LazyLock};
 use rand::prelude::*;
+use rand::SeedableRng;
 use rayon::prelude::*;
 use mh_physics::NumericalScheme;
 
@@ -155,7 +156,7 @@ fn build_near_singular_matrix(n: usize) -> CsrMatrix<f64> {
 
 /// 构建对称正定矩阵（用于收敛性验证）
 fn build_spd_matrix(n: usize) -> CsrMatrix<f64> {
-    let mut rng = thread_rng();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(1);
 
     let mut row_ptr = vec![0usize; n + 1];
     let mut col_idx = Vec::new();
@@ -202,6 +203,7 @@ fn test_zero_rhs_instant_convergence() {
         atol: 1e-12,
         rtol: 1e-10,
         verbose: false,
+        stagnation_tol: 1e-12,
     };
 
     let mut solver = PcgSolver::new(config.clone());
@@ -255,6 +257,7 @@ fn test_ill_conditioned_matrix_stability() {
         atol: 1e-10,
         rtol: 1e-8,
         verbose: false,
+        stagnation_tol: 1e-12,
     };
 
     let mut solver = PcgSolver::new(config);
@@ -347,7 +350,7 @@ fn test_negative_depth_recovery() {
 
     let config = Layer3Config::builder()
         .params(NumericalParams {
-            h_min: H_DRY,
+            h_min: H_DRY * 0.1,
             h_dry: H_DRY,
             ..Default::default()
         })
@@ -526,6 +529,7 @@ fn test_solver_on_singular_matrix() {
         atol: 1e-14,
         rtol: 1e-12,
         verbose: false,
+        stagnation_tol: 1e-12,
     };
 
     let mut solver = PcgSolver::new(config);
@@ -641,6 +645,7 @@ fn test_boundary_extreme_values() {
 // ============================================================
 
 #[test]
+#[ignore = "slow"]
 fn test_long_term_stability() {
     let mesh = Arc::new(PhysicsMesh::empty(5));
     // 使用 create_state

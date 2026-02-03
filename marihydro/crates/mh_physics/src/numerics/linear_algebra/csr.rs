@@ -49,6 +49,29 @@ use mh_runtime::RuntimeScalar;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use thiserror::Error;
+
+/// CSR 结构校验错误
+#[derive(Debug, Clone, Error)]
+pub enum CsrError {
+    #[error("row_ptr 长度无效: expected={expected}, actual={actual}")]
+    RowPtrLength { expected: usize, actual: usize },
+    #[error("row_ptr 末尾必须等于 nnz: last={last}, nnz={nnz}")]
+    RowPtrEnd { last: usize, nnz: usize },
+    #[error("row_ptr 非单调或越界: row={row}, start={start}, end={end}, nnz={nnz}")]
+    RowPtrInvalid {
+        row: usize,
+        start: usize,
+        end: usize,
+        nnz: usize,
+    },
+    #[error("列索引与值长度不一致: col_idx={col_len}, values={val_len}")]
+    LengthMismatch { col_len: usize, val_len: usize },
+    #[error("列索引越界: row={row}, col={col}, n_cols={n_cols}")]
+    ColOutOfRange { row: usize, col: usize, n_cols: usize },
+    #[error("行内列索引未严格递增: row={row}")]
+    ColNotSorted { row: usize },
+}
 
 // =============================================================================
 // 稀疏模式（与值分离，用于复用）
@@ -132,6 +155,54 @@ impl CsrPattern {
     pub fn has_entry(&self, row: usize, col: usize) -> bool {
         self.find_index(row, col).is_some()
     }
+
+    /// 校验 CSR 稀疏模式合法性
+    pub fn validate(&self) -> Result<(), CsrError> {
+        if self.row_ptr.len() != self.n_rows + 1 {
+            return Err(CsrError::RowPtrLength {
+                expected: self.n_rows + 1,
+                actual: self.row_ptr.len(),
+            });
+        }
+
+        let nnz = self.col_idx.len();
+        let last = *self.row_ptr.last().unwrap_or(&0);
+        if last != nnz {
+            return Err(CsrError::RowPtrEnd { last, nnz });
+        }
+
+        for row in 0..self.n_rows {
+            let start = self.row_ptr[row];
+            let end = self.row_ptr[row + 1];
+            if start > end || end > nnz {
+                return Err(CsrError::RowPtrInvalid {
+                    row,
+                    start,
+                    end,
+                    nnz,
+                });
+            }
+
+            let mut last_col: Option<usize> = None;
+            for &col in &self.col_idx[start..end] {
+                if col >= self.n_cols {
+                    return Err(CsrError::ColOutOfRange {
+                        row,
+                        col,
+                        n_cols: self.n_cols,
+                    });
+                }
+                if let Some(prev) = last_col {
+                    if col <= prev {
+                        return Err(CsrError::ColNotSorted { row });
+                    }
+                }
+                last_col = Some(col);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -172,23 +243,99 @@ impl<S: RuntimeScalar> CsrMatrix<S> {
         col_idx: Vec<usize>,
         values: Vec<S>,
     ) -> Self {
-        debug_assert_eq!(row_ptr.len(), n_rows + 1, "row_ptr 长度必须为 n_rows + 1");
-        debug_assert_eq!(col_idx.len(), values.len(), "col_idx 和 values 长度必须相等");
-        debug_assert_eq!(
-            row_ptr[n_rows],
-            col_idx.len(),
-            "row_ptr 末尾必须等于 nnz"
-        );
+        Self::try_from_raw(n_rows, n_cols, row_ptr, col_idx, values)
+            .expect("CSR from_raw 输入非法")
+    }
 
-        Self {
-            pattern: CsrPattern {
-                n_rows,
-                n_cols,
-                row_ptr,
-                col_idx,
-            },
-            values,
+    /// 尝试从原始 CSR 数据创建矩阵，自动排序并合并重复列
+    pub fn try_from_raw(
+        n_rows: usize,
+        n_cols: usize,
+        row_ptr: Vec<usize>,
+        col_idx: Vec<usize>,
+        values: Vec<S>,
+    ) -> Result<Self, CsrError> {
+        if row_ptr.len() != n_rows + 1 {
+            return Err(CsrError::RowPtrLength {
+                expected: n_rows + 1,
+                actual: row_ptr.len(),
+            });
         }
+        if col_idx.len() != values.len() {
+            return Err(CsrError::LengthMismatch {
+                col_len: col_idx.len(),
+                val_len: values.len(),
+            });
+        }
+        let nnz = col_idx.len();
+        let last = *row_ptr.last().unwrap_or(&0);
+        if last != nnz {
+            return Err(CsrError::RowPtrEnd { last, nnz });
+        }
+
+        let mut new_row_ptr = Vec::with_capacity(n_rows + 1);
+        let mut new_col_idx = Vec::with_capacity(nnz);
+        let mut new_values = Vec::with_capacity(nnz);
+        new_row_ptr.push(0);
+
+        for row in 0..n_rows {
+            let start = row_ptr[row];
+            let end = row_ptr[row + 1];
+            if start > end || end > nnz {
+                return Err(CsrError::RowPtrInvalid {
+                    row,
+                    start,
+                    end,
+                    nnz,
+                });
+            }
+
+            let mut entries: Vec<(usize, S)> = (start..end)
+                .map(|i| (col_idx[i], values[i]))
+                .collect();
+
+            for &(col, _) in &entries {
+                if col >= n_cols {
+                    return Err(CsrError::ColOutOfRange {
+                        row,
+                        col,
+                        n_cols,
+                    });
+                }
+            }
+
+            entries.sort_by_key(|(col, _)| *col);
+
+            let mut last_col: Option<usize> = None;
+            for (col, val) in entries {
+                if let Some(prev) = last_col {
+                    if col == prev {
+                        if let Some(last_val) = new_values.last_mut() {
+                            *last_val = *last_val + val;
+                        }
+                        continue;
+                    }
+                }
+                new_col_idx.push(col);
+                new_values.push(val);
+                last_col = Some(col);
+            }
+
+            new_row_ptr.push(new_col_idx.len());
+        }
+
+        let pattern = CsrPattern {
+            n_rows,
+            n_cols,
+            row_ptr: new_row_ptr,
+            col_idx: new_col_idx,
+        };
+        pattern.validate()?;
+
+        Ok(Self {
+            pattern,
+            values: new_values,
+        })
     }
 
     /// 创建单位矩阵
@@ -237,6 +384,11 @@ impl<S: RuntimeScalar> CsrMatrix<S> {
     #[inline]
     pub fn pattern(&self) -> &CsrPattern {
         &self.pattern
+    }
+
+    /// 校验矩阵结构有效性
+    pub fn validate(&self) -> Result<(), CsrError> {
+        self.pattern.validate()
     }
 
     /// 获取值切片

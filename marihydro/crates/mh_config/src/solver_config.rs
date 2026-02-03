@@ -308,7 +308,7 @@ pub enum LimiterType {
 }
 
 /// 网格配置
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshConfig {
     /// 网格文件路径
     #[serde(default)]
@@ -321,6 +321,16 @@ pub struct MeshConfig {
     /// 是否使用自适应网格
     #[serde(default)]
     pub adaptive: bool,
+}
+
+impl Default for MeshConfig {
+    fn default() -> Self {
+        Self {
+            file: PathBuf::from("mesh.msh"),
+            max_cells: None,
+            adaptive: false,
+        }
+    }
 }
 
 /// 输出配置

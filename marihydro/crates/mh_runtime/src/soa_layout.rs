@@ -153,16 +153,23 @@ impl SoaLayout {
         Some(std::slice::from_raw_parts_mut(ptr, desc.count))
     }
 
+    /// 获取字段切片（带边界与类型检查）
     pub fn get_field<'a, T>(&self, name: &str, buffer: &'a [u8]) -> RuntimeResult<&'a [T]> {
         let desc = self
             .get_field_descriptor(name)
             .ok_or_else(|| RuntimeError::validation("field not found"))?;
+        if desc.element_size != std::mem::size_of::<T>() {
+            return Err(RuntimeError::validation("field type size mismatch"));
+        }
         if desc.byte_offset + desc.byte_size() > buffer.len() {
             return Err(RuntimeError::buffer("buffer too small"));
         }
-        Ok(unsafe { self.get_field_slice(name, buffer).unwrap() })
+        let slice = unsafe { self.get_field_slice(name, buffer) }
+            .ok_or_else(|| RuntimeError::validation("field slice not available"))?;
+        Ok(slice)
     }
 
+    /// 获取字段可变切片（带边界与类型检查）
     pub fn get_field_mut<'a, T>(
         &self,
         name: &str,
@@ -171,10 +178,15 @@ impl SoaLayout {
         let desc = self
             .get_field_descriptor(name)
             .ok_or_else(|| RuntimeError::validation("field not found"))?;
+        if desc.element_size != std::mem::size_of::<T>() {
+            return Err(RuntimeError::validation("field type size mismatch"));
+        }
         if desc.byte_offset + desc.byte_size() > buffer.len() {
             return Err(RuntimeError::buffer("buffer too small"));
         }
-        Ok(unsafe { self.get_field_slice_mut(name, buffer).unwrap() })
+        let slice = unsafe { self.get_field_slice_mut(name, buffer) }
+            .ok_or_else(|| RuntimeError::validation("field slice not available"))?;
+        Ok(slice)
     }
 
     /// 获取所有字段的偏移数组（用于 GPU kernel）
@@ -230,14 +242,12 @@ impl SoaLayoutBuilder {
 
     /// 构建布局
     pub fn build(self) -> SoaLayout {
-        self.build_checked().unwrap_or_else(|_| SoaLayout {
-            fields: Vec::new(),
-            field_indices: HashMap::new(),
-            total_bytes: 0,
-            element_count: 0,
+        self.build_checked().unwrap_or_else(|e| {
+            panic!("SoaLayout::build failed: {e}")
         })
     }
 
+    /// 构建 SoA 布局（返回错误而非吞掉）
     pub fn build_checked(self) -> RuntimeResult<SoaLayout> {
         let mut descriptors = Vec::with_capacity(self.fields.len());
         let mut field_indices = HashMap::new();

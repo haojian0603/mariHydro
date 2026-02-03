@@ -433,8 +433,11 @@ impl ConfigWatcher {
         let mut updates = ConfigUpdates::new();
         
         for (key, value) in flat {
-            // 只处理白名单字段
-            if !self.config.allowed_fields.contains(&key) {
+            // 只处理白名单字段或其子字段
+            let allowed = self.config.allowed_fields.iter().any(|allowed_key| {
+                key == *allowed_key || key.starts_with(&format!("{allowed_key}."))
+            });
+            if !allowed {
                 continue;
             }
             
@@ -457,6 +460,22 @@ impl ConfigWatcher {
         }
         
         Ok(updates)
+    }
+
+    /// 应用更新并在失败时回滚
+    pub fn apply_updates_with_rollback<T: HotReloadable>(
+        &self,
+        target: &mut T,
+        updates: &ConfigUpdates,
+    ) -> HotReloadResult<()> {
+        let snapshot = target.snapshot();
+        match target.apply_updates(updates) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = target.rollback(&snapshot);
+                Err(e)
+            }
+        }
     }
     
     /// 获取上次快照（用于回滚）

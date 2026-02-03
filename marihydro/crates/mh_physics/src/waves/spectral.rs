@@ -21,8 +21,8 @@ pub struct WaveSpectrum {
 impl WaveSpectrum {
     /// 创建空谱
     pub fn new(n_freq: usize, n_dir: usize) -> Self {
-        let f_min = 0.04;
-        let f_max = 1.0;
+        let f_min: f64 = 0.04;
+        let f_max: f64 = 1.0;
         let df = (f_max / f_min).ln() / (n_freq.saturating_sub(1).max(1) as f64);
 
         let frequencies: Vec<f64> = (0..n_freq)

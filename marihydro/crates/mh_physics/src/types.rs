@@ -38,12 +38,15 @@ use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
 // ============================================================
-// 索引类型说明
+// 索引类型说明（分层设计）
 // ============================================================
 
-// 注：索引扩展trait已删除（T=1清理）
-// 直接使用 CellIndex::get(), FaceIndex::get(), NodeIndex::get() 进行 usize 转换
-// 直接使用 CellIndex::new(idx), FaceIndex::new(idx), NodeIndex::new(idx) 创建
+// L1：mh_foundation::index::Idx<T>（u32 索引，基础层/序列化友好）
+// L2：mh_runtime::*Index（usize 索引，计算路径友好）
+// L2+：mh_runtime::SafeIdx（代际验证，结构编辑与安全操作）
+// L3：mh_physics 直接复用 mh_runtime 索引，避免重复定义
+//
+// 使用规范：引擎与算法层使用 L2/L3；存储与序列化使用 L1；拓扑编辑使用 L2+
 
 // ============================================================
 // 安全包装类型（泛型化改造）
@@ -222,10 +225,15 @@ impl<S: RuntimeScalar> SafeVelocity<S> {
     ///
     /// # 返回
     /// 如果|v| > max_speed，则缩放至max_speed，否则返回原值
+    ///
+    /// # 数值稳定性
+    /// 使用 `S::EPSILON * 1000` 作为除法保护阈值，避免 speed 约等于 0 时除法不稳定
     #[inline]
     pub fn clamp_speed(self, max_speed: S) -> Self {
         let speed = self.speed();
-        if speed > max_speed && speed > S::from_f64(1e-14).unwrap() {
+        // 使用类型安全的阈值：EPSILON * 1000 提供足够的安全边际
+        let threshold = S::EPSILON * S::from_f64(1000.0).unwrap();
+        if speed > max_speed && speed > threshold {
             let factor = max_speed / speed;
             Self {
                 u: self.u * factor,
@@ -594,7 +602,8 @@ where
             
             // 限制最大速度
             let speed = (u * u + v * v).sqrt();
-            if speed > self.vel_max && speed > S::from_f64(1e-14).unwrap() {
+            let threshold = S::EPSILON * S::from_f64(1000.0).unwrap();
+            if speed > self.vel_max && speed > threshold {
                 let factor = self.vel_max / speed;
                 (u * factor, v * factor)
             } else {
@@ -614,6 +623,12 @@ where
     ///
     /// 检查阈值层级关系和正数约束
     pub fn validate(&self) -> Result<(), ParamsValidationError> {
+        if self.h_min <= S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "h_min",
+                constraint: "h_min > 0",
+            });
+        }
         // 验证阈值层级
         if self.h_min >= self.h_dry {
             return Err(ParamsValidationError::InvalidThreshold {
@@ -631,6 +646,20 @@ where
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "h_friction",
                 constraint: "h_friction < h_wet",
+            });
+        }
+
+        if self.vel_min < S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "vel_min",
+                constraint: "vel_min >= 0",
+            });
+        }
+
+        if self.vel_min >= self.vel_max {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "vel_min",
+                constraint: "vel_min < vel_max",
             });
         }
 
@@ -652,6 +681,48 @@ where
             return Err(ParamsValidationError::InvalidThreshold {
                 field: "dt_min",
                 constraint: "dt_min < dt_max",
+            });
+        }
+
+        if self.min_wave_speed <= S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "min_wave_speed",
+                constraint: "min_wave_speed > 0",
+            });
+        }
+
+        if self.det_min <= S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "det_min",
+                constraint: "det_min > 0",
+            });
+        }
+
+        if self.flux_eps <= S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "flux_eps",
+                constraint: "flux_eps > 0",
+            });
+        }
+
+        if self.entropy_ratio <= S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "entropy_ratio",
+                constraint: "entropy_ratio > 0",
+            });
+        }
+
+        if self.nu_min < S::ZERO {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "nu_min",
+                constraint: "nu_min >= 0",
+            });
+        }
+
+        if self.nu_min > self.nu_max {
+            return Err(ParamsValidationError::InvalidThreshold {
+                field: "nu_min",
+                constraint: "nu_min <= nu_max",
             });
         }
 

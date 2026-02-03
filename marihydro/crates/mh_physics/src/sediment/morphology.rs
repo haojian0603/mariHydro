@@ -23,7 +23,7 @@
 //! use mh_physics::sediment::morphology::{MorphodynamicsSolver, MorphologyConfig};
 //!
 //! let config = MorphologyConfig::default();
-//! let mut solver = MorphodynamicsSolver::new(mesh.n_cells(), config);
+//! let mut solver = MorphodynamicsSolver::new(mesh.cell_count(), config);
 //!
 //! // 在每个时间步更新河床
 //! solver.step(&mut state, &mesh, &qb_x, &qb_y, dt);
@@ -32,7 +32,7 @@
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::core::Backend;
 use crate::state::ShallowWaterState;
-use mh_runtime::{DeviceBuffer, RuntimeScalar};
+use mh_runtime::{DeviceBuffer, RuntimeScalar, Vector2D};
 use num_traits::{Float, FromPrimitive};
 use serde::{Deserialize, Serialize};
 
@@ -334,7 +334,7 @@ where
             }
         }
 
-        let _ = mesh.n_cells();
+        let _ = mesh.cell_count();
         jacobian
     }
 
@@ -368,7 +368,7 @@ where
             *v = B::Scalar::ZERO;
         }
 
-        for face_idx in 0..mesh.n_faces() {
+        for face_idx in 0..mesh.face_count() {
             let fi = FaceIndex::new(face_idx);
             let owner_ci = mesh.face_owner(fi);
             let neighbor_ci = mesh.face_neighbor(fi);
@@ -376,9 +376,11 @@ where
             let owner: usize = owner_ci.get();
             let neighbor = neighbor_ci.map(|c| c.get());
 
-            let (nx_f64, ny_f64) = mesh.face_normal_2d_tuple(face_idx);
-            let nx = self.backend.scalar_from_f64(nx_f64);
-            let ny = self.backend.scalar_from_f64(ny_f64);
+            let normal = mesh
+                .face_normal_generic::<B>(fi)
+                .expect("face_normal out of range");
+            let nx = normal.x();
+            let ny = normal.y();
             let length = self.backend.scalar_from_f64(mesh.face_length(fi));
 
             // Owner 的法向通量
@@ -465,8 +467,7 @@ where
         for iter in 0..self.config.max_avalanche_iter {
             let mut changed = false;
 
-            for face_idx in mesh.interior_faces() {
-                let fi = FaceIndex::new(face_idx);
+            for fi in mesh.interior_face_indices() {
                 let owner_ci = mesh.face_owner(fi);
                 let neigh_ci = mesh
                     .face_neighbor(fi)

@@ -14,22 +14,24 @@
 //!
 //! ```ignore
 //! use mh_mesh::converter::SimpleMeshData;
+//! use mh_mesh::FrozenMesh;
 //!
-//! let frozen_mesh = half_edge_mesh.freeze();
+//! let frozen_mesh = FrozenMesh::empty();
 //! let simple_data = SimpleMeshData::from_frozen(&frozen_mesh);
 //!
 //! println!("GPU 数据大小: {} bytes", simple_data.memory_usage());
 //! ```
 
 use crate::frozen::FrozenMesh;
+use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
 
 /// 简化网格数据（用于 GPU 传输）
 ///
 /// 将网格数据转换为连续的数组格式，便于 GPU 缓冲区传输。
-/// 使用 f32 以减少内存占用和传输带宽。
+/// 支持 f32/f64 精度，默认导出 `SimpleMeshData` 为 f32。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SimpleMeshData {
+pub struct SimpleMeshDataGeneric<S> {
     /// 节点数
     pub n_nodes: usize,
     /// 单元数
@@ -41,15 +43,15 @@ pub struct SimpleMeshData {
 
     /// 节点坐标 (x, y, z) 交错存储
     /// 长度: n_nodes * 3
-    pub node_coords: Vec<f32>,
+    pub node_coords: Vec<S>,
 
     /// 单元中心坐标 (x, y) 交错存储
     /// 长度: n_cells * 2
-    pub cell_centers: Vec<f32>,
+    pub cell_centers: Vec<S>,
 
     /// 单元面积
     /// 长度: n_cells
-    pub cell_areas: Vec<f32>,
+    pub cell_areas: Vec<S>,
 
     /// 单元节点索引（压缩格式）
     pub cell_nodes: Vec<u32>,
@@ -68,41 +70,68 @@ pub struct SimpleMeshData {
 
     /// 面法向量 (nx, ny) 交错存储
     /// 长度: n_faces * 2
-    pub face_normals: Vec<f32>,
+    pub face_normals: Vec<S>,
 
     /// 面长度
     /// 长度: n_faces
-    pub face_lengths: Vec<f32>,
+    pub face_lengths: Vec<S>,
 
     /// 面中心坐标 (x, y) 交错存储
     /// 长度: n_faces * 2
-    pub face_centers: Vec<f32>,
+    pub face_centers: Vec<S>,
 
     /// 边界面索引列表
     pub boundary_faces: Vec<u32>,
 }
 
-impl SimpleMeshData {
+/// 默认简化网格数据（f32）
+pub type SimpleMeshData = SimpleMeshDataGeneric<f32>;
+
+/// f32 简化网格数据
+pub type SimpleMeshDataF32 = SimpleMeshDataGeneric<f32>;
+
+/// f64 简化网格数据
+pub type SimpleMeshDataF64 = SimpleMeshDataGeneric<f64>;
+
+impl<S> SimpleMeshDataGeneric<S>
+where
+    S: Copy + FromPrimitive + Serialize + for<'de> Deserialize<'de>,
+{
     /// 从 FrozenMesh 转换
     ///
     /// 将 FrozenMesh 中的数据转换为适合 GPU 使用的格式。
     pub fn from_frozen(mesh: &FrozenMesh) -> Self {
         // 节点坐标
-        let node_coords: Vec<f32> = mesh
+        let node_coords: Vec<S> = mesh
             .node_coords
             .iter()
-            .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .flat_map(|p| {
+                [
+                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                    S::from_f64(p.z).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                ]
+            })
             .collect();
 
         // 单元中心
-        let cell_centers: Vec<f32> = mesh
+        let cell_centers: Vec<S> = mesh
             .cell_center
             .iter()
-            .flat_map(|p| [p.x as f32, p.y as f32])
+            .flat_map(|p| {
+                [
+                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                ]
+            })
             .collect();
 
         // 单元面积
-        let cell_areas: Vec<f32> = mesh.cell_area.iter().map(|&x| x as f32).collect();
+        let cell_areas: Vec<S> = mesh
+            .cell_area
+            .iter()
+            .map(|&x| S::from_f64(x).unwrap_or_else(|| S::from_f64(0.0).unwrap()))
+            .collect();
 
         // 单元节点索引
         let cell_nodes: Vec<u32> = mesh.cell_node_indices.clone();
@@ -113,20 +142,34 @@ impl SimpleMeshData {
         let face_neighbor = mesh.face_neighbor.clone();
 
         // 面法向量（只取 x, y 分量）
-        let face_normals: Vec<f32> = mesh
+        let face_normals: Vec<S> = mesh
             .face_normal
             .iter()
-            .flat_map(|n| [n.x as f32, n.y as f32])
+            .flat_map(|n| {
+                [
+                    S::from_f64(n.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                    S::from_f64(n.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                ]
+            })
             .collect();
 
         // 面长度
-        let face_lengths: Vec<f32> = mesh.face_length.iter().map(|&x| x as f32).collect();
+        let face_lengths: Vec<S> = mesh
+            .face_length
+            .iter()
+            .map(|&x| S::from_f64(x).unwrap_or_else(|| S::from_f64(0.0).unwrap()))
+            .collect();
 
         // 面中心
-        let face_centers: Vec<f32> = mesh
+        let face_centers: Vec<S> = mesh
             .face_center
             .iter()
-            .flat_map(|p| [p.x as f32, p.y as f32])
+            .flat_map(|p| {
+                [
+                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
+                ]
+            })
             .collect();
 
         // 边界面索引
@@ -153,16 +196,17 @@ impl SimpleMeshData {
 
     /// 计算内存占用（字节）
     pub fn memory_usage(&self) -> usize {
-        self.node_coords.len() * 4
-            + self.cell_centers.len() * 4
-            + self.cell_areas.len() * 4
+        let scalar_size = std::mem::size_of::<S>();
+        self.node_coords.len() * scalar_size
+            + self.cell_centers.len() * scalar_size
+            + self.cell_areas.len() * scalar_size
             + self.cell_nodes.len() * 4
             + self.cell_offsets.len() * 4
             + self.face_owner.len() * 4
             + self.face_neighbor.len() * 4
-            + self.face_normals.len() * 4
-            + self.face_lengths.len() * 4
-            + self.face_centers.len() * 4
+            + self.face_normals.len() * scalar_size
+            + self.face_lengths.len() * scalar_size
+            + self.face_centers.len() * scalar_size
             + self.boundary_faces.len() * 4
     }
 
@@ -241,7 +285,7 @@ impl SimpleMeshData {
     }
 
     /// 获取节点坐标
-    pub fn get_node_coords(&self, node: usize) -> (f32, f32, f32) {
+    pub fn get_node_coords(&self, node: usize) -> (S, S, S) {
         let base = node * 3;
         (
             self.node_coords[base],
@@ -251,19 +295,19 @@ impl SimpleMeshData {
     }
 
     /// 获取单元中心
-    pub fn get_cell_center(&self, cell: usize) -> (f32, f32) {
+    pub fn get_cell_center(&self, cell: usize) -> (S, S) {
         let base = cell * 2;
         (self.cell_centers[base], self.cell_centers[base + 1])
     }
 
     /// 获取面法向量
-    pub fn get_face_normal(&self, face: usize) -> (f32, f32) {
+    pub fn get_face_normal(&self, face: usize) -> (S, S) {
         let base = face * 2;
         (self.face_normals[base], self.face_normals[base + 1])
     }
 
     /// 获取面中心
-    pub fn get_face_center(&self, face: usize) -> (f32, f32) {
+    pub fn get_face_center(&self, face: usize) -> (S, S) {
         let base = face * 2;
         (self.face_centers[base], self.face_centers[base + 1])
     }
@@ -329,33 +373,40 @@ impl MeshStatisticsExt {
         let lengths = &mesh.face_length;
 
         // 单元面积统计
-        let min_area = areas.iter().cloned().fold(f64::MAX, f64::min);
-        let max_area = areas.iter().cloned().fold(f64::MIN, f64::max);
-        let sum_area: f64 = areas.iter().sum();
-        let avg_area = sum_area / areas.len().max(1) as f64;
-
-        // 计算标准差
-        let variance: f64 = areas.iter().map(|&a| (a - avg_area).powi(2)).sum::<f64>()
-            / areas.len().max(1) as f64;
-        let std_area = variance.sqrt();
+        let (min_area, max_area, avg_area, std_area) = if areas.is_empty() {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            let min_area = areas.iter().cloned().fold(f64::MAX, f64::min);
+            let max_area = areas.iter().cloned().fold(f64::MIN, f64::max);
+            let sum_area: f64 = areas.iter().sum();
+            let avg_area = sum_area / areas.len() as f64;
+            let variance: f64 = areas
+                .iter()
+                .map(|&a| (a - avg_area).powi(2))
+                .sum::<f64>()
+                / areas.len() as f64;
+            let std_area = variance.sqrt();
+            (min_area, max_area, avg_area, std_area)
+        };
 
         // 边长统计
-        let min_length = lengths.iter().cloned().fold(f64::MAX, f64::min);
-        let max_length = lengths.iter().cloned().fold(f64::MIN, f64::max);
-        let avg_length = lengths.iter().sum::<f64>() / lengths.len().max(1) as f64;
+        let (min_length, max_length, avg_length) = if lengths.is_empty() {
+            (0.0, 0.0, 0.0)
+        } else {
+            let min_length = lengths.iter().cloned().fold(f64::MAX, f64::min);
+            let max_length = lengths.iter().cloned().fold(f64::MIN, f64::max);
+            let avg_length = lengths.iter().sum::<f64>() / lengths.len() as f64;
+            (min_length, max_length, avg_length)
+        };
 
         // 长宽比（使用面积和边长估算）
-        let aspect_ratio_min = if max_area > 0.0 {
-            (min_area / max_area).sqrt()
+        let (aspect_ratio_min, aspect_ratio_max, aspect_ratio_avg) = if min_area > 0.0 && max_area > 0.0 {
+            let min_ratio = (min_area / max_area).sqrt();
+            let max_ratio = (max_area / min_area).sqrt();
+            (min_ratio, max_ratio, 0.5 * (min_ratio + max_ratio))
         } else {
-            1.0
+            (1.0, 1.0, 1.0)
         };
-        let aspect_ratio_max = if min_area > 0.0 {
-            (max_area / min_area).sqrt()
-        } else {
-            1.0
-        };
-        let aspect_ratio_avg = 0.5 * (aspect_ratio_min + aspect_ratio_max);
 
         // 边界统计
         let boundary_names = mesh.boundary_names.clone();

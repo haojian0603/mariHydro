@@ -29,7 +29,88 @@
 //! - 批量预报 (1000 点): < 100μs
 //! - 节点因子更新: 每小时一次
 
+use std::collections::HashMap;
 use std::f64::consts::PI;
+use thiserror::Error;
+
+/// 天文潮输入与构造错误
+#[derive(Debug, Clone, Error)]
+pub enum AstronomicalTideError {
+    #[error("无效时间戳: {timestamp}")]
+    InvalidTimestamp { timestamp: f64 },
+    #[error("时间戳超出范围: {timestamp}")]
+    TimestampOutOfRange { timestamp: f64 },
+    #[error("调和常数为空")]
+    EmptyHarmonics,
+    #[error("调和常数无效: constituent={constituent:?}, amplitude={amplitude}, phase_deg={phase_deg}")]
+    InvalidHarmonic {
+        constituent: ConstituentType,
+        amplitude: f64,
+        phase_deg: f64,
+    },
+    #[error("站点不存在: {station}")]
+    StationNotFound { station: String },
+    #[error("平均潮位无效: {mean_level}")]
+    InvalidMeanLevel { mean_level: f64 },
+}
+
+/// 站点调和常数表
+#[derive(Debug, Clone, Default)]
+pub struct StationHarmonicTable {
+    stations: HashMap<String, Vec<HarmonicConstant>>,
+}
+
+impl StationHarmonicTable {
+    pub fn new(stations: HashMap<String, Vec<HarmonicConstant>>) -> Result<Self, AstronomicalTideError> {
+        let table = Self { stations };
+        table.validate()?;
+        Ok(table)
+    }
+
+    pub fn insert(&mut self, name: impl Into<String>, harmonics: Vec<HarmonicConstant>) -> Result<(), AstronomicalTideError> {
+        if harmonics.is_empty() {
+            return Err(AstronomicalTideError::EmptyHarmonics);
+        }
+        for hc in &harmonics {
+            if !hc.amplitude.is_finite() || !hc.phase.is_finite() || hc.amplitude < 0.0 {
+                return Err(AstronomicalTideError::InvalidHarmonic {
+                    constituent: hc.constituent,
+                    amplitude: hc.amplitude,
+                    phase_deg: hc.phase.to_degrees(),
+                });
+            }
+        }
+        self.stations.insert(name.into(), harmonics);
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Result<&[HarmonicConstant], AstronomicalTideError> {
+        self.stations
+            .get(name)
+            .map(|v| v.as_slice())
+            .ok_or_else(|| AstronomicalTideError::StationNotFound {
+                station: name.to_string(),
+            })
+    }
+
+    pub fn validate(&self) -> Result<(), AstronomicalTideError> {
+        for (name, harmonics) in &self.stations {
+            if harmonics.is_empty() {
+                return Err(AstronomicalTideError::EmptyHarmonics);
+            }
+            for hc in harmonics {
+                if !hc.amplitude.is_finite() || !hc.phase.is_finite() || hc.amplitude < 0.0 {
+                    return Err(AstronomicalTideError::InvalidHarmonic {
+                        constituent: hc.constituent,
+                        amplitude: hc.amplitude,
+                        phase_deg: hc.phase.to_degrees(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 // ============================================================================
 // 分潮类型枚举
@@ -312,7 +393,7 @@ impl ConstituentType {
     /// 获取角频率 (rad/s) - IERS 2010 精确值
     pub fn angular_frequency(&self) -> f64 {
         // 基准角速度 (rad/s)
-        const OMEGA_LUNAR_HOUR: f64 = 0.000_145_444_104; // τ: 月角小时角
+        const OMEGA_LUNAR_HOUR: f64 = 0.000_070_259_000; // τ: 月角小时角
         const OMEGA_LUNAR_MONTH: f64 = 0.000_002_279_352; // s: 月平均经度
         const OMEGA_SOLAR_YEAR: f64 = 0.000_000_199_107; // h: 日平均经度
         const OMEGA_LUNAR_PERIGEE: f64 = 0.000_000_017_113; // p: 月近地点
@@ -607,11 +688,28 @@ pub struct HarmonicConstant {
 impl HarmonicConstant {
     /// 创建新的调和常数
     pub fn new(constituent: ConstituentType, amplitude: f64, phase_deg: f64) -> Self {
-        Self {
+        Self::try_new(constituent, amplitude, phase_deg)
+            .expect("invalid harmonic constant")
+    }
+
+    /// 创建新的调和常数（带校验）
+    pub fn try_new(
+        constituent: ConstituentType,
+        amplitude: f64,
+        phase_deg: f64,
+    ) -> Result<Self, AstronomicalTideError> {
+        if !amplitude.is_finite() || !phase_deg.is_finite() || amplitude < 0.0 {
+            return Err(AstronomicalTideError::InvalidHarmonic {
+                constituent,
+                amplitude,
+                phase_deg,
+            });
+        }
+        Ok(Self {
             constituent,
             amplitude,
             phase: phase_deg.to_radians(),
-        }
+        })
     }
 
     /// 获取角频率 (rad/s)
@@ -657,11 +755,16 @@ pub struct AstronomicalTideEngine {
     last_nodal_update: f64,
     /// 平均潮位 [m]
     mean_level: f64,
+    /// 是否应用节点因子修正
+    apply_nodal_factors: bool,
 }
 
 impl AstronomicalTideEngine {
     /// 节点因子更新间隔（秒）：每小时更新
     const NODAL_UPDATE_INTERVAL: f64 = 3600.0;
+    /// 可接受时间戳范围（Unix 秒）
+    const MIN_TIMESTAMP: f64 = -2_208_988_800.0; // 1900-01-01
+    const MAX_TIMESTAMP: f64 = 4_102_444_800.0;  // 2100-01-01
 
     /// 创建新的天文潮引擎
     ///
@@ -674,20 +777,65 @@ impl AstronomicalTideEngine {
         mean_level: f64,
         harmonics: Vec<HarmonicConstant>,
     ) -> Self {
+        Self::try_new(epoch_timestamp, mean_level, harmonics)
+            .expect("invalid astronomical tide engine inputs")
+    }
+
+    /// 创建新的天文潮引擎（带校验）
+    pub fn try_new(
+        epoch_timestamp: f64,
+        mean_level: f64,
+        harmonics: Vec<HarmonicConstant>,
+    ) -> Result<Self, AstronomicalTideError> {
+        Self::validate_timestamp(epoch_timestamp)?;
+        if !mean_level.is_finite() {
+            return Err(AstronomicalTideError::InvalidMeanLevel { mean_level });
+        }
+        if harmonics.is_empty() {
+            return Err(AstronomicalTideError::EmptyHarmonics);
+        }
+
         let args = AstronomicalArguments::from_unix_timestamp(epoch_timestamp);
         let cached_nodal = harmonics
             .iter()
             .map(|h| NodalFactors::compute(h.constituent, &args))
             .collect();
 
-        Self {
+        Ok(Self {
             epoch_timestamp,
             harmonics,
             cached_args: args,
             cached_nodal,
             last_nodal_update: epoch_timestamp,
             mean_level,
+            apply_nodal_factors: true,
+        })
+    }
+
+    /// 从站点常数表创建
+    pub fn from_station(
+        epoch_timestamp: f64,
+        mean_level: f64,
+        station: &str,
+        table: &StationHarmonicTable,
+    ) -> Result<Self, AstronomicalTideError> {
+        let harmonics = table.get(station)?.to_vec();
+        Self::try_new(epoch_timestamp, mean_level, harmonics)
+    }
+
+    /// 设置是否启用节点因子修正
+    pub fn set_nodal_factors_enabled(&mut self, enabled: bool) {
+        self.apply_nodal_factors = enabled;
+    }
+
+    fn validate_timestamp(timestamp: f64) -> Result<(), AstronomicalTideError> {
+        if !timestamp.is_finite() {
+            return Err(AstronomicalTideError::InvalidTimestamp { timestamp });
         }
+        if timestamp < Self::MIN_TIMESTAMP || timestamp > Self::MAX_TIMESTAMP {
+            return Err(AstronomicalTideError::TimestampOutOfRange { timestamp });
+        }
+        Ok(())
     }
 
     /// 创建包含主要 8 分潮的引擎
@@ -702,8 +850,9 @@ impl AstronomicalTideEngine {
             .iter()
             .zip(amplitudes.iter())
             .zip(phases_deg.iter())
-            .map(|((&c, &a), &p)| HarmonicConstant::new(c, a, p))
-            .collect();
+            .map(|((&c, &a), &p)| HarmonicConstant::try_new(c, a, p))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("invalid major_8 harmonic constants");
         Self::new(epoch_timestamp, mean_level, harmonics)
     }
 
@@ -716,14 +865,13 @@ impl AstronomicalTideEngine {
         s2_amp: f64,
         s2_phase: f64,
     ) -> Self {
-        Self::new(
-            epoch_timestamp,
-            mean_level,
-            vec![
-                HarmonicConstant::new(ConstituentType::M2, m2_amp, m2_phase),
-                HarmonicConstant::new(ConstituentType::S2, s2_amp, s2_phase),
-            ],
-        )
+        let harmonics = vec![
+            HarmonicConstant::try_new(ConstituentType::M2, m2_amp, m2_phase)
+                .expect("invalid M2 harmonic"),
+            HarmonicConstant::try_new(ConstituentType::S2, s2_amp, s2_phase)
+                .expect("invalid S2 harmonic"),
+        ];
+        Self::new(epoch_timestamp, mean_level, harmonics)
     }
 
     /// 创建典型混合潮引擎（M2 + S2 + K1 + O1）
@@ -735,20 +883,24 @@ impl AstronomicalTideEngine {
         k1_amp: f64, k1_phase: f64,
         o1_amp: f64, o1_phase: f64,
     ) -> Self {
-        Self::new(
-            epoch_timestamp,
-            mean_level,
-            vec![
-                HarmonicConstant::new(ConstituentType::M2, m2_amp, m2_phase),
-                HarmonicConstant::new(ConstituentType::S2, s2_amp, s2_phase),
-                HarmonicConstant::new(ConstituentType::K1, k1_amp, k1_phase),
-                HarmonicConstant::new(ConstituentType::O1, o1_amp, o1_phase),
-            ],
-        )
+        let harmonics = vec![
+            HarmonicConstant::try_new(ConstituentType::M2, m2_amp, m2_phase)
+                .expect("invalid M2 harmonic"),
+            HarmonicConstant::try_new(ConstituentType::S2, s2_amp, s2_phase)
+                .expect("invalid S2 harmonic"),
+            HarmonicConstant::try_new(ConstituentType::K1, k1_amp, k1_phase)
+                .expect("invalid K1 harmonic"),
+            HarmonicConstant::try_new(ConstituentType::O1, o1_amp, o1_phase)
+                .expect("invalid O1 harmonic"),
+        ];
+        Self::new(epoch_timestamp, mean_level, harmonics)
     }
 
     /// 更新节点因子（如果需要）
     fn update_nodal_if_needed(&mut self, timestamp: f64) {
+        if !self.apply_nodal_factors {
+            return;
+        }
         if (timestamp - self.last_nodal_update).abs() > Self::NODAL_UPDATE_INTERVAL {
             self.cached_args = AstronomicalArguments::from_unix_timestamp(timestamp);
             self.cached_nodal = self
@@ -768,6 +920,13 @@ impl AstronomicalTideEngine {
     /// # 返回
     /// 潮汐预报结果
     pub fn predict(&mut self, timestamp: f64) -> TidePrediction {
+        if Self::validate_timestamp(timestamp).is_err() {
+            return TidePrediction {
+                level: f64::NAN,
+                rate: f64::NAN,
+                accuracy: f64::INFINITY,
+            };
+        }
         self.update_nodal_if_needed(timestamp);
 
         let t = timestamp - self.epoch_timestamp;
@@ -803,13 +962,23 @@ impl AstronomicalTideEngine {
             return;
         }
 
-        // 更新节点因子（使用第一个时间戳）
-        self.update_nodal_if_needed(timestamps[0]);
+        // 更新节点因子（使用第一个有效时间戳）
+        if let Some(&first) = timestamps.iter().find(|t| Self::validate_timestamp(**t).is_ok()) {
+            self.update_nodal_if_needed(first);
+        }
 
         // 预计算频率
         let omegas: Vec<f64> = self.harmonics.iter().map(|h| h.omega()).collect();
 
         for (i, &ts) in timestamps.iter().enumerate() {
+            if Self::validate_timestamp(ts).is_err() {
+                output[i] = TidePrediction {
+                    level: f64::NAN,
+                    rate: f64::NAN,
+                    accuracy: f64::INFINITY,
+                };
+                continue;
+            }
             let t = ts - self.epoch_timestamp;
             let mut level = self.mean_level;
             let mut rate = 0.0;
@@ -850,7 +1019,9 @@ impl AstronomicalTideEngine {
 
     /// 设置平均潮位
     pub fn set_mean_level(&mut self, level: f64) {
-        self.mean_level = level;
+        if level.is_finite() {
+            self.mean_level = level;
+        }
     }
 
     /// 添加调和常数

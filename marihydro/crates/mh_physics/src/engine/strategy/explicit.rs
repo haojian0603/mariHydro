@@ -302,7 +302,7 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
         
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
-            if area <= zero {
+            if !area.is_finite() || area <= zero {
                 continue;
             }
             let inv_area = one / area;
@@ -367,6 +367,9 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
             if speed > tiny {
                 // 使用单元面积的平方根作为特征长度
                 let area = mesh.cell_area(i);
+                if !area.is_finite() || area <= zero {
+                    continue;
+                }
                 let dx = area.sqrt();
                 let dt_local = cfl * dx / speed;
                 dt_min = dt_min.min(dt_local);

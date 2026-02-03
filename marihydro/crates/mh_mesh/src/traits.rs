@@ -47,6 +47,7 @@
 //! ```
 
 use mh_geo::{Point2D, Point3D};
+use mh_runtime::{BoundaryIndex, CellIndex, FaceIndex, NodeIndex};
 
 // =========================================================================
 // MeshAccess - 网格只读访问接口
@@ -355,7 +356,11 @@ pub trait MeshAccessExt: MeshAccess {
 
         // 检查单元面积
         let areas: Vec<f64> = (0..self.n_cells()).map(|i| self.cell_area(i)).collect();
-        if !areas.is_empty() {
+        if areas.is_empty() {
+            report.stats.min_area = 0.0;
+            report.stats.max_area = 0.0;
+            report.stats.avg_area = 0.0;
+        } else {
             report.stats.min_area = areas.iter().cloned().fold(f64::INFINITY, f64::min);
             report.stats.max_area = areas.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             report.stats.avg_area = areas.iter().sum::<f64>() / areas.len() as f64;
@@ -408,7 +413,9 @@ pub trait MeshAccessExt: MeshAccess {
 
     /// 获取边界面索引列表
     fn boundary_face_indices(&self) -> Vec<usize> {
-        (self.n_internal_faces()..self.n_faces()).collect()
+        (self.n_internal_faces()..self.n_faces())
+            .filter(|&i| self.is_boundary_face(i))
+            .collect()
     }
 
     /// 按边界 ID 分组的面索引
@@ -556,3 +563,127 @@ mod tests {
         assert!((n2d.y - 0.0).abs() < 1e-10);
     }
 }
+
+// =========================================================================
+// MeshAccessTyped - 强类型索引访问接口（层级索引适配）
+// =========================================================================
+
+/// 强类型索引访问接口
+///
+/// 为保持索引分层（基础索引/运行时索引/业务索引），
+/// 本 trait 以运行时索引类型为输入输出，
+/// 并基于 MeshAccess 的 usize 实现提供类型安全包装。
+pub trait MeshAccessTyped: MeshAccess {
+    /// 单元质心（强类型索引）
+    #[inline]
+    fn cell_centroid_idx(&self, cell: CellIndex) -> Point2D {
+        self.cell_centroid(cell.get())
+    }
+
+    /// 单元面积（强类型索引）
+    #[inline]
+    fn cell_area_idx(&self, cell: CellIndex) -> f64 {
+        self.cell_area(cell.get())
+    }
+
+    /// 面中心（强类型索引）
+    #[inline]
+    fn face_centroid_idx(&self, face: FaceIndex) -> Point2D {
+        self.face_centroid(face.get())
+    }
+
+    /// 面长度（强类型索引）
+    #[inline]
+    fn face_length_idx(&self, face: FaceIndex) -> f64 {
+        self.face_length(face.get())
+    }
+
+    /// 面法向量（强类型索引）
+    #[inline]
+    fn face_normal_idx(&self, face: FaceIndex) -> Point3D {
+        self.face_normal(face.get())
+    }
+
+    /// 节点坐标（强类型索引）
+    #[inline]
+    fn node_position_idx(&self, node: NodeIndex) -> Point3D {
+        self.node_position(node.get())
+    }
+
+    /// 单元底床高程（强类型索引）
+    #[inline]
+    fn cell_bed_elevation_idx(&self, cell: CellIndex) -> f64 {
+        self.cell_bed_elevation(cell.get())
+    }
+
+    /// 面 owner 单元（强类型索引）
+    #[inline]
+    fn face_owner_idx(&self, face: FaceIndex) -> CellIndex {
+        CellIndex::new(self.face_owner(face.get()))
+    }
+
+    /// 面 neighbor 单元（强类型索引）
+    #[inline]
+    fn face_neighbor_idx(&self, face: FaceIndex) -> Option<CellIndex> {
+        self.face_neighbor(face.get()).map(CellIndex::new)
+    }
+
+    /// 单元相邻面索引迭代器（强类型索引）
+    #[inline]
+    fn cell_face_indices_idx(&self, cell: CellIndex) -> impl Iterator<Item = FaceIndex> + '_ {
+        self.cell_face_indices(cell.get())
+            .iter()
+            .map(|&f| FaceIndex::new(f as usize))
+    }
+
+    /// 单元相邻单元索引迭代器（强类型索引）
+    #[inline]
+    fn cell_neighbor_indices_idx(&self, cell: CellIndex) -> impl Iterator<Item = CellIndex> + '_ {
+        self.cell_neighbor_indices(cell.get())
+            .iter()
+            .filter_map(|&c| if c == u32::MAX { None } else { Some(CellIndex::new(c as usize)) })
+    }
+
+    /// 单元节点索引迭代器（强类型索引）
+    #[inline]
+    fn cell_node_indices_idx(&self, cell: CellIndex) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.cell_node_indices(cell.get())
+            .iter()
+            .map(|&n| NodeIndex::new(n as usize))
+    }
+
+    /// 边界 ID（强类型索引）
+    #[inline]
+    fn boundary_id_idx(&self, face: FaceIndex) -> Option<BoundaryIndex> {
+        self.boundary_id(face.get()).map(BoundaryIndex::new)
+    }
+
+    /// 边界名称（强类型索引）
+    #[inline]
+    fn boundary_name_idx(&self, boundary_id: BoundaryIndex) -> Option<&str> {
+        self.boundary_name(boundary_id.get())
+    }
+
+    /// 面左侧高程（强类型索引）
+    #[inline]
+    fn face_z_left_idx(&self, face: FaceIndex) -> f64 {
+        self.face_z_left(face.get())
+    }
+
+    /// 面右侧高程（强类型索引）
+    #[inline]
+    fn face_z_right_idx(&self, face: FaceIndex) -> f64 {
+        self.face_z_right(face.get())
+    }
+
+    /// 边界面索引列表（强类型索引）
+    #[inline]
+    fn boundary_face_indices_idx(&self) -> Vec<FaceIndex> {
+        (self.n_internal_faces()..self.n_faces())
+            .map(FaceIndex::new)
+            .collect()
+    }
+}
+
+// 自动为所有 MeshAccess 实现类型提供强类型接口
+impl<T: MeshAccess + ?Sized> MeshAccessTyped for T {}

@@ -56,16 +56,9 @@ impl<I: Copy + Default> Default for CsrConnectivity<I> {
 impl<I: Copy> CsrConnectivity<I> {
     /// 创建新的 CSR 连接性
     pub fn new(offsets: Vec<u32>, indices: Vec<I>) -> Self {
-        debug_assert!(
-            !offsets.is_empty(),
-            "offsets must have at least one element"
-        );
-        debug_assert_eq!(
-            offsets.last().copied().unwrap_or(0) as usize,
-            indices.len(),
-            "last offset must equal indices length"
-        );
-        Self { offsets, indices }
+        Self::try_new(offsets, indices).unwrap_or_else(|e| {
+            panic!("CsrConnectivity::new failed: {e}")
+        })
     }
 
     pub fn try_new(offsets: Vec<u32>, indices: Vec<I>) -> Result<Self, crate::error::MeshError> {

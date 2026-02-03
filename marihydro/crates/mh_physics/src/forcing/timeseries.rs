@@ -213,6 +213,9 @@ impl TimeSeries {
     ///
     /// 插值后的值。如果 t 超出数据范围，根据外推模式处理。
     pub fn get_value(&self, t: f64) -> f64 {
+        if !t.is_finite() {
+            return self.values[0];
+        }
         let n = self.times.len();
         let t_start = self.times[0];
         let t_end = self.times[n - 1];
@@ -362,6 +365,9 @@ impl TimeSeries {
     ///
     /// 插值后的值。如果 t 超出数据范围，根据外推模式处理。
     pub fn get_value_with_cursor(&self, t: f64, cursor: &mut TimeSeriesCursor) -> f64 {
+        if !t.is_finite() {
+            return self.values[0];
+        }
         let n = self.times.len();
         let t_start = self.times[0];
         let t_end = self.times[n - 1];

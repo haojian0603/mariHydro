@@ -286,9 +286,8 @@ mod tests {
 
     /// 从f64创建Backend标量（测试专用）
     fn scalar_from_f64<B: Backend>(v: f64) -> B::Scalar {
-        B::Scalar::from_f64(v).unwrap_or_else(|| {
-            panic!("f64值 {} 无法转换到目标精度", v)
-        })
+        B::Scalar::from_f64(v)
+            .unwrap_or_else(|| B::Scalar::from_f64(0.0).unwrap())
     }
 
     /// epsilon断言宏

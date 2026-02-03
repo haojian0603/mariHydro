@@ -15,13 +15,13 @@
 //! use mh_runtime::CpuBackend;
 //!
 //! let backend = CpuBackend::<f64>::new();
-//! let adapter = UnstructuredMeshAdapter::from_physics_mesh_with_backend(&backend, mesh);
+//! let adapter = UnstructuredMeshAdapter::from_physics_mesh_with_backend(&backend, mesh)?;
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use crate::core::{Backend, CpuBackend};
-use super::topology::{MeshKind, MeshTopology};
-use mh_runtime::{CellIndex, FaceIndex, RuntimeScalar};
+use crate::core::Backend;
+use super::topology::{MeshKind, MeshTopology, MeshValidationError};
+use mh_runtime::{CellIndex, FaceIndex, RuntimeScalar, Vector2D};
 use num_traits::FromPrimitive;
 use std::sync::Arc;
 
@@ -59,18 +59,23 @@ where
     ///
     /// - `backend`: 计算后端实例
     /// - `mesh`: 物理网格引用
-    pub fn from_physics_mesh_with_backend(backend: &B, mesh: Arc<PhysicsMesh>) -> Self {
-        let n_cells = mesh.n_cells();
-        let n_faces = mesh.n_faces();
+    pub fn from_physics_mesh_with_backend(
+        backend: &B,
+        mesh: Arc<PhysicsMesh>,
+    ) -> Result<Self, MeshValidationError> {
+        let n_cells = mesh.cell_count();
+        let n_faces = mesh.face_count();
         
         // 使用 Backend 分配单元面积缓冲区
         let mut cell_areas_vec = Vec::with_capacity(n_cells);
         for i in 0..n_cells {
-            let area = mesh.cell_area(CellIndex(i)).unwrap_or(0.0);
+            let area = mesh.cell_area(CellIndex(i)).unwrap_or(f64::NAN);
             if !area.is_finite() || area <= 0.0 {
-                panic!("UnstructuredMeshAdapter: 无效单元面积 cell={i}, area={area}");
+                return Err(MeshValidationError::InvalidCellArea { cell: i, area });
             }
-            cell_areas_vec.push(B::Scalar::from_f64(area).unwrap_or(B::Scalar::ZERO));
+            let scalar = B::Scalar::from_f64(area)
+                .ok_or(MeshValidationError::InvalidCellArea { cell: i, area })?;
+            cell_areas_vec.push(scalar);
         }
         let cell_areas = {
             let mut buf = backend.alloc(n_cells);
@@ -83,9 +88,11 @@ where
         for i in 0..n_faces {
             let length = mesh.face_length(FaceIndex(i));
             if !length.is_finite() || length <= 0.0 {
-                panic!("UnstructuredMeshAdapter: 无效面长度 face={i}, length={length}");
+                return Err(MeshValidationError::InvalidFaceLength { face: i, length });
             }
-            face_lengths_vec.push(B::Scalar::from_f64(length).unwrap_or(B::Scalar::ZERO));
+            let scalar = B::Scalar::from_f64(length)
+                .ok_or(MeshValidationError::InvalidFaceLength { face: i, length })?;
+            face_lengths_vec.push(scalar);
         }
         let face_lengths = {
             let mut buf = backend.alloc(n_faces);
@@ -109,12 +116,20 @@ where
         for face in 0..n_faces {
             let owner = mesh.face_owner(FaceIndex(face));
             if owner.get() >= n_cells {
-                panic!("UnstructuredMeshAdapter: face owner 越界 face={face}, owner={}", owner.get());
+                return Err(MeshValidationError::FaceOwnerOutOfRange {
+                    face,
+                    owner: owner.get(),
+                    n_cells,
+                });
             }
             cell_face_map[owner.get()].push(face);
             if let Some(neighbor) = mesh.face_neighbor(FaceIndex(face)) {
                 if neighbor.get() >= n_cells {
-                    panic!("UnstructuredMeshAdapter: face neighbor 越界 face={face}, neighbor={}", neighbor.get());
+                    return Err(MeshValidationError::FaceNeighborOutOfRange {
+                        face,
+                        neighbor: neighbor.get(),
+                        n_cells,
+                    });
                 }
                 cell_face_map[neighbor.get()].push(face);
             }
@@ -130,11 +145,9 @@ where
             cell_face_map,
         };
 
-        if let Err(err) = adapter.validate() {
-            panic!("UnstructuredMeshAdapter 校验失败: {err}");
-        }
+        adapter.validate()?;
 
-        adapter
+        Ok(adapter)
     }
     
     /// 获取原始网格引用
@@ -150,27 +163,18 @@ where
     }
 }
 
-// Layer 4 便捷方法：仅为 CpuBackend<f64> 提供无 Backend 参数的构造函数
-impl UnstructuredMeshAdapter<CpuBackend<f64>> {
-    /// 从 PhysicsMesh 创建适配器（默认 f64 精度，Layer 4 便捷方法）
-    ///
-    /// 此方法仅在 Layer 4 应用层使用，Layer 3 代码应使用 `from_physics_mesh_with_backend`
-    pub fn from_physics_mesh(mesh: Arc<PhysicsMesh>) -> Self {
-        let backend = CpuBackend::<f64>::new();
-        Self::from_physics_mesh_with_backend(&backend, mesh)
-    }
-}
+// 移除默认 Backend 便捷构造函数，避免遗留接口
 
 impl<B: Backend + Clone> MeshTopology<B> for UnstructuredMeshAdapter<B>
 where
     B::Scalar: RuntimeScalar,
 {
     fn n_cells(&self) -> usize {
-        self.mesh.n_cells()
+        self.mesh.cell_count()
     }
     
     fn n_faces(&self) -> usize {
-        self.mesh.n_faces()
+        self.mesh.face_count()
     }
     
     fn n_interior_faces(&self) -> usize {
@@ -178,14 +182,17 @@ where
     }
     
     fn n_nodes(&self) -> usize {
-        self.mesh.n_nodes()
+        self.mesh.node_count()
     }
     
     fn cell_center(&self, cell: usize) -> [B::Scalar; 2] {
-        let (x, y) = self.mesh.cell_center_tuple(cell);
+        let center = self
+            .mesh
+            .cell_center_generic::<B>(CellIndex::new(cell))
+            .expect("cell_center out of range");
         [
-            B::Scalar::from_f64(x).unwrap_or(B::Scalar::ZERO),
-            B::Scalar::from_f64(y).unwrap_or(B::Scalar::ZERO),
+            center.x(),
+            center.y(),
         ]
     }
     
@@ -194,10 +201,13 @@ where
     }
     
     fn face_normal(&self, face: usize) -> [B::Scalar; 2] {
-        let (nx, ny) = self.mesh.face_normal_2d_tuple(face);
+        let normal = self
+            .mesh
+            .face_normal_generic::<B>(FaceIndex::new(face))
+            .expect("face_normal out of range");
         [
-            B::Scalar::from_f64(nx).unwrap_or(B::Scalar::ZERO),
-            B::Scalar::from_f64(ny).unwrap_or(B::Scalar::ZERO),
+            normal.x(),
+            normal.y(),
         ]
     }
     
@@ -206,10 +216,13 @@ where
     }
     
     fn face_center(&self, face: usize) -> [B::Scalar; 2] {
-        let (x, y) = self.mesh.face_center_tuple(face);
+        let center = self
+            .mesh
+            .face_center_generic::<B>(FaceIndex::new(face))
+            .expect("face_center out of range");
         [
-            B::Scalar::from_f64(x).unwrap_or(B::Scalar::ZERO),
-            B::Scalar::from_f64(y).unwrap_or(B::Scalar::ZERO),
+            center.x(),
+            center.y(),
         ]
     }
     

@@ -171,11 +171,15 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
         let mut cell_areas: Vec<B::Scalar> = Vec::with_capacity(n_cells);
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
-            cell_areas.push(area);
+            if !area.is_finite() || area <= B::Scalar::ZERO {
+                cell_areas.push(B::Scalar::ZERO);
+            } else {
+                cell_areas.push(area);
+            }
         }
 
-        let diag_matrix = PoissonMatrixBuilder::new(n_cells).build_diagonal(
-            &self.backend,
+        let matrix = PoissonMatrixBuilder::new(n_cells).build_csr(
+            mesh,
             &cell_areas,
             dt,
             gravity,
@@ -183,6 +187,28 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
             h,
             h_min,
         );
+
+        let diag_matrix = match PoissonMatrixBuilder::new(n_cells).build_diagonal(
+            &self.backend,
+            &cell_areas,
+            dt,
+            gravity,
+            theta,
+            h,
+            h_min,
+        ) {
+            Ok(matrix) => matrix,
+            Err(_) => {
+                return StepResult {
+                    dt_used: dt,
+                    max_wave_speed: B::Scalar::ZERO,
+                    dry_cells: 0,
+                    limited_cells: 0,
+                    converged: false,
+                    iterations: 0,
+                };
+            }
+        };
 
         self.diag = diag_matrix.diag.clone();
         let diag: &[B::Scalar] = &self.diag;
@@ -216,7 +242,7 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
             let mut rhs_buf = self.backend.alloc(rhs.len());
             rhs_buf.copy_from_slice(rhs);
 
-            let result = pcg_solver.solve(&diag_matrix, &mut eta_buf, &rhs_buf, Some(&diag_matrix));
+            let result = pcg_solver.solve(&matrix, &mut eta_buf, &rhs_buf, Some(&diag_matrix));
 
             converged = result.converged;
             iterations = result.iterations;
@@ -273,7 +299,7 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
 
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
-            if area > eps_zero::<B::Scalar>() {
+            if area.is_finite() && area > eps_zero::<B::Scalar>() {
                 let inv_area = B::Scalar::ONE / area;
                 grad_eta_x[i] = grad_eta_x[i] * inv_area;
                 grad_eta_y[i] = grad_eta_y[i] * inv_area;
@@ -348,6 +374,9 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
             let speed_eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::EPSILON);
             if speed > speed_eps {
                 let area = mesh.cell_area(i);
+                if !area.is_finite() || area <= B::Scalar::ZERO {
+                    continue;
+                }
                 let dx = area.sqrt();
                 let dt_local = cfl * dx / speed;
                 if dt_local < dt_min {

@@ -19,11 +19,11 @@
 //!
 //! // 创建 f64 精度的处理器
 //! let params_f64 = NumericalParams::<f64>::default();
-//! let handler_f64 = WettingDryingHandler::<CpuBackend<f64>>::from_params(&params_f64);
+//! let handler_f64 = WettingDryingHandler::<CpuBackend<f64>>::from_params(&params_f64).unwrap();
 //!
 //! // 创建 f32 精度的处理器
 //! let params_f32 = NumericalParams::<f32>::default();
-//! let handler_f32 = WettingDryingHandler::<CpuBackend<f32>>::from_params(&params_f32);
+//! let handler_f32 = WettingDryingHandler::<CpuBackend<f32>>::from_params(&params_f32).unwrap();
 //!
 //! // 判定干湿状态
 //! let is_dry_f64 = handler_f64.is_dry(1e-8);
@@ -178,16 +178,20 @@ pub struct WettingDryingHandler<B: Backend> {
 impl<B: Backend> WettingDryingHandler<B> {
     /// 使用配置创建处理器
     #[inline]
-    pub fn new(config: WettingDryingConfig<B::Scalar>) -> Self {
+    pub fn new(config: WettingDryingConfig<B::Scalar>) -> mh_foundation::MhResult<Self> {
         if let Err(reason) = config.validate() {
-            panic!("WettingDryingConfig 无效: {reason}");
+            return Err(mh_foundation::MhError::invalid_input(format!(
+                "WettingDryingConfig 无效: {reason}"
+            )));
         }
-        Self { config }
+        Ok(Self { config })
     }
 
     /// 从数值参数创建处理器
     #[inline]
-    pub fn from_params(params: &crate::types::NumericalParams<B::Scalar>) -> Self {
+    pub fn from_params(
+        params: &crate::types::NumericalParams<B::Scalar>
+    ) -> mh_foundation::MhResult<Self> {
         Self::new(WettingDryingConfig::from_params(params))
     }
 
@@ -322,7 +326,7 @@ mod tests {
     #[test]
     fn test_wet_state_f64() {
         let config = WettingDryingConfig::<f64>::default();
-        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config).unwrap();
 
         assert!(handler.get_state(0.0).is_dry());
         assert!(handler.get_state(1e-5).is_dry());
@@ -331,7 +335,7 @@ mod tests {
     #[test]
     fn test_wet_state_f32() {
         let config = WettingDryingConfig::<f32>::default();
-        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config).unwrap();
 
         assert!(handler.get_state(0.0f32).is_dry());
         assert!(handler.get_state(1e-5f32).is_dry());
@@ -344,7 +348,7 @@ mod tests {
             h_wet: 1e-3,
             ..Default::default()
         };
-        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config).unwrap();
 
         assert_eq!(handler.wet_fraction(0.0), 0.0);
         assert_eq!(handler.wet_fraction(1e-4), 0.0);
@@ -362,7 +366,7 @@ mod tests {
             h_wet: 1e-3f32,
             ..Default::default()
         };
-        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config).unwrap();
 
         assert_eq!(handler.wet_fraction(0.0f32), 0.0f32);
         let mid = 5.5e-4f32;
@@ -373,7 +377,7 @@ mod tests {
     #[test]
     fn test_wet_fraction_smooth_f64() {
         let config = WettingDryingConfig::<f64>::default();
-        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config).unwrap();
 
         // 平滑函数在边界处应连续
         let frac_dry = handler.wet_fraction_smooth(config.h_dry);
@@ -385,7 +389,7 @@ mod tests {
     #[test]
     fn test_correct_cell_f64() {
         let config = WettingDryingConfig::<f64>::default();
-        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f64>>::new(config).unwrap();
 
         // 负水深修正
         let (h, hu, hv) = handler.correct_cell(-1.0, 10.0, 10.0);
@@ -409,7 +413,7 @@ mod tests {
     #[test]
     fn test_correct_cell_f32() {
         let config = WettingDryingConfig::<f32>::default();
-        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config);
+        let handler = WettingDryingHandler::<CpuBackend<f32>>::new(config).unwrap();
 
         let (h, hu, hv) = handler.correct_cell(-1.0f32, 10.0f32, 10.0f32);
         assert_eq!(h, 0.0f32);
@@ -421,7 +425,8 @@ mod tests {
     fn test_should_compute_flux_f64() {
         let handler = WettingDryingHandler::<CpuBackend<f64>>::from_params(
             &NumericalParams::<f64>::default()
-        );
+        )
+        .unwrap();
 
         let (compute, _, _) = handler.should_compute_flux(0.0, 0.0);
         assert!(!compute, "双干不应计算");
@@ -468,10 +473,12 @@ mod tests {
     fn test_type_aliases() {
         let handler_f64 = WettingDryingHandler::<CpuBackend<f64>>::from_params(
             &NumericalParams::<f64>::default()
-        );
+        )
+        .unwrap();
         let handler_f32 = WettingDryingHandler::<CpuBackend<f32>>::from_params(
             &NumericalParams::<f32>::default()
-        );
+        )
+        .unwrap();
 
         assert_eq!(std::mem::size_of_val(&handler_f64.config.h_dry), 8);
         assert_eq!(std::mem::size_of_val(&handler_f32.config.h_dry), 4);

@@ -4,7 +4,7 @@
 //!
 //! 使用 Roe 线性化与熵修正，提供对接触间断更高分辨率的通量。
 
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 
@@ -86,8 +86,8 @@ impl<B: Backend> RiemannSolver for RoeSolver<B> {
         let ut_l = B::vec2_dot(&vel_left, &tangent);
         let ut_r = B::vec2_dot(&vel_right, &tangent);
 
-        let c_l = (self.gravity * h_left).sqrt();
-        let c_r = (self.gravity * h_right).sqrt();
+        let _c_l = (self.gravity * h_left).sqrt();
+        let _c_r = (self.gravity * h_right).sqrt();
 
         let sqrt_hl = h_left.sqrt();
         let sqrt_hr = h_right.sqrt();

@@ -34,9 +34,6 @@ use std::marker::PhantomData;
 /// 无效索引标记
 pub const INVALID_INDEX: u32 = u32::MAX;
 
-/// 无效代际标记
-#[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
-pub const INVALID_GENERATION: u32 = 0;
 
 // ============================================================================
 // 标记类型 (Phantom Types)
@@ -120,21 +117,14 @@ impl<T> Idx<T> {
         }
     }
 
-    /// 兼容旧 API：创建带 generation 参数的索引
-    ///
-    /// generation 参数会被忽略。
-    #[deprecated(note = "Use Idx::new(index) instead. Generation moved to mh_runtime::SafeIdx")]
-    #[inline]
-    pub const fn new_with_generation(index: u32, _generation: u32) -> Self {
-        Self::new(index)
-    }
 
     /// 从 usize 创建
     #[inline]
-    pub fn from_usize(index: usize) -> Self {
-        Self::try_from_usize(index).unwrap_or(Self::INVALID)
+    pub fn from_usize(index: usize) -> Result<Self, crate::error::MhError> {
+        Self::try_from_usize(index)
     }
 
+    /// 从 usize 创建索引（带溢出检查）
     pub fn try_from_usize(index: usize) -> Result<Self, crate::error::MhError> {
         if index > u32::MAX as usize {
             return Err(crate::error::MhError::invalid_input("Idx 溢出: usize > u32::MAX"));
@@ -160,12 +150,6 @@ impl<T> Idx<T> {
         self.index as usize
     }
 
-    /// 获取代际号（兼容旧 API，始终返回 1）
-    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
-    #[inline]
-    pub const fn generation(self) -> u32 {
-        1
-    }
 
     /// 判断索引是否有效
     #[inline]
@@ -179,19 +163,6 @@ impl<T> Idx<T> {
         self.index == INVALID_INDEX
     }
 
-    /// 创建下一代索引（兼容旧 API，返回自身）
-    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
-    #[inline]
-    pub fn next_generation(self) -> Self {
-        self
-    }
-
-    /// 检查代际是否匹配（兼容旧 API，始终返回 true）
-    #[deprecated(note = "Generation moved to mh_runtime::SafeIdx")]
-    #[inline]
-    pub const fn matches_generation(self, _generation: u32) -> bool {
-        true
-    }
 
     /// 转换为 `Option<usize>`
     #[inline]
@@ -261,10 +232,12 @@ impl<T> fmt::Display for Idx<T> {
 }
 
 // usize 转换
-impl<T> From<usize> for Idx<T> {
+impl<T> TryFrom<usize> for Idx<T> {
+    type Error = crate::error::MhError;
+
     #[inline]
-    fn from(index: usize) -> Self {
-        Self::from_usize(index)
+    fn try_from(index: usize) -> Result<Self, Self::Error> {
+        Self::try_from_usize(index)
     }
 }
 
@@ -291,11 +264,13 @@ impl<T> From<Idx<T>> for u32 {
 }
 
 // Option 转换
-impl<T> From<Option<usize>> for Idx<T> {
-    fn from(opt: Option<usize>) -> Self {
+impl<T> TryFrom<Option<usize>> for Idx<T> {
+    type Error = crate::error::MhError;
+
+    fn try_from(opt: Option<usize>) -> Result<Self, Self::Error> {
         match opt {
-            Some(i) => Self::from_usize(i),
-            None => Self::INVALID,
+            Some(i) => Self::try_from_usize(i),
+            None => Ok(Self::INVALID),
         }
     }
 }
@@ -401,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_idx_from_usize() {
-        let idx: CellIndex = 42usize.into();
+        let idx = CellIndex::try_from(42usize).unwrap();
         assert_eq!(idx.index(), 42);
         assert!(idx.is_valid());
     }
@@ -545,7 +520,18 @@ impl CellIdx {
     
     /// 从 usize 创建
     #[inline]
-    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    pub fn from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        Self::try_from_usize(idx)
+    }
+
+    /// 从 usize 创建（带溢出检查）
+    #[inline]
+    pub fn try_from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        if idx > u32::MAX as usize {
+            return Err(crate::error::MhError::invalid_input("CellIdx 溢出"));
+        }
+        Ok(Self(idx as u32))
+    }
     
     /// 是否有效
     #[inline]
@@ -574,8 +560,13 @@ impl From<u32> for CellIdx {
     #[inline] fn from(v: u32) -> Self { Self(v) }
 }
 
-impl From<usize> for CellIdx {
-    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+impl TryFrom<usize> for CellIdx {
+    type Error = crate::error::MhError;
+
+    #[inline]
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        Self::try_from_usize(v)
+    }
 }
 
 /// 轻量级面索引（4 字节，用于计算路径）
@@ -593,7 +584,18 @@ impl FaceIdx {
     
     /// 从 usize 创建
     #[inline]
-    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    pub fn from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        Self::try_from_usize(idx)
+    }
+
+    /// 从 usize 创建（带溢出检查）
+    #[inline]
+    pub fn try_from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        if idx > u32::MAX as usize {
+            return Err(crate::error::MhError::invalid_input("FaceIdx 溢出"));
+        }
+        Ok(Self(idx as u32))
+    }
     
     /// 是否有效
     #[inline]
@@ -622,8 +624,13 @@ impl From<u32> for FaceIdx {
     #[inline] fn from(v: u32) -> Self { Self(v) }
 }
 
-impl From<usize> for FaceIdx {
-    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+impl TryFrom<usize> for FaceIdx {
+    type Error = crate::error::MhError;
+
+    #[inline]
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        Self::try_from_usize(v)
+    }
 }
 
 /// 轻量级节点索引（4 字节，用于计算路径）
@@ -641,7 +648,18 @@ impl NodeIdx {
     
     /// 从 usize 创建
     #[inline]
-    pub fn from_usize(idx: usize) -> Self { Self(idx as u32) }
+    pub fn from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        Self::try_from_usize(idx)
+    }
+
+    /// 从 usize 创建（带溢出检查）
+    #[inline]
+    pub fn try_from_usize(idx: usize) -> Result<Self, crate::error::MhError> {
+        if idx > u32::MAX as usize {
+            return Err(crate::error::MhError::invalid_input("NodeIdx 溢出"));
+        }
+        Ok(Self(idx as u32))
+    }
     
     /// 是否有效
     #[inline]
@@ -670,8 +688,13 @@ impl From<u32> for NodeIdx {
     #[inline] fn from(v: u32) -> Self { Self(v) }
 }
 
-impl From<usize> for NodeIdx {
-    #[inline] fn from(v: usize) -> Self { Self(v as u32) }
+impl TryFrom<usize> for NodeIdx {
+    type Error = crate::error::MhError;
+
+    #[inline]
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        Self::try_from_usize(v)
+    }
 }
 
 /// 边界条件 ID（4 字节）
@@ -718,7 +741,7 @@ mod simple_idx_tests {
     
     #[test]
     fn test_face_idx() {
-        let idx = FaceIdx::from_usize(42);
+        let idx = FaceIdx::from_usize(42).unwrap();
         assert!(idx.is_valid());
         assert_eq!(idx.raw(), 42);
     }

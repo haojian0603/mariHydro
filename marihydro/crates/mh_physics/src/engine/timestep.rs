@@ -63,13 +63,17 @@ where
         mesh: &PhysicsMesh,
         params: &NumericalParams<B::Scalar>
     ) -> B::Scalar {
-        let n_cells = mesh.n_cells();
+        let n_cells = mesh.cell_count();
         if n_cells == 0 {
             return self.dt_max;
         }
 
         let min_length = self.cached_dx_min
             .unwrap_or_else(|| self.compute_min_char_length(mesh));
+
+        if !min_length.is_finite() || min_length <= B::Scalar::ZERO {
+            return self.dt_min;
+        }
 
         let max_speed = self.compute_max_wave_speed_parallel(state, params);
 
@@ -95,6 +99,9 @@ where
         let min_length = self.cached_dx_min.unwrap_or_else(|| {
             B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE)
         });
+        if !min_length.is_finite() || min_length <= B::Scalar::ZERO {
+            return self.dt_min;
+        }
         let dt = self.cfl * min_length / max_speed;
         self.clamp_dt(dt)
     }
@@ -142,7 +149,7 @@ where
     }
 
     fn compute_min_char_length(&self, mesh: &PhysicsMesh) -> B::Scalar {
-        let n = mesh.n_cells();
+        let n = mesh.cell_count();
         if n == 0 {
             return B::Scalar::from_f64(f64::MAX).unwrap_or(B::Scalar::MAX);
         }

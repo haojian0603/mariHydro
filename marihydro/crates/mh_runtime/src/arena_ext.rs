@@ -80,10 +80,11 @@ impl<Tag> SafeIdx<Tag> {
 
     /// 从 usize 创建（代际默认为1）
     #[inline]
-    pub fn from_usize(index: usize) -> Self {
-        Self::try_from_usize(index).unwrap_or(Self::INVALID)
+    pub fn from_usize(index: usize) -> RuntimeResult<Self> {
+        Self::try_from_usize(index)
     }
 
+    /// 从 usize 创建索引（带溢出检查）
     pub fn try_from_usize(index: usize) -> RuntimeResult<Self> {
         if index > u32::MAX as usize {
             return Err(RuntimeError::InvalidIndex);
@@ -319,18 +320,26 @@ impl<T, Tag> SafeArena<T, Tag> {
         match self.free_head {
             Some(free_idx) => {
                 let idx = free_idx as usize;
-                match &self.slots[idx] {
-                    Slot::Vacant { next_free, generation } => {
-                        self.free_head = *next_free;
-                        let new_generation = generation.wrapping_add(1);
-                        let new_generation = if new_generation == 0 { 1 } else { new_generation };
-                        self.slots[idx] = Slot::Occupied { value, generation: new_generation };
-                        self.len += 1;
-                        SafeIdx::new(free_idx, new_generation)
-                    }
-                    Slot::Occupied { .. } => {
-                        panic!("SafeArena corruption: free list points to occupied slot");
-                    }
+                let (next_free, generation, is_vacant) = match &self.slots[idx] {
+                    Slot::Vacant { next_free, generation } => (*next_free, *generation, true),
+                    Slot::Occupied { .. } => (None, 0, false),
+                };
+                if is_vacant {
+                    self.free_head = next_free;
+                    let new_generation = generation.wrapping_add(1);
+                    let new_generation = if new_generation == 0 { 1 } else { new_generation };
+                    self.slots[idx] = Slot::Occupied { value, generation: new_generation };
+                    self.len += 1;
+                    SafeIdx::new(free_idx, new_generation)
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("SafeArena corruption: free list points to occupied slot; fallback to append");
+                    self.free_head = None;
+                    let new_idx = self.slots.len() as u32;
+                    let generation = 1;
+                    self.slots.push(Slot::Occupied { value, generation });
+                    self.len += 1;
+                    SafeIdx::new(new_idx, generation)
                 }
             }
             None => {

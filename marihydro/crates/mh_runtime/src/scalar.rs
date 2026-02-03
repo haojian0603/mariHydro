@@ -140,6 +140,9 @@ pub trait RuntimeScalar:
     /// 当除数绝对值小于 MIN_POSITIVE 时返回 fallback
     #[inline]
     fn safe_div(self, rhs: Self, fallback: Self) -> Self {
+        if !self.is_finite() || !rhs.is_finite() {
+            return fallback;
+        }
         if rhs.abs() < Self::MIN_POSITIVE {
             fallback
         } else {
@@ -156,6 +159,9 @@ pub trait RuntimeScalar:
     /// 带阈值的安全除法
     #[inline]
     fn safe_div_eps(self, rhs: Self, eps: Self, fallback: Self) -> Self {
+        if !self.is_finite() || !rhs.is_finite() || !eps.is_finite() {
+            return fallback;
+        }
         if rhs.abs() < eps {
             fallback
         } else {
@@ -178,7 +184,7 @@ pub trait RuntimeScalar:
     /// 安全平方根（负数返回 0）
     #[inline]
     fn safe_sqrt(self) -> Self {
-        if self < Self::ZERO {
+        if !self.is_finite() || self < Self::ZERO {
             Self::ZERO
         } else {
             self.sqrt()
@@ -188,6 +194,9 @@ pub trait RuntimeScalar:
     /// 安全幂运算（负数非整数次幂返回 0）
     #[inline]
     fn safe_powf(self, exp: Self) -> Self {
+        if !self.is_finite() || !exp.is_finite() {
+            return Self::ZERO;
+        }
         if self < Self::ZERO && (exp.fract() != Self::ZERO) {
             Self::ZERO
         } else {
@@ -198,7 +207,7 @@ pub trait RuntimeScalar:
     /// 安全自然对数（非正数返回 0）
     #[inline]
     fn safe_ln(self) -> Self {
-        if self <= Self::ZERO {
+        if !self.is_finite() || self <= Self::ZERO {
             Self::ZERO
         } else {
             self.ln()
@@ -208,6 +217,9 @@ pub trait RuntimeScalar:
     /// 安全正弦（大数周期归约）
     #[inline]
     fn sin_safe(self) -> Self {
+        if !self.is_finite() {
+            return Self::ZERO;
+        }
         let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
         if self.abs() > threshold {
             let reduced = self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX);
@@ -220,6 +232,9 @@ pub trait RuntimeScalar:
     /// 安全余弦（大数周期归约）
     #[inline]
     fn cos_safe(self) -> Self {
+        if !self.is_finite() {
+            return Self::ONE;
+        }
         let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
         if self.abs() > threshold {
             let reduced = self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX);
@@ -232,6 +247,9 @@ pub trait RuntimeScalar:
     /// 安全正弦余弦对（保证 sin² + cos² ≈ 1）
     #[inline]
     fn sin_cos_safe(self) -> (Self, Self) {
+        if !self.is_finite() {
+            return (Self::ZERO, Self::ONE);
+        }
         let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
         let reduced = if self.abs() > threshold {
             self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX)
@@ -244,12 +262,18 @@ pub trait RuntimeScalar:
     /// 近似相等判断
     #[inline]
     fn approx_eq(self, other: Self, epsilon: Self) -> bool {
+        if !self.is_finite() || !other.is_finite() || !epsilon.is_finite() {
+            return false;
+        }
         (self - other).abs() < epsilon
     }
 
     /// 检查是否接近零
     #[inline]
     fn is_near_zero(self, epsilon: Self) -> bool {
+        if !self.is_finite() || !epsilon.is_finite() {
+            return false;
+        }
         self.abs() < epsilon
     }
 

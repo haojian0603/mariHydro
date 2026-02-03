@@ -124,7 +124,7 @@ pub use implicit::{
 
 // ==================== 大气源项导出 ====================
 pub use atmosphere::{
-    WindStressConfig, PressureGradientConfig, WindStressSource, PressureGradientSource,
+    WindStressConfig, PressureGradientConfig, WindStressRuntimeSource, WindStressSource, PressureGradientSource,
     DragCoefficientMethod,
     wind_drag_coefficient_lp81, wind_drag_coefficient_wu82,
 };

@@ -42,6 +42,18 @@ pub trait Dimension: 'static + Copy + Clone + Default + Send + Sync + std::fmt::
     fn n_layers(&self) -> usize {
         Self::N_LAYERS
     }
+
+    /// 运行时存储大小（针对 D3Dynamic）
+    #[inline]
+    fn storage_size_dyn(&self, n_cells: usize) -> usize {
+        n_cells * self.n_layers().max(1)
+    }
+
+    /// 运行时扁平索引（针对 D3Dynamic）
+    #[inline]
+    fn flat_index_dyn(&self, cell: usize, layer: usize) -> usize {
+        cell * self.n_layers().max(1) + layer
+    }
 }
 
 /// 2D 维度标记
@@ -94,17 +106,19 @@ impl Default for D3Dynamic {
 }
 
 impl D3Dynamic {
+    /// 给定单元数的运行时存储大小
     pub fn storage_size_runtime(&self, n_cells: usize) -> usize {
-        n_cells * self.n_layers.max(1)
+        self.storage_size_dyn(n_cells)
     }
 
+    /// 计算运行时扁平索引（cell, layer）
     pub fn flat_index_runtime(&self, cell: usize, layer: usize) -> usize {
-        cell * self.n_layers.max(1) + layer
+        self.flat_index_dyn(cell, layer)
     }
 }
 
 impl Dimension for D3Dynamic {
-    /// 编译期无法确定，使用 1 作为占位
+    /// 编译期无法确定，使用 1 作为默认层数
     const N_LAYERS: usize = 1;
     
     fn name() -> &'static str { "3D-Dynamic" }

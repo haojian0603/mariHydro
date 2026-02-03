@@ -115,6 +115,10 @@ impl SourceTerm for ManningFrictionConfig {
         let hv = state.hv[cell];
         let dt = ctx.dt;
 
+        if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
+            return SourceContribution::ZERO;
+        }
+
         // 干单元处理
         if ctx.is_dry(h) {
             return SourceContribution::momentum(-hu / dt, -hv / dt);
@@ -150,12 +154,19 @@ impl SourceTerm for ManningFrictionConfig {
         }
 
         let dt = ctx.dt;
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
         let n_cells = state.h.len();
 
         for i in 0..n_cells {
             let h = state.h[i];
             let hu = state.hu[i];
             let hv = state.hv[i];
+
+            if !h.is_finite() {
+                continue;
+            }
 
             if ctx.is_dry(h) {
                 output_hu[i] += -hu / dt;
@@ -238,6 +249,10 @@ impl SourceTerm for ChezyFrictionConfig {
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
+
+        if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
+            return SourceContribution::ZERO;
+        }
 
         // 干单元处理
         if ctx.is_dry(h) {
@@ -462,6 +477,10 @@ macro_rules! impl_manning_friction_generic {
                 let hu = state.hu[cell];
                 let hv = state.hv[cell];
 
+                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) {
+                    return SourceContributionGeneric::default();
+                }
+
                 if h < self.config.min_depth {
                     return SourceContributionGeneric::default();
                 }
@@ -482,12 +501,13 @@ macro_rules! impl_manning_friction_generic {
 
                 // γ = c_f * |u| / h
                 let gamma = cf * speed / h;
-                let factor = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+                let decay = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+                let factor = (decay - (1.0 as $scalar)) / ctx.dt;
 
                 SourceContributionGeneric { 
                     s_h: 0.0 as $scalar, 
-                    s_hu: -cf * speed * u * factor, 
-                    s_hv: -cf * speed * v * factor 
+                    s_hu: hu * factor, 
+                    s_hv: hv * factor 
                 }
             }
 
@@ -577,6 +597,10 @@ macro_rules! impl_chezy_friction_generic {
                 let hu = state.hu[cell];
                 let hv = state.hv[cell];
 
+                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) {
+                    return SourceContributionGeneric::default();
+                }
+
                 if h < self.config.min_depth {
                     return SourceContributionGeneric::default();
                 }
@@ -593,12 +617,13 @@ macro_rules! impl_chezy_friction_generic {
 
                 let cf = g / (c * c);
                 let gamma = cf * speed / h;
-                let factor = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+                let decay = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
+                let factor = (decay - (1.0 as $scalar)) / ctx.dt;
 
                 SourceContributionGeneric { 
                     s_h: 0.0 as $scalar, 
-                    s_hu: -cf * speed * u * factor, 
-                    s_hv: -cf * speed * v * factor 
+                    s_hu: hu * factor, 
+                    s_hv: hv * factor 
                 }
             }
 

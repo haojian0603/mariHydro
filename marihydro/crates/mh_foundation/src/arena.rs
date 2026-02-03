@@ -36,7 +36,7 @@
 //! let mut arena: Arena<i32, CellTag> = Arena::new();
 //! 
 //! // 插入元素
-//! let idx = arena.insert(42);
+//! let idx = arena.insert(42).unwrap();
 //! assert_eq!(arena.get(idx), Some(&42));
 //! 
 //! // 删除元素
@@ -45,7 +45,7 @@
 //! assert_eq!(arena.get(idx), None); // 索引失效
 //! 
 //! // 复用槽位
-//! let new_idx = arena.insert(100);
+//! let new_idx = arena.insert(100).unwrap();
 //! assert_eq!(new_idx.index(), idx.index()); // 复用相同槽位
 //! ```
 //! 
@@ -195,8 +195,8 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
     }
 
     /// 插入元素并返回索引
-    #[inline]
-    pub fn insert(&mut self, value: T) -> Idx<Tag> {
+        #[inline]
+        pub fn insert(&mut self, value: T) -> Result<Idx<Tag>, crate::error::MhError> {
         match self.free_head {
             Some(free_idx) => {
                 // 复用空闲槽位
@@ -209,29 +209,41 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
                         self.free_head = *next_free;
                         *slot = Slot::Occupied { value };
                         self.len += 1;
-                        Idx::new(free_idx)
+                            Ok(Idx::new(free_idx))
                     }
                     Slot::Occupied { .. } => {
-                        // 这不应该发生
-                        panic!("Arena corruption: free_head points to occupied slot");
+                        // 这不应该发生，尝试恢复并追加新槽位
+                        #[cfg(debug_assertions)]
+                        eprintln!("Arena corruption: free_head points to occupied slot; fallback to append");
+                        self.free_head = None;
+                        if self.slots.len() >= u32::MAX as usize {
+                                return Err(crate::error::MhError::internal("Arena 索引溢出"));
+                        }
+                        let new_idx = self.slots.len() as u32;
+                        self.slots.push(Slot::Occupied { value });
+                        self.len += 1;
+                            Ok(Idx::new(new_idx))
                     }
                 }
             }
             None => {
                 // 追加新槽位
+                if self.slots.len() >= u32::MAX as usize {
+                        return Err(crate::error::MhError::internal("Arena 索引溢出"));
+                }
                 let idx = self.slots.len() as u32;
                 self.slots.push(Slot::Occupied { value });
                 self.len += 1;
-                Idx::new(idx)
+                    Ok(Idx::new(idx))
             }
         }
     }
 
+    /// 尝试插入元素（带溢出检查）
+    ///
+    /// 当索引空间已满时返回错误。
     pub fn try_insert(&mut self, value: T) -> Result<Idx<Tag>, crate::error::MhError> {
-        if self.slots.len() >= u32::MAX as usize {
-            return Err(crate::error::MhError::internal("Arena 索引溢出"));
-        }
-        Ok(self.insert(value))
+        self.insert(value)
     }
 
     /// 获取元素的不可变引用
@@ -592,7 +604,7 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         assert_eq!(arena.len(), 1);
         assert_eq!(arena.get(idx), Some(&42));
@@ -602,9 +614,9 @@ mod tests {
     #[test]
     fn test_insert_multiple() {
         let mut arena: TestArena = Arena::new();
-        let idx1 = arena.insert(1);
-        let idx2 = arena.insert(2);
-        let idx3 = arena.insert(3);
+        let idx1 = arena.insert(1).unwrap();
+        let idx2 = arena.insert(2).unwrap();
+        let idx3 = arena.insert(3).unwrap();
 
         assert_eq!(arena.len(), 3);
         assert_eq!(arena.get(idx1), Some(&1));
@@ -615,7 +627,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         let removed = arena.remove(idx);
         assert_eq!(removed, Some(42));
@@ -626,7 +638,7 @@ mod tests {
     #[test]
     fn test_remove_invalid() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         arena.remove(idx);
         let removed = arena.remove(idx);
@@ -636,10 +648,10 @@ mod tests {
     #[test]
     fn test_reuse_slot() {
         let mut arena: TestArena = Arena::new();
-        let idx1 = arena.insert(1);
+        let idx1 = arena.insert(1).unwrap();
         arena.remove(idx1);
         
-        let idx2 = arena.insert(2);
+        let idx2 = arena.insert(2).unwrap();
         assert_eq!(idx2, idx1);
         
         assert_eq!(arena.get(idx1), Some(&2));
@@ -649,7 +661,7 @@ mod tests {
     #[test]
     fn test_get_mut() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         if let Some(value) = arena.get_mut(idx) {
             *value = 100;
@@ -662,7 +674,7 @@ mod tests {
     #[test]
     fn test_contains() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         assert!(arena.contains(idx));
         arena.remove(idx);
@@ -672,9 +684,9 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut arena: TestArena = Arena::new();
-        arena.insert(1);
-        arena.insert(2);
-        arena.insert(3);
+        arena.insert(1).unwrap();
+        arena.insert(2).unwrap();
+        arena.insert(3).unwrap();
         
         arena.clear();
         assert!(arena.is_empty());
@@ -684,9 +696,9 @@ mod tests {
     #[test]
     fn test_iter() {
         let mut arena: TestArena = Arena::new();
-        arena.insert(1);
-        arena.insert(2);
-        arena.insert(3);
+        arena.insert(1).unwrap();
+        arena.insert(2).unwrap();
+        arena.insert(3).unwrap();
 
         let values: Vec<i32> = arena.iter().map(|(_, &v)| v).collect();
         assert_eq!(values.len(), 3);
@@ -698,9 +710,9 @@ mod tests {
     #[test]
     fn test_iter_with_holes() {
         let mut arena: TestArena = Arena::new();
-        let idx1 = arena.insert(1);
-        let _idx2 = arena.insert(2);
-        let idx3 = arena.insert(3);
+        let idx1 = arena.insert(1).unwrap();
+        let _idx2 = arena.insert(2).unwrap();
+        let idx3 = arena.insert(3).unwrap();
 
         arena.remove(idx1);
         arena.remove(idx3);
@@ -712,9 +724,9 @@ mod tests {
     #[test]
     fn test_iter_mut() {
         let mut arena: TestArena = Arena::new();
-        arena.insert(1);
-        arena.insert(2);
-        arena.insert(3);
+        arena.insert(1).unwrap();
+        arena.insert(2).unwrap();
+        arena.insert(3).unwrap();
 
         for (_, v) in arena.iter_mut() {
             *v *= 10;
@@ -729,8 +741,8 @@ mod tests {
     #[test]
     fn test_indices() {
         let mut arena: TestArena = Arena::new();
-        let idx1 = arena.insert(1);
-        let _idx2 = arena.insert(2);
+        let idx1 = arena.insert(1).unwrap();
+        let _idx2 = arena.insert(2).unwrap();
         
         arena.remove(idx1);
         
@@ -741,7 +753,7 @@ mod tests {
     #[test]
     fn test_index_operator() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         
         assert_eq!(arena[idx], 42);
         arena[idx] = 100;
@@ -752,7 +764,7 @@ mod tests {
     #[should_panic(expected = "Invalid arena index")]
     fn test_index_operator_invalid() {
         let mut arena: TestArena = Arena::new();
-        let idx = arena.insert(42);
+        let idx = arena.insert(42).unwrap();
         arena.remove(idx);
         let _ = arena[idx]; // 应该 panic
     }
@@ -776,7 +788,7 @@ mod tests {
         let mut indices = Vec::new();
 
         for i in 0..1000 {
-            indices.push(arena.insert(i));
+            indices.push(arena.insert(i).unwrap());
         }
         assert_eq!(arena.len(), 1000);
 
@@ -788,7 +800,7 @@ mod tests {
         assert_eq!(arena.len(), 500);
 
         for i in 0..500 {
-            arena.insert(i + 1000);
+            arena.insert(i + 1000).unwrap();
         }
         assert_eq!(arena.len(), 1000);
     }
@@ -796,9 +808,9 @@ mod tests {
     #[test]
     fn test_exact_size_iterator() {
         let mut arena: TestArena = Arena::new();
-        arena.insert(1);
-        arena.insert(2);
-        arena.insert(3);
+        arena.insert(1).unwrap();
+        arena.insert(2).unwrap();
+        arena.insert(3).unwrap();
 
         let iter = arena.iter();
         assert_eq!(iter.len(), 3);
@@ -818,8 +830,8 @@ mod tests {
         let mut arena_a: Arena<i32, TagA> = Arena::new();
         let mut arena_b: Arena<i32, TagB> = Arena::new();
 
-        let idx_a = arena_a.insert(1);
-        let idx_b = arena_b.insert(2);
+        let idx_a = arena_a.insert(1).unwrap();
+        let idx_b = arena_b.insert(2).unwrap();
 
         // arena_a.get(idx_b); // 编译错误
 
@@ -836,7 +848,7 @@ mod tests {
         let from_u32: Idx<TestTag> = 42u32.into();
         assert_eq!(from_u32, idx);
 
-        let from_usize: Idx<TestTag> = 42usize.into();
+        let from_usize = Idx::<TestTag>::try_from(42usize).unwrap();
         assert_eq!(from_usize, idx);
     }
 

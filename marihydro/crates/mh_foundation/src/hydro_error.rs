@@ -268,7 +268,42 @@ impl HydroError {
 
 impl From<MhError> for HydroError {
     fn from(err: MhError) -> Self {
-        HydroError::new(ErrorCategory::Internal, err.to_string())
+        match err {
+            MhError::Io { message, source } => {
+                let mut e = HydroError::new(ErrorCategory::Io, message);
+                if let Some(src) = source {
+                    e = e.with_source(src);
+                }
+                e
+            }
+            MhError::FileNotFound { path } => {
+                HydroError::new(ErrorCategory::Io, format!("文件未找到: {}", path.display()))
+            }
+            MhError::SizeMismatch { .. } => {
+                HydroError::new(ErrorCategory::Memory, err.to_string())
+            }
+            MhError::IndexOutOfBounds { .. } => {
+                HydroError::new(ErrorCategory::Memory, err.to_string())
+            }
+            MhError::InvalidInput { .. } => {
+                HydroError::new(ErrorCategory::Configuration, err.to_string())
+            }
+            MhError::Internal { .. } => {
+                HydroError::new(ErrorCategory::Internal, err.to_string())
+            }
+            MhError::NotFound { .. } => {
+                HydroError::new(ErrorCategory::Configuration, err.to_string())
+            }
+            MhError::NotImplemented { .. } => {
+                HydroError::new(ErrorCategory::Internal, err.to_string())
+            }
+            MhError::LockError { .. } => {
+                HydroError::new(ErrorCategory::Parallel, err.to_string())
+            }
+            MhError::ChannelSendError => {
+                HydroError::new(ErrorCategory::Parallel, err.to_string())
+            }
+        }
     }
 }
 

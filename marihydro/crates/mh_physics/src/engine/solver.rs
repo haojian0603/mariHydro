@@ -5,11 +5,14 @@
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
-use crate::schemes::{HllcSolver, HlleSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::numerics::{MusclConfig, MusclReconstructorGeneric, WenoConfig, WenoReconstructorGeneric};
 use crate::numerics::reconstruction::ReconstructedStateGeneric;
+use crate::numerics::ReconstructorGeneric;
 use crate::state::ShallowWaterState;
+use crate::sources::traits::{SourceContextGeneric, SourceTermGeneric};
+use crate::{BoundaryDataProvider, ExternalForcing};
 use crate::types::{NumericalParams};
 use crate::Layer3Config;
 
@@ -193,6 +196,7 @@ where
     pub flux_h: B::Buffer<B::Scalar>,
     pub flux_hu: B::Buffer<B::Scalar>,
     pub flux_hv: B::Buffer<B::Scalar>,
+    pub source_h: B::Buffer<B::Scalar>,
     pub source_hu: B::Buffer<B::Scalar>,
     pub source_hv: B::Buffer<B::Scalar>,
     pub vel_u: B::Buffer<B::Scalar>,
@@ -209,6 +213,7 @@ where
             flux_h: backend.alloc(n_cells),
             flux_hu: backend.alloc(n_cells),
             flux_hv: backend.alloc(n_cells),
+            source_h: backend.alloc(n_cells),
             source_hu: backend.alloc(n_cells),
             source_hv: backend.alloc(n_cells),
             vel_u: backend.alloc(n_cells),
@@ -226,6 +231,7 @@ where
 
     pub fn reset_sources(&mut self) {
         let zero = B::Scalar::ZERO;
+        self.source_h.fill(zero);
         self.source_hu.fill(zero);
         self.source_hv.fill(zero);
     }
@@ -240,6 +246,7 @@ where
         self.flux_h.resize(n_cells, B::Scalar::ZERO);
         self.flux_hu.resize(n_cells, B::Scalar::ZERO);
         self.flux_hv.resize(n_cells, B::Scalar::ZERO);
+        self.source_h.resize(n_cells, B::Scalar::ZERO);
         self.source_hu.resize(n_cells, B::Scalar::ZERO);
         self.source_hv.resize(n_cells, B::Scalar::ZERO);
         self.vel_u.resize(n_cells, B::Scalar::ZERO);
@@ -281,18 +288,27 @@ impl<S: RuntimeScalar> ScalarReconstructor<S> {
     }
 
     fn configure_for_scheme(&mut self, scheme: NumericalScheme, mesh: Arc<PhysicsMesh>) {
-        match (scheme, self) {
-            (NumericalScheme::SecondOrderWeno, ScalarReconstructor::Weno(recon)) => {
-                recon.set_config(WenoConfig::default());
+        match scheme {
+            NumericalScheme::SecondOrderWeno => {
+                if let ScalarReconstructor::Weno(recon) = self {
+                    recon.set_config(WenoConfig::default());
+                } else {
+                    *self = Self::new(mesh, scheme);
+                }
             }
-            (NumericalScheme::SecondOrderMuscl, ScalarReconstructor::Muscl(recon)) => {
-                recon.set_config(MusclConfig::default());
+            NumericalScheme::SecondOrderMuscl => {
+                if let ScalarReconstructor::Muscl(recon) = self {
+                    recon.set_config(MusclConfig::default());
+                } else {
+                    *self = Self::new(mesh, scheme);
+                }
             }
-            (NumericalScheme::FirstOrder, ScalarReconstructor::Muscl(recon)) => {
-                recon.set_config(MusclConfig::first_order());
-            }
-            _ => {
-                *self = Self::new(mesh, scheme);
+            NumericalScheme::FirstOrder => {
+                if let ScalarReconstructor::Muscl(recon) = self {
+                    recon.set_config(MusclConfig::first_order());
+                } else {
+                    *self = Self::new(mesh, scheme);
+                }
             }
         }
     }
@@ -492,6 +508,8 @@ where
     recon_eta: ScalarReconstructor<B::Scalar>,
     recon_u: ScalarReconstructor<B::Scalar>,
     recon_v: ScalarReconstructor<B::Scalar>,
+    sources: Vec<Box<dyn SourceTermGeneric<B>>>,
+    boundary_provider: Option<Arc<dyn BoundaryDataProvider>>,
 }
 
 impl<B: Backend> ShallowWaterSolver<B>
@@ -520,7 +538,7 @@ where
         config: Layer3Config<B::Scalar>, 
         backend: B
     ) -> Self {
-        let n_cells = mesh.n_cells();
+        let n_cells = mesh.cell_count();
         let gravity = config.gravity;
         let params = config.params.clone();
         let timestep_ctrl = TimeStepController::<B>::new(gravity, &params);
@@ -530,7 +548,8 @@ where
         // 转换参数类型：Layer 4 NumericalParams → Layer 3 SolverParams
         let solver_params = crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&params, gravity);
         let riemann = Self::build_riemann_solver(&config, &params, &solver_params, gravity);
-        let wetting_drying = WettingDryingHandler::<B>::from_params(&params);
+        let wetting_drying = WettingDryingHandler::<B>::from_params(&params)
+            .expect("WettingDryingHandler 初始化失败");
         let hydrostatic = HydrostaticReconstruction::<B>::new(&solver_params, gravity);
         let recon_eta = ScalarReconstructor::new(mesh.clone(), config.scheme);
         let recon_u = ScalarReconstructor::new(mesh.clone(), config.scheme);
@@ -551,35 +570,47 @@ where
             recon_eta,
             recon_u,
             recon_v,
+            sources: Vec::new(),
+            boundary_provider: None,
         }
     }
 
     pub fn step(&mut self, state: &mut ShallowWaterState<B>, dt: B::Scalar) -> B::Scalar {
+        self.step_with_sources(state, dt, 0.0)
+    }
+
+    pub fn step_with_sources(
+        &mut self,
+        state: &mut ShallowWaterState<B>,
+        dt: B::Scalar,
+        time: f64,
+    ) -> B::Scalar {
         if self.config.stability.check_nan {
             let _ = self.detect_and_clean_nan(state);
         }
-        
+
         self.workspace.reset();
         self.prepare_reconstruction(state);
-        
-        let max_wave_speed = if self.mesh.n_faces() >= self.config.parallel_threshold as usize {
-            self.compute_fluxes_parallel(state)
+
+        let max_wave_speed = if self.mesh.face_count() >= self.config.parallel_threshold as usize {
+            self.compute_fluxes_parallel(state, time)
         } else {
-            self.compute_fluxes_serial(state)
+            self.compute_fluxes_serial(state, time)
         };
-        
+
+        self.apply_sources(state, time, dt);
         self.update_state(state, dt);
-        
+
         if self.config.stability.check_nan {
             let _ = self.detect_and_clean_nan(state);
         }
-        
+
         let (dry_cells, limited_count) = self.enforce_positivity(state, dt);
         self.stats.max_wave_speed = max_wave_speed;
         self.stats.dry_cells = dry_cells;
         self.stats.limited_faces = limited_count;
         self.stats.dt = dt;
-        
+
         dt
     }
 
@@ -598,13 +629,14 @@ where
             self.workspace.resize(n);
         }
 
-        for i in self.mesh.cells() {
+        for cell in self.mesh.cell_indices() {
+            let idx = cell.get();
             let (u, v) = self.params.safe_velocity_components(
-                state.hu[i], state.hv[i], state.h[i]
+                state.hu[idx], state.hv[idx], state.h[idx]
             );
-            self.workspace.vel_u[i] = u;
-            self.workspace.vel_v[i] = v;
-            self.workspace.eta[i] = state.h[i] + state.z[i];
+            self.workspace.vel_u[idx] = u;
+            self.workspace.vel_v[idx] = v;
+            self.workspace.eta[idx] = state.h[idx] + state.z[idx];
         }
 
         let scheme = self.config.scheme;
@@ -633,7 +665,7 @@ where
         let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
         let length = self.backend.scalar_from_f64(length_f64);
-        let h = state.h[owner.get()];
+        let h = state.h[owner.get()].max(B::Scalar::ZERO);
         let pressure = half * g * h * h * length;
         let flux_hu = -pressure * normal.x();
         let flux_hv = -pressure * normal.y();
@@ -641,8 +673,7 @@ where
     }
 
     fn apply_boundary_pressures(&mut self, state: &ShallowWaterState<B>) {
-        for face_idx in self.mesh.boundary_faces() {
-            let face = FaceIndex::new(face_idx);
+        for face in self.mesh.boundary_face_indices() {
             let (flux_hu, flux_hv) = self.compute_boundary_pressure(state, face);
             let owner = self.mesh.face_owner(face);
             self.workspace.source_hu[owner.get()] += flux_hu;
@@ -650,12 +681,75 @@ where
         }
     }
 
-    fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
+    fn apply_boundary_forcing(&mut self, state: &ShallowWaterState<B>, time: f64) {
+        if let Some(provider) = &self.boundary_provider {
+            for face in self.mesh.boundary_face_indices() {
+                let face_idx = face.get();
+                let forcing = provider
+                    .get_forcing(face_idx, time)
+                    .unwrap_or(ExternalForcing::ZERO);
+                let (flux, length, owner) = self.compute_boundary_flux(state, face, &forcing);
+
+                let fh = flux.mass * length;
+                let fhu = flux.momentum_x * length;
+                let fhv = flux.momentum_y * length;
+
+                let owner_idx = owner.get();
+                self.workspace.flux_h[owner_idx] -= fh;
+                self.workspace.flux_hu[owner_idx] -= fhu;
+                self.workspace.flux_hv[owner_idx] -= fhv;
+            }
+        } else {
+            self.apply_boundary_pressures(state);
+        }
+    }
+
+    fn compute_boundary_flux(
+        &self,
+        state: &ShallowWaterState<B>,
+        face_idx: FaceIndex,
+        forcing: &ExternalForcing,
+    ) -> (RiemannFlux<B::Scalar>, B::Scalar, CellIndex) {
+        let normal = self.mesh.face_normal_generic::<B>(face_idx)
+            .expect("边界面法向量转换失败");
+        let length_f64 = self.mesh.face_length(face_idx);
+        let length = self.backend.scalar_from_f64(length_f64);
+        let owner = self.mesh.face_owner(face_idx);
+
+        if !forcing.eta.is_finite() || !forcing.u().is_finite() || !forcing.v().is_finite() {
+            return (RiemannFlux::zero(), length, owner);
+        }
+
+        let h_left = state.h[owner.get()];
+        let (u_left, v_left) = self.params.safe_velocity_components(
+            state.hu[owner.get()],
+            state.hv[owner.get()],
+            h_left,
+        );
+        let vel_left = B::vec2_new(u_left, v_left);
+
+        let z = state.z[owner.get()];
+        let z_f64 = z.to_f64().unwrap_or(0.0);
+        let h_right_f64 = (forcing.eta - z_f64).max(0.0);
+        let h_right = self.backend.scalar_from_f64(h_right_f64);
+        let vel_right = B::vec2_new(
+            self.backend.scalar_from_f64(forcing.u()),
+            self.backend.scalar_from_f64(forcing.v()),
+        );
+
+        let flux = self.riemann
+            .solve(h_left, h_right, vel_left, vel_right, normal)
+            .unwrap_or_else(|_| RiemannFlux::zero());
+
+        (flux, length, owner)
+    }
+
+    fn compute_fluxes_serial(&mut self, state: &ShallowWaterState<B>, time: f64) -> B::Scalar {
         let mut max_wave_speed = B::Scalar::ZERO;
 
-        for face_idx in self.mesh.interior_faces() {
+        for face in self.mesh.interior_face_indices() {
             let (flux, bed_src, length, owner, neighbor) = 
-                self.compute_face(state, FaceIndex::new(face_idx));
+                self.compute_face(state, face);
 
             if flux.max_wave_speed > max_wave_speed {
                 max_wave_speed = flux.max_wave_speed;
@@ -682,17 +776,20 @@ where
             }
         }
 
-        self.apply_boundary_pressures(state);
+        self.apply_boundary_forcing(state, time);
         max_wave_speed
     }
 
-    fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>) -> B::Scalar {
+    fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>, time: f64) -> B::Scalar {
         let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(B::Scalar::ZERO);
-        let face_results: Vec<_> = self.mesh.interior_faces()
+        let face_results: Vec<_> = self
+            .mesh
+            .interior_face_indices()
+            .collect::<Vec<_>>()
             .into_par_iter()
             .map(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) = 
-                    self.compute_face(state, FaceIndex::new(face_idx));
+                    self.compute_face(state, face_idx);
 
                 max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
@@ -722,7 +819,7 @@ where
             }
         }
 
-        self.apply_boundary_pressures(state);
+        self.apply_boundary_forcing(state, time);
         max_speed_atomic.load(Ordering::Relaxed)
     }
 
@@ -851,15 +948,73 @@ where
     }
 
     fn update_state(&self, state: &mut ShallowWaterState<B>, dt: B::Scalar) {
-        for i in self.mesh.cells() {
-            let area_f64 = self.mesh.cell_area(CellIndex(i)).unwrap_or(1.0_f64);
+        for cell in self.mesh.cell_indices() {
+            let idx = cell.get();
+            let area_f64 = self.mesh.cell_area(cell).unwrap_or(1.0_f64);
+            if !area_f64.is_finite() || area_f64 <= 0.0 {
+                state.h[idx] = B::Scalar::ZERO;
+                state.hu[idx] = B::Scalar::ZERO;
+                state.hv[idx] = B::Scalar::ZERO;
+                continue;
+            }
             let inv_area = self.backend.scalar_from_f64(1.0 / area_f64);
-            state.h[i] = state.h[i] + dt * inv_area * self.workspace.flux_h[i];
-            state.hu[i] = state.hu[i] + dt * inv_area * 
-                (self.workspace.flux_hu[i] + self.workspace.source_hu[i]);
-            state.hv[i] = state.hv[i] + dt * inv_area * 
-                (self.workspace.flux_hv[i] + self.workspace.source_hv[i]);
+            state.h[idx] = state.h[idx] + dt * inv_area * (self.workspace.flux_h[idx] + self.workspace.source_h[idx]);
+            state.hu[idx] = state.hu[idx] + dt * inv_area * 
+                (self.workspace.flux_hu[idx] + self.workspace.source_hu[idx]);
+            state.hv[idx] = state.hv[idx] + dt * inv_area * 
+                (self.workspace.flux_hv[idx] + self.workspace.source_hv[idx]);
         }
+    }
+
+    fn apply_sources(&mut self, state: &ShallowWaterState<B>, time: f64, dt: B::Scalar) {
+        if self.sources.is_empty() {
+            return;
+        }
+
+        let ctx = SourceContextGeneric::new(
+            time,
+            dt,
+            self.config.gravity,
+            self.params.h_dry,
+            self.params.h_wet,
+        );
+
+        for source in &self.sources {
+            if !source.is_enabled() {
+                continue;
+            }
+            source.accumulate(
+                state,
+                &mut self.workspace.source_h,
+                &mut self.workspace.source_hu,
+                &mut self.workspace.source_hv,
+                &ctx,
+            );
+        }
+    }
+
+    pub fn register_source<S: SourceTermGeneric<B> + 'static>(&mut self, source: S) {
+        self.sources.push(Box::new(source));
+    }
+
+    pub fn clear_sources(&mut self) {
+        self.sources.clear();
+    }
+
+    pub fn source_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    pub fn set_boundary_provider(&mut self, provider: Arc<dyn BoundaryDataProvider>) {
+        self.boundary_provider = Some(provider);
+    }
+
+    pub fn clear_boundary_provider(&mut self) {
+        self.boundary_provider = None;
+    }
+
+    pub fn has_boundary_provider(&self) -> bool {
+        self.boundary_provider.is_some()
     }
 
     fn enforce_positivity(&mut self, state: &mut ShallowWaterState<B>, _dt: B::Scalar) -> (usize, usize) {
@@ -868,16 +1023,17 @@ where
         let mut dry_count = 0;
         let mut limited_count = 0;
 
-        for i in self.mesh.cells() {
-            if state.h[i] < h_min {
-                state.h[i] = B::Scalar::ZERO;
-                state.hu[i] = B::Scalar::ZERO;
-                state.hv[i] = B::Scalar::ZERO;
+        for cell in self.mesh.cell_indices() {
+            let idx = cell.get();
+            if state.h[idx] < h_min {
+                state.h[idx] = B::Scalar::ZERO;
+                state.hu[idx] = B::Scalar::ZERO;
+                state.hv[idx] = B::Scalar::ZERO;
                 dry_count += 1;
-            } else if state.h[i] < h_dry {
-                let factor = self.wetting_drying.wet_fraction_smooth(state.h[i]);
-                state.hu[i] = state.hu[i] * factor;
-                state.hv[i] = state.hv[i] * factor;
+            } else if state.h[idx] < h_dry {
+                let factor = self.wetting_drying.wet_fraction_smooth(state.h[idx]);
+                state.hu[idx] = state.hu[idx] * factor;
+                state.hv[idx] = state.hv[idx] * factor;
                 dry_count += 1;
                 limited_count += 1;
             }
@@ -889,29 +1045,35 @@ where
     pub fn detect_and_clean_nan(&mut self, state: &mut ShallowWaterState<B>) -> NanDetectionResult {
         let mut result = NanDetectionResult::default();
         
-        for i in self.mesh.cells() {
+        for cell in self.mesh.cell_indices() {
+            let idx = cell.get();
             let mut has_nan = false;
             
-            if !state.h[i].is_finite() {
-                state.h[i] = B::Scalar::ZERO;
+            if !state.h[idx].is_finite() {
+                state.h[idx] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
-            if !state.hu[i].is_finite() {
-                state.hu[i] = B::Scalar::ZERO;
+            if !state.hu[idx].is_finite() {
+                state.hu[idx] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
-            if !state.hv[i].is_finite() {
-                state.hv[i] = B::Scalar::ZERO;
+            if !state.hv[idx].is_finite() {
+                state.hv[idx] = B::Scalar::ZERO;
+                has_nan = true;
+            }
+
+            if !state.z[idx].is_finite() {
+                state.z[idx] = B::Scalar::ZERO;
                 has_nan = true;
             }
             
             if has_nan {
                 result.found_nan = true;
-                result.affected_cells.push(i);
+                result.affected_cells.push(idx);
                 self.stats.nan_count += 1;
-                self.stats.last_nan_location = Some(i);
+                self.stats.last_nan_location = Some(idx);
             }
         }
         

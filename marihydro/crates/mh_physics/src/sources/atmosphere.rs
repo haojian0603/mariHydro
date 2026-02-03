@@ -23,9 +23,13 @@
 //! ∂v/∂t = -(1/ρ) * ∂p/∂y
 //! ```
 
-use super::traits::{SourceContribution, SourceContext, SourceTerm};
+use super::traits::{
+    SourceContribution, SourceContext, SourceTerm,
+    SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
+};
 use crate::state::ShallowWaterState;
 use mh_runtime::CpuBackend;
+use std::sync::{Arc, RwLock};
 
 // 注意：CpuBackend 已在上方导入
 
@@ -146,7 +150,7 @@ impl DragCoefficientMethod {
             Self::YellandTaylor1996 => wind_drag_coefficient_yelland96(wind_speed),
             Self::Coare30 => wind_drag_coefficient_coare30(wind_speed),
             Self::Coare35 => wind_drag_coefficient_coare35(wind_speed),
-            Self::Constant(bits) => f64::from_bits(*bits),
+            Self::Constant(bits) => f64::from_bits(*bits).max(0.0),
         }
     }
 }
@@ -245,9 +249,15 @@ impl SourceTerm for WindStressConfig {
         if h < self.h_min || ctx.is_dry(h) {
             return SourceContribution::ZERO;
         }
+        if !self.rho_water.is_finite() || self.rho_water <= 0.0 {
+            return SourceContribution::ZERO;
+        }
 
         let wu = self.wind_u.get(cell).copied().unwrap_or(0.0);
         let wv = self.wind_v.get(cell).copied().unwrap_or(0.0);
+        if !wu.is_finite() || !wv.is_finite() {
+            return SourceContribution::ZERO;
+        }
 
         let wind_speed = (wu * wu + wv * wv).sqrt();
         if wind_speed < 1e-10 {
@@ -265,6 +275,139 @@ impl SourceTerm for WindStressConfig {
 
     fn is_explicit(&self) -> bool {
         true
+    }
+}
+
+impl SourceTermGeneric<CpuBackend<f64>> for WindStressConfig {
+    fn name(&self) -> &'static str {
+        "WindStress"
+    }
+
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn compute_cell(
+        &self,
+        cell: usize,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
+        let h = state.h[cell];
+        if h < self.h_min || ctx.is_dry(h) {
+            return SourceContributionGeneric::default();
+        }
+        if !self.rho_water.is_finite() || self.rho_water <= 0.0 {
+            return SourceContributionGeneric::default();
+        }
+
+        let wu = self.wind_u.get(cell).copied().unwrap_or(0.0);
+        let wv = self.wind_v.get(cell).copied().unwrap_or(0.0);
+        if !wu.is_finite() || !wv.is_finite() {
+            return SourceContributionGeneric::default();
+        }
+        let wind_speed = (wu * wu + wv * wv).sqrt();
+        if wind_speed < 1e-10 {
+            return SourceContributionGeneric::default();
+        }
+
+        let cd = self.drag_method.compute(wind_speed);
+        let factor = self.density_ratio() * cd * wind_speed;
+
+        SourceContributionGeneric::momentum(factor * wu, factor * wv)
+    }
+
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !SourceTermGeneric::is_enabled(self) {
+            return;
+        }
+
+        let n_cells = state.n_cells();
+        if rhs_h.len() < n_cells {
+            rhs_h.resize(n_cells, 0.0);
+        }
+        if rhs_hu.len() < n_cells {
+            rhs_hu.resize(n_cells, 0.0);
+        }
+        if rhs_hv.len() < n_cells {
+            rhs_hv.resize(n_cells, 0.0);
+        }
+
+        for cell in 0..n_cells {
+            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
+    }
+}
+
+/// 可更新的风应力源项（用于运行时强迫更新）
+#[derive(Clone)]
+pub struct WindStressRuntimeSource {
+    config: Arc<RwLock<WindStressConfig>>,
+}
+
+impl WindStressRuntimeSource {
+    pub fn new(config: Arc<RwLock<WindStressConfig>>) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> Arc<RwLock<WindStressConfig>> {
+        self.config.clone()
+    }
+}
+
+impl SourceTermGeneric<CpuBackend<f64>> for WindStressRuntimeSource {
+    fn name(&self) -> &'static str {
+        "WindStress"
+    }
+
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.config.read().map(|cfg| cfg.enabled).unwrap_or(false)
+    }
+
+    fn compute_cell(
+        &self,
+        cell: usize,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
+        let guard = match self.config.read() {
+            Ok(cfg) => cfg,
+            Err(_) => return SourceContributionGeneric::default(),
+        };
+        SourceTermGeneric::compute_cell(&*guard, cell, state, ctx)
+    }
+
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        let guard = match self.config.read() {
+            Ok(cfg) => cfg,
+            Err(_) => return,
+        };
+        SourceTermGeneric::accumulate(&*guard, state, rhs_h, rhs_hu, rhs_hv, ctx)
     }
 }
 
@@ -336,9 +479,15 @@ impl SourceTerm for PressureGradientConfig {
         if h < self.h_min || ctx.is_dry(h) {
             return SourceContribution::ZERO;
         }
+        if !self.rho_water.is_finite() || self.rho_water <= 0.0 {
+            return SourceContribution::ZERO;
+        }
 
         let dpdx = self.dpdx.get(cell).copied().unwrap_or(0.0);
         let dpdy = self.dpdy.get(cell).copied().unwrap_or(0.0);
+        if !dpdx.is_finite() || !dpdy.is_finite() {
+            return SourceContribution::ZERO;
+        }
 
         // 加速度: a = -(1/ρ) * ∇p
         // 动量源项: S = h * a = -h/ρ * ∇p
@@ -457,7 +606,7 @@ mod tests {
         let params = NumericalParams::default();
         let ctx = SourceContext::new(0.0, 1.0, &params);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTerm::compute_cell(&config, &state, 0, &ctx);
 
         assert_eq!(contrib.s_h, 0.0);
         assert!(contrib.s_hu > 0.0); // 正向风应力
@@ -473,7 +622,7 @@ mod tests {
         let params = NumericalParams::default();
         let ctx = SourceContext::new(0.0, 1.0, &params);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTerm::compute_cell(&config, &state, 0, &ctx);
 
         assert_eq!(contrib.s_h, 0.0);
         assert_eq!(contrib.s_hu, 0.0);
@@ -522,8 +671,8 @@ mod tests {
     #[test]
     fn test_source_term_trait_wind() {
         let config = WindStressConfig::default_config(10);
-        assert_eq!(config.name(), "WindStress");
-        assert!(config.is_explicit());
+        assert_eq!(SourceTerm::name(&config), "WindStress");
+        assert!(SourceTerm::is_explicit(&config));
     }
 
     #[test]

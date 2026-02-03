@@ -23,8 +23,8 @@
 //! };
 //!
 //! // 基本干湿处理
-//! let handler = WettingDryingHandler::new(WettingDryingConfig::default());
-//! let state = handler.classify(0.005);
+//! let handler = WettingDryingHandler::new(WettingDryingConfig::default()).unwrap();
+//! let state = handler.get_state(0.005);
 //!
 //! // 使用过渡函数
 //! let factor = smooth_heaviside(0.005, 0.01);

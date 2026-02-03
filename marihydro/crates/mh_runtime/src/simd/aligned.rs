@@ -64,7 +64,9 @@ impl<T> AlignedVec<T> {
 
     /// 计算布局
     fn layout_for(capacity: usize) -> Layout {
-        let size = std::mem::size_of::<T>() * capacity;
+        let size = std::mem::size_of::<T>()
+            .checked_mul(capacity)
+            .expect("AlignedVec capacity overflow");
         let align = Self::ALIGNMENT.max(std::mem::align_of::<T>());
         Layout::from_size_align(size, align).expect("无效布局")
     }
@@ -123,12 +125,13 @@ impl<T> AlignedVec<T> {
 
     /// 预留额外容量
     pub fn reserve(&mut self, additional: usize) {
-        let required = self.len + additional;
+        let required = self.len.checked_add(additional).expect("AlignedVec capacity overflow");
         if required <= self.cap {
             return;
         }
 
-        let new_cap = required.max(self.cap * 2);
+        let doubled = self.cap.saturating_mul(2).max(1);
+        let new_cap = required.max(doubled);
         let new_layout = Self::layout_for(new_cap);
 
         let new_ptr = if self.cap == 0 {

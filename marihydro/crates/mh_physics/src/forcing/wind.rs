@@ -60,6 +60,47 @@ pub enum WindData {
 }
 
 impl WindProvider {
+    fn normalize_timeseries(
+        times: Vec<f64>,
+        u_values: Vec<f64>,
+        v_values: Vec<f64>,
+    ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let n = times.len().min(u_values.len()).min(v_values.len());
+        if n == 0 {
+            return (Vec::new(), Vec::new(), Vec::new());
+        }
+
+        let mut tuples: Vec<(f64, f64, f64)> = (0..n)
+            .filter_map(|i| {
+                let t = times[i];
+                let u = u_values[i];
+                let v = v_values[i];
+                if t.is_finite() && u.is_finite() && v.is_finite() {
+                    Some((t, u, v))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        tuples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut out_t = Vec::with_capacity(tuples.len());
+        let mut out_u = Vec::with_capacity(tuples.len());
+        let mut out_v = Vec::with_capacity(tuples.len());
+        let mut last_t = None;
+        for (t, u, v) in tuples {
+            if last_t.map_or(true, |lt| t > lt) {
+                out_t.push(t);
+                out_u.push(u);
+                out_v.push(v);
+                last_t = Some(t);
+            }
+        }
+
+        (out_t, out_u, out_v)
+    }
+
     /// 创建恒定风场
     ///
     /// # 参数
@@ -90,6 +131,7 @@ impl WindProvider {
     /// - `u_values`: U 分量 [m/s]
     /// - `v_values`: V 分量 [m/s]
     pub fn time_series(times: Vec<f64>, u_values: Vec<f64>, v_values: Vec<f64>) -> Self {
+        let (times, u_values, v_values) = Self::normalize_timeseries(times, u_values, v_values);
         let initial_u = u_values.first().copied().unwrap_or(0.0);
         let initial_v = v_values.first().copied().unwrap_or(0.0);
 
@@ -134,22 +176,30 @@ impl WindProvider {
             WindData::Constant { u, v } => (*u, *v),
 
             WindData::TimeSeries { times, u_values, v_values } => {
-                if times.is_empty() {
+                let n = times.len().min(u_values.len()).min(v_values.len());
+                if n == 0 {
                     return (0.0, 0.0);
+                }
+                if n == 1 {
+                    return (u_values[0], v_values[0]);
                 }
 
                 // 查找时间区间
                 if time <= times[0] {
                     return (u_values[0], v_values[0]);
                 }
-                if time >= *times.last().unwrap() {
-                    return (*u_values.last().unwrap(), *v_values.last().unwrap());
+                if time >= times[n - 1] {
+                    return (u_values[n - 1], v_values[n - 1]);
                 }
 
                 // 线性插值
-                for i in 0..times.len() - 1 {
+                for i in 0..n - 1 {
                     if time >= times[i] && time < times[i + 1] {
-                        let t = (time - times[i]) / (times[i + 1] - times[i]);
+                        let dt = times[i + 1] - times[i];
+                        if dt.abs() < 1e-12 {
+                            return (u_values[i], v_values[i]);
+                        }
+                        let t = (time - times[i]) / dt;
                         let u = u_values[i] + t * (u_values[i + 1] - u_values[i]);
                         let v = v_values[i] + t * (v_values[i + 1] - v_values[i]);
                         return (u, v);
@@ -160,6 +210,11 @@ impl WindProvider {
             }
 
             WindData::Periodic { mean_speed, amplitude, direction, period, phase } => {
+                if !period.is_finite() || *period <= 0.0 {
+                    let u = -mean_speed * direction.sin();
+                    let v = -mean_speed * direction.cos();
+                    return (u, v);
+                }
                 let omega = 2.0 * std::f64::consts::PI / period;
                 let speed = mean_speed + amplitude * (omega * time + phase).sin();
 

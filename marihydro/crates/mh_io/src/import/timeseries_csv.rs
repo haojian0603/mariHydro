@@ -242,14 +242,35 @@ fn parse_csv_content(
         );
     }
 
-    // 检查是否有有效数据
+    normalize_timeseries(&path_str, &mut times, std::slice::from_mut(&mut values))?;
+
+    Ok((times, values))
+}
+
+fn normalize_timeseries(
+    path_str: &str,
+    times: &mut Vec<f64>,
+    values: &mut [Vec<f64>],
+) -> MhResult<()> {
     if times.is_empty() {
         return Err(MhError::InvalidInput {
             message: format!("{}: No valid data found", path_str),
         });
     }
+    for (col_idx, column) in values.iter().enumerate() {
+        if column.len() != times.len() {
+            return Err(MhError::InvalidInput {
+                message: format!(
+                    "{}: Column {} length mismatch (expected {}, got {})",
+                    path_str,
+                    col_idx,
+                    times.len(),
+                    column.len()
+                ),
+            });
+        }
+    }
 
-    // 验证时间单调性
     let mut sorted_indices: Vec<_> = (0..times.len()).collect();
     sorted_indices.sort_by(|&a, &b| times[a].partial_cmp(&times[b]).unwrap());
 
@@ -257,12 +278,16 @@ fn parse_csv_content(
     if needs_sort {
         eprintln!("INFO: {}: Sorting {} data points by time", path_str, times.len());
         let sorted_times: Vec<_> = sorted_indices.iter().map(|&i| times[i]).collect();
-        let sorted_values: Vec<_> = sorted_indices.iter().map(|&i| values[i]).collect();
-        times = sorted_times;
-        values = sorted_values;
+        let mut sorted_values: Vec<Vec<f64>> = values
+            .iter()
+            .map(|col| sorted_indices.iter().map(|&i| col[i]).collect())
+            .collect();
+        *times = sorted_times;
+        for (dst, src) in values.iter_mut().zip(sorted_values.drain(..)) {
+            *dst = src;
+        }
     }
 
-    // 检查时间严格递增
     for i in 1..times.len() {
         if times[i] <= times[i - 1] {
             eprintln!(
@@ -274,17 +299,21 @@ fn parse_csv_content(
         }
     }
 
-    // 移除重复时间点（保留最后一个）
     let mut dedup_times = Vec::with_capacity(times.len());
-    let mut dedup_values = Vec::with_capacity(values.len());
-    
+    let mut dedup_values: Vec<Vec<f64>> = values
+        .iter()
+        .map(|col| Vec::with_capacity(col.len()))
+        .collect();
+
     for i in 0..times.len() {
-        let is_last = i == times.len() - 1;
+        let is_last = i + 1 == times.len();
         let is_unique = is_last || times[i] < times[i + 1];
-        
+
         if is_unique {
             dedup_times.push(times[i]);
-            dedup_values.push(values[i]);
+            for (dst, src) in dedup_values.iter_mut().zip(values.iter()) {
+                dst.push(src[i]);
+            }
         }
     }
 
@@ -302,7 +331,12 @@ fn parse_csv_content(
         });
     }
 
-    Ok((dedup_times, dedup_values))
+    *times = dedup_times;
+    for (dst, src) in values.iter_mut().zip(dedup_values.into_iter()) {
+        *dst = src;
+    }
+
+    Ok(())
 }
 
 /// 加载多列 CSV 为多个时间序列
@@ -322,6 +356,7 @@ pub fn load_multi_column_timeseries(
     let mut times = Vec::new();
     let mut all_values: Vec<Vec<f64>> = Vec::new();
     let mut n_cols = 0;
+    let path_str = path.to_string_lossy().to_string();
 
     for (line_num, line) in content.lines().enumerate() {
         if config.has_header && line_num == 0 {
@@ -401,11 +436,7 @@ pub fn load_multi_column_timeseries(
         }
     }
 
-    if times.is_empty() {
-        return Err(MhError::InvalidInput {
-            message: format!("{}: No valid data found", path.display()),
-        });
-    }
+    normalize_timeseries(&path_str, &mut times, &mut all_values)?;
 
     Ok((times, all_values))
 }
@@ -508,5 +539,17 @@ mod tests {
 
         assert_eq!(times, vec![0.0, 1.0]);
         assert_eq!(values, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_normalize_timeseries_multi_column() {
+        let mut times = vec![2.0, 1.0, 1.0];
+        let mut values = vec![vec![20.0, 10.0, 11.0], vec![200.0, 100.0, 110.0]];
+
+        normalize_timeseries("test", &mut times, &mut values).unwrap();
+
+        assert_eq!(times, vec![1.0, 2.0]);
+        assert_eq!(values[0], vec![11.0, 20.0]);
+        assert_eq!(values[1], vec![110.0, 200.0]);
     }
 }

@@ -32,6 +32,7 @@
 use super::csr::CsrMatrix;
 use super::preconditioner::ScalarPreconditioner;
 use super::vector_ops::{axpy_unchecked as axpy, copy, dot_unchecked as dot, norm2};
+use crate::core::kernel::spmv_kernel;
 use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,8 @@ pub struct SolverConfig {
     pub max_iter: usize,
     /// 是否打印迭代信息
     pub verbose: bool,
+    /// 停滞判定阈值（相对残差变化率）
+    pub stagnation_tol: f64,
 }
 
 impl Default for SolverConfig {
@@ -59,6 +62,7 @@ impl Default for SolverConfig {
             atol: 1e-14,
             max_iter: 1000,
             verbose: false,
+            stagnation_tol: 1e-12,
         }
     }
 }
@@ -99,6 +103,8 @@ pub enum SolverStatus {
     Diverged,
     /// 停滞
     Stagnated,
+    /// 外部提前停止
+    Stopped,
 }
 
 /// 求解器结果
@@ -114,6 +120,12 @@ pub struct SolverResult<S: RuntimeScalar> {
     pub initial_residual_norm: S,
     /// 相对残差
     pub relative_residual: S,
+}
+
+/// 迭代过程观察者（早停钩子）
+pub trait IterationObserver<S: RuntimeScalar>: Send + Sync {
+    /// 返回 true 则提前停止
+    fn should_stop(&mut self, iter: usize, residual_norm: S, relative_residual: S) -> bool;
 }
 
 impl<S: RuntimeScalar> SolverResult<S> {
@@ -283,6 +295,7 @@ pub struct ConjugateGradient<S: RuntimeScalar> {
     r: Vec<S>,
     p: Vec<S>,
     ap: Vec<S>,
+    observer: Option<Box<dyn IterationObserver<S>>>,
 }
 
 impl<S: RuntimeScalar> ConjugateGradient<S> {
@@ -293,7 +306,19 @@ impl<S: RuntimeScalar> ConjugateGradient<S> {
             r: Vec::new(),
             p: Vec::new(),
             ap: Vec::new(),
+            observer: None,
         }
+    }
+
+    /// 设置迭代观察者
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+        self.observer = observer;
+    }
+
+    /// 通过 builder 风格设置迭代观察者
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// 确保工作向量大小正确
@@ -321,16 +346,25 @@ where
         self.ensure_workspace(n);
         let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
         let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
-        matrix.mul_vec(x, &mut self.r);
+        spmv_kernel(matrix, x, &mut self.r);
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < atol {
+        let b_norm = norm2(b);
+        let use_absolute = b_norm <= atol;
+        let effective_tol = if use_absolute {
+            atol
+        } else {
+            atol.max(rtol * b_norm)
+        };
+
+        if initial_norm < effective_tol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
@@ -344,20 +378,25 @@ where
         copy(&self.r, &mut self.p);
 
         let mut rr = dot(&self.r, &self.r);
+        let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            matrix.mul_vec(&self.p, &mut self.ap);
+            spmv_kernel(matrix, &self.p, &mut self.ap);
 
             // alpha = r'r / p'Ap
             let pap = dot(&self.p, &self.ap);
-            if pap.abs() < stag_tol {
+            if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
                     residual_norm: norm2(&self.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.r) / initial_norm,
+                    relative_residual: if use_absolute {
+                        norm2(&self.r)
+                    } else {
+                        norm2(&self.r) / b_norm
+                    },
                 };
             }
 
@@ -370,7 +409,7 @@ where
             axpy(-alpha, &self.ap, &mut self.r);
 
             let res_norm = norm2(&self.r);
-            let rel_res = res_norm / initial_norm;
+            let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
                 if let Some(res_val) = res_norm.to_f64() {
@@ -379,7 +418,7 @@ where
             }
 
             // 检查收敛
-            if res_norm < atol || rel_res < rtol {
+            if res_norm < effective_tol || (!use_absolute && rel_res < rtol) {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -388,6 +427,30 @@ where
                     relative_residual: rel_res,
                 };
             }
+
+            if (prev_res - res_norm).abs() <= stag_tol * prev_res {
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter + 1,
+                    residual_norm: res_norm,
+                    initial_residual_norm: initial_norm,
+                    relative_residual: rel_res,
+                };
+            }
+
+            if let Some(observer) = self.observer.as_mut() {
+                if observer.should_stop(iter + 1, res_norm, rel_res) {
+                    return SolverResult {
+                        status: SolverStatus::Stopped,
+                        iterations: iter + 1,
+                        residual_norm: res_norm,
+                        initial_residual_norm: initial_norm,
+                        relative_residual: rel_res,
+                    };
+                }
+            }
+
+            prev_res = res_norm;
 
             // beta = r'r_new / r'r_old
             let rr_new = dot(&self.r, &self.r);
@@ -405,7 +468,11 @@ where
             iterations: self.config.max_iter,
             residual_norm: norm2(&self.r),
             initial_residual_norm: initial_norm,
-            relative_residual: norm2(&self.r) / initial_norm,
+            relative_residual: if use_absolute {
+                norm2(&self.r)
+            } else {
+                norm2(&self.r) / b_norm
+            },
         }
     }
 
@@ -424,6 +491,7 @@ pub struct PcgSolver<S: RuntimeScalar> {
     z: Vec<S>,
     p: Vec<S>,
     ap: Vec<S>,
+    observer: Option<Box<dyn IterationObserver<S>>>,
 }
 
 impl<S: RuntimeScalar> PcgSolver<S> {
@@ -435,7 +503,19 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             z: Vec::new(),
             p: Vec::new(),
             ap: Vec::new(),
+            observer: None,
         }
+    }
+
+    /// 设置迭代观察者
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+        self.observer = observer;
+    }
+
+    /// 通过 builder 风格设置迭代观察者
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// 确保工作向量大小正确
@@ -458,7 +538,7 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     /// - `precond`: 预条件器
     /// - `ws`: 外部工作区
     pub fn solve_with_workspace<P: ScalarPreconditioner<S>>(
-        &self,
+        &mut self,
         matrix: &CsrMatrix<S>,
         b: &[S],
         x: &mut [S],
@@ -469,10 +549,11 @@ impl<S: RuntimeScalar> PcgSolver<S> {
         ws.resize(n);
         let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
         let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
-        matrix.mul_vec(x, &mut ws.r);
+        spmv_kernel(matrix, x, &mut ws.r);
         for i in 0..n {
             ws.r[i] = b[i] - ws.r[i];
         }
@@ -481,7 +562,8 @@ impl<S: RuntimeScalar> PcgSolver<S> {
         let b_norm = norm2(b);
 
         // 鲁棒的收敛判据：处理 b_norm ≈ 0 的情况
-        let effective_tol = if b_norm < S::MIN_POSITIVE {
+        let use_absolute = b_norm <= atol;
+        let effective_tol = if use_absolute {
             atol
         } else {
             atol.max(rtol * b_norm)
@@ -504,23 +586,24 @@ impl<S: RuntimeScalar> PcgSolver<S> {
         copy(&ws.z, &mut ws.p);
 
         let mut rz = dot(&ws.r, &ws.z);
+        let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            matrix.mul_vec(&ws.p, &mut ws.ap);
+            spmv_kernel(matrix, &ws.p, &mut ws.ap);
 
             // alpha = r'z / p'Ap
             let pap = dot(&ws.p, &ws.ap);
-            if pap.abs() < stag_tol {
+            if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
                     residual_norm: norm2(&ws.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: if initial_norm > S::ZERO {
-                        norm2(&ws.r) / initial_norm
+                    relative_residual: if use_absolute {
+                        norm2(&ws.r)
                     } else {
-                        S::ZERO
+                        norm2(&ws.r) / b_norm
                     },
                 };
             }
@@ -534,6 +617,7 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             axpy(-alpha, &ws.ap, &mut ws.r);
 
             let res_norm = norm2(&ws.r);
+            let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
                 if let Some(res_val) = res_norm.to_f64() {
@@ -548,13 +632,33 @@ impl<S: RuntimeScalar> PcgSolver<S> {
                     iterations: iter + 1,
                     residual_norm: res_norm,
                     initial_residual_norm: initial_norm,
-                    relative_residual: if initial_norm > S::ZERO {
-                        res_norm / initial_norm
-                    } else {
-                        S::ZERO
-                    },
+                    relative_residual: rel_res,
                 };
             }
+
+            if (prev_res - res_norm).abs() <= stag_tol * prev_res {
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter + 1,
+                    residual_norm: res_norm,
+                    initial_residual_norm: initial_norm,
+                    relative_residual: rel_res,
+                };
+            }
+
+            if let Some(observer) = self.observer.as_mut() {
+                if observer.should_stop(iter + 1, res_norm, rel_res) {
+                    return SolverResult {
+                        status: SolverStatus::Stopped,
+                        iterations: iter + 1,
+                        residual_norm: res_norm,
+                        initial_residual_norm: initial_norm,
+                        relative_residual: rel_res,
+                    };
+                }
+            }
+
+            prev_res = res_norm;
 
             // z = M^{-1} * r
             precond.apply(&ws.r, &mut ws.z);
@@ -575,10 +679,10 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             iterations: self.config.max_iter,
             residual_norm: norm2(&ws.r),
             initial_residual_norm: initial_norm,
-            relative_residual: if initial_norm > S::ZERO {
-                norm2(&ws.r) / initial_norm
+            relative_residual: if use_absolute {
+                norm2(&ws.r)
             } else {
-                S::ZERO
+                norm2(&ws.r) / b_norm
             },
         }
     }
@@ -599,16 +703,25 @@ where
         self.ensure_workspace(n);
         let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
         let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
 
         // r = b - A*x
-        matrix.mul_vec(x, &mut self.r);
+        spmv_kernel(matrix, x, &mut self.r);
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < atol {
+        let b_norm = norm2(b);
+        let use_absolute = b_norm <= atol;
+        let effective_tol = if use_absolute {
+            atol
+        } else {
+            atol.max(rtol * b_norm)
+        };
+
+        if initial_norm < effective_tol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
@@ -625,20 +738,25 @@ where
         copy(&self.z, &mut self.p);
 
         let mut rz = dot(&self.r, &self.z);
+        let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            matrix.mul_vec(&self.p, &mut self.ap);
+            spmv_kernel(matrix, &self.p, &mut self.ap);
 
             // alpha = r'z / p'Ap
             let pap = dot(&self.p, &self.ap);
-            if pap.abs() < stag_tol {
+            if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
                     residual_norm: norm2(&self.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.r) / initial_norm,
+                    relative_residual: if use_absolute {
+                        norm2(&self.r)
+                    } else {
+                        norm2(&self.r) / b_norm
+                    },
                 };
             }
 
@@ -651,7 +769,7 @@ where
             axpy(-alpha, &self.ap, &mut self.r);
 
             let res_norm = norm2(&self.r);
-            let rel_res = res_norm / initial_norm;
+            let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
                 if let Some(res_val) = res_norm.to_f64() {
@@ -660,7 +778,7 @@ where
             }
 
             // 检查收敛
-            if res_norm < atol || rel_res < rtol {
+            if res_norm < effective_tol || (!use_absolute && rel_res < rtol) {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -669,6 +787,30 @@ where
                     relative_residual: rel_res,
                 };
             }
+
+            if (prev_res - res_norm).abs() <= stag_tol * prev_res {
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter + 1,
+                    residual_norm: res_norm,
+                    initial_residual_norm: initial_norm,
+                    relative_residual: rel_res,
+                };
+            }
+
+            if let Some(observer) = self.observer.as_mut() {
+                if observer.should_stop(iter + 1, res_norm, rel_res) {
+                    return SolverResult {
+                        status: SolverStatus::Stopped,
+                        iterations: iter + 1,
+                        residual_norm: res_norm,
+                        initial_residual_norm: initial_norm,
+                        relative_residual: rel_res,
+                    };
+                }
+            }
+
+            prev_res = res_norm;
 
             // z = M^{-1} * r
             precond.apply(&self.r, &mut self.z);
@@ -689,7 +831,11 @@ where
             iterations: self.config.max_iter,
             residual_norm: norm2(&self.r),
             initial_residual_norm: initial_norm,
-            relative_residual: norm2(&self.r) / initial_norm,
+            relative_residual: if use_absolute {
+                norm2(&self.r)
+            } else {
+                norm2(&self.r) / b_norm
+            },
         }
     }
 
@@ -711,6 +857,7 @@ pub struct BiCgStabSolver<S: RuntimeScalar> {
     s: Vec<S>,
     t: Vec<S>,
     z: Vec<S>,
+    observer: Option<Box<dyn IterationObserver<S>>>,
 }
 
 impl<S: RuntimeScalar> BiCgStabSolver<S> {
@@ -725,7 +872,19 @@ impl<S: RuntimeScalar> BiCgStabSolver<S> {
             s: Vec::new(),
             t: Vec::new(),
             z: Vec::new(),
+            observer: None,
         }
+    }
+
+    /// 设置迭代观察者
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+        self.observer = observer;
+    }
+
+    /// 通过 builder 风格设置迭代观察者
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// 确保工作向量大小正确
@@ -757,17 +916,26 @@ where
         self.ensure_workspace(n);
         let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
         let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
+        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
         let div_factor = S::from_f64(1e6).unwrap_or(S::MAX);
 
         // r = b - A*x
-        matrix.mul_vec(x, &mut self.r);
+        spmv_kernel(matrix, x, &mut self.r);
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
         let initial_norm = norm2(&self.r);
-        if initial_norm < atol {
+        let b_norm = norm2(b);
+        let use_absolute = b_norm <= atol;
+        let effective_tol = if use_absolute {
+            atol
+        } else {
+            atol.max(rtol * b_norm)
+        };
+
+        if initial_norm < effective_tol {
             return SolverResult {
                 status: SolverStatus::Converged,
                 iterations: 0,
@@ -787,13 +955,14 @@ where
 
         self.v.fill(S::ZERO);
         self.p.fill(S::ZERO);
+        let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // 计算 rho = (r0, r)
             let rho = dot(&self.r0, &self.r);
             
             // 检查 rho breakdown
-            if rho.abs() < stag_tol {
+            if rho.abs() < breakdown_tol {
                 if iter == 0 {
                     // 初始残差与影子残差正交，已经收敛
                     return SolverResult {
@@ -809,7 +978,11 @@ where
                     iterations: iter,
                     residual_norm: norm2(&self.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.r) / initial_norm,
+                    relative_residual: if use_absolute {
+                        norm2(&self.r)
+                    } else {
+                        norm2(&self.r) / b_norm
+                    },
                 };
             }
 
@@ -834,17 +1007,21 @@ where
             precond.apply(&self.p, &mut self.z);
 
             // v = A * z
-            matrix.mul_vec(&self.z, &mut self.v);
+            spmv_kernel(matrix, &self.z, &mut self.v);
 
             // alpha = rho / (r0, v)
             let r0v = dot(&self.r0, &self.v);
-            if r0v.abs() < stag_tol {
+            if r0v.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
                     residual_norm: norm2(&self.r),
                     initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.r) / initial_norm,
+                    relative_residual: if use_absolute {
+                        norm2(&self.r)
+                    } else {
+                        norm2(&self.r) / b_norm
+                    },
                 };
             }
             alpha = rho / r0v;
@@ -864,7 +1041,7 @@ where
                     iterations: iter + 1,
                     residual_norm: s_norm,
                     initial_residual_norm: initial_norm,
-                    relative_residual: s_norm / initial_norm,
+                    relative_residual: if use_absolute { s_norm } else { s_norm / b_norm },
                 };
             }
 
@@ -872,18 +1049,18 @@ where
             precond.apply(&self.s, &mut self.z);
 
             // t = A * z
-            matrix.mul_vec(&self.z, &mut self.t);
+            spmv_kernel(matrix, &self.z, &mut self.t);
 
             // omega = (t, s) / (t, t)
             let tt = dot(&self.t, &self.t);
-            if tt.abs() < stag_tol {
+            if tt.abs() < breakdown_tol {
                 omega = S::ONE;
             } else {
                 omega = dot(&self.t, &self.s) / tt;
             }
             
             // 检查 omega breakdown（omega 过小会导致算法不稳定）
-            if omega.abs() < stag_tol {
+            if omega.abs() < breakdown_tol {
                 // 只更新 x 的 alpha 部分后返回
                 precond.apply(&self.p, &mut self.z);
                 axpy(alpha, &self.z, x);
@@ -892,7 +1069,11 @@ where
                     iterations: iter + 1,
                     residual_norm: norm2(&self.s),
                     initial_residual_norm: initial_norm,
-                    relative_residual: norm2(&self.s) / initial_norm,
+                    relative_residual: if use_absolute {
+                        norm2(&self.s)
+                    } else {
+                        norm2(&self.s) / b_norm
+                    },
                 };
             }
 
@@ -908,7 +1089,7 @@ where
             }
 
             let res_norm = norm2(&self.r);
-            let rel_res = res_norm / initial_norm;
+            let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
                 if let Some(res_val) = res_norm.to_f64() {
@@ -917,7 +1098,7 @@ where
             }
 
             // 检查收敛
-            if res_norm < atol || rel_res < rtol {
+            if res_norm < effective_tol || (!use_absolute && rel_res < rtol) {
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -926,6 +1107,30 @@ where
                     relative_residual: rel_res,
                 };
             }
+
+            if (prev_res - res_norm).abs() <= stag_tol * prev_res {
+                return SolverResult {
+                    status: SolverStatus::Stagnated,
+                    iterations: iter + 1,
+                    residual_norm: res_norm,
+                    initial_residual_norm: initial_norm,
+                    relative_residual: rel_res,
+                };
+            }
+
+            if let Some(observer) = self.observer.as_mut() {
+                if observer.should_stop(iter + 1, res_norm, rel_res) {
+                    return SolverResult {
+                        status: SolverStatus::Stopped,
+                        iterations: iter + 1,
+                        residual_norm: res_norm,
+                        initial_residual_norm: initial_norm,
+                        relative_residual: rel_res,
+                    };
+                }
+            }
+
+            prev_res = res_norm;
 
             // 检查发散
             if res_norm > initial_norm * div_factor {
@@ -944,7 +1149,11 @@ where
             iterations: self.config.max_iter,
             residual_norm: norm2(&self.r),
             initial_residual_norm: initial_norm,
-            relative_residual: norm2(&self.r) / initial_norm,
+            relative_residual: if use_absolute {
+                norm2(&self.r)
+            } else {
+                norm2(&self.r) / b_norm
+            },
         }
     }
 
@@ -1057,7 +1266,7 @@ mod tests {
         // b = A * x_exact
         let x_exact = vec![0.25, 0.25, 0.25];
         let mut b = vec![0.0; 3];
-        matrix.mul_vec(&x_exact, &mut b);
+        spmv_kernel(&matrix, &x_exact, &mut b);
 
         let mut x = x_exact.clone();
 

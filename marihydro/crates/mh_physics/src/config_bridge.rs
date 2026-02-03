@@ -13,6 +13,7 @@ use mh_config::SolverConfig as Layer4Config;
 use mh_config::solver_config::{RiemannSolverType, TimeIntegrationMethod};
 use crate::types::NumericalParams;
 use crate::engine::solver::{NumericalScheme, FallbackStrategy, TimeIntegrator, StabilityOptions};
+use crate::engine::time_integrator::TimeIntegratorKind;
 use mh_runtime::RuntimeScalar;
 use num_traits::FromPrimitive;
 
@@ -40,6 +41,8 @@ pub struct Layer3Config<S: RuntimeScalar> {
     pub parallel_threshold: usize,
     /// 是否启用隐式摩擦
     pub implicit_friction: bool,
+    /// 默认 Manning 糙率系数
+    pub default_manning_n: S,
     /// 黎曼求解器类型
     pub riemann_solver: RiemannSolverType,
     /// 数值格式
@@ -54,6 +57,8 @@ pub struct Layer3Config<S: RuntimeScalar> {
     pub timestep_reduction_factor: S,
     /// 时间积分器类型
     pub integrator: TimeIntegrator,
+    /// 显式时间积分器阶次
+    pub time_integrator_kind: TimeIntegratorKind,
 }
 
 impl<S> Default for Layer3Config<S>
@@ -68,6 +73,7 @@ where
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
             implicit_friction: true,
+            default_manning_n: S::from_f64(0.03).unwrap_or_else(|| S::ZERO),
             riemann_solver: RiemannSolverType::Hllc,
             scheme: NumericalScheme::SecondOrderMuscl,
             fallback: FallbackStrategy::default(),
@@ -75,6 +81,7 @@ where
             max_fallback_attempts: 3,
             timestep_reduction_factor: S::from_f64(0.5).unwrap_or_else(|| S::ZERO),
             integrator: TimeIntegrator::Explicit,
+            time_integrator_kind: TimeIntegratorKind::SspRk3,
         }
     }
 }
@@ -83,6 +90,7 @@ where
 #[derive(Debug, Clone)]
 pub struct Layer3ConfigBuilder<S: RuntimeScalar> {
     config: Layer3Config<S>,
+    time_integrator_kind_overridden: bool,
 }
 
 impl<S> Layer3ConfigBuilder<S>
@@ -93,12 +101,16 @@ where
     pub fn new() -> Self {
         Self {
             config: Layer3Config::default(),
+            time_integrator_kind_overridden: false,
         }
     }
 
     /// 设置数值格式
     pub fn scheme(mut self, scheme: NumericalScheme) -> Self {
         self.config.scheme = scheme;
+        if !self.time_integrator_kind_overridden && matches!(scheme, NumericalScheme::FirstOrder) {
+            self.config.time_integrator_kind = TimeIntegratorKind::ForwardEuler;
+        }
         self
     }
 
@@ -148,6 +160,12 @@ where
         self
     }
 
+    /// 设置默认 Manning 糙率系数
+    pub fn default_manning_n(mut self, n: S) -> Self {
+        self.config.default_manning_n = n;
+        self
+    }
+
     /// 设置NaN检测
     pub fn nan_detection_enabled(mut self, enabled: bool) -> Self {
         self.config.stability.check_nan = enabled;
@@ -157,6 +175,13 @@ where
     /// 设置稳定性选项
     pub fn stability_options(mut self, options: StabilityOptions) -> Self {
         self.config.stability = options;
+        self
+    }
+
+    /// 设置显式时间积分器阶次
+    pub fn time_integrator_kind(mut self, kind: TimeIntegratorKind) -> Self {
+        self.config.time_integrator_kind = kind;
+        self.time_integrator_kind_overridden = true;
         self
     }
 
@@ -193,9 +218,13 @@ where
     /// - `Ok(Self)`: 转换成功
     /// - `Err(ConfigBridgeError)`: 转换失败（数值溢出或无法转换）
     pub fn from_layer4(config: &Layer4Config) -> Result<Self, ConfigBridgeError> {
+        // 确保 h_wet > h_dry，默认取 h_dry 的 10 倍或者 1e-3 的较大值
+        let h_wet = (config.physics.h_dry * 10.0).max(1e-3);
+        
         let params_f64 = NumericalParams::<f64> {
             h_min: config.physics.h_min,
             h_dry: config.physics.h_dry,
+            h_wet,
             cfl: config.physics.cfl,
             vel_max: config.physics.velocity_cap,
             flux_eps: config.physics.flux_eps,
@@ -213,6 +242,11 @@ where
             .ok_or(ConfigBridgeError::ConversionFailed {
                 field: "gravity",
                 value: config.physics.gravity,
+            })?;
+        let default_manning_n = S::from_f64(config.physics.manning_n)
+            .ok_or(ConfigBridgeError::ConversionFailed {
+                field: "manning_n",
+                value: config.physics.manning_n,
             })?;
         let timestep_reduction_factor = S::from_f64(config.numerical.timestep_reduction_factor)
             .ok_or(ConfigBridgeError::ConversionFailed {
@@ -233,12 +267,19 @@ where
             TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
         };
 
+        let time_integrator_kind = match config.numerical.time_integration {
+            TimeIntegrationMethod::ForwardEuler => TimeIntegratorKind::ForwardEuler,
+            TimeIntegrationMethod::SspRk2 => TimeIntegratorKind::SspRk2,
+            TimeIntegrationMethod::SspRk3 => TimeIntegratorKind::SspRk3,
+        };
+
         Ok(Self {
             params,
             gravity,
             use_hydrostatic_reconstruction: config.numerical.use_hydrostatic_reconstruction,
             parallel_threshold: config.parallel.threshold,
             implicit_friction: config.numerical.friction,
+            default_manning_n,
             riemann_solver: config.numerical.riemann_solver,
             scheme,
             fallback: FallbackStrategy::default(),
@@ -246,6 +287,7 @@ where
             max_fallback_attempts: config.numerical.max_fallback_attempts,
             timestep_reduction_factor,
             integrator,
+            time_integrator_kind,
         })
     }
 }
@@ -267,6 +309,16 @@ impl From<TimeIntegrationMethod> for TimeIntegrator {
             TimeIntegrationMethod::ForwardEuler => TimeIntegrator::Explicit,
             TimeIntegrationMethod::SspRk2 => TimeIntegrator::Explicit,
             TimeIntegrationMethod::SspRk3 => TimeIntegrator::Explicit,
+        }
+    }
+}
+
+impl From<TimeIntegrationMethod> for TimeIntegratorKind {
+    fn from(value: TimeIntegrationMethod) -> Self {
+        match value {
+            TimeIntegrationMethod::ForwardEuler => TimeIntegratorKind::ForwardEuler,
+            TimeIntegrationMethod::SspRk2 => TimeIntegratorKind::SspRk2,
+            TimeIntegrationMethod::SspRk3 => TimeIntegratorKind::SspRk3,
         }
     }
 }

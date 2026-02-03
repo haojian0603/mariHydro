@@ -12,6 +12,7 @@
 use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
+use mh_foundation::error::MhResult;
 use mh_foundation::AlignedVec;
 use mh_runtime::CpuBackend;
 use serde::{Deserialize, Serialize};
@@ -56,17 +57,17 @@ pub struct BridgePierDrag {
 
 impl BridgePierDrag {
     /// 创建新的桥墩源项
-    pub fn new(n_cells: usize, config: BridgePierConfig) -> Self {
-        Self {
+    pub fn new(n_cells: usize, config: BridgePierConfig) -> MhResult<Self> {
+        Ok(Self {
             config: config.clone(),
             constants: config.constants,
             blockage: AlignedVec::zeros(n_cells),
-            drag_coeff: AlignedVec::from_vec(vec![config.default_cd; n_cells]),
-        }
+            drag_coeff: AlignedVec::from_vec(vec![config.default_cd; n_cells])?,
+        })
     }
 
     /// 使用默认配置创建
-    pub fn with_defaults(n_cells: usize) -> Self {
+    pub fn with_defaults(n_cells: usize) -> MhResult<Self> {
         Self::new(n_cells, BridgePierConfig::default())
     }
 
@@ -180,13 +181,13 @@ mod tests {
 
     #[test]
     fn test_pier_creation() {
-        let pier = BridgePierDrag::with_defaults(10);
+        let pier = BridgePierDrag::with_defaults(10).unwrap();
         assert_eq!(pier.blockage.len(), 10);
     }
 
     #[test]
     fn test_zero_blockage() {
-        let pier = BridgePierDrag::with_defaults(10);
+        let pier = BridgePierDrag::with_defaults(10).unwrap();
         let state = create_test_state(10, 2.0, 1.0, 0.0);
         let params = NumericalParams::default();
         let ctx = SourceContext::new(0.0, 1.0, &params);
@@ -199,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_with_blockage() {
-        let mut pier = BridgePierDrag::with_defaults(10);
+        let mut pier = BridgePierDrag::with_defaults(10).unwrap();
         pier.set_pier(0, 0.2, None); // 20% 阻塞
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_geometry_setup() {
-        let mut pier = BridgePierDrag::with_defaults(10);
+        let mut pier = BridgePierDrag::with_defaults(10).unwrap();
         pier.set_from_geometry(0, 2.0, 10.0); // 2m 墩径，10m 单元宽度
 
         assert!((pier.blockage[0] - 0.2).abs() < 1e-10);

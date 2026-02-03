@@ -92,7 +92,7 @@ impl<S: RuntimeScalar> WenoReconstructorGeneric<S> {
     }
 
     fn build_stencils(mesh: &PhysicsMesh) -> Vec<WenoStencil> {
-        let n_faces = mesh.n_faces();
+        let n_faces = mesh.face_count();
         let mut stencils = Vec::with_capacity(n_faces);
 
         for face in 0..n_faces {
