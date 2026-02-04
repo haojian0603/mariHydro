@@ -21,15 +21,16 @@
 //! use mh_physics::sediment::SedimentProperties;
 //!
 //! let props = SedimentProperties::from_d50_mm(0.5);
-//! let formula = TransportFormulaBuilder::<f64>::new("mpm").build();
+//! let backend = mh_runtime::CpuBackend::<f64>::new();
+//! let formula = TransportFormulaBuilder::<f64>::new("mpm").build(&backend);
 //!
 //! let theta = 0.1;  // Shields 参数
-//! let phi = formula.compute_phi(theta, props.critical_shields, &props);
+//! let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
 //! ```
 
 use super::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_runtime::RuntimeScalar as Scalar;
+use mh_runtime::{Backend, RuntimeScalar as Scalar};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -54,45 +55,65 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
     /// # 返回
     ///
     /// 无量纲输沙率 Φ
-    fn compute_phi(&self, theta: S, theta_cr: S, props: &SedimentProperties) -> S;
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        theta_cr: S,
+        props: &SedimentProperties,
+    ) -> S;
 
     /// 计算有量纲输沙率 [m²/s]
     ///
     /// 默认实现：q_b = Φ × √[(s-1)gd³]
-    fn compute_dimensional(&self, theta: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let phi = self.compute_phi(theta, S::from_f64(props.critical_shields).unwrap_or(S::ZERO), props);
+    fn compute_dimensional<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        props: &SedimentProperties,
+        physics: &PhysicalConstants,
+    ) -> S {
+        let theta_cr = backend.scalar_from_f64(props.critical_shields);
+        let phi = self.compute_phi(backend, theta, theta_cr, props);
         if phi <= S::ZERO {
             return S::ZERO;
         }
 
-        let d = S::from_f64(props.d50).unwrap_or(S::ZERO);
-        let s = S::from_f64(props.relative_density).unwrap_or(S::ZERO);
-        let g = S::from_f64(physics.g).unwrap_or(S::ZERO);
+        let d = backend.scalar_from_f64(props.d50);
+        let s = backend.scalar_from_f64(props.relative_density);
+        let g = backend.scalar_from_f64(physics.g);
         let scale = ((s - S::ONE) * g * d * d * d).sqrt();
         phi * scale
     }
 
-    fn compute_from_shear_stress(&self, tau_b: S, props: &SedimentProperties, physics: &PhysicalConstants) -> S {
-        let theta = S::from_f64(props.shields_number(tau_b.to_f64().unwrap_or(0.0), physics)).unwrap_or(S::ZERO);
-        self.compute_dimensional(theta, props, physics)
+    fn compute_from_shear_stress<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        tau_b: S,
+        props: &SedimentProperties,
+        physics: &PhysicalConstants,
+    ) -> S {
+        let theta = props.shields_number(backend, tau_b, physics);
+        self.compute_dimensional(backend, theta, props, physics)
     }
 
     /// 计算输沙方向向量
     ///
     /// 输沙方向与剪切应力方向一致
-    fn compute_transport_vector(
+    fn compute_transport_vector<B: Backend<Scalar = S>>(
         &self,
+        backend: &B,
         tau_bx: S,
         tau_by: S,
         props: &SedimentProperties,
         physics: &PhysicalConstants,
     ) -> (S, S) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
-        if tau_b < S::from_f64(1e-14).unwrap_or(S::ZERO) {
+        if tau_b < backend.scalar_from_f64(1e-14) {
             return (S::ZERO, S::ZERO);
         }
 
-        let qb = self.compute_from_shear_stress(tau_b, props, physics);
+        let qb = self.compute_from_shear_stress(backend, tau_b, props, physics);
         let ratio = qb / tau_b;
         (tau_bx * ratio, tau_by * ratio)
     }
@@ -122,19 +143,13 @@ pub struct MeyerPeterMullerFormula<S: Scalar> {
     pub exponent: S,
 }
 
-impl<S: Scalar> Default for MeyerPeterMullerFormula<S> {
-    fn default() -> Self {
-        Self {
-            coefficient: S::from_f64(8.0).unwrap_or(S::ZERO),
-            exponent: S::from_f64(1.5).unwrap_or(S::ZERO),
-        }
-    }
-}
-
 impl<S: Scalar> MeyerPeterMullerFormula<S> {
     /// 创建默认参数的 MPM 公式
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
+        Self {
+            coefficient: backend.scalar_from_f64(8.0),
+            exponent: backend.scalar_from_f64(1.5),
+        }
     }
 
     /// 设置系数
@@ -152,10 +167,10 @@ impl<S: Scalar> MeyerPeterMullerFormula<S> {
     /// 创建 Wong-Parker (2006) 修正版本
     ///
     /// A = 4.93, n = 1.6，适用于均匀沙
-    pub fn wong_parker() -> Self {
+    pub fn wong_parker<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
-            coefficient: S::from_f64(4.93).unwrap_or(S::ZERO),
-            exponent: S::from_f64(1.6).unwrap_or(S::ZERO),
+            coefficient: backend.scalar_from_f64(4.93),
+            exponent: backend.scalar_from_f64(1.6),
         }
     }
 }
@@ -169,7 +184,13 @@ impl<S: Scalar> TransportFormula<S> for MeyerPeterMullerFormula<S> {
         "mpm"
     }
 
-    fn compute_phi(&self, theta: S, theta_cr: S, _props: &SedimentProperties) -> S {
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        _backend: &B,
+        theta: S,
+        theta_cr: S,
+        _props: &SedimentProperties,
+    ) -> S {
         let excess = theta - theta_cr;
         if excess <= S::ZERO {
             return S::ZERO;
@@ -195,16 +216,10 @@ pub struct VanRijn1984Formula<S: Scalar> {
     pub coefficient: S,
 }
 
-impl<S: Scalar> Default for VanRijn1984Formula<S> {
-    fn default() -> Self {
-        Self { coefficient: S::from_f64(0.053).unwrap_or(S::ZERO) }
-    }
-}
-
 impl<S: Scalar> VanRijn1984Formula<S> {
     /// 创建默认参数的 Van Rijn 公式
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
+        Self { coefficient: backend.scalar_from_f64(0.053) }
     }
 
     /// 设置系数
@@ -223,10 +238,16 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         "vanrijn"
     }
 
-    fn compute_phi(&self, theta: S, theta_cr: S, props: &SedimentProperties) -> S {
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        theta_cr: S,
+        props: &SedimentProperties,
+    ) -> S {
         // 临界 Shields 参数保护：防止除零
         // 使用 1e-10 作为最小值，确保数值稳定性
-        let min_theta_cr = S::from_f64(1e-10).unwrap_or(S::EPSILON);
+        let min_theta_cr = backend.scalar_from_f64(1e-10);
         let theta_cr_safe = if theta_cr > min_theta_cr { theta_cr } else { min_theta_cr };
         
         if theta <= theta_cr_safe {
@@ -237,17 +258,17 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         let t_param = (theta - theta_cr_safe) / theta_cr_safe;
         
         // 限制 T 参数范围，防止极端值导致溢出
-        let max_t = S::from_f64(100.0).unwrap_or(S::ONE);
+        let max_t = backend.scalar_from_f64(100.0);
         let t_param_clamped = if t_param < max_t { t_param } else { max_t };
 
         // 无量纲粒径 D* 保护：防止 D*^(-0.3) 溢出
-        let min_d_star = S::from_f64(0.1).unwrap_or(S::EPSILON);
-        let d_star_raw = S::from_f64(props.dimensionless_diameter).unwrap_or(min_d_star);
+        let min_d_star = backend.scalar_from_f64(0.1);
+        let d_star_raw = backend.scalar_from_f64(props.dimensionless_diameter);
         let d_star = if d_star_raw > min_d_star { d_star_raw } else { min_d_star };
 
         // Φ = A × T^2.1 × D*^(-0.3)
-        let exp_t = S::from_f64(2.1).unwrap_or(S::TWO);
-        let exp_d = S::from_f64(-0.3).unwrap_or(S::ZERO);
+        let exp_t = backend.scalar_from_f64(2.1);
+        let exp_d = backend.scalar_from_f64(-0.3);
         
         self.coefficient * t_param_clamped.powf(exp_t) * d_star.powf(exp_d)
     }
@@ -304,25 +325,25 @@ impl<S: Scalar> EinsteinFormula<S> {
     ///
     /// 使用 8 阶 Chebyshev 多项式近似 Φ*(ψ) 关系，拟合区间 ψ ∈ [0.5, 40]，
     /// 最大相对误差约 1e-4。
-    fn chebyshev_approximation(psi: S) -> S {
+    fn chebyshev_approximation<B: Backend<Scalar = S>>(backend: &B, psi: S) -> S {
         // Chebyshev 系数（预计算）
         // 在 ψ ∈ [0.5, 40] 区间拟合
         let coeffs = [
-            S::from_f64(0.4893).unwrap_or(S::ZERO), S::from_f64(-0.7812).unwrap_or(S::ZERO), S::from_f64(0.3421).unwrap_or(S::ZERO), S::from_f64(-0.1234).unwrap_or(S::ZERO),
-            S::from_f64(0.0423).unwrap_or(S::ZERO), S::from_f64(-0.0134).unwrap_or(S::ZERO), S::from_f64(0.0038).unwrap_or(S::ZERO), S::from_f64(-0.0009).unwrap_or(S::ZERO)
+            backend.scalar_from_f64(0.4893), backend.scalar_from_f64(-0.7812), backend.scalar_from_f64(0.3421), backend.scalar_from_f64(-0.1234),
+            backend.scalar_from_f64(0.0423), backend.scalar_from_f64(-0.0134), backend.scalar_from_f64(0.0038), backend.scalar_from_f64(-0.0009)
         ];
 
         // 归一化到 [-1, 1]
-        let psi_min = S::from_f64(0.5).unwrap_or(S::ZERO);
-        let psi_max = S::from_f64(40.0).unwrap_or(S::ZERO);
+        let psi_min = backend.scalar_from_f64(0.5);
+        let psi_max = backend.scalar_from_f64(40.0);
         let psi_clamped = psi.min(psi_max).max(psi_min);
-        let x = S::from_f64(2.0).unwrap_or(S::ZERO) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
+        let x = backend.scalar_from_f64(2.0) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
 
         // Clenshaw 递归计算
         let mut b1 = S::ZERO;
         let mut b2 = S::ZERO;
         for &c in coeffs.iter().rev() {
-            let b0 = c + S::from_f64(2.0).unwrap_or(S::ZERO) * x * b1 - b2;
+            let b0 = c + backend.scalar_from_f64(2.0) * x * b1 - b2;
             b2 = b1;
             b1 = b0;
         }
@@ -332,11 +353,11 @@ impl<S: Scalar> EinsteinFormula<S> {
     }
 
     /// 简化近似（原始实现）
-    fn simple_approximation(psi: S) -> S {
-        if psi < S::from_f64(2.0).unwrap_or(S::ZERO) {
-            S::from_f64(40.0).unwrap_or(S::ZERO) * (S::from_f64(-0.39).unwrap_or(S::ZERO) * psi).exp()
+    fn simple_approximation<B: Backend<Scalar = S>>(backend: &B, psi: S) -> S {
+        if psi < backend.scalar_from_f64(2.0) {
+            backend.scalar_from_f64(40.0) * (backend.scalar_from_f64(-0.39) * psi).exp()
         } else {
-            S::from_f64(0.465).unwrap_or(S::ZERO) * psi.powf(S::from_f64(-2.5).unwrap_or(S::ZERO))
+            backend.scalar_from_f64(0.465) * psi.powf(backend.scalar_from_f64(-2.5))
         }
     }
 }
@@ -350,27 +371,33 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
         "einstein"
     }
 
-    fn compute_phi(&self, theta: S, _theta_cr: S, _props: &SedimentProperties) -> S {
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        _theta_cr: S,
+        _props: &SedimentProperties,
+    ) -> S {
         // 防止除零和溢出
-        if theta < S::from_f64(1e-14).unwrap_or(S::ZERO) {
+        if theta < backend.scalar_from_f64(1e-14) {
             return S::ZERO;
         }
 
         // Einstein 参数 ψ = 1/θ，带溢出保护
-        let psi = (S::ONE / theta).min(S::from_f64(1e6).unwrap_or(S::ZERO));
+        let psi = (S::ONE / theta).min(backend.scalar_from_f64(1e6));
 
-        if psi > S::from_f64(40.0).unwrap_or(S::ZERO) {
+        if psi > backend.scalar_from_f64(40.0) {
             return S::ZERO; // 无输沙
         }
 
         let phi = if self.use_chebyshev {
-            Self::chebyshev_approximation(psi)
+            Self::chebyshev_approximation(backend, psi)
         } else {
-            Self::simple_approximation(psi)
+            Self::simple_approximation(backend, psi)
         };
 
         // 结果限制
-        phi.min(S::from_f64(1e3).unwrap_or(S::ZERO)).max(S::ZERO)
+        phi.min(backend.scalar_from_f64(1e3)).max(S::ZERO)
     }
 
     fn uses_slope_effect(&self) -> bool {
@@ -395,18 +422,12 @@ pub struct EngelundHansenFormula<S: Scalar> {
     pub friction_factor: S,
 }
 
-impl<S: Scalar> Default for EngelundHansenFormula<S> {
-    fn default() -> Self {
-        Self {
-            friction_factor: S::from_f64(0.05).unwrap_or(S::ZERO),
-        }
-    }
-}
-
 impl<S: Scalar> EngelundHansenFormula<S> {
     /// 创建 Engelund-Hansen 公式
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
+        Self {
+            friction_factor: backend.scalar_from_f64(0.05),
+        }
     }
 
     /// 设置摩阻系数
@@ -425,11 +446,19 @@ impl<S: Scalar> TransportFormula<S> for EngelundHansenFormula<S> {
         "engelund-hansen"
     }
 
-    fn compute_phi(&self, theta: S, _theta_cr: S, _props: &SedimentProperties) -> S {
-        if theta < S::from_f64(1e-14).unwrap_or(S::ZERO) {
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        _theta_cr: S,
+        _props: &SedimentProperties,
+    ) -> S {
+        if theta < backend.scalar_from_f64(1e-14) {
             return S::ZERO;
         }
-        S::from_f64(0.05).unwrap_or(S::ZERO) * theta.powf(S::from_f64(2.5).unwrap_or(S::ZERO)) / self.friction_factor
+        backend.scalar_from_f64(0.05)
+            * theta.powf(backend.scalar_from_f64(2.5))
+            / self.friction_factor
     }
 }
 
@@ -450,16 +479,16 @@ impl<S: Scalar> TransportFormulaBuilder<S> {
     }
 
     /// 根据配置构建公式实例
-    pub fn build(self) -> Box<dyn TransportFormula<S>> {
+    pub fn build<B: Backend<Scalar = S>>(self, backend: &B) -> Box<dyn TransportFormula<S>> {
         match self.formula_id.to_lowercase().replace(['_', ' '], "-").as_str() {
-            "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<S>::default()),
-            "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<S>::wong_parker()),
-            "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<S>::default()),
+            "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<S>::new(backend)),
+            "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<S>::wong_parker(backend)),
+            "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<S>::new(backend)),
             "einstein" | "ein" => Box::new(EinsteinFormula::<S>::new()),
-            "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<S>::default()),
+            "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<S>::new(backend)),
             _ => {
                 log::warn!("未知输沙公式 '{}'，使用 Meyer-Peter-Müller", self.formula_id);
-                Box::new(MeyerPeterMullerFormula::<S>::default())
+                Box::new(MeyerPeterMullerFormula::<S>::new(backend))
             }
         }
     }
@@ -480,22 +509,24 @@ mod tests {
 
     #[test]
     fn test_mpm_below_critical() {
-        let formula = MeyerPeterMullerFormula::<f64>::default();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
         let props = make_sand();
 
         // 低于临界 Shields 数时不输沙
-        let phi = formula.compute_phi(0.01, props.critical_shields, &props);
+        let phi = formula.compute_phi(&backend, 0.01, props.critical_shields, &props);
         assert!(phi <= 0.0);
     }
 
     #[test]
     fn test_mpm_above_critical() {
-        let formula = MeyerPeterMullerFormula::<f64>::default();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
         let props = make_sand();
 
         // 高于临界时有输沙
         let theta = props.critical_shields * 2.0;
-        let phi = formula.compute_phi(theta, props.critical_shields, &props);
+        let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
         assert!(phi > 0.0);
 
         // Φ = 8 × (θ - θ_cr)^1.5
@@ -505,48 +536,52 @@ mod tests {
 
     #[test]
     fn test_vanrijn_formula() {
-        let formula = VanRijn1984Formula::<f64>::default();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let formula = VanRijn1984Formula::<f64>::new(&backend);
         let props = make_sand();
 
         let theta = props.critical_shields * 2.0;
-        let phi = formula.compute_phi(theta, props.critical_shields, &props);
+        let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
         assert!(phi > 0.0);
     }
 
     #[test]
     fn test_einstein_formula() {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = EinsteinFormula::<f64>::new();
         let props = make_sand();
 
         // 高 Shields 数时有输沙
-        let phi = formula.compute_phi(0.5, 0.0, &props);
+        let phi = formula.compute_phi(&backend, 0.5, 0.0, &props);
         assert!(phi > 0.0);
 
         // 非常低的 Shields 数时无输沙
-        let phi_low = formula.compute_phi(0.01, 0.0, &props);
+        let phi_low = formula.compute_phi(&backend, 0.01, 0.0, &props);
         assert!(phi > phi_low);
     }
 
     #[test]
     fn test_get_formula() {
-        let mpm = TransportFormulaBuilder::<f64>::new("mpm").build();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let mpm = TransportFormulaBuilder::<f64>::new("mpm").build(&backend);
         assert_eq!(mpm.id(), "mpm");
 
-        let vr = TransportFormulaBuilder::<f64>::new("VanRijn").build();
+        let vr = TransportFormulaBuilder::<f64>::new("VanRijn").build(&backend);
         assert_eq!(vr.id(), "vanrijn");
 
-        let ein = TransportFormulaBuilder::<f64>::new("EINSTEIN").build();
+        let ein = TransportFormulaBuilder::<f64>::new("EINSTEIN").build(&backend);
         assert_eq!(ein.id(), "einstein");
     }
 
     #[test]
     fn test_dimensional_transport() {
-        let formula = MeyerPeterMullerFormula::<f64>::default();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
         let props = make_sand();
         let physics = PhysicalConstants::freshwater();
 
         let tau_b = 5.0; // Pa
-        let qb = formula.compute_from_shear_stress(tau_b, &props, &physics);
+        let qb = formula.compute_from_shear_stress(&backend, tau_b, &props, &physics);
 
         // 应该有正输沙率
         if tau_b > props.critical_shear_stress {
@@ -556,13 +591,14 @@ mod tests {
 
     #[test]
     fn test_transport_vector() {
-        let formula = MeyerPeterMullerFormula::<f64>::default();
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
         let props = make_sand();
         let physics = PhysicalConstants::freshwater();
 
         let tau_bx = 3.0;
         let tau_by = 4.0;
-        let (qbx, qby) = formula.compute_transport_vector(tau_bx, tau_by, &props, &physics);
+        let (qbx, qby) = formula.compute_transport_vector(&backend, tau_bx, tau_by, &props, &physics);
 
         // 方向应与剪切力方向一致
         if qbx.abs() > 1e-14 && qby.abs() > 1e-14 {
@@ -574,15 +610,17 @@ mod tests {
 
     #[test]
     fn test_f32_formula() {
-        let formula_f32 = MeyerPeterMullerFormula::<f32>::default();
-        let formula_f64 = MeyerPeterMullerFormula::<f64>::default();
+        let backend_f32 = mh_runtime::CpuBackend::<f32>::new();
+        let backend_f64 = mh_runtime::CpuBackend::<f64>::new();
+        let formula_f32 = MeyerPeterMullerFormula::<f32>::new(&backend_f32);
+        let formula_f64 = MeyerPeterMullerFormula::<f64>::new(&backend_f64);
         let props = make_sand();
 
         let theta = (props.critical_shields * 2.0) as f32;
         let theta_f64 = props.critical_shields * 2.0;
 
-        let phi_f32 = formula_f32.compute_phi(theta, props.critical_shields as f32, &props);
-        let phi_f64 = formula_f64.compute_phi(theta_f64, props.critical_shields, &props);
+        let phi_f32 = formula_f32.compute_phi(&backend_f32, theta, props.critical_shields as f32, &props);
+        let phi_f64 = formula_f64.compute_phi(&backend_f64, theta_f64, props.critical_shields, &props);
 
         // 结果应该接近
         assert!((phi_f32 as f64 - phi_f64).abs() < 1e-4);

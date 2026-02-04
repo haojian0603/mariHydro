@@ -8,7 +8,7 @@
 //!
 //! 本模块采用**Backend感知**设计：
 //!
-//! - **Layer 1**: 基础类型（`CsrMatrix`, `AlignedVec64`）- 无泛型
+//! - **Layer 1**: 基础类型（`CsrMatrix`）- 无泛型
 //! - **Layer 2**: Backend Trait（`Preconditioner<B>`）- 关联类型抽象
 //! - **Layer 3**: 具体实现（`JacobiPreconditioner<B>`）- 全泛型
 //!
@@ -20,7 +20,7 @@
 //! - **未来**: `GpuBackend<f32>` 等
 //!
 //! 关键约束：
-//! - 所有内存分配使用 `AlignedVec<64>`，确保SIMD对齐
+//! - 所有内存分配使用 Backend 分配器
 //! - 计算内核必须支持 `no_std` 友好（`Pod + Clone` 约束）
 //! - 错误处理使用 `Result<_, PreconditionerError>`，强制检查
 //!
@@ -47,7 +47,6 @@ pub use vector_ops::{
 pub use preconditioner::{
     // Trait
     Preconditioner,
-    ScalarPreconditioner,
     // 错误类型
     PreconditionerError,
     // 性能统计
@@ -69,31 +68,6 @@ pub use solver::{
     // 配置与结果
     SolverConfig, SolverResult, SolverStatus,
 };
-
-// 依赖导入（必须在此导入以避免循环）
-use mh_foundation::AlignedVec;
-use mh_runtime::RuntimeScalar;
-
-// ============================================================================
-// 字节对齐工具
-// ============================================================================
-
-/// 64 字节对齐的向量类型别名 (使用 mh_foundation 的 AlignedVec)
-pub type AlignedVec64<T> = AlignedVec<T>;
-
-/// 创建对齐向量的工厂函数
-#[inline]
-pub fn aligned_vec<S: RuntimeScalar>(n: usize) -> AlignedVec64<S> {
-    AlignedVec::zeros(n)
-}
-
-/// 从 slice 创建对齐向量
-#[inline]
-pub fn aligned_vec_from_slice<S: RuntimeScalar + Clone>(slice: &[S]) -> AlignedVec64<S> {
-    let mut vec = AlignedVec::zeros(slice.len());
-    vec.copy_from_slice(slice);
-    vec
-}
 
 // ============================================================================
 // SIMD 能力检测（编译时）
@@ -148,19 +122,9 @@ mod tests {
         // 验证所有类型可访问
         let _builder: CsrBuilder<f64> = CsrBuilder::new(3, 3);
         let backend = CpuBackend::<f64>::new();
-        let _precond: JacobiPreconditioner<CpuBackend<f64>> = JacobiPreconditioner::new(&backend);
+        let _precond: JacobiPreconditioner<CpuBackend<f64>> = JacobiPreconditioner::new(backend);
         let config = SolverConfig::new(1e-8, 100); // 先创建 config
-        let _solver: ConjugateGradient<f64> = ConjugateGradient::new(config); // 再传入 config
-    }
-
-    #[test]
-    fn test_alignment() {
-        let v: AlignedVec64<f64> = aligned_vec(100);
-        assert_eq!(v.as_ptr() as usize % 64, 0, "向量必须64字节对齐");
-        
-        let v2 = aligned_vec_from_slice(&[1.0, 2.0, 3.0]);
-        assert_eq!(v2.len(), 3);
-        assert_eq!(v2.as_ptr() as usize % 64, 0, "向量必须64字节对齐");
+        let _solver: ConjugateGradient<CpuBackend<f64>> = ConjugateGradient::new(backend, config); // 再传入 config
     }
 
     #[test]
@@ -180,16 +144,5 @@ mod tests {
         assert!(align == 32 || align == 64, "对齐必须是32或64字节");
     }
 
-    #[test]
-    fn test_aligned_vec_zeroed() {
-        let v: AlignedVec64<f64> = aligned_vec(10);
-        assert!(v.iter().all(|&x| x == 0.0), "零初始化失败");
-    }
-
-    #[test]
-    fn test_aligned_vec_from_slice() {
-        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let v = aligned_vec_from_slice(&data);
-        assert_eq!(&*v, &data[..]);
-    }
+    // 对齐相关测试已移除：内存对齐由 Backend 分配器负责
 }

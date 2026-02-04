@@ -43,7 +43,7 @@ use crate::core::{Backend, CpuBackend};
 use crate::sources::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use mh_runtime::{RuntimeScalar as Scalar, Vector2D};
 use std::marker::PhantomData;
 
@@ -69,20 +69,20 @@ pub enum TurbulenceModel<S: Scalar> {
 impl<S: Scalar> TurbulenceModel<S> {
     /// Smagorinsky 常数的默认值
     #[inline]
-    pub fn default_smagorinsky_constant() -> S {
-        S::from_f64(0.15).unwrap_or(S::ZERO)
+    pub fn default_smagorinsky_constant<B: Backend<Scalar = S>>(backend: &B) -> S {
+        backend.scalar_from_f64(0.15)
     }
 
     /// 最小涡粘性系数 [m²/s]
     #[inline]
-    pub fn min_eddy_viscosity() -> S {
-        S::from_f64(1e-6).unwrap_or(S::ZERO)
+    pub fn min_eddy_viscosity<B: Backend<Scalar = S>>(backend: &B) -> S {
+        backend.scalar_from_f64(1e-6)
     }
 
     /// 最大涡粘性系数 [m²/s]
     #[inline]
-    pub fn max_eddy_viscosity() -> S {
-        S::from_f64(1e3).unwrap_or(S::ZERO)
+    pub fn max_eddy_viscosity<B: Backend<Scalar = S>>(backend: &B) -> S {
+        backend.scalar_from_f64(1e3)
     }
 
     /// 创建禁用模式（推荐）
@@ -94,17 +94,17 @@ impl<S: Scalar> TurbulenceModel<S> {
     ///
     /// # 参数
     /// - `nu`: 涡粘性系数 [m²/s]，建议范围 0.1-10
-    pub fn constant(nu: S) -> Self {
-        let min = Self::min_eddy_viscosity();
-        let max = Self::max_eddy_viscosity();
+    pub fn constant<B: Backend<Scalar = S>>(backend: &B, nu: S) -> Self {
+        let min = Self::min_eddy_viscosity(backend);
+        let max = Self::max_eddy_viscosity(backend);
         let clamped = if nu < min { min } else if nu > max { max } else { nu };
         Self::ConstantViscosity(clamped)
     }
 
     /// 创建 Smagorinsky 模型
-    pub fn smagorinsky(cs: S) -> Self {
-        let min = S::from_f64(0.05).unwrap_or(S::ZERO);
-        let max = S::from_f64(0.3).unwrap_or(S::ONE);
+    pub fn smagorinsky<B: Backend<Scalar = S>>(backend: &B, cs: S) -> Self {
+        let min = backend.scalar_from_f64(0.05);
+        let max = backend.scalar_from_f64(0.3);
         let clamped = if cs < min { min } else if cs > max { max } else { cs };
         Self::Smagorinsky { cs: clamped }
     }
@@ -117,43 +117,48 @@ impl<S: Scalar> TurbulenceModel<S> {
 
 /// Smagorinsky 湍流求解器（完全泛型化）
 #[derive(Debug, Clone)]
-pub struct SmagorinskySolver<S: Scalar> {
+pub struct SmagorinskySolver<B: Backend> {
     /// 模型配置
-    pub model: TurbulenceModel<S>,
+    pub model: TurbulenceModel<B::Scalar>,
     /// 网格尺度 [m]（每个单元）
-    pub grid_scale: Vec<S>,
+    pub grid_scale: B::Buffer<B::Scalar>,
     /// 计算得到的涡粘性 [m²/s]（每个单元）
-    pub eddy_viscosity: Vec<S>,
+    pub eddy_viscosity: B::Buffer<B::Scalar>,
     /// 速度梯度（每个单元）
-    pub velocity_gradient: Vec<VelocityGradient<S>>,
+    pub velocity_gradient: Vec<VelocityGradient<B::Scalar>>,
     /// 最小水深
-    pub h_min: S,
+    pub h_min: B::Scalar,
+    /// 后端
+    backend: B,
     /// 类型标记
-    _marker: PhantomData<S>,
+    _marker: PhantomData<B>,
 }
 
-impl<S: Scalar> SmagorinskySolver<S> {
+impl<B: Backend> SmagorinskySolver<B> {
     /// 创建新的求解器
-    pub fn new(n_cells: usize, model: TurbulenceModel<S>) -> Self {
+    pub fn new(backend: B, n_cells: usize, model: TurbulenceModel<B::Scalar>) -> Self {
+        let grid_scale = backend.alloc_init(n_cells, backend.scalar_from_f64(10.0));
+        let eddy_viscosity = backend.alloc_init(n_cells, B::Scalar::ZERO);
         Self {
             model,
-            grid_scale: vec![S::from_f64(10.0).unwrap_or(S::ZERO); n_cells], // 默认网格尺度
-            eddy_viscosity: vec![S::ZERO; n_cells],
+            grid_scale,
+            eddy_viscosity,
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: S::from_f64(1e-4).unwrap_or(S::ZERO),
+            h_min: backend.scalar_from_f64(1e-4),
+            backend,
             _marker: PhantomData,
         }
     }
 
     /// 从网格初始化
-    pub fn from_mesh(mesh: &PhysicsMesh, model: TurbulenceModel<S>) -> Self {
+    pub fn from_mesh(backend: B, mesh: &PhysicsMesh, model: TurbulenceModel<B::Scalar>) -> Self {
         let n_cells = mesh.cell_count();
-        let mut solver = Self::new(n_cells, model);
+        let mut solver = Self::new(backend, n_cells, model);
 
         // 计算网格尺度（使用单元面积的平方根）
         for i in 0..n_cells {
             if let Some(area) = mesh.cell_area(mh_runtime::CellIndex(i)) {
-                solver.grid_scale[i] = S::from_f64(area.sqrt()).unwrap_or(S::ZERO);
+                solver.grid_scale[i] = solver.backend.scalar_from_f64(area.sqrt());
             }
         }
 
@@ -161,10 +166,11 @@ impl<S: Scalar> SmagorinskySolver<S> {
     }
 
     /// 设置网格尺度
-    pub fn set_grid_scale(&mut self, i: usize, scale: S) {
+    pub fn set_grid_scale(&mut self, i: usize, scale: B::Scalar) {
         if i < self.grid_scale.len() {
-            self.grid_scale[i] = if scale < S::from_f64(1e-3).unwrap_or(S::ZERO) {
-                S::from_f64(1e-3).unwrap_or(S::ZERO)
+            let min_scale = self.backend.scalar_from_f64(1e-3);
+            self.grid_scale[i] = if scale < min_scale {
+                min_scale
             } else {
                 scale
             };
@@ -172,14 +178,14 @@ impl<S: Scalar> SmagorinskySolver<S> {
     }
 
     /// 设置速度梯度（外部计算）
-    pub fn set_velocity_gradient(&mut self, i: usize, grad: VelocityGradient<S>) {
+    pub fn set_velocity_gradient(&mut self, i: usize, grad: VelocityGradient<B::Scalar>) {
         if i < self.velocity_gradient.len() {
             self.velocity_gradient[i] = grad;
         }
     }
 
     /// 批量设置速度梯度
-    pub fn set_velocity_gradients(&mut self, gradients: &[VelocityGradient<S>]) {
+    pub fn set_velocity_gradients(&mut self, gradients: &[VelocityGradient<B::Scalar>]) {
         let n = self.velocity_gradient.len().min(gradients.len());
         self.velocity_gradient[..n].copy_from_slice(&gradients[..n]);
     }
@@ -195,9 +201,9 @@ impl<S: Scalar> SmagorinskySolver<S> {
     /// - `mesh`: 网格信息
     pub fn estimate_gradient_from_state(
         &mut self,
-        h: &[S],
-        hu: &[S],
-        hv: &[S],
+        h: &[B::Scalar],
+        hu: &[B::Scalar],
+        hv: &[B::Scalar],
         mesh: &PhysicsMesh,
     ) {
         let n_cells = self.velocity_gradient.len()
@@ -215,11 +221,11 @@ impl<S: Scalar> SmagorinskySolver<S> {
             let v = hv[i] / h_i;
 
             // 简单的最近邻梯度估计
-            let mut du_dx = S::ZERO;
-            let mut du_dy = S::ZERO;
-            let mut dv_dx = S::ZERO;
-            let mut dv_dy = S::ZERO;
-            let mut weight_sum = S::ZERO;
+            let mut du_dx = B::Scalar::ZERO;
+            let mut du_dy = B::Scalar::ZERO;
+            let mut dv_dx = B::Scalar::ZERO;
+            let mut dv_dy = B::Scalar::ZERO;
+            let mut weight_sum = B::Scalar::ZERO;
 
             for face_id in mesh.cell_faces(CellIndex::new(i)) {
                 // 使用 face_neighbor 获取邻居
@@ -239,12 +245,12 @@ impl<S: Scalar> SmagorinskySolver<S> {
                     let normal = mesh
                         .face_normal_generic::<CpuBackend<f64>>(face_id)
                         .expect("face_normal out of range");
-                    let nx = S::from_f64(normal.x()).unwrap_or(S::ZERO);
-                    let ny = S::from_f64(normal.y()).unwrap_or(S::ZERO);
+                    let nx = self.backend.scalar_from_f64(normal.x());
+                    let ny = self.backend.scalar_from_f64(normal.y());
                     let dist = self.grid_scale[i];
 
-                    if dist > S::from_f64(1e-10).unwrap_or(S::ZERO) {
-                        let weight = S::ONE / dist;
+                    if dist > self.backend.scalar_from_f64(1e-10) {
+                        let weight = B::Scalar::ONE / dist;
                         du_dx = du_dx + (u_n - u) * nx * weight;
                         du_dy = du_dy + (u_n - u) * ny * weight;
                         dv_dx = dv_dx + (v_n - v) * nx * weight;
@@ -254,7 +260,7 @@ impl<S: Scalar> SmagorinskySolver<S> {
                 }
             }
 
-            if weight_sum > S::from_f64(1e-10).unwrap_or(S::ZERO) {
+            if weight_sum > self.backend.scalar_from_f64(1e-10) {
                 self.velocity_gradient[i] = VelocityGradient::new(
                     du_dx / weight_sum,
                     du_dy / weight_sum,
@@ -271,16 +277,16 @@ impl<S: Scalar> SmagorinskySolver<S> {
     pub fn update_eddy_viscosity(&mut self) {
         match &self.model {
             TurbulenceModel::None | TurbulenceModel::Disabled => {
-                self.eddy_viscosity.fill(S::ZERO);
+                self.eddy_viscosity.fill(B::Scalar::ZERO);
             }
             TurbulenceModel::ConstantViscosity(nu) => {
                 self.eddy_viscosity.fill(*nu);
             }
             TurbulenceModel::Smagorinsky { cs } => {
-                let min = TurbulenceModel::<S>::min_eddy_viscosity();
-                let max = TurbulenceModel::<S>::max_eddy_viscosity();
+                let min = TurbulenceModel::<B::Scalar>::min_eddy_viscosity(&self.backend);
+                let max = TurbulenceModel::<B::Scalar>::max_eddy_viscosity(&self.backend);
                 for (i, nu) in self.eddy_viscosity.iter_mut().enumerate() {
-                    let delta = self.grid_scale.get(i).copied().unwrap_or(S::ZERO);
+                    let delta = self.grid_scale.get(i).copied().unwrap_or(B::Scalar::ZERO);
                     let strain = self
                         .velocity_gradient
                         .get(i)
@@ -295,8 +301,8 @@ impl<S: Scalar> SmagorinskySolver<S> {
     }
 
     /// 获取单元涡粘性
-    pub fn get_eddy_viscosity(&self, cell: usize) -> S {
-        self.eddy_viscosity.get(cell).copied().unwrap_or(S::ZERO)
+    pub fn get_eddy_viscosity(&self, cell: usize) -> B::Scalar {
+        self.eddy_viscosity.get(cell).copied().unwrap_or(B::Scalar::ZERO)
     }
 
     /// 计算湍流扩散通量
@@ -309,10 +315,10 @@ impl<S: Scalar> SmagorinskySolver<S> {
     pub fn compute_diffusion_flux(
         &self,
         cell: usize,
-        h: S,
-    ) -> (S, S) {
+        h: B::Scalar,
+    ) -> (B::Scalar, B::Scalar) {
         if h < self.h_min {
-            return (S::ZERO, S::ZERO);
+            return (B::Scalar::ZERO, B::Scalar::ZERO);
         }
 
         let nu = self.get_eddy_viscosity(cell);
@@ -326,7 +332,7 @@ impl<S: Scalar> SmagorinskySolver<S> {
 }
 
 // 实现 TurbulenceClosure trait
-impl<S: Scalar> TurbulenceClosure<S> for SmagorinskySolver<S> {
+impl<B: Backend> TurbulenceClosure<B::Scalar> for SmagorinskySolver<B> {
     fn name(&self) -> &'static str {
         "Smagorinsky"
     }
@@ -335,14 +341,14 @@ impl<S: Scalar> TurbulenceClosure<S> for SmagorinskySolver<S> {
         false // Smagorinsky 适用于 2D
     }
 
-    fn eddy_viscosity(&self) -> &[S] {
-        &self.eddy_viscosity
+    fn eddy_viscosity(&self) -> &[B::Scalar] {
+        self.eddy_viscosity.as_slice()
     }
 
-    fn update(&mut self, velocity_gradients: &[VelocityGradient<S>], cell_sizes: &[S]) {
+    fn update(&mut self, velocity_gradients: &[VelocityGradient<B::Scalar>], cell_sizes: &[B::Scalar]) {
         self.set_velocity_gradients(velocity_gradients);
         let n = self.grid_scale.len().min(cell_sizes.len());
-        self.grid_scale[..n].copy_from_slice(&cell_sizes[..n]);
+        self.grid_scale.as_slice_mut()[..n].copy_from_slice(&cell_sizes[..n]);
         self.update_eddy_viscosity();
     }
 
@@ -359,34 +365,38 @@ pub struct TurbulenceConfig<B: Backend> {
     /// 湍流模型
     pub model: TurbulenceModel<B::Scalar>,
     /// 涡粘性 [m²/s]（预计算或常数）
-    pub eddy_viscosity: Vec<B::Scalar>,
+    pub eddy_viscosity: B::Buffer<B::Scalar>,
     /// 网格尺度 [m]（每个单元）
-    pub grid_scale: Vec<B::Scalar>,
+    pub grid_scale: B::Buffer<B::Scalar>,
     /// 速度梯度（外部提供）
     pub velocity_gradient: Vec<VelocityGradient<B::Scalar>>,
     /// 最小水深
     pub h_min: B::Scalar,
+    /// 后端
+    backend: B,
     /// 类型标记
     _marker: PhantomData<B>,
 }
 
 impl<B: Backend> TurbulenceConfig<B> {
     /// 创建新配置
-    pub fn new(n_cells: usize, model: TurbulenceModel<B::Scalar>) -> Self {
+    pub fn new(backend: B, n_cells: usize, model: TurbulenceModel<B::Scalar>) -> Self {
         Self {
             enabled: true,
             model,
-            eddy_viscosity: vec![B::Scalar::ZERO; n_cells],
-            grid_scale: vec![<B::Scalar as Scalar>::from_config(10.0).unwrap_or(B::Scalar::ZERO); n_cells],
+            eddy_viscosity: backend.alloc_init(n_cells, B::Scalar::ZERO),
+            grid_scale: backend.alloc_init(n_cells, backend.scalar_from_f64(10.0)),
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: <B::Scalar as Scalar>::from_config(1e-4).unwrap_or(B::Scalar::ZERO),
+            h_min: backend.scalar_from_f64(1e-4),
+            backend,
             _marker: PhantomData,
         }
     }
 
     /// 创建常数涡粘性配置
-    pub fn constant(n_cells: usize, nu: B::Scalar) -> Self {
-        let mut config = Self::new(n_cells, TurbulenceModel::constant(nu));
+    pub fn constant(backend: B, n_cells: usize, nu: B::Scalar) -> Self {
+        let model = TurbulenceModel::constant(&backend, nu);
+        let mut config = Self::new(backend, n_cells, model);
         config.eddy_viscosity.fill(nu);
         config
     }
@@ -408,7 +418,7 @@ impl<B: Backend> TurbulenceConfig<B> {
     /// 批量设置涡粘性
     pub fn set_eddy_viscosity_field(&mut self, nu: &[B::Scalar]) {
         let n = self.eddy_viscosity.len().min(nu.len());
-        self.eddy_viscosity[..n].copy_from_slice(&nu[..n]);
+        self.eddy_viscosity.as_slice_mut()[..n].copy_from_slice(&nu[..n]);
     }
 }
 
@@ -429,7 +439,7 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         ctx: &SourceContextGeneric<f64>,
     ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
@@ -451,12 +461,12 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
                     .unwrap_or_default();
                 let strain = grad.strain_rate_magnitude();
                 let nu_sgs = (cs * delta) * (cs * delta) * strain;
-                let min = TurbulenceModel::<f64>::min_eddy_viscosity();
-                let max = TurbulenceModel::<f64>::max_eddy_viscosity();
+                let min = TurbulenceModel::<f64>::min_eddy_viscosity(&self.backend);
+                let max = TurbulenceModel::<f64>::max_eddy_viscosity(&self.backend);
                 if nu_sgs < min { min } else if nu_sgs > max { max } else { nu_sgs }
             }
         };
-        if nu < TurbulenceModel::<f64>::min_eddy_viscosity() {
+        if nu < TurbulenceModel::<f64>::min_eddy_viscosity(&self.backend) {
             return SourceContributionGeneric::zero();
         }
 
@@ -487,7 +497,7 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
@@ -532,7 +542,8 @@ mod tests {
 
     #[test]
     fn test_turbulence_model_constant() {
-        let model = TurbulenceModel::constant(0.01_f64);
+        let backend = CpuBackend::<f64>::new();
+        let model = TurbulenceModel::constant(&backend, 0.01_f64);
         match model {
             TurbulenceModel::ConstantViscosity(nu) => {
                 assert!((nu - 0.01).abs() < 1e-10);
@@ -543,14 +554,17 @@ mod tests {
 
     #[test]
     fn test_smagorinsky_solver_creation() {
-        let solver = SmagorinskySolver::<f64>::new(10, TurbulenceModel::default());
+        let backend = CpuBackend::<f64>::new();
+        let solver = SmagorinskySolver::new(backend, 10, TurbulenceModel::default());
         assert_eq!(solver.grid_scale.len(), 10);
         assert_eq!(solver.eddy_viscosity.len(), 10);
     }
 
     #[test]
     fn test_smagorinsky_solver_constant_viscosity() {
-        let mut solver = SmagorinskySolver::new(10, TurbulenceModel::constant(0.1_f64));
+        let backend = CpuBackend::<f64>::new();
+        let model = TurbulenceModel::constant(&backend, 0.1_f64);
+        let mut solver = SmagorinskySolver::new(backend, 10, model);
         solver.update_eddy_viscosity();
 
         for i in 0..10 {
@@ -560,7 +574,8 @@ mod tests {
 
     #[test]
     fn test_turbulence_config_creation() {
-        let config = TurbulenceConfig::<CpuBackend<f64>>::new(10, TurbulenceModel::default());
+        let backend = CpuBackend::<f64>::new();
+        let config = TurbulenceConfig::new(backend, 10, TurbulenceModel::default());
         assert!(config.enabled);
         assert_eq!(config.eddy_viscosity.len(), 10);
         assert_eq!(config.grid_scale.len(), 10);
@@ -568,16 +583,18 @@ mod tests {
 
     #[test]
     fn test_turbulence_config_constant() {
-        let config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.05);
+        let backend = CpuBackend::<f64>::new();
+        let config = TurbulenceConfig::constant(backend, 10, 0.05);
         assert!((config.eddy_viscosity[0] - 0.05).abs() < 1e-10);
     }
 
     #[test]
     fn test_turbulence_source_term() {
-        let mut config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.1);
+        let backend = CpuBackend::<f64>::new();
+        let mut config = TurbulenceConfig::constant(backend, 10, 0.1);
         config.velocity_gradient[0] = VelocityGradient::new(1.0, 0.0, 0.0, 1.0);
 
-        let mut state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new_with_backend(
+        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(
             CpuBackend::<f64>::new(),
             10,
         );
@@ -587,7 +604,8 @@ mod tests {
             state.hu[i] = 2.0; // h * u = 2.0 * 1.0
             state.hv[i] = 1.0; // h * v = 2.0 * 0.5
         }
-        let ctx = SourceContextGeneric::with_defaults(0.0, 1.0);
+        let backend_ctx = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend_ctx, 0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -598,14 +616,16 @@ mod tests {
 
     #[test]
     fn test_turbulence_dry_cell() {
-        let config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.1);
+        let backend = CpuBackend::<f64>::new();
+        let config = TurbulenceConfig::constant(backend, 10, 0.1);
 
-        let state = ShallowWaterStateGeneric::<CpuBackend<f64>>::new_with_backend(
+        let state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(
             CpuBackend::<f64>::new(),
             10,
         );
         // h 默认为 0，是干单元
-        let ctx = SourceContextGeneric::with_defaults(0.0, 1.0);
+        let backend_ctx = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend_ctx, 0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -615,14 +635,17 @@ mod tests {
 
     #[test]
     fn test_source_term_generic_trait() {
-        let config = TurbulenceConfig::<CpuBackend<f64>>::constant(10, 0.15);
+        let backend = CpuBackend::<f64>::new();
+        let config = TurbulenceConfig::constant(backend, 10, 0.15);
         assert_eq!(config.name(), "Turbulence");
         assert_eq!(config.stiffness(), SourceStiffness::Explicit);
     }
 
     #[test]
     fn test_turbulence_closure_trait() {
-        let mut solver = SmagorinskySolver::<f64>::new(10, TurbulenceModel::constant(0.5));
+        let backend = CpuBackend::<f64>::new();
+        let model = TurbulenceModel::constant(&backend, 0.5);
+        let mut solver = SmagorinskySolver::new(backend, 10, model);
         assert_eq!(solver.name(), "Smagorinsky");
         assert!(!solver.is_3d());
 
@@ -635,7 +658,8 @@ mod tests {
 
     #[test]
     fn test_turbulence_model_smagorinsky() {
-        let model = TurbulenceModel::smagorinsky(0.2_f64);
+        let backend = CpuBackend::<f64>::new();
+        let model = TurbulenceModel::smagorinsky(&backend, 0.2_f64);
         match model {
             TurbulenceModel::Smagorinsky { cs } => assert!((cs - 0.2).abs() < 1e-10),
             _ => panic!("Expected Smagorinsky model"),
@@ -644,8 +668,10 @@ mod tests {
 
     #[test]
     fn test_f32_precision() {
-        let model_f32 = TurbulenceModel::<f32>::constant(0.1_f32);
-        let model_f64 = TurbulenceModel::<f64>::constant(0.1_f64);
+        let backend_f32 = CpuBackend::<f32>::new();
+        let backend_f64 = CpuBackend::<f64>::new();
+        let model_f32 = TurbulenceModel::<f32>::constant(&backend_f32, 0.1_f32);
+        let model_f64 = TurbulenceModel::<f64>::constant(&backend_f64, 0.1_f64);
 
         match (model_f32, model_f64) {
             (

@@ -24,7 +24,7 @@ use super::workspace::SolverWorkspaceGeneric;
 use crate::core::Backend;
 use crate::engine::pcg::{PcgSolver, PcgConfig, PreconditionerType, PoissonMatrixBuilder};
 use crate::mesh::MeshTopology;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use num_traits::FromPrimitive;
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
@@ -134,7 +134,7 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
     
     fn step(
         &mut self,
-        state: &mut ShallowWaterStateGeneric<B>,
+        state: &mut ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         _workspace: &mut SolverWorkspaceGeneric<B>,
         dt: B::Scalar,
@@ -348,7 +348,7 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
 
     fn compute_stable_dt(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         cfl: B::Scalar,
     ) -> B::Scalar {

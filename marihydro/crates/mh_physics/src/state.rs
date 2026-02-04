@@ -9,8 +9,7 @@
 //!
 //! - [`ShallowWaterState`]：泛型状态存储
 //! - [`ConservedState`]：单元状态
-//! - [`ShallowWaterStateF64`]：f64精度状态别名（Layer 4专用）
-//! - [`ShallowWaterStateF32`]：f32精度状态别名（GPU测试专用）
+//! - [`ShallowWaterState`]：泛型状态存储
 //!
 //! # 设计原则
 //!
@@ -20,20 +19,14 @@
 use crate::fields::{FieldMeta, FieldRegistry};
 use crate::traits::{StateAccess, StateAccessMut};
 use crate::types::{NumericalParams, SafeVelocity};
-use mh_runtime::{Backend, CpuBackend};
+use mh_runtime::{Backend, DeviceBuffer};
 use num_traits::{Float, Zero};
 use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
 
 // ============================================
-// 🔥 强制类型别名（Layer 4专用，无泛型）
+// 🔥 类型别名仅在 mh_physics::lib.rs 统一导出
 // ============================================
-
-/// f64精度浅水状态（Layer 4直接调用，禁止在Layer 3使用）
-pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
-
-/// f32精度浅水状态（GPU测试专用）
-pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
 
 /// 单个单元的守恒状态
 /// 
@@ -138,27 +131,28 @@ where
     }
 }
 
-/// 动态标量场集合，按名称管理示踪剂等扩展字段
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DynamicScalars<S> {
+/// 动态标量场集合，按名称管理示踪剂等扩展字段（Backend 感知）
+#[derive(Debug, Clone)]
+pub struct DynamicScalars<B: Backend> {
+    /// 计算后端实例
+    backend: B,
     /// 单元数量
-    #[serde(default)]
     len: usize,
     /// 字段名称列表
-    #[serde(default)]
     names: Vec<String>,
-    /// 数据存储
-    #[serde(default)]
-    data: Vec<Vec<S>>,
+    /// 数据存储（Backend 缓冲区）
+    data: Vec<B::Buffer<B::Scalar>>,
 }
 
-impl<S> DynamicScalars<S>
+impl<B> DynamicScalars<B>
 where
-    S: Float + Copy + RuntimeScalar,
+    B: Backend,
+    B::Scalar: Float + RuntimeScalar,
 {
     /// 创建空集合
-    pub fn new(len: usize) -> Self {
+    pub fn new(backend: B, len: usize) -> Self {
         Self {
+            backend,
             len,
             names: Vec::new(),
             data: Vec::new(),
@@ -166,8 +160,8 @@ where
     }
 
     /// 创建指定数量的匿名示踪剂字段
-    pub fn with_count(len: usize, count: usize) -> Self {
-        let mut scalars = Self::new(len);
+    pub fn with_count(backend: B, len: usize, count: usize) -> Self {
+        let mut scalars = Self::new(backend, len);
         for i in 0..count {
             scalars.register(format!("tracer_{i}"));
         }
@@ -196,39 +190,53 @@ where
     pub fn register(&mut self, name: impl Into<String>) -> usize {
         let name = name.into();
         if let Some(pos) = self.names.iter().position(|n| n == &name) {
-            self.data[pos].resize(self.len, S::ZERO);
+            self.data[pos].resize(self.len, B::Scalar::ZERO);
             return pos;
         }
 
         self.names.push(name);
-        self.data.push(vec![S::ZERO; self.len]);
+        let mut buf = self.backend.alloc(self.len);
+        buf.fill(B::Scalar::ZERO);
+        self.data.push(buf);
         self.data.len() - 1
     }
 
-    /// 按索引获取只读切片
+    /// 按索引获取只读缓冲区
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<&[S]> {
-        self.data.get(idx).map(|v| v.as_slice())
+    pub fn get(&self, idx: usize) -> Option<&B::Buffer<B::Scalar>> {
+        self.data.get(idx)
     }
 
-    /// 按索引获取可变切片
+    /// 按索引获取可变缓冲区
     #[inline]
-    pub fn get_mut(&mut self, idx: usize) -> Option<&mut [S]> {
-        self.data.get_mut(idx).map(|v| v.as_mut_slice())
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut B::Buffer<B::Scalar>> {
+        self.data.get_mut(idx)
     }
 
-    /// 按名称获取只读切片
-    pub fn get_by_name(&self, name: &str) -> Option<&[S]> {
+    /// 按索引获取只读切片（仅 CPU 可用）
+    #[inline]
+    pub fn get_slice(&self, idx: usize) -> Option<&[B::Scalar]> {
+        self.data.get(idx).and_then(|v| v.try_as_slice())
+    }
+
+    /// 按索引获取可变切片（仅 CPU 可用）
+    #[inline]
+    pub fn get_slice_mut(&mut self, idx: usize) -> Option<&mut [B::Scalar]> {
+        self.data.get_mut(idx).and_then(|v| v.try_as_slice_mut())
+    }
+
+    /// 按名称获取只读切片（仅 CPU 可用）
+    pub fn get_by_name(&self, name: &str) -> Option<&[B::Scalar]> {
         self.names
             .iter()
             .position(|n| n == name)
-            .and_then(|i| self.get(i))
+            .and_then(|i| self.get_slice(i))
     }
 
-    /// 按名称获取可变示踪剂切片
-    pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut [S]> {
+    /// 按名称获取可变示踪剂切片（仅 CPU 可用）
+    pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut [B::Scalar]> {
         if let Some(pos) = self.names.iter().position(|n| n == name) {
-            return self.get_mut(pos);
+            return self.get_slice_mut(pos);
         }
         None
     }
@@ -236,7 +244,7 @@ where
     /// 将所有字段清零
     pub fn clear_all(&mut self) {
         for field in &mut self.data {
-            field.fill(S::ZERO);
+            field.fill(B::Scalar::ZERO);
         }
     }
 
@@ -244,7 +252,7 @@ where
     pub fn resize_len(&mut self, len: usize) {
         self.len = len;
         for field in &mut self.data {
-            field.resize(len, S::ZERO);
+            field.resize(len, B::Scalar::ZERO);
         }
     }
 
@@ -256,7 +264,11 @@ where
             self.data = other
                 .data
                 .iter()
-                .map(|_| vec![S::ZERO; other.len])
+                .map(|_| {
+                    let mut buf = self.backend.alloc(other.len);
+                    buf.fill(B::Scalar::ZERO);
+                    buf
+                })
                 .collect();
         } else {
             self.resize_len(other.len);
@@ -267,17 +279,15 @@ where
     pub fn copy_from(&mut self, other: &Self) {
         self.match_layout(other);
         for (dst, src) in self.data.iter_mut().zip(other.data.iter()) {
-            dst.copy_from_slice(src.as_slice());
+            self.backend.copy(src, dst);
         }
     }
 
     /// self += scale * rhs
-    pub fn add_scaled(&mut self, rhs: &Self, scale: S) {
+    pub fn add_scaled(&mut self, rhs: &Self, scale: B::Scalar) {
         self.match_layout(rhs);
         for (dst, src) in self.data.iter_mut().zip(rhs.data.iter()) {
-            for (d, s) in dst.iter_mut().zip(src.iter()) {
-                *d += scale * *s;
-            }
+            self.backend.axpy(scale, src, dst);
         }
     }
 
@@ -288,12 +298,14 @@ where
         while self.data.len() < count {
             let idx = self.data.len();
             self.names.push(format!("tracer_{idx}"));
-            self.data.push(vec![S::ZERO; self.len]);
+            let mut buf = self.backend.alloc(self.len);
+            buf.fill(B::Scalar::ZERO);
+            self.data.push(buf);
         }
     }
 
     /// self = a * A + b * B
-    pub fn linear_combine(&mut self, a: S, state_a: &Self, b: S, state_b: &Self) {
+    pub fn linear_combine(&mut self, a: B::Scalar, state_a: &Self, b: B::Scalar, state_b: &Self) {
         debug_assert_eq!(state_a.names, state_b.names, "示踪剂字段布局不一致");
         self.match_layout(state_a);
         for ((dst, sa), sb) in self
@@ -302,107 +314,109 @@ where
             .zip(state_a.data.iter())
             .zip(state_b.data.iter())
         {
-            for ((d, a_val), b_val) in dst.iter_mut().zip(sa.iter()).zip(sb.iter()) {
-                *d = a * *a_val + b * *b_val;
-            }
+            self.backend.copy(sa, dst);
+            self.backend.scale(a, dst);
+            self.backend.axpy(b, sb, dst);
         }
     }
 
     /// self = a * self + b * other
-    pub fn axpy(&mut self, a: S, b: S, other: &Self) {
+    pub fn axpy(&mut self, a: B::Scalar, b: B::Scalar, other: &Self) {
         self.match_layout(other);
         for (dst, src) in self.data.iter_mut().zip(other.data.iter()) {
-            for (d, s) in dst.iter_mut().zip(src.iter()) {
-                *d = a * *d + b * *s;
-            }
+            self.backend.scale(a, dst);
+            self.backend.axpy(b, src, dst);
         }
     }
 
     /// 迭代所有字段的可变存储
     #[inline]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Vec<S>> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut B::Buffer<B::Scalar>> {
         self.data.iter_mut()
+    }
+
+    /// 迭代所有字段的只读存储
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &B::Buffer<B::Scalar>> {
+        self.data.iter()
     }
 }
 
 /// 梯度状态 (用于二阶重构)
 #[derive(Debug, Clone)]
-pub struct GradientState<S> {
+pub struct GradientState<B: Backend> {
     /// 水深梯度 x 分量
-    pub grad_h_x: Vec<S>,
+    pub grad_h_x: B::Buffer<B::Scalar>,
     /// 水深梯度 y 分量
-    pub grad_h_y: Vec<S>,
+    pub grad_h_y: B::Buffer<B::Scalar>,
     /// x 动量梯度 x 分量
-    pub grad_hu_x: Vec<S>,
+    pub grad_hu_x: B::Buffer<B::Scalar>,
     /// x 动量梯度 y 分量
-    pub grad_hu_y: Vec<S>,
+    pub grad_hu_y: B::Buffer<B::Scalar>,
     /// y 动量梯度 x 分量
-    pub grad_hv_x: Vec<S>,
+    pub grad_hv_x: B::Buffer<B::Scalar>,
     /// y 动量梯度 y 分量
-    pub grad_hv_y: Vec<S>,
+    pub grad_hv_y: B::Buffer<B::Scalar>,
 }
 
-impl<S> GradientState<S>
-where
-    S: RuntimeScalar,
-{
+impl<B: Backend> GradientState<B> {
     /// 创建新的梯度状态
-    pub fn new(n_cells: usize) -> Self {
+    pub fn new(backend: B, n_cells: usize) -> Self {
         Self {
-            grad_h_x: vec![S::ZERO; n_cells],
-            grad_h_y: vec![S::ZERO; n_cells],
-            grad_hu_x: vec![S::ZERO; n_cells],
-            grad_hu_y: vec![S::ZERO; n_cells],
-            grad_hv_x: vec![S::ZERO; n_cells],
-            grad_hv_y: vec![S::ZERO; n_cells],
+            grad_h_x: backend.alloc(n_cells),
+            grad_h_y: backend.alloc(n_cells),
+            grad_hu_x: backend.alloc(n_cells),
+            grad_hu_y: backend.alloc(n_cells),
+            grad_hv_x: backend.alloc(n_cells),
+            grad_hv_y: backend.alloc(n_cells),
         }
     }
 
     /// 重置为零
     pub fn reset(&mut self) {
-        self.grad_h_x.fill(S::ZERO);
-        self.grad_h_y.fill(S::ZERO);
-        self.grad_hu_x.fill(S::ZERO);
-        self.grad_hu_y.fill(S::ZERO);
-        self.grad_hv_x.fill(S::ZERO);
-        self.grad_hv_y.fill(S::ZERO);
+        self.grad_h_x.fill(B::Scalar::ZERO);
+        self.grad_h_y.fill(B::Scalar::ZERO);
+        self.grad_hu_x.fill(B::Scalar::ZERO);
+        self.grad_hu_y.fill(B::Scalar::ZERO);
+        self.grad_hv_x.fill(B::Scalar::ZERO);
+        self.grad_hv_y.fill(B::Scalar::ZERO);
     }
 
     /// 获取单元梯度向量
     #[inline]
-    pub fn get_h(&self, cell: usize) -> (S, S) {
+    pub fn get_h(&self, cell: usize) -> (B::Scalar, B::Scalar) {
         (self.grad_h_x[cell], self.grad_h_y[cell])
     }
 
     /// 设置单元 h 梯度
     #[inline]
-    pub fn set_h(&mut self, cell: usize, grad_x: S, grad_y: S) {
+    pub fn set_h(&mut self, cell: usize, grad_x: B::Scalar, grad_y: B::Scalar) {
         self.grad_h_x[cell] = grad_x;
         self.grad_h_y[cell] = grad_y;
     }
 
     /// 获取单元 hu 梯度
     #[inline]
-    pub fn get_hu(&self, cell: usize) -> (S, S) {
+    pub fn get_hu(&self, cell: usize) -> (B::Scalar, B::Scalar) {
         (self.grad_hu_x[cell], self.grad_hu_y[cell])
     }
 
     /// 设置单元 hu 梯度
     #[inline]
-    pub fn set_hu(&mut self, cell: usize, grad_x: S, grad_y: S) {
+    pub fn set_hu(&mut self, cell: usize, grad_x: B::Scalar, grad_y: B::Scalar) {
         self.grad_hu_x[cell] = grad_x;
         self.grad_hu_y[cell] = grad_y;
     }
 
     /// 获取单元 hv 梯度
     #[inline]
-    pub fn get_hv(&self, cell: usize) -> (S, S) {
+    pub fn get_hv(&self, cell: usize) -> (B::Scalar, B::Scalar) {
         (self.grad_hv_x[cell], self.grad_hv_y[cell])
     }
 
     /// 设置单元 hv 梯度
     #[inline]
-    pub fn set_hv(&mut self, cell: usize, grad_x: S, grad_y: S) {
+    pub fn set_hv(&mut self, cell: usize, grad_x: B::Scalar, grad_y: B::Scalar) {
         self.grad_hv_x[cell] = grad_x;
         self.grad_hv_y[cell] = grad_y;
     }
@@ -520,34 +534,34 @@ where
 
 /// 右端项缓冲区 (用于时间积分)
 #[derive(Debug, Clone)]
-pub struct RhsBuffers<S:RuntimeScalar> {
+pub struct RhsBuffers<B: Backend> {
+    /// 后端实例
+    backend: B,
     /// 水深变化率 [m/s]
-    pub dh_dt: Vec<S>,
+    pub dh_dt: B::Buffer<B::Scalar>,
     /// x 动量变化率 [m²/s²]
-    pub dhu_dt: Vec<S>,
+    pub dhu_dt: B::Buffer<B::Scalar>,
     /// y 动量变化率 [m²/s²]
-    pub dhv_dt: Vec<S>,
+    pub dhv_dt: B::Buffer<B::Scalar>,
     /// 标量示踪剂变化率（可选）
-    pub tracer_rhs: DynamicScalars<S>,
+    pub tracer_rhs: DynamicScalars<B>,
 }
 
-impl<S> RhsBuffers<S>
-where
-    S: RuntimeScalar,
-{
+impl<B: Backend> RhsBuffers<B> {
     /// 创建新的 RHS 缓冲区
-    pub fn new(n_cells: usize) -> Self {
+    pub fn new(backend: B, n_cells: usize) -> Self {
         Self {
-            dh_dt: vec![S::ZERO; n_cells],
-            dhu_dt: vec![S::ZERO; n_cells],
-            dhv_dt: vec![S::ZERO; n_cells],
-            tracer_rhs: DynamicScalars::new(n_cells),
+            backend: backend.clone(),
+            dh_dt: backend.alloc(n_cells),
+            dhu_dt: backend.alloc(n_cells),
+            dhv_dt: backend.alloc(n_cells),
+            tracer_rhs: DynamicScalars::new(backend, n_cells),
         }
     }
 
     /// 创建带有示踪剂的 RHS 缓冲区
-    pub fn with_tracers(n_cells: usize, n_tracers: usize) -> Self {
-        let mut rhs = Self::new(n_cells);
+    pub fn with_tracers(backend: B, n_cells: usize, n_tracers: usize) -> Self {
+        let mut rhs = Self::new(backend, n_cells);
         rhs.tracer_rhs.set_count(n_tracers);
         rhs
     }
@@ -564,29 +578,29 @@ where
 
     /// 重置为零
     pub fn reset(&mut self) {
-        self.dh_dt.fill(S::ZERO);
-        self.dhu_dt.fill(S::ZERO);
-        self.dhv_dt.fill(S::ZERO);
+        self.dh_dt.fill(B::Scalar::ZERO);
+        self.dhu_dt.fill(B::Scalar::ZERO);
+        self.dhv_dt.fill(B::Scalar::ZERO);
         self.tracer_rhs.clear_all();
     }
 
     /// 调整大小
     pub fn resize(&mut self, n_cells: usize, n_tracers: usize) {
-        self.dh_dt.resize(n_cells, S::ZERO);
-        self.dhu_dt.resize(n_cells, S::ZERO);
-        self.dhv_dt.resize(n_cells, S::ZERO);
+        self.dh_dt.resize(n_cells, B::Scalar::ZERO);
+        self.dhu_dt.resize(n_cells, B::Scalar::ZERO);
+        self.dhv_dt.resize(n_cells, B::Scalar::ZERO);
         self.tracer_rhs.resize_len(n_cells);
         self.tracer_rhs.set_count(n_tracers);
     }
 
     /// 将示踪剂布局对齐到给定状态
-    pub fn match_tracers(&mut self, layout: &DynamicScalars<S>) {
+    pub fn match_tracers(&mut self, layout: &DynamicScalars<B>) {
         self.tracer_rhs.match_layout(layout);
     }
 
     /// 添加通量贡献
     #[inline]
-    pub fn add_flux(&mut self, cell: usize, flux: Flux<S>, area_inv: S) {
+    pub fn add_flux(&mut self, cell: usize, flux: Flux<B::Scalar>, area_inv: B::Scalar) {
         self.dh_dt[cell] += flux.mass * area_inv;
         self.dhu_dt[cell] += flux.mom_x * area_inv;
         self.dhv_dt[cell] += flux.mom_y * area_inv;
@@ -594,7 +608,7 @@ where
 
     /// 添加源项贡献
     #[inline]
-    pub fn add_source(&mut self, cell: usize, source: ConservedState<S>) {
+    pub fn add_source(&mut self, cell: usize, source: ConservedState<B::Scalar>) {
         self.dh_dt[cell] += source.h;
         self.dhu_dt[cell] += source.hu;
         self.dhv_dt[cell] += source.hv;
@@ -622,7 +636,7 @@ pub struct ShallowWaterState<B: Backend> {
     /// 底床高程 [m]
     pub z: B::Buffer<B::Scalar>,
     /// 动态示踪剂字段
-    pub tracers: DynamicScalars<B::Scalar>,
+    pub tracers: DynamicScalars<B>,
     /// 字段注册表（元数据）
     pub field_registry: FieldRegistry,
     /// 后端实例
@@ -632,7 +646,7 @@ pub struct ShallowWaterState<B: Backend> {
 impl<B: Backend> ShallowWaterState<B> {
     /// 使用后端实例创建新状态
     pub fn new_with_backend(backend: B, n_cells: usize) -> Self {
-        let tracers = DynamicScalars::new(n_cells);
+        let tracers = DynamicScalars::new(backend.clone(), n_cells);
         let field_registry = FieldRegistry::shallow_water();
 
         Self {
@@ -768,7 +782,7 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 克隆结构（不复制数据，创建零初始化的状态）
     pub fn clone_structure(&self) -> Self {
         let backend = self.backend.clone();
-        let mut tracers = DynamicScalars::new(self.n_cells);
+        let mut tracers = DynamicScalars::new(backend.clone(), self.n_cells);
         tracers.match_layout(&self.tracers);
 
         Self {
@@ -828,13 +842,13 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 按索引获取示踪剂切片
     #[inline]
     pub fn tracer_slice(&self, idx: usize) -> Option<&[B::Scalar]> {
-        self.tracers.get(idx)
+        self.tracers.get_slice(idx)
     }
 
     /// 按索引获取可变示踪剂切片
     #[inline]
     pub fn tracer_slice_mut(&mut self, idx: usize) -> Option<&mut [B::Scalar]> {
-        self.tracers.get_mut(idx)
+        self.tracers.get_slice_mut(idx)
     }
 
     /// 按名称获取示踪剂切片
@@ -961,26 +975,28 @@ impl<B: Backend> ShallowWaterState<B> {
     }
 
     /// 计算总质量
-    pub fn total_mass(&self, cell_areas: &[B::Scalar]) -> B::Scalar {
+    pub fn total_mass(&self, cell_areas: &B::Buffer<B::Scalar>) -> B::Scalar {
+        let areas = cell_areas.try_as_slice().unwrap_or(&[]);
         self.h
             .iter()
-            .zip(cell_areas.iter())
+            .zip(areas.iter())
             .map(|(h, a)| *h * *a)
             .fold(B::Scalar::zero(), |acc, x| acc + x)
     }
 
     /// 计算总动量
-    pub fn total_momentum(&self, cell_areas: &[B::Scalar]) -> (B::Scalar, B::Scalar) {
+    pub fn total_momentum(&self, cell_areas: &B::Buffer<B::Scalar>) -> (B::Scalar, B::Scalar) {
+        let areas = cell_areas.try_as_slice().unwrap_or(&[]);
         let hux: B::Scalar = self
             .hu
             .iter()
-            .zip(cell_areas.iter())
+            .zip(areas.iter())
             .map(|(hu, a)| *hu * *a)
             .fold(B::Scalar::zero(), |acc, x| acc + x);
         let hvx: B::Scalar = self
             .hv
             .iter()
-            .zip(cell_areas.iter())
+            .zip(areas.iter())
             .map(|(hv, a)| *hv * *a)
             .fold(B::Scalar::zero(), |acc, x| acc + x);
         (hux, hvx)
@@ -1009,17 +1025,10 @@ impl<B: Backend> ShallowWaterState<B> {
             self.tracers.match_layout(&other.tracers);
         }
 
-        let h_slice = self.h_slice_mut();
-        h_slice.copy_from_slice(other.h_slice());
-
-        let hu_slice = self.hu_slice_mut();
-        hu_slice.copy_from_slice(other.hu_slice());
-
-        let hv_slice = self.hv_slice_mut();
-        hv_slice.copy_from_slice(other.hv_slice());
-
-        let z_slice = self.z_slice_mut();
-        z_slice.copy_from_slice(other.z_slice());
+        self.backend.copy(&other.h, &mut self.h);
+        self.backend.copy(&other.hu, &mut self.hu);
+        self.backend.copy(&other.hv, &mut self.hv);
+        self.backend.copy(&other.z, &mut self.z);
 
         self.tracers.copy_from(&other.tracers);
 
@@ -1081,17 +1090,10 @@ impl<B: Backend> ShallowWaterState<B> {
         }
 
         // 复制主变量
-        let h_slice = self.h_slice_mut();
-        h_slice.copy_from_slice(other.h_slice());
-
-        let hu_slice = self.hu_slice_mut();
-        hu_slice.copy_from_slice(other.hu_slice());
-
-        let hv_slice = self.hv_slice_mut();
-        hv_slice.copy_from_slice(other.hv_slice());
-
-        let z_slice = self.z_slice_mut();
-        z_slice.copy_from_slice(other.z_slice());
+        self.backend.copy(&other.h, &mut self.h);
+        self.backend.copy(&other.hu, &mut self.hu);
+        self.backend.copy(&other.hv, &mut self.hv);
+        self.backend.copy(&other.z, &mut self.z);
 
         // 复制示踪剂
         self.tracers.copy_from(&other.tracers);
@@ -1100,12 +1102,10 @@ impl<B: Backend> ShallowWaterState<B> {
     }
 
     /// 添加缩放的 RHS: self += scale * rhs
-    pub fn add_scaled_rhs(&mut self, rhs: &RhsBuffers<B::Scalar>, scale: B::Scalar) {
-        for i in 0..self.n_cells {
-            self.h[i] = self.h[i] + scale * rhs.dh_dt[i];
-            self.hu[i] = self.hu[i] + scale * rhs.dhu_dt[i];
-            self.hv[i] = self.hv[i] + scale * rhs.dhv_dt[i];
-        }
+    pub fn add_scaled_rhs(&mut self, rhs: &RhsBuffers<B>, scale: B::Scalar) {
+        self.backend.axpy(scale, &rhs.dh_dt, &mut self.h);
+        self.backend.axpy(scale, &rhs.dhu_dt, &mut self.hu);
+        self.backend.axpy(scale, &rhs.dhv_dt, &mut self.hv);
         self.tracers.add_scaled(&rhs.tracer_rhs, scale);
     }
 
@@ -1113,12 +1113,17 @@ impl<B: Backend> ShallowWaterState<B> {
     pub fn linear_combine(&mut self, a: B::Scalar, state_a: &Self, b: B::Scalar, state_b: &Self) {
         debug_assert_eq!(self.n_cells(), state_a.n_cells());
         debug_assert_eq!(self.n_cells(), state_b.n_cells());
+        self.backend.copy(&state_a.h, &mut self.h);
+        self.backend.scale(a, &mut self.h);
+        self.backend.axpy(b, &state_b.h, &mut self.h);
 
-        for i in 0..self.n_cells {
-            self.h[i] = a * state_a.h[i] + b * state_b.h[i];
-            self.hu[i] = a * state_a.hu[i] + b * state_b.hu[i];
-            self.hv[i] = a * state_a.hv[i] + b * state_b.hv[i];
-        }
+        self.backend.copy(&state_a.hu, &mut self.hu);
+        self.backend.scale(a, &mut self.hu);
+        self.backend.axpy(b, &state_b.hu, &mut self.hu);
+
+        self.backend.copy(&state_a.hv, &mut self.hv);
+        self.backend.scale(a, &mut self.hv);
+        self.backend.axpy(b, &state_b.hv, &mut self.hv);
         self.tracers
             .linear_combine(a, &state_a.tracers, b, &state_b.tracers);
     }
@@ -1126,27 +1131,26 @@ impl<B: Backend> ShallowWaterState<B> {
     /// 自线性组合: self = a * self + b * other
     pub fn axpy(&mut self, a: B::Scalar, b: B::Scalar, other: &Self) {
         debug_assert_eq!(self.n_cells(), other.n_cells());
+        self.backend.scale(a, &mut self.h);
+        self.backend.axpy(b, &other.h, &mut self.h);
 
-        for i in 0..self.n_cells {
-            self.h[i] = a * self.h[i] + b * other.h[i];
-            self.hu[i] = a * self.hu[i] + b * other.hu[i];
-            self.hv[i] = a * self.hv[i] + b * other.hv[i];
-        }
+        self.backend.scale(a, &mut self.hu);
+        self.backend.axpy(b, &other.hu, &mut self.hu);
+
+        self.backend.scale(a, &mut self.hv);
+        self.backend.axpy(b, &other.hv, &mut self.hv);
         self.tracers.axpy(a, b, &other.tracers);
     }
 
     /// 强制正性约束
     pub fn enforce_positivity(&mut self) {
-        for h in self.h.iter_mut() {
-            if *h < B::Scalar::zero() {
-                *h = B::Scalar::zero();
-            }
-        }
-
+        self.backend.enforce_positivity(&mut self.h, B::Scalar::zero());
         for tracer in self.tracers.iter_mut() {
-            for v in tracer.iter_mut() {
-                if *v < B::Scalar::zero() {
-                    *v = B::Scalar::zero();
+            if let Some(slice) = tracer.try_as_slice_mut() {
+                for v in slice.iter_mut() {
+                    if *v < B::Scalar::zero() {
+                        *v = B::Scalar::zero();
+                    }
                 }
             }
         }
@@ -1221,15 +1225,15 @@ impl<B: Backend> ShallowWaterState<B> {
             }
         }
 
-        for (_tracer_idx, tracer) in self.tracers.data.iter().enumerate() {
+        for tracer in self.tracers.iter() {
             if tracer.len() != self.n_cells {
                 return Err(StateError::SizeMismatch {
                     expected: self.n_cells,
                     actual: tracer.len(),
                 });
             }
-
-            for (cell_idx, &value) in tracer.iter().enumerate() {
+            let slice = tracer.try_as_slice().ok_or(StateError::BackendAccess { field: "tracer" })?;
+            for (cell_idx, &value) in slice.iter().enumerate() {
                 if !value.is_finite() {
                     return Err(StateError::InvalidValue {
                         field: "tracer",
@@ -1286,6 +1290,10 @@ pub enum StateError<S> {
     LayoutMismatch {
         field: &'static str,
     },
+    /// 后端缓冲区不可直接访问
+    BackendAccess {
+        field: &'static str,
+    },
 }
 
 impl<S> std::fmt::Display for StateError<S>
@@ -1335,14 +1343,14 @@ where
             Self::LayoutMismatch { field } => {
                 write!(f, "Layout mismatch: {field}")
             }
+            Self::BackendAccess { field } => {
+                write!(f, "Backend buffer not accessible: {field}")
+            }
         }
     }
 }
 
 impl<S> std::error::Error for StateError<S> where S: std::fmt::Debug + std::fmt::Display {}
-
-/// 泛型状态类型别名（向后兼容 - 内部使用）
-pub type ShallowWaterStateGeneric<B> = ShallowWaterState<B>;
 
 // StateAccess Trait 实现（泛型版本）
 impl<B> StateAccess for ShallowWaterState<B>
@@ -1555,7 +1563,8 @@ mod tests {
 
     #[test]
     fn test_dynamic_scalars() {
-        let mut scalars = DynamicScalars::<f64>::new(10);
+        let backend = CpuBackend::<f64>::new();
+        let mut scalars = DynamicScalars::new(backend, 10);
         assert_eq!(scalars.len(), 10);
         assert_eq!(scalars.count(), 0);
 
@@ -1563,12 +1572,12 @@ mod tests {
         assert_eq!(idx, 0);
         assert_eq!(scalars.count(), 1);
 
-        if let Some(slice) = scalars.get_mut(0) {
+        if let Some(slice) = scalars.get_slice_mut(0) {
             slice[0] = 25.0;
             slice[1] = 26.0;
         }
 
-        if let Some(slice) = scalars.get(0) {
+        if let Some(slice) = scalars.get_slice(0) {
             assert_eq!(slice[0], 25.0);
             assert_eq!(slice[1], 26.0);
         }
@@ -1576,7 +1585,8 @@ mod tests {
 
     #[test]
     fn test_gradient_state() {
-        let grad = GradientState::<f64>::new(5);
+        let backend = CpuBackend::<f64>::new();
+        let grad = GradientState::<CpuBackend<f64>>::new(backend, 5);
         assert_eq!(grad.grad_h_x.len(), 5);
         assert_eq!(grad.grad_h_y.len(), 5);
 
@@ -1601,7 +1611,8 @@ mod tests {
 
     #[test]
     fn test_rhs_buffers() {
-        let rhs = RhsBuffers::<f64>::new(10);
+        let backend = CpuBackend::<f64>::new();
+        let rhs = RhsBuffers::new(backend, 10);
         assert_eq!(rhs.dh_dt.len(), 10);
         assert_eq!(rhs.dhu_dt.len(), 10);
         assert_eq!(rhs.dhv_dt.len(), 10);

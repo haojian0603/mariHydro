@@ -176,7 +176,7 @@ impl CoriolisSource {
 use super::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use mh_runtime::{Backend, RuntimeScalar};
 
 /// 泛型科氏力配置
@@ -251,7 +251,7 @@ macro_rules! impl_coriolis_generic {
             fn compute_cell(
                 &self,
                 cell: usize,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 ctx: &SourceContextGeneric<$scalar>,
             ) -> SourceContributionGeneric<$scalar> {
                 let h = state.h[cell];
@@ -292,7 +292,7 @@ macro_rules! impl_coriolis_generic {
 
             fn accumulate(
                 &self,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 _rhs_h: &mut Vec<$scalar>,
                 rhs_hu: &mut Vec<$scalar>,
                 rhs_hv: &mut Vec<$scalar>,

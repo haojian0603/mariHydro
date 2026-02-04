@@ -19,7 +19,7 @@
 //! - 必须通过 `create_state()` 和 `create_solver()` 辅助函数创建对象
 //! - 违反此原则将导致编译错误或运行时性能损失
 
-use mh_runtime::{KahanSum, CpuBackend};
+use mh_runtime::{Backend, KahanSum, CpuBackend};
 use mh_physics::{
     numerics::linear_algebra::{
         CsrMatrix, JacobiPreconditioner, PcgSolver, SolverConfig, SolverStatus,
@@ -194,10 +194,12 @@ fn build_spd_matrix(n: usize) -> CsrMatrix<f64> {
 #[test]
 fn test_zero_rhs_instant_convergence() {
     let matrix = build_dominant_matrix(50, 4.0, 1.0);
-    let b = vec![0.0; 50];
+    let backend = test_backend().clone();
+    let mut b = backend.alloc(50);
+    b.fill(0.0);
     
     // 测试1：零初始猜测应该0次迭代收敛
-    let mut x_zero = vec![0.0; 50];
+    let mut x_zero = backend.alloc_init(50, 0.0);
     let config = SolverConfig {
         max_iter: 100,
         atol: 1e-12,
@@ -206,8 +208,8 @@ fn test_zero_rhs_instant_convergence() {
         stagnation_tol: 1e-12,
     };
 
-    let mut solver = PcgSolver::new(config.clone());
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let mut solver = PcgSolver::new(backend.clone(), config.clone());
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x_zero, &precond);
 
     // 零初始猜测 + 零RHS = 0次迭代收敛
@@ -224,9 +226,10 @@ fn test_zero_rhs_instant_convergence() {
     );
     
     // 测试2：非零初始猜测需要迭代，但最终应收敛到零解
-    let mut x_nonzero = vec![1.0; 50];
-    let mut solver2 = PcgSolver::new(config);
-    let precond2 = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let mut x_nonzero = backend.alloc(50);
+    x_nonzero.fill(1.0);
+    let mut solver2 = PcgSolver::new(backend.clone(), config);
+    let precond2 = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
     let result2 = solver2.solve(&matrix, &b, &mut x_nonzero, &precond2);
     
     assert_eq!(
@@ -236,9 +239,9 @@ fn test_zero_rhs_instant_convergence() {
         result2.status
     );
     // 解应该接近零
-    assert!(x_nonzero.iter().all(|v: &f64| v.abs() < 1e-8),
+    assert!(x_nonzero.as_slice().iter().all(|v: &f64| v.abs() < 1e-8),
         "解应接近零，实际最大值: {}",
-        x_nonzero.iter().map(|v: &f64| v.abs()).fold(0.0_f64, |a, b| a.max(b))
+        x_nonzero.as_slice().iter().map(|v: &f64| v.abs()).fold(0.0_f64, |a, b| a.max(b))
     );
 }
 
@@ -249,8 +252,10 @@ fn test_zero_rhs_instant_convergence() {
 #[test]
 fn test_ill_conditioned_matrix_stability() {
     let matrix = build_near_singular_matrix(20);
-    let b = vec![1.0; 20];
-    let mut x = vec![0.0; 20];
+    let backend = test_backend().clone();
+    let mut b = backend.alloc(20);
+    b.fill(1.0);
+    let mut x = backend.alloc_init(20, 0.0);
 
     let config = SolverConfig {
         max_iter: 5000,
@@ -260,8 +265,8 @@ fn test_ill_conditioned_matrix_stability() {
         stagnation_tol: 1e-12,
     };
 
-    let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let mut solver = PcgSolver::new(backend.clone(), config);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 必须收敛或明确报告失败
@@ -272,7 +277,7 @@ fn test_ill_conditioned_matrix_stability() {
                 "收敛残差未达标: {}",
                 result.residual_norm
             );
-            assert!(x.iter().all(|v: &f64| v.is_finite()), "解包含非有限值");
+            assert!(x.as_slice().iter().all(|v: &f64| v.is_finite()), "解包含非有限值");
         }
         SolverStatus::MaxIterationsReached => {
             // 病态矩阵可能不收敛，但不应panic
@@ -286,7 +291,7 @@ fn test_ill_conditioned_matrix_stability() {
 
     // 解必须有限
     assert!(
-        x.iter().all(|v: &f64| v.is_finite()),
+        x.as_slice().iter().all(|v: &f64| v.is_finite()),
         "奇异矩阵求解产生非有限值"
     );
 }
@@ -521,8 +526,10 @@ fn test_solver_on_singular_matrix() {
     let values = vec![1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0];
     let matrix = CsrMatrix::from_raw(n, n, row_ptr, col_idx, values);
 
-    let b = vec![1.0, 1.0, 1.0, 1.0, 1.0];
-    let mut x = vec![0.0; n];
+    let backend = test_backend().clone();
+    let mut b = backend.alloc(n);
+    b.fill(1.0);
+    let mut x = backend.alloc_init(n, 0.0);
 
     let config = SolverConfig {
         max_iter: 1000,
@@ -532,8 +539,8 @@ fn test_solver_on_singular_matrix() {
         stagnation_tol: 1e-12,
     };
 
-    let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let mut solver = PcgSolver::new(backend.clone(), config);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 奇异矩阵可能不收敛，但不应panic
@@ -549,7 +556,7 @@ fn test_solver_on_singular_matrix() {
 
     // 解必须有限
     assert!(
-        x.iter().all(|v: &f64| v.is_finite()),
+        x.as_slice().iter().all(|v: &f64| v.is_finite()),
         "奇异矩阵求解产生非有限值"
     );
 }
@@ -734,15 +741,22 @@ fn test_convergence_criteria_edge_cases() {
 #[test]
 fn test_parallel_solver_consistency() {
     let matrix = Arc::new(build_spd_matrix(100));
-    let b = Arc::new(vec![1.0; 100]);
+    let backend = Arc::new(test_backend().clone());
+    let b = Arc::new({
+        let mut buf = backend.alloc(100);
+        buf.fill(1.0);
+        buf
+    });
 
     let results: Vec<_> = (0..4)
         .into_par_iter()
         .map(|_| {
-            let mut x = vec![0.0; 100];
+            let backend = (*backend).clone();
+            let b = b.clone();
+            let mut x = backend.alloc_init(100, 0.0);
             let config = SolverConfig::default();
-            let mut solver = PcgSolver::new(config);
-            let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+            let mut solver = PcgSolver::new(backend.clone(), config);
+            let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
             let result = solver.solve(&matrix, &b, &mut x, &precond);
             (result, x)
         })
@@ -771,12 +785,14 @@ fn test_no_memory_leak_in_solver() {
     // 循环创建和销毁求解器，检测内存增长
     for _ in 0..100 {
         let matrix = build_dominant_matrix(20, 4.0, 1.0);
-        let b = vec![1.0; 20];
-        let mut x = vec![0.0; 20];
+        let backend = test_backend().clone();
+        let mut b = backend.alloc(20);
+        b.fill(1.0);
+        let mut x = backend.alloc_init(20, 0.0);
 
         let config = SolverConfig::default();
-        let mut solver = PcgSolver::new(config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let mut solver = PcgSolver::new(backend.clone(), config);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
         let _ = solver.solve(&matrix, &b, &mut x, &precond);
     }
 

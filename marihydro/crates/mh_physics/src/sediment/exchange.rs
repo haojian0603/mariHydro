@@ -2,7 +2,6 @@
 
 use crate::core::{Backend, DeviceBuffer};
 use mh_runtime::RuntimeScalar as Scalar;
-use num_traits::ToPrimitive;
 
 /// 泥沙交换参数
 #[derive(Debug, Clone)]
@@ -94,11 +93,11 @@ impl<B: Backend> SedimentExchange<B> {
         }
 
         let slice = self.flux.as_slice();
-        let added = slice
-            .iter()
-            .take(n)
-            .fold(0.0, |acc, &v| acc + v.to_f64().unwrap_or(0.0));
-        self.cumulative_exchange += <B::Scalar as Scalar>::from_config(added).unwrap_or(B::Scalar::ZERO);
+        let mut added = B::Scalar::ZERO;
+        for &v in slice.iter().take(n) {
+            added += v;
+        }
+        self.cumulative_exchange += added;
     }
     
     /// 获取净交换通量

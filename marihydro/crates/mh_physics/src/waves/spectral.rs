@@ -5,7 +5,7 @@
 //! 提供波能谱与诊断参数计算，为外部谱波模型耦合与后续扩展提供入口。
 
 use std::f64::consts::PI;
-use crate::waves::radiation_stress::{compute_wavenumber_and_n, RadiationStressTensor};
+use crate::waves::radiation_stress::{compute_wavenumber_and_n, RadiationStressTensorGeneric};
 
 /// 波能谱
 #[derive(Debug, Clone)]
@@ -251,7 +251,7 @@ impl SpectralWaveSolver {
             let omega = 2.0 * PI / tp.max(1e-6);
             let (_k, n) = compute_wavenumber_and_n(omega, h);
             let energy = rho * g * hs * hs / 8.0;
-            let stress = RadiationStressTensor::compute(energy, n, dir);
+            let stress = RadiationStressTensorGeneric::<f64>::compute(energy, n, dir);
             self.params.sxx[i] = stress.sxx;
             self.params.sxy[i] = stress.sxy;
             self.params.syy[i] = stress.syy;

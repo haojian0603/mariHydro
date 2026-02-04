@@ -40,9 +40,6 @@ pub struct ShearStress<S: RuntimeScalar> {
     pub u_star: S,
 }
 
-/// Layer 4 便捷别名（f64）
-pub type ShearStressF64 = ShearStress<f64>;
-
 impl<S: RuntimeScalar> Default for ShearStress<S> {
     fn default() -> Self {
         Self {
@@ -61,55 +58,63 @@ impl<S: RuntimeScalar> ShearStress<S> {
 }
 
 /// 床面剪切应力计算器
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ShearStressCalculator<S: RuntimeScalar> {
+#[derive(Debug, Clone)]
+pub struct ShearStressCalculator<B: Backend> {
+    /// 后端
+    backend: B,
     /// 最小水深 [m]
-    pub h_min: S,
+    pub h_min: B::Scalar,
     /// 水密度 [kg/m³]
-    pub rho_water: S,
+    pub rho_water: B::Scalar,
     /// 重力加速度 [m/s²]
-    pub g: S,
+    pub g: B::Scalar,
 }
 
-/// Layer 4 便捷别名（f64）
-pub type ShearStressCalculatorF64 = ShearStressCalculator<f64>;
+impl<B: Backend> ShearStressCalculator<B> {
+    /// 创建新的计算器
+    pub fn new(backend: B, h_min: B::Scalar, rho_water: B::Scalar, g: B::Scalar) -> Self {
+        Self { backend, h_min, rho_water, g }
+    }
 
-impl<S: RuntimeScalar> Default for ShearStressCalculator<S> {
-    fn default() -> Self {
+    /// 使用默认物理常数创建
+    pub fn with_backend(backend: B) -> Self {
         let physics = PhysicalConstants::seawater();
         Self {
-            h_min: S::from_f64(0.01).unwrap_or(S::ZERO),
-            rho_water: S::from_f64(physics.rho_water).unwrap_or(S::ONE),
-            g: S::from_f64(physics.g).unwrap_or(S::ONE),
+            h_min: backend.scalar_from_f64(0.01),
+            rho_water: backend.scalar_from_f64(physics.rho_water),
+            g: backend.scalar_from_f64(physics.g),
+            backend,
         }
-    }
-}
-
-impl<S: RuntimeScalar> ShearStressCalculator<S> {
-    /// 创建新的计算器
-    pub fn new(h_min: S, rho_water: S, g: S) -> Self {
-        Self { h_min, rho_water, g }
     }
 
     /// 从物理常数创建
-    pub fn from_physics(physics: &PhysicalConstants, h_min: S) -> Self {
+    pub fn from_physics(backend: B, physics: &PhysicalConstants, h_min: B::Scalar) -> Self {
+        let rho_water = backend.scalar_from_f64(physics.rho_water);
+        let g = backend.scalar_from_f64(physics.g);
         Self {
             h_min,
-            rho_water: S::from_f64(physics.rho_water).unwrap_or(S::ONE),
-            g: S::from_f64(physics.g).unwrap_or(S::ONE),
+            rho_water,
+            g,
+            backend,
         }
     }
 
     /// 使用 Manning 公式计算剪切应力（单个点）
-    pub fn manning(&self, h: S, u: S, v: S, manning_n: S) -> ShearStress<S> {
+    pub fn manning(
+        &self,
+        h: B::Scalar,
+        u: B::Scalar,
+        v: B::Scalar,
+        manning_n: B::Scalar,
+    ) -> ShearStress<B::Scalar> {
         if h < self.h_min {
             return ShearStress::default();
         }
 
         let speed_sq = u * u + v * v;
-        let eps = S::from_f64(1e-12).unwrap_or(S::ZERO);
+        let eps = self.backend.scalar_from_f64(1e-12);
         let speed = (speed_sq + eps).sqrt();
-        let h_pow = h.powf(S::from_f64(1.0 / 3.0).unwrap_or(S::ONE));
+        let h_pow = h.powf(self.backend.scalar_from_f64(1.0 / 3.0));
 
         let magnitude = self.rho_water * self.g * manning_n * manning_n * speed_sq / h_pow;
         let tau_x = magnitude * u / speed;
@@ -126,13 +131,19 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
     }
 
     /// 使用 Chezy 公式计算剪切应力（单个点）
-    pub fn chezy(&self, h: S, u: S, v: S, chezy_c: S) -> ShearStress<S> {
-        if h < self.h_min || chezy_c < S::from_f64(1e-6).unwrap_or(S::ZERO) {
+    pub fn chezy(
+        &self,
+        h: B::Scalar,
+        u: B::Scalar,
+        v: B::Scalar,
+        chezy_c: B::Scalar,
+    ) -> ShearStress<B::Scalar> {
+        if h < self.h_min || chezy_c < self.backend.scalar_from_f64(1e-6) {
             return ShearStress::default();
         }
 
         let speed_sq = u * u + v * v;
-        let eps = S::from_f64(1e-12).unwrap_or(S::ZERO);
+        let eps = self.backend.scalar_from_f64(1e-12);
         let speed = (speed_sq + eps).sqrt();
         let magnitude = self.rho_water * self.g * speed_sq / (chezy_c * chezy_c);
         let tau_x = magnitude * u / speed;
@@ -149,106 +160,20 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
     }
 
     /// 从水力半径和能量坡度计算剪切应力
-    pub fn from_energy_slope(&self, hydraulic_radius: S, energy_slope: S) -> S {
+    pub fn from_energy_slope(&self, hydraulic_radius: B::Scalar, energy_slope: B::Scalar) -> B::Scalar {
         self.rho_water * self.g * hydraulic_radius * energy_slope.abs()
-    }
-
-    /// 批量计算 Manning 剪切应力
-    pub fn manning_batch(
-        &self,
-        h: &[S],
-        u: &[S],
-        v: &[S],
-        manning_n: ManningCoeff<'_, S>,
-    ) -> (Vec<S>, Vec<S>, Vec<S>, Vec<S>) {
-        debug_assert_eq!(h.len(), u.len());
-        debug_assert_eq!(h.len(), v.len());
-
-        let mut tau_out = vec![S::ZERO; h.len()];
-        let mut tau_x_out = vec![S::ZERO; h.len()];
-        let mut tau_y_out = vec![S::ZERO; h.len()];
-        let mut u_star_out = vec![S::ZERO; h.len()];
-
-        for i in 0..h.len() {
-            let n = manning_n.get(i);
-            let shear = self.manning(h[i], u[i], v[i], n);
-            tau_out[i] = shear.magnitude;
-            tau_x_out[i] = shear.tau_x;
-            tau_y_out[i] = shear.tau_y;
-            u_star_out[i] = shear.u_star;
-        }
-
-        (tau_out, tau_x_out, tau_y_out, u_star_out)
-    }
-
-    /// 批量计算 Chezy 剪切应力
-    pub fn chezy_batch(
-        &self,
-        h: &[S],
-        u: &[S],
-        v: &[S],
-        chezy_c: ChezyCoeff<'_, S>,
-    ) -> (Vec<S>, Vec<S>, Vec<S>, Vec<S>) {
-        debug_assert_eq!(h.len(), u.len());
-        debug_assert_eq!(h.len(), v.len());
-
-        let mut tau_out = vec![S::ZERO; h.len()];
-        let mut tau_x_out = vec![S::ZERO; h.len()];
-        let mut tau_y_out = vec![S::ZERO; h.len()];
-        let mut u_star_out = vec![S::ZERO; h.len()];
-
-        for i in 0..h.len() {
-            let c = chezy_c.get(i);
-            let shear = self.chezy(h[i], u[i], v[i], c);
-            tau_out[i] = shear.magnitude;
-            tau_x_out[i] = shear.tau_x;
-            tau_y_out[i] = shear.tau_y;
-            u_star_out[i] = shear.u_star;
-        }
-
-        (tau_out, tau_x_out, tau_y_out, u_star_out)
-    }
-}
-
-/// Manning 糙率（切片版本，Layer 4 兼容）
-#[derive(Debug, Clone, Copy, Serialize)]
-pub enum ManningCoeff<'a, S: RuntimeScalar> {
-    /// 常数糙率
-    Uniform(S),
-    /// 按单元提供的糙率数组
-    Array(&'a [S]),
-}
-
-impl<'a, S: RuntimeScalar> ManningCoeff<'a, S> {
-    pub fn get(&self, idx: usize) -> S {
-        match self {
-            ManningCoeff::Uniform(v) => *v,
-            ManningCoeff::Array(arr) => arr[idx],
-        }
-    }
-}
-
-impl<'a, S: RuntimeScalar> From<S> for ManningCoeff<'a, S> {
-    fn from(val: S) -> Self {
-        ManningCoeff::Uniform(val)
-    }
-}
-
-impl<'a, S: RuntimeScalar> From<&'a [S]> for ManningCoeff<'a, S> {
-    fn from(arr: &'a [S]) -> Self {
-        ManningCoeff::Array(arr)
     }
 }
 
 /// Manning 糙率（Backend 缓冲区版本，Layer 3 推荐）
 #[derive(Debug, Clone, Copy)]
-pub enum ManningCoeffBuf<'a, S: RuntimeScalar, B: Backend<Scalar = S>> {
-    Uniform(S),
-    Buffer(&'a B::Buffer<S>),
+pub enum ManningCoeffBuf<'a, B: Backend> {
+    Uniform(B::Scalar),
+    Buffer(&'a B::Buffer<B::Scalar>),
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ManningCoeffBuf<'a, S, B> {
-    pub fn get(&self, idx: usize) -> S {
+impl<'a, B: Backend> ManningCoeffBuf<'a, B> {
+    pub fn get(&self, idx: usize) -> B::Scalar {
         match self {
             ManningCoeffBuf::Uniform(v) => *v,
             ManningCoeffBuf::Buffer(buf) => buf[idx],
@@ -256,58 +181,28 @@ impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ManningCoeffBuf<'a, S, B> {
     }
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> From<S> for ManningCoeffBuf<'a, S, B> {
-    fn from(val: S) -> Self {
+impl<'a, B: Backend> From<B::Scalar> for ManningCoeffBuf<'a, B> {
+    fn from(val: B::Scalar) -> Self {
         ManningCoeffBuf::Uniform(val)
     }
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ManningCoeffBuf<'a, S, B> {
+impl<'a, B: Backend> ManningCoeffBuf<'a, B> {
     /// 从 Backend 缓冲区创建 ManningCoeffBuf
-    pub fn from_buffer(buf: &'a B::Buffer<S>) -> Self {
+    pub fn from_buffer(buf: &'a B::Buffer<B::Scalar>) -> Self {
         ManningCoeffBuf::Buffer(buf)
-    }
-}
-
-/// Chezy 系数（切片版本，Layer 4 兼容）
-#[derive(Debug, Clone, Copy, Serialize)]
-pub enum ChezyCoeff<'a, S: RuntimeScalar> {
-    /// 常数 Chezy 系数
-    Uniform(S),
-    /// 按单元提供的 Chezy 系数数组
-    Array(&'a [S]),
-}
-
-impl<'a, S: RuntimeScalar> ChezyCoeff<'a, S> {
-    pub fn get(&self, idx: usize) -> S {
-        match self {
-            ChezyCoeff::Uniform(v) => *v,
-            ChezyCoeff::Array(arr) => arr[idx],
-        }
-    }
-}
-
-impl<'a, S: RuntimeScalar> From<S> for ChezyCoeff<'a, S> {
-    fn from(val: S) -> Self {
-        ChezyCoeff::Uniform(val)
-    }
-}
-
-impl<'a, S: RuntimeScalar> From<&'a [S]> for ChezyCoeff<'a, S> {
-    fn from(arr: &'a [S]) -> Self {
-        ChezyCoeff::Array(arr)
     }
 }
 
 /// Chezy 系数（Backend 缓冲区版本，Layer 3 推荐）
 #[derive(Debug, Clone, Copy)]
-pub enum ChezyCoeffBuf<'a, S: RuntimeScalar, B: Backend<Scalar = S>> {
-    Uniform(S),
-    Buffer(&'a B::Buffer<S>),
+pub enum ChezyCoeffBuf<'a, B: Backend> {
+    Uniform(B::Scalar),
+    Buffer(&'a B::Buffer<B::Scalar>),
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ChezyCoeffBuf<'a, S, B> {
-    pub fn get(&self, idx: usize) -> S {
+impl<'a, B: Backend> ChezyCoeffBuf<'a, B> {
+    pub fn get(&self, idx: usize) -> B::Scalar {
         match self {
             ChezyCoeffBuf::Uniform(v) => *v,
             ChezyCoeffBuf::Buffer(buf) => buf[idx],
@@ -315,37 +210,52 @@ impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ChezyCoeffBuf<'a, S, B> {
     }
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> From<S> for ChezyCoeffBuf<'a, S, B> {
-    fn from(val: S) -> Self {
+impl<'a, B: Backend> From<B::Scalar> for ChezyCoeffBuf<'a, B> {
+    fn from(val: B::Scalar) -> Self {
         ChezyCoeffBuf::Uniform(val)
     }
 }
 
-impl<'a, S: RuntimeScalar, B: Backend<Scalar = S>> ChezyCoeffBuf<'a, S, B> {
+impl<'a, B: Backend> ChezyCoeffBuf<'a, B> {
     /// 从 Backend 缓冲区创建 ChezyCoeffBuf
-    pub fn from_buffer(buf: &'a B::Buffer<S>) -> Self {
+    pub fn from_buffer(buf: &'a B::Buffer<B::Scalar>) -> Self {
         ChezyCoeffBuf::Buffer(buf)
     }
 }
 
-impl<S: RuntimeScalar> ShearStressCalculator<S> {
+/// 剪切应力批量计算错误
+#[derive(Debug, Clone)]
+pub enum ShearStressBatchError {
+    SizeMismatch { expected: usize, actual: usize },
+}
+
+impl<B: Backend> ShearStressCalculator<B> {
     /// 使用 Backend 缓冲区批量计算 Manning 剪切应力
-    pub fn manning_batch_backend<B>(
+    pub fn manning_batch(
         &self,
-        _backend: &B,
-        h: &B::Buffer<S>,
-        u: &B::Buffer<S>,
-        v: &B::Buffer<S>,
-        manning_n: ManningCoeffBuf<'_, S, B>,
-        tau_out: &mut B::Buffer<S>,
-        tau_x_out: &mut B::Buffer<S>,
-        tau_y_out: &mut B::Buffer<S>,
-        u_star_out: &mut B::Buffer<S>,
-    )
-    where
-        B: Backend<Scalar = S>,
-    {
+        h: &B::Buffer<B::Scalar>,
+        u: &B::Buffer<B::Scalar>,
+        v: &B::Buffer<B::Scalar>,
+        manning_n: ManningCoeffBuf<'_, B>,
+        tau_out: &mut B::Buffer<B::Scalar>,
+        tau_x_out: &mut B::Buffer<B::Scalar>,
+        tau_y_out: &mut B::Buffer<B::Scalar>,
+        u_star_out: &mut B::Buffer<B::Scalar>,
+    ) -> Result<(), ShearStressBatchError> {
         let n = h.len().min(u.len()).min(v.len());
+        if tau_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_out.len() });
+        }
+        if tau_x_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_x_out.len() });
+        }
+        if tau_y_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_y_out.len() });
+        }
+        if u_star_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: u_star_out.len() });
+        }
+
         for i in 0..n {
             let n_coeff = manning_n.get(i);
             let shear = self.manning(h[i], u[i], v[i], n_coeff);
@@ -354,25 +264,35 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
             tau_y_out[i] = shear.tau_y;
             u_star_out[i] = shear.u_star;
         }
+        Ok(())
     }
 
     /// 使用 Backend 缓冲区批量计算 Chezy 剪切应力
-    pub fn chezy_batch_backend<B>(
+    pub fn chezy_batch(
         &self,
-        _backend: &B,
-        h: &B::Buffer<S>,
-        u: &B::Buffer<S>,
-        v: &B::Buffer<S>,
-        chezy_c: ChezyCoeffBuf<'_, S, B>,
-        tau_out: &mut B::Buffer<S>,
-        tau_x_out: &mut B::Buffer<S>,
-        tau_y_out: &mut B::Buffer<S>,
-        u_star_out: &mut B::Buffer<S>,
-    )
-    where
-        B: Backend<Scalar = S>,
-    {
+        h: &B::Buffer<B::Scalar>,
+        u: &B::Buffer<B::Scalar>,
+        v: &B::Buffer<B::Scalar>,
+        chezy_c: ChezyCoeffBuf<'_, B>,
+        tau_out: &mut B::Buffer<B::Scalar>,
+        tau_x_out: &mut B::Buffer<B::Scalar>,
+        tau_y_out: &mut B::Buffer<B::Scalar>,
+        u_star_out: &mut B::Buffer<B::Scalar>,
+    ) -> Result<(), ShearStressBatchError> {
         let n = h.len().min(u.len()).min(v.len());
+        if tau_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_out.len() });
+        }
+        if tau_x_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_x_out.len() });
+        }
+        if tau_y_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: tau_y_out.len() });
+        }
+        if u_star_out.len() < n {
+            return Err(ShearStressBatchError::SizeMismatch { expected: n, actual: u_star_out.len() });
+        }
+
         for i in 0..n {
             let c_coeff = chezy_c.get(i);
             let shear = self.chezy(h[i], u[i], v[i], c_coeff);
@@ -381,6 +301,7 @@ impl<S: RuntimeScalar> ShearStressCalculator<S> {
             tau_y_out[i] = shear.tau_y;
             u_star_out[i] = shear.u_star;
         }
+        Ok(())
     }
 }
 
@@ -420,10 +341,12 @@ pub fn shields_from_tau(tau_b: f64, rho_water: f64, rho_sediment: f64, d50: f64)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::CpuBackend;
 
     #[test]
     fn test_manning_single_point() {
-        let calculator: ShearStressCalculator<f64> = ShearStressCalculator::default();
+        let backend = CpuBackend::<f64>::new();
+        let calculator = ShearStressCalculator::with_backend(backend);
 
         let h = 1.0;
         let u = 2.0;
@@ -440,7 +363,8 @@ mod tests {
 
     #[test]
     fn test_chezy_single_point() {
-        let calculator: ShearStressCalculator<f64> = ShearStressCalculator::default();
+        let backend = CpuBackend::<f64>::new();
+        let calculator = ShearStressCalculator::with_backend(backend);
 
         let h = 1.0;
         let u = 1.5;
@@ -466,16 +390,43 @@ mod tests {
     }
     #[test]
     fn test_batch_calculation() {
-        let calc = ShearStressCalculator::default();
-        
+        let backend = CpuBackend::<f64>::new();
+        let calc = ShearStressCalculator::with_backend(backend);
+
         let h = vec![2.0, 1.5, 1.0, 0.5];
         let u = vec![1.0, 1.5, 2.0, 0.5];
         let v = vec![0.0, 0.5, 0.0, 0.0];
-        let (tau, tau_x, tau_y, u_star): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) =
-            calc.manning_batch(&h, &u, &v, 0.03.into());
-        
+        let mut h_buf = backend.alloc(h.len());
+        let mut u_buf = backend.alloc(u.len());
+        let mut v_buf = backend.alloc(v.len());
+        h_buf.copy_from_slice(&h);
+        u_buf.copy_from_slice(&u);
+        v_buf.copy_from_slice(&v);
+
+        let mut tau = backend.alloc(h.len());
+        let mut tau_x = backend.alloc(h.len());
+        let mut tau_y = backend.alloc(h.len());
+        let mut u_star = backend.alloc(h.len());
+
+        calc.manning_batch(
+            &h_buf,
+            &u_buf,
+            &v_buf,
+            ManningCoeffBuf::from(0.03),
+            &mut tau,
+            &mut tau_x,
+            &mut tau_y,
+            &mut u_star,
+        )
+        .unwrap();
+
+        let tau_slice = tau.as_slice();
+        let tau_x_slice = tau_x.as_slice();
+        let tau_y_slice = tau_y.as_slice();
+        let u_star_slice = u_star.as_slice();
+
         // 所有值应为正
-        for (&t, (&tx, (&ty, &us))) in tau.iter().zip(tau_x.iter().zip(tau_y.iter().zip(u_star.iter()))) {
+        for (&t, (&tx, (&ty, &us))) in tau_slice.iter().zip(tau_x_slice.iter().zip(tau_y_slice.iter().zip(u_star_slice.iter()))) {
             assert!(t > 0.0);
             assert!(tx.is_finite());
             assert!(ty.is_finite());

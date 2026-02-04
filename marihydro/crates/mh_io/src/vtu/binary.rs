@@ -15,23 +15,6 @@ pub struct BinaryEncoder {
     buffer: Vec<u8>,
 }
 
-//! 二进制 VTU 编码器 (Base64 + AppendedData)
-//!
-//! VTK 二进制格式规范：
-//! - 数据块：Header (u32, 小端) + Data (原始二进制)
-//! - AppendedData：base64 编码，用于 <DataArray format="appended">
-//! - 支持 f32/f64 混合精度
-
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use mh_runtime::RuntimeScalar;
-use serde_json;
-use std::io::{self, Write};
-
-/// 二进制编码器
-pub struct BinaryEncoder {
-    buffer: Vec<u8>,
-}
-
 impl BinaryEncoder {
     /// 创建新编码器，预分配 1MB 缓冲区
     pub fn new() -> Self {
@@ -123,7 +106,7 @@ impl Default for BinaryEncoder {
 /// 二进制 VTU 完整写入器
 pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
     writer: &mut W,
-    mesh: &crate::snapshot::MeshSnapshot,
+    mesh: &crate::snapshot::MeshSnapshot<S>,
     state: &crate::snapshot::StateSnapshot<S>,
     time: f64,
 ) -> io::Result<()> {
@@ -243,7 +226,12 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
         h_offset
     )?;
 
-    let eta: Vec<f64> = h.iter().zip(&mesh.bed_elevations).map(|(h, z)| h + z).collect();
+    let bed: Vec<f64> = mesh
+        .bed_elevations
+        .iter()
+        .map(|v| v.to_f64().unwrap_or(0.0))
+        .collect();
+    let eta: Vec<f64> = h.iter().zip(&bed).map(|(h, z)| h + z).collect();
     let eta_offset = encoder.encode_f64(&eta)?;
     writeln!(
         writer,
@@ -268,7 +256,7 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
         velocity_offset
     )?;
 
-    let bed_offset = encoder.encode_f64(&mesh.bed_elevations)?;
+    let bed_offset = encoder.encode_f64(&bed)?;
     writeln!(
         writer,
         r#"        <DataArray type="Float64" Name="bed_elevation" format="appended" offset="{}"/>"#,

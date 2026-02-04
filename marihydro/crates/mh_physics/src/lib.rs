@@ -100,7 +100,6 @@ pub use schemes::{
 };
 pub use state::{
     ConservedState, Flux, GradientState, RhsBuffers, ShallowWaterState, StateError,
-    ShallowWaterStateGeneric,
 };
 
 // 修复SolverStats路径
@@ -140,23 +139,3 @@ pub use error::{PhysicsError, PhysicsResult};
 // 重导出配置桥接类型（测试用）
 pub use config_bridge::Layer3Config;
 
-
-// 强制类型别名（Layer 4专用，无泛型）
-/// f64精度浅水状态（Layer 4直接调用，禁止在Layer 3使用）
-pub type ShallowWaterStateF64 = ShallowWaterState<CpuBackend<f64>>;
-
-/// f32精度浅水状态（GPU测试专用）
-pub type ShallowWaterStateF32 = ShallowWaterState<CpuBackend<f32>>;
-
-// 验证导出路径正确
-#[cfg(test)]
-mod test_reexports {
-    use super::*;
-    
-    #[test]
-    fn test_f64_alias_available() {
-        let backend = CpuBackend::<f64>::new();
-        let state: ShallowWaterStateF64 = ShallowWaterState::new_with_backend(backend, 100);
-        assert_eq!(state.n_cells(), 100);
-    }
-}

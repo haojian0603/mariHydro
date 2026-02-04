@@ -4,7 +4,7 @@
 //!
 //! 验证双精度极限精度和数值算法的数学正确性
 
-use mh_runtime::{KahanSum, CpuBackend};
+use mh_runtime::{Backend, CpuBackend, DeviceBuffer, KahanSum};
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, JacobiPreconditioner, SsorPreconditioner,
     Ilu0Preconditioner, SolverConfig, BiCgStabSolver, IterativeSolver,
@@ -104,8 +104,10 @@ fn test_bicgstab_shadow_residual_fixed() {
     let n = 100;
     let matrix = generate_nonsymmetric_matrix(n, 12345);
 
+    let backend = CpuBackend::<f64>::new();
+
     // 构建RHS
-    let mut rhs = vec![0.0; n];
+    let mut rhs = backend.alloc(n);
     for i in 0..n {
         rhs[i] = (i as f64 + 1.0).sin();
     }
@@ -113,11 +115,11 @@ fn test_bicgstab_shadow_residual_fixed() {
     let start = Instant::now();
 
     // 创建求解器
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
     let config = SolverConfig::new(1e-10, 100);
-    let mut solver = BiCgStabSolver::new(config);
+    let mut solver = BiCgStabSolver::new(backend.clone(), config);
 
-    let mut x = vec![0.0; n];
+    let mut x = backend.alloc_init(n, 0.0);
     let result = solver.solve(&matrix, &rhs, &mut x, &precond);
 
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -131,13 +133,13 @@ fn test_bicgstab_shadow_residual_fixed() {
     );
 
     // 计算残差验证
-    let mut residual = vec![0.0; n];
-    matrix.mul_vec(&x, &mut residual);
+    let mut residual = backend.alloc(n);
+    matrix.mul_vec(x.as_slice(), residual.as_slice_mut());
     for i in 0..n {
         residual[i] = rhs[i] - residual[i];
     }
-    let res_norm: f64 = residual.iter().map(|r| r * r).sum::<f64>().sqrt();
-    let rhs_norm: f64 = rhs.iter().map(|r| r * r).sum::<f64>().sqrt();
+    let res_norm: f64 = residual.as_slice().iter().map(|r| r * r).sum::<f64>().sqrt();
+    let rhs_norm: f64 = rhs.as_slice().iter().map(|r| r * r).sum::<f64>().sqrt();
     let relative_residual = res_norm / rhs_norm;
 
     assert!(
@@ -184,7 +186,7 @@ fn test_ssor_preconditioner_mathematical() {
     ).unwrap();
 
     // 随机残差向量
-    let mut r = vec![0.0; n];
+    let mut r = backend.alloc(n);
     let mut rng_state = 98765u64;
     for i in 0..n {
         rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -192,12 +194,12 @@ fn test_ssor_preconditioner_mathematical() {
     }
 
     // 应用预条件器: z = M^{-1} * r
-    let mut z = vec![0.0; n];
-    precond.apply(&r, &mut z);
+    let mut z = backend.alloc_init(n, 0.0);
+    precond.apply(&r, &mut z).unwrap();
 
     // 计算 A*z
-    let mut az = vec![0.0; n];
-    matrix.mul_vec(&z, &mut az);
+    let mut az = backend.alloc_init(n, 0.0);
+    matrix.mul_vec(z.as_slice(), az.as_slice_mut());
 
     // 计算 ||A*z - r|| / ||r||
     let mut diff_norm_sq = 0.0;
@@ -227,7 +229,7 @@ fn test_ssor_preconditioner_mathematical() {
     );
 
     // 验证z非零
-    let z_norm: f64 = z.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let z_norm: f64 = z.as_slice().iter().map(|v| v * v).sum::<f64>().sqrt();
     assert!(z_norm > 1e-14, "SSOR produced zero output");
 }
 
@@ -321,23 +323,25 @@ fn test_ilu0_pivot_regularization() {
 
     let n = 30;
     let matrix = generate_ill_conditioned_matrix(n, 1e12);
+    let backend = CpuBackend::<f64>::new();
 
     let start = Instant::now();
 
     // 创建ILU(0)预条件器
-    let precond = Ilu0Preconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+    let precond = Ilu0Preconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
 
     // 测试预条件效果
-    let r = vec![1.0; n];
-    let mut z = vec![0.0; n];
-    precond.apply(&r, &mut z);
+    let mut r = backend.alloc(n);
+    r.fill(1.0);
+    let mut z = backend.alloc_init(n, 0.0);
+    precond.apply(&r, &mut z).unwrap();
 
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     // 验证输出有限且非零
-    let z_norm: f64 = z.iter().map(|v| v * v).sum::<f64>().sqrt();
-    let max_z = z.iter().cloned().fold(0.0_f64, f64::max);
-    let min_z = z.iter().cloned().fold(f64::MAX, f64::min);
+    let z_norm: f64 = z.as_slice().iter().map(|v| v * v).sum::<f64>().sqrt();
+    let max_z = z.as_slice().iter().cloned().fold(0.0_f64, f64::max);
+    let min_z = z.as_slice().iter().cloned().fold(f64::MAX, f64::min);
 
     println!("ILU(0) output norm: {:.4e}", z_norm);
     println!("ILU(0) output range: [{:.4e}, {:.4e}]", min_z, max_z);

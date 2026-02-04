@@ -5,15 +5,15 @@
 
 use mh_physics::sediment::{SedimentManagerGeneric, SedimentConfigGeneric};
 use mh_physics::core::CpuBackend;
-use mh_physics::state::ShallowWaterStateGeneric;
+use mh_physics::state::ShallowWaterState;
 
 // 🔥 测试辅助函数
 fn test_backend() -> CpuBackend<f64> {
     CpuBackend::<f64>::new()
 }
 
-fn create_state(n_cells: usize) -> ShallowWaterStateGeneric<CpuBackend<f64>> {
-    ShallowWaterStateGeneric::new_with_backend(test_backend(), n_cells)
+fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
+    ShallowWaterState::new_with_backend(test_backend(), n_cells)
 }
 
 /// 测试泥沙管理器创建

@@ -49,8 +49,8 @@
 //! let mut state = TracerState::new(1000); // 1000 个计算单元
 //!
 //! // 添加盐度和温度
-//! state.add_tracer(TracerProperties::salinity()).unwrap();
-//! state.add_tracer(TracerProperties::temperature()).unwrap();
+//! state.add_tracer(TracerProperties::salinity(&backend)).unwrap();
+//! state.add_tracer(TracerProperties::temperature(&backend)).unwrap();
 //!
 //! // 访问特定示踪剂
 //! if let Some(salinity) = state.get_mut(TracerType::Salinity) {
@@ -72,7 +72,8 @@
 //!     ..Default::default()
 //! };
 //!
-//! let mut solver = TracerTransportSolver::new(config);
+//! let backend = mh_runtime::CpuBackend::<f64>::new();
+//! let mut solver = TracerTransportSolver::new_with_backend(backend, config);
 //! ```
 //!
 //! # 设计原则

@@ -42,7 +42,8 @@ use std::collections::hash_map::DefaultHasher;
 /// - 检查点保存
 /// - 可视化预览
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeshSnapshot {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
+pub struct MeshSnapshot<S: RuntimeScalar> {
     /// 节点数
     pub n_nodes: usize,
     /// 单元数
@@ -52,9 +53,9 @@ pub struct MeshSnapshot {
     /// 单元节点索引
     pub cell_nodes: Vec<Vec<usize>>,
     /// 单元面积
-    pub cell_areas: Vec<f64>,
+    pub cell_areas: Vec<S>,
     /// 床面高程
-    pub bed_elevations: Vec<f64>,
+    pub bed_elevations: Vec<S>,
     /// 边界面索引（可选）
     pub boundary_faces: Option<Vec<u32>>,
     /// 边界标识（可选，与边界面对应）
@@ -78,7 +79,7 @@ pub struct SnapshotMeta {
     pub description: Option<String>,
 }
 
-impl MeshSnapshot {
+impl<S: RuntimeScalar> MeshSnapshot<S> {
     /// 创建空快照
     pub fn empty() -> Self {
         Self {
@@ -110,8 +111,8 @@ impl MeshSnapshot {
         n_cells: usize,
         node_positions: Vec<(f64, f64)>,
         cell_nodes: Vec<Vec<usize>>,
-        cell_areas: Vec<f64>,
-        bed_elevations: Vec<f64>,
+        cell_areas: Vec<S>,
+        bed_elevations: Vec<S>,
     ) -> Self {
         Self {
             n_nodes,
@@ -153,7 +154,7 @@ impl MeshSnapshot {
     /// let snapshot = MeshSnapshot::empty()
     ///     .with_bed_elevations(vec![0.0; n_cells]);
     /// ```
-    pub fn with_bed_elevations(mut self, elevations: Vec<f64>) -> Self {
+    pub fn with_bed_elevations(mut self, elevations: Vec<S>) -> Self {
         self.bed_elevations = elevations;
         self
     }
@@ -187,10 +188,14 @@ impl MeshSnapshot {
             }
         }
         for &a in &self.cell_areas {
-            a.to_bits().hash(&mut hasher);
+            if let Some(v) = a.to_f64() {
+                v.to_bits().hash(&mut hasher);
+            }
         }
         for &z in &self.bed_elevations {
-            z.to_bits().hash(&mut hasher);
+            if let Some(v) = z.to_f64() {
+                v.to_bits().hash(&mut hasher);
+            }
         }
         if let Some(faces) = &self.boundary_faces {
             for &f in faces {
@@ -233,8 +238,9 @@ impl MeshSnapshot {
         // 单元节点索引: 每个 Vec 的元素 * 8 bytes
         let cell_nodes_mem: usize = self.cell_nodes.iter().map(|v| v.len() * 8).sum();
         // 面积和高程: 各 8 bytes
-        let areas_mem = self.cell_areas.len() * 8;
-        let elev_mem = self.bed_elevations.len() * 8;
+        let scalar_size = std::mem::size_of::<S>();
+        let areas_mem = self.cell_areas.len() * scalar_size;
+        let elev_mem = self.bed_elevations.len() * scalar_size;
         // 边界数据
         let boundary_mem = self.boundary_faces.as_ref().map_or(0, |v| v.len() * 4)
             + self.boundary_ids.as_ref().map_or(0, |v| v.len() * 4);
@@ -271,7 +277,7 @@ impl MeshSnapshot {
             ));
         }
         for (i, &area) in self.cell_areas.iter().enumerate() {
-            if !area.is_finite() || area < 0.0 {
+            if !area.is_finite() || area < S::ZERO {
                 return Err(format!("单元 {} 面积无效: {}", i, area));
             }
         }
@@ -340,7 +346,7 @@ impl MeshSnapshot {
     }
 }
 
-impl Default for MeshSnapshot {
+impl<S: RuntimeScalar> Default for MeshSnapshot<S> {
     fn default() -> Self {
         Self::empty()
     }
@@ -355,7 +361,7 @@ impl Default for MeshSnapshot {
 /// 包含浅水方程守恒变量的只读副本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
-pub struct StateSnapshot<S: RuntimeScalar = f64> {
+pub struct StateSnapshot<S: RuntimeScalar> {
     /// 水深 [m]
     pub h: Vec<S>,
     /// x 动量 [m²/s]
@@ -618,6 +624,40 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
             h_min,
             h_max,
             h_mean: h_sum / n as f64,
+        }
+    }
+
+    /// 精度/标量类型转换
+    ///
+    /// 用于在不同运行时精度之间显式转换快照，避免隐式截断。
+    pub fn map_scalar<T: RuntimeScalar>(&self) -> StateSnapshot<T> {
+        let map_vec = |src: &[S]| -> Vec<T> {
+            src.iter()
+                .map(|v| {
+                    T::from_f64(v.to_f64().unwrap_or(0.0)).unwrap_or(T::ZERO)
+                })
+                .collect()
+        };
+
+        let z = self.z.as_ref().map(|v| map_vec(v));
+        let scalars = self
+            .scalars
+            .as_ref()
+            .map(|fields| fields.iter().map(|v| map_vec(v)).collect());
+
+        let mut meta = self.meta.clone();
+        if let Some(m) = meta.as_mut() {
+            m.hash = None;
+        }
+
+        StateSnapshot {
+            h: map_vec(&self.h),
+            hu: map_vec(&self.hu),
+            hv: map_vec(&self.hv),
+            z,
+            scalars,
+            scalar_names: self.scalar_names.clone(),
+            meta,
         }
     }
 }

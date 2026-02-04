@@ -29,9 +29,17 @@ use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, realloc, Layout};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
+/// AlignedVec 分配与容量错误
 #[derive(Debug, Clone)]
 pub enum AlignedVecError {
-    AllocationFailed { size: usize, align: usize },
+    /// 内存分配失败
+    AllocationFailed {
+        /// 请求的字节数
+        size: usize,
+        /// 对齐字节数
+        align: usize,
+    },
+    /// 容量溢出
     CapacityOverflow,
 }
 

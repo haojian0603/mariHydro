@@ -16,24 +16,27 @@
 //! use mh_physics::numerics::linear_algebra::{
 //!     CsrMatrix, PcgSolver, JacobiPreconditioner, SolverConfig,
 //! };
+//! use mh_runtime::CpuBackend;
 //!
+//! let backend = CpuBackend::<f64>::new();
 //! let matrix: CsrMatrix<f64> = /* ... */;
-//! let b = vec![1.0, 2.0, 3.0];
-//! let mut x = vec![0.0; 3];
+//! let mut b = backend.alloc(3);
+//! b.copy_from_slice(&[1.0, 2.0, 3.0]);
+//! let mut x = backend.alloc_init(3, 0.0);
 //!
-//! let precond = JacobiPreconditioner::from_matrix(&matrix);
+//! let precond = JacobiPreconditioner::from_matrix(&backend, &matrix).unwrap();
 //! let config = SolverConfig::new(1e-8, 100);
-//! let mut solver = PcgSolver::<f64>::new(config);
+//! let mut solver = PcgSolver::new(backend.clone(), config);
 //!
 //! let result = solver.solve(&matrix, &b, &mut x, &precond);
 //! println!("Converged in {} iterations", result.iterations);
 //! ```
 
 use super::csr::CsrMatrix;
-use super::preconditioner::ScalarPreconditioner;
-use super::vector_ops::{axpy_unchecked as axpy, copy, dot_unchecked as dot, norm2};
+use super::preconditioner::Preconditioner;
 use crate::core::kernel::spmv_kernel;
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -143,125 +146,129 @@ impl<S: RuntimeScalar> SolverResult<S> {
 /// CG 求解器工作区
 ///
 /// 预分配的工作向量，避免 solve 内部频繁分配
-#[derive(Debug, Clone, Default)]
-pub struct CgWorkspace<S: RuntimeScalar> {
+#[derive(Debug, Clone)]
+pub struct CgWorkspace<B: Backend> {
     /// 残差向量
-    pub r: Vec<S>,
+    pub r: B::Buffer<B::Scalar>,
     /// 搜索方向
-    pub p: Vec<S>,
+    pub p: B::Buffer<B::Scalar>,
     /// A*p
-    pub ap: Vec<S>,
+    pub ap: B::Buffer<B::Scalar>,
     /// 预条件后的残差
-    pub z: Vec<S>,
+    pub z: B::Buffer<B::Scalar>,
 }
 
-impl<S: RuntimeScalar> CgWorkspace<S> {
+impl<B: Backend> CgWorkspace<B> {
     /// 创建新的工作区
-    pub fn new(n: usize) -> Self {
-        Self {
-            r: vec![S::ZERO; n],
-            p: vec![S::ZERO; n],
-            ap: vec![S::ZERO; n],
-            z: vec![S::ZERO; n],
-        }
+    pub fn new(backend: &B, n: usize) -> Self {
+        let mut r = backend.alloc(n);
+        let mut p = backend.alloc(n);
+        let mut ap = backend.alloc(n);
+        let mut z = backend.alloc(n);
+        r.fill(B::Scalar::ZERO);
+        p.fill(B::Scalar::ZERO);
+        ap.fill(B::Scalar::ZERO);
+        z.fill(B::Scalar::ZERO);
+        Self { r, p, ap, z }
     }
 
     /// 调整工作区大小并清零
     ///
     /// 无论大小是否变化，均清零防止历史数据污染。
-    pub fn resize(&mut self, n: usize) {
+    pub fn resize(&mut self, backend: &B, n: usize) {
         if self.r.len() != n {
-            self.r = vec![S::ZERO; n];
-            self.p = vec![S::ZERO; n];
-            self.ap = vec![S::ZERO; n];
-            self.z = vec![S::ZERO; n];
-        } else {
-            // 即使大小不变也要清零
-            self.r.fill(S::ZERO);
-            self.p.fill(S::ZERO);
-            self.ap.fill(S::ZERO);
-            self.z.fill(S::ZERO);
+            self.r = backend.alloc(n);
+            self.p = backend.alloc(n);
+            self.ap = backend.alloc(n);
+            self.z = backend.alloc(n);
         }
+        self.clear();
     }
 
     /// 清零工作区
     pub fn clear(&mut self) {
-        self.r.fill(S::ZERO);
-        self.p.fill(S::ZERO);
-        self.ap.fill(S::ZERO);
-        self.z.fill(S::ZERO);
+        self.r.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
+        self.ap.fill(B::Scalar::ZERO);
+        self.z.fill(B::Scalar::ZERO);
     }
 }
 
 /// BiCGStab 求解器工作区
-#[derive(Debug, Clone, Default)]
-pub struct BiCgStabWorkspace<S: RuntimeScalar> {
+#[derive(Debug, Clone)]
+pub struct BiCgStabWorkspace<B: Backend> {
     /// 残差向量
-    pub r: Vec<S>,
+    pub r: B::Buffer<B::Scalar>,
     /// 影子残差，必须保持不变
-    pub r0: Vec<S>,
+    pub r0: B::Buffer<B::Scalar>,
     /// 搜索方向
-    pub p: Vec<S>,
+    pub p: B::Buffer<B::Scalar>,
     /// A*p_hat
-    pub v: Vec<S>,
+    pub v: B::Buffer<B::Scalar>,
     /// 中间残差
-    pub s: Vec<S>,
+    pub s: B::Buffer<B::Scalar>,
     /// A*s_hat
-    pub t: Vec<S>,
+    pub t: B::Buffer<B::Scalar>,
     /// 预条件后的向量
-    pub p_hat: Vec<S>,
+    pub p_hat: B::Buffer<B::Scalar>,
     /// 预条件后的向量
-    pub s_hat: Vec<S>,
+    pub s_hat: B::Buffer<B::Scalar>,
 }
 
-impl<S: RuntimeScalar> BiCgStabWorkspace<S> {
+impl<B: Backend> BiCgStabWorkspace<B> {
     /// 创建新的工作区
-    pub fn new(n: usize) -> Self {
-        Self {
-            r: vec![S::ZERO; n],
-            r0: vec![S::ZERO; n],
-            p: vec![S::ZERO; n],
-            v: vec![S::ZERO; n],
-            s: vec![S::ZERO; n],
-            t: vec![S::ZERO; n],
-            p_hat: vec![S::ZERO; n],
-            s_hat: vec![S::ZERO; n],
-        }
+    pub fn new(backend: &B, n: usize) -> Self {
+        let mut r = backend.alloc(n);
+        let mut r0 = backend.alloc(n);
+        let mut p = backend.alloc(n);
+        let mut v = backend.alloc(n);
+        let mut s = backend.alloc(n);
+        let mut t = backend.alloc(n);
+        let mut p_hat = backend.alloc(n);
+        let mut s_hat = backend.alloc(n);
+        r.fill(B::Scalar::ZERO);
+        r0.fill(B::Scalar::ZERO);
+        p.fill(B::Scalar::ZERO);
+        v.fill(B::Scalar::ZERO);
+        s.fill(B::Scalar::ZERO);
+        t.fill(B::Scalar::ZERO);
+        p_hat.fill(B::Scalar::ZERO);
+        s_hat.fill(B::Scalar::ZERO);
+        Self { r, r0, p, v, s, t, p_hat, s_hat }
     }
 
     /// 调整工作区大小并清零
     ///
     /// 无论大小是否变化，均清零防止历史数据污染。
-    pub fn resize(&mut self, n: usize) {
+    pub fn resize(&mut self, backend: &B, n: usize) {
         if self.r.len() != n {
-            self.r = vec![S::ZERO; n];
-            self.r0 = vec![S::ZERO; n];
-            self.p = vec![S::ZERO; n];
-            self.v = vec![S::ZERO; n];
-            self.s = vec![S::ZERO; n];
-            self.t = vec![S::ZERO; n];
-            self.p_hat = vec![S::ZERO; n];
-            self.s_hat = vec![S::ZERO; n];
-        } else {
-            self.clear();
+            self.r = backend.alloc(n);
+            self.r0 = backend.alloc(n);
+            self.p = backend.alloc(n);
+            self.v = backend.alloc(n);
+            self.s = backend.alloc(n);
+            self.t = backend.alloc(n);
+            self.p_hat = backend.alloc(n);
+            self.s_hat = backend.alloc(n);
         }
+        self.clear();
     }
 
     /// 清零工作区
     pub fn clear(&mut self) {
-        self.r.fill(S::ZERO);
-        self.r0.fill(S::ZERO);
-        self.p.fill(S::ZERO);
-        self.v.fill(S::ZERO);
-        self.s.fill(S::ZERO);
-        self.t.fill(S::ZERO);
-        self.p_hat.fill(S::ZERO);
-        self.s_hat.fill(S::ZERO);
+        self.r.fill(B::Scalar::ZERO);
+        self.r0.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
+        self.v.fill(B::Scalar::ZERO);
+        self.s.fill(B::Scalar::ZERO);
+        self.t.fill(B::Scalar::ZERO);
+        self.p_hat.fill(B::Scalar::ZERO);
+        self.s_hat.fill(B::Scalar::ZERO);
     }
 }
 
 /// 迭代求解器 trait
-pub trait IterativeSolver<S: RuntimeScalar> {
+pub trait IterativeSolver<B: Backend> {
     /// 求解线性系统 Ax = b
     ///
     /// # 参数
@@ -274,13 +281,13 @@ pub trait IterativeSolver<S: RuntimeScalar> {
     /// # 返回
     ///
     /// 求解结果
-    fn solve<P: ScalarPreconditioner<S>>(
+    fn solve<P: Preconditioner<B>>(
         &mut self,
-        matrix: &CsrMatrix<S>,
-        b: &[S],
-        x: &mut [S],
+        matrix: &CsrMatrix<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        x: &mut B::Buffer<B::Scalar>,
         precond: &P,
-    ) -> SolverResult<S>;
+    ) -> SolverResult<B::Scalar>;
 
     /// 获取求解器名称
     fn name(&self) -> &'static str;
@@ -289,34 +296,39 @@ pub trait IterativeSolver<S: RuntimeScalar> {
 /// 共轭梯度法求解器
 ///
 /// 适用于对称正定矩阵
-pub struct ConjugateGradient<S: RuntimeScalar> {
+pub struct ConjugateGradient<B: Backend> {
     config: SolverConfig,
+    backend: B,
     // 工作向量
-    r: Vec<S>,
-    p: Vec<S>,
-    ap: Vec<S>,
-    observer: Option<Box<dyn IterationObserver<S>>>,
+    r: B::Buffer<B::Scalar>,
+    p: B::Buffer<B::Scalar>,
+    ap: B::Buffer<B::Scalar>,
+    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
-impl<S: RuntimeScalar> ConjugateGradient<S> {
+impl<B: Backend> ConjugateGradient<B> {
     /// 创建共轭梯度求解器
-    pub fn new(config: SolverConfig) -> Self {
+    pub fn new(backend: B, config: SolverConfig) -> Self {
+        let r = backend.alloc(0);
+        let p = backend.alloc(0);
+        let ap = backend.alloc(0);
         Self {
             config,
-            r: Vec::new(),
-            p: Vec::new(),
-            ap: Vec::new(),
+            backend,
+            r,
+            p,
+            ap,
             observer: None,
         }
     }
 
     /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
         self.observer = observer;
     }
 
     /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
         self.observer = Some(observer);
         self
     }
@@ -324,39 +336,42 @@ impl<S: RuntimeScalar> ConjugateGradient<S> {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![S::ZERO; n];
-            self.p = vec![S::ZERO; n];
-            self.ap = vec![S::ZERO; n];
+            self.r = self.backend.alloc(n);
+            self.p = self.backend.alloc(n);
+            self.ap = self.backend.alloc(n);
         }
+        self.r.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
+        self.ap.fill(B::Scalar::ZERO);
     }
 }
 
-impl<S> IterativeSolver<S> for ConjugateGradient<S>
+impl<B> IterativeSolver<B> for ConjugateGradient<B>
 where
-    S: RuntimeScalar,
+    B: Backend,
 {
-    fn solve<P: ScalarPreconditioner<S>>(
+    fn solve<P: Preconditioner<B>>(
         &mut self,
-        matrix: &CsrMatrix<S>,
-        b: &[S],
-        x: &mut [S],
+        matrix: &CsrMatrix<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        x: &mut B::Buffer<B::Scalar>,
         _precond: &P,
-    ) -> SolverResult<S> {
+    ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
+        let rtol = self.backend.scalar_from_f64(self.config.rtol);
+        let atol = self.backend.scalar_from_f64(self.config.atol);
+        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
+        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
 
         // r = b - A*x
-        spmv_kernel(matrix, x, &mut self.r);
+        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
-        let initial_norm = norm2(&self.r);
-        let b_norm = norm2(b);
+        let initial_norm = self.backend.norm2(&self.r);
+        let b_norm = self.backend.norm2(b);
         let use_absolute = b_norm <= atol;
         let effective_tol = if use_absolute {
             atol
@@ -370,32 +385,32 @@ where
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: S::ZERO,
+                relative_residual: B::Scalar::ZERO,
             };
         }
 
         // p = r
-        copy(&self.r, &mut self.p);
+        self.backend.copy(&self.r, &mut self.p);
 
-        let mut rr = dot(&self.r, &self.r);
+        let mut rr = self.backend.dot(&self.r, &self.r);
         let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, &self.p, &mut self.ap);
+            spmv_kernel(matrix, self.p.as_slice(), self.ap.as_slice_mut());
 
             // alpha = r'r / p'Ap
-            let pap = dot(&self.p, &self.ap);
+            let pap = self.backend.dot(&self.p, &self.ap);
             if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
-                    residual_norm: norm2(&self.r),
+                    residual_norm: self.backend.norm2(&self.r),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&self.r)
+                        self.backend.norm2(&self.r)
                     } else {
-                        norm2(&self.r) / b_norm
+                        self.backend.norm2(&self.r) / b_norm
                     },
                 };
             }
@@ -403,18 +418,16 @@ where
             let alpha = rr / pap;
 
             // x = x + alpha * p
-            axpy(alpha, &self.p, x);
+            self.backend.axpy(alpha, &self.p, x);
 
             // r = r - alpha * ap
-            axpy(-alpha, &self.ap, &mut self.r);
+            self.backend.axpy(-alpha, &self.ap, &mut self.r);
 
-            let res_norm = norm2(&self.r);
+            let res_norm = self.backend.norm2(&self.r);
             let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
-                if let Some(res_val) = res_norm.to_f64() {
-                    log::trace!("CG iter {}: residual = {:.6e}", iter + 1, res_val);
-                }
+                log::trace!("CG iter {}: residual = {:?}", iter + 1, res_norm);
             }
 
             // 检查收敛
@@ -453,7 +466,7 @@ where
             prev_res = res_norm;
 
             // beta = r'r_new / r'r_old
-            let rr_new = dot(&self.r, &self.r);
+            let rr_new = self.backend.dot(&self.r, &self.r);
             let beta = rr_new / rr;
             rr = rr_new;
 
@@ -466,12 +479,12 @@ where
         SolverResult {
             status: SolverStatus::MaxIterationsReached,
             iterations: self.config.max_iter,
-            residual_norm: norm2(&self.r),
+            residual_norm: self.backend.norm2(&self.r),
             initial_residual_norm: initial_norm,
             relative_residual: if use_absolute {
-                norm2(&self.r)
+                self.backend.norm2(&self.r)
             } else {
-                norm2(&self.r) / b_norm
+                self.backend.norm2(&self.r) / b_norm
             },
         }
     }
@@ -484,36 +497,42 @@ where
 /// 预条件共轭梯度法求解器
 ///
 /// 适用于对称正定矩阵，使用预条件器加速收敛
-pub struct PcgSolver<S: RuntimeScalar> {
+pub struct PcgSolver<B: Backend> {
     config: SolverConfig,
+    backend: B,
     // 工作向量
-    r: Vec<S>,
-    z: Vec<S>,
-    p: Vec<S>,
-    ap: Vec<S>,
-    observer: Option<Box<dyn IterationObserver<S>>>,
+    r: B::Buffer<B::Scalar>,
+    z: B::Buffer<B::Scalar>,
+    p: B::Buffer<B::Scalar>,
+    ap: B::Buffer<B::Scalar>,
+    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
-impl<S: RuntimeScalar> PcgSolver<S> {
+impl<B: Backend> PcgSolver<B> {
     /// 创建 PCG 求解器
-    pub fn new(config: SolverConfig) -> Self {
+    pub fn new(backend: B, config: SolverConfig) -> Self {
+        let r = backend.alloc(0);
+        let z = backend.alloc(0);
+        let p = backend.alloc(0);
+        let ap = backend.alloc(0);
         Self {
             config,
-            r: Vec::new(),
-            z: Vec::new(),
-            p: Vec::new(),
-            ap: Vec::new(),
+            backend,
+            r,
+            z,
+            p,
+            ap,
             observer: None,
         }
     }
 
     /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
         self.observer = observer;
     }
 
     /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
         self.observer = Some(observer);
         self
     }
@@ -521,11 +540,15 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![S::ZERO; n];
-            self.z = vec![S::ZERO; n];
-            self.p = vec![S::ZERO; n];
-            self.ap = vec![S::ZERO; n];
+            self.r = self.backend.alloc(n);
+            self.z = self.backend.alloc(n);
+            self.p = self.backend.alloc(n);
+            self.ap = self.backend.alloc(n);
         }
+        self.r.fill(B::Scalar::ZERO);
+        self.z.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
+        self.ap.fill(B::Scalar::ZERO);
     }
 
     /// 使用外部工作区求解（避免内部分配）
@@ -537,29 +560,29 @@ impl<S: RuntimeScalar> PcgSolver<S> {
     /// - `x`: 解向量
     /// - `precond`: 预条件器
     /// - `ws`: 外部工作区
-    pub fn solve_with_workspace<P: ScalarPreconditioner<S>>(
+    pub fn solve_with_workspace<P: Preconditioner<B>>(
         &mut self,
-        matrix: &CsrMatrix<S>,
-        b: &[S],
-        x: &mut [S],
+        matrix: &CsrMatrix<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        x: &mut B::Buffer<B::Scalar>,
         precond: &P,
-        ws: &mut CgWorkspace<S>,
-    ) -> SolverResult<S> {
+        ws: &mut CgWorkspace<B>,
+    ) -> SolverResult<B::Scalar> {
         let n = b.len();
-        ws.resize(n);
-        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
+        ws.resize(&self.backend, n);
+        let rtol = self.backend.scalar_from_f64(self.config.rtol);
+        let atol = self.backend.scalar_from_f64(self.config.atol);
+        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
+        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
 
         // r = b - A*x
-        spmv_kernel(matrix, x, &mut ws.r);
+        spmv_kernel(matrix, x.as_slice(), ws.r.as_slice_mut());
         for i in 0..n {
             ws.r[i] = b[i] - ws.r[i];
         }
 
-        let initial_norm = norm2(&ws.r);
-        let b_norm = norm2(b);
+        let initial_norm = self.backend.norm2(&ws.r);
+        let b_norm = self.backend.norm2(b);
 
         // 鲁棒的收敛判据：处理 b_norm ≈ 0 的情况
         let use_absolute = b_norm <= atol;
@@ -575,35 +598,43 @@ impl<S: RuntimeScalar> PcgSolver<S> {
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: S::ZERO,
+                relative_residual: B::Scalar::ZERO,
             };
         }
 
         // z = M^{-1} * r
-        precond.apply(&ws.r, &mut ws.z);
+        if let Err(_err) = precond.apply(&ws.r, &mut ws.z) {
+            return SolverResult {
+                status: SolverStatus::Stopped,
+                iterations: 0,
+                residual_norm: initial_norm,
+                initial_residual_norm: initial_norm,
+                relative_residual: if use_absolute { initial_norm } else { initial_norm / b_norm },
+            };
+        }
 
         // p = z
-        copy(&ws.z, &mut ws.p);
+        self.backend.copy(&ws.z, &mut ws.p);
 
-        let mut rz = dot(&ws.r, &ws.z);
+        let mut rz = self.backend.dot(&ws.r, &ws.z);
         let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, &ws.p, &mut ws.ap);
+            spmv_kernel(matrix, ws.p.as_slice(), ws.ap.as_slice_mut());
 
             // alpha = r'z / p'Ap
-            let pap = dot(&ws.p, &ws.ap);
+            let pap = self.backend.dot(&ws.p, &ws.ap);
             if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
-                    residual_norm: norm2(&ws.r),
+                    residual_norm: self.backend.norm2(&ws.r),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&ws.r)
+                        self.backend.norm2(&ws.r)
                     } else {
-                        norm2(&ws.r) / b_norm
+                        self.backend.norm2(&ws.r) / b_norm
                     },
                 };
             }
@@ -611,18 +642,16 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             let alpha = rz / pap;
 
             // x = x + alpha * p
-            axpy(alpha, &ws.p, x);
+            self.backend.axpy(alpha, &ws.p, x);
 
             // r = r - alpha * ap
-            axpy(-alpha, &ws.ap, &mut ws.r);
+            self.backend.axpy(-alpha, &ws.ap, &mut ws.r);
 
-            let res_norm = norm2(&ws.r);
+            let res_norm = self.backend.norm2(&ws.r);
             let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
-                if let Some(res_val) = res_norm.to_f64() {
-                    log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_val);
-                }
+                log::trace!("PCG iter {}: residual = {:?}", iter + 1, res_norm);
             }
 
             // 检查收敛
@@ -661,10 +690,22 @@ impl<S: RuntimeScalar> PcgSolver<S> {
             prev_res = res_norm;
 
             // z = M^{-1} * r
-            precond.apply(&ws.r, &mut ws.z);
+            if let Err(_err) = precond.apply(&ws.r, &mut ws.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter + 1,
+                    residual_norm: self.backend.norm2(&ws.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&ws.r)
+                    } else {
+                        self.backend.norm2(&ws.r) / b_norm
+                    },
+                };
+            }
 
             // beta = r'z_new / r'z_old
-            let rz_new = dot(&ws.r, &ws.z);
+            let rz_new = self.backend.dot(&ws.r, &ws.z);
             let beta = rz_new / rz;
             rz = rz_new;
 
@@ -677,43 +718,43 @@ impl<S: RuntimeScalar> PcgSolver<S> {
         SolverResult {
             status: SolverStatus::MaxIterationsReached,
             iterations: self.config.max_iter,
-            residual_norm: norm2(&ws.r),
+            residual_norm: self.backend.norm2(&ws.r),
             initial_residual_norm: initial_norm,
             relative_residual: if use_absolute {
-                norm2(&ws.r)
+                self.backend.norm2(&ws.r)
             } else {
-                norm2(&ws.r) / b_norm
+                self.backend.norm2(&ws.r) / b_norm
             },
         }
     }
 }
 
-impl<S> IterativeSolver<S> for PcgSolver<S>
+impl<B> IterativeSolver<B> for PcgSolver<B>
 where
-    S: RuntimeScalar,
+    B: Backend,
 {
-    fn solve<P: ScalarPreconditioner<S>>(
+    fn solve<P: Preconditioner<B>>(
         &mut self,
-        matrix: &CsrMatrix<S>,
-        b: &[S],
-        x: &mut [S],
+        matrix: &CsrMatrix<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        x: &mut B::Buffer<B::Scalar>,
         precond: &P,
-    ) -> SolverResult<S> {
+    ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
+        let rtol = self.backend.scalar_from_f64(self.config.rtol);
+        let atol = self.backend.scalar_from_f64(self.config.atol);
+        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
+        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
 
         // r = b - A*x
-        spmv_kernel(matrix, x, &mut self.r);
+        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
-        let initial_norm = norm2(&self.r);
-        let b_norm = norm2(b);
+        let initial_norm = self.backend.norm2(&self.r);
+        let b_norm = self.backend.norm2(b);
         let use_absolute = b_norm <= atol;
         let effective_tol = if use_absolute {
             atol
@@ -727,35 +768,43 @@ where
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: S::ZERO,
+                relative_residual: B::Scalar::ZERO,
             };
         }
 
         // z = M^{-1} * r
-        precond.apply(&self.r, &mut self.z);
+        if let Err(_err) = precond.apply(&self.r, &mut self.z) {
+            return SolverResult {
+                status: SolverStatus::Stopped,
+                iterations: 0,
+                residual_norm: initial_norm,
+                initial_residual_norm: initial_norm,
+                relative_residual: if use_absolute { initial_norm } else { initial_norm / b_norm },
+            };
+        }
 
         // p = z
-        copy(&self.z, &mut self.p);
+        self.backend.copy(&self.z, &mut self.p);
 
-        let mut rz = dot(&self.r, &self.z);
+        let mut rz = self.backend.dot(&self.r, &self.z);
         let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, &self.p, &mut self.ap);
+            spmv_kernel(matrix, self.p.as_slice(), self.ap.as_slice_mut());
 
             // alpha = r'z / p'Ap
-            let pap = dot(&self.p, &self.ap);
+            let pap = self.backend.dot(&self.p, &self.ap);
             if pap.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
-                    residual_norm: norm2(&self.r),
+                    residual_norm: self.backend.norm2(&self.r),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&self.r)
+                        self.backend.norm2(&self.r)
                     } else {
-                        norm2(&self.r) / b_norm
+                        self.backend.norm2(&self.r) / b_norm
                     },
                 };
             }
@@ -763,18 +812,16 @@ where
             let alpha = rz / pap;
 
             // x = x + alpha * p
-            axpy(alpha, &self.p, x);
+            self.backend.axpy(alpha, &self.p, x);
 
             // r = r - alpha * ap
-            axpy(-alpha, &self.ap, &mut self.r);
+            self.backend.axpy(-alpha, &self.ap, &mut self.r);
 
-            let res_norm = norm2(&self.r);
+            let res_norm = self.backend.norm2(&self.r);
             let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
-                if let Some(res_val) = res_norm.to_f64() {
-                    log::trace!("PCG iter {}: residual = {:.6e}", iter + 1, res_val);
-                }
+                log::trace!("PCG iter {}: residual = {:?}", iter + 1, res_norm);
             }
 
             // 检查收敛
@@ -813,10 +860,22 @@ where
             prev_res = res_norm;
 
             // z = M^{-1} * r
-            precond.apply(&self.r, &mut self.z);
+            if let Err(_err) = precond.apply(&self.r, &mut self.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter + 1,
+                    residual_norm: self.backend.norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&self.r)
+                    } else {
+                        self.backend.norm2(&self.r) / b_norm
+                    },
+                };
+            }
 
             // beta = r'z_new / r'z_old
-            let rz_new = dot(&self.r, &self.z);
+            let rz_new = self.backend.dot(&self.r, &self.z);
             let beta = rz_new / rz;
             rz = rz_new;
 
@@ -829,12 +888,12 @@ where
         SolverResult {
             status: SolverStatus::MaxIterationsReached,
             iterations: self.config.max_iter,
-            residual_norm: norm2(&self.r),
+            residual_norm: self.backend.norm2(&self.r),
             initial_residual_norm: initial_norm,
             relative_residual: if use_absolute {
-                norm2(&self.r)
+                self.backend.norm2(&self.r)
             } else {
-                norm2(&self.r) / b_norm
+                self.backend.norm2(&self.r) / b_norm
             },
         }
     }
@@ -847,42 +906,51 @@ where
 /// 双共轭梯度稳定法求解器
 ///
 /// 适用于非对称矩阵
-pub struct BiCgStabSolver<S: RuntimeScalar> {
+pub struct BiCgStabSolver<B: Backend> {
     config: SolverConfig,
+    backend: B,
     // 工作向量
-    r: Vec<S>,
-    r0: Vec<S>,
-    p: Vec<S>,
-    v: Vec<S>,
-    s: Vec<S>,
-    t: Vec<S>,
-    z: Vec<S>,
-    observer: Option<Box<dyn IterationObserver<S>>>,
+    r: B::Buffer<B::Scalar>,
+    r0: B::Buffer<B::Scalar>,
+    p: B::Buffer<B::Scalar>,
+    v: B::Buffer<B::Scalar>,
+    s: B::Buffer<B::Scalar>,
+    t: B::Buffer<B::Scalar>,
+    z: B::Buffer<B::Scalar>,
+    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
-impl<S: RuntimeScalar> BiCgStabSolver<S> {
+impl<B: Backend> BiCgStabSolver<B> {
     /// 创建 BiCGStab 求解器
-    pub fn new(config: SolverConfig) -> Self {
+    pub fn new(backend: B, config: SolverConfig) -> Self {
+        let r = backend.alloc(0);
+        let r0 = backend.alloc(0);
+        let p = backend.alloc(0);
+        let v = backend.alloc(0);
+        let s = backend.alloc(0);
+        let t = backend.alloc(0);
+        let z = backend.alloc(0);
         Self {
             config,
-            r: Vec::new(),
-            r0: Vec::new(),
-            p: Vec::new(),
-            v: Vec::new(),
-            s: Vec::new(),
-            t: Vec::new(),
-            z: Vec::new(),
+            backend,
+            r,
+            r0,
+            p,
+            v,
+            s,
+            t,
+            z,
             observer: None,
         }
     }
 
     /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<S>>>) {
+    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
         self.observer = observer;
     }
 
     /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<S>>) -> Self {
+    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
         self.observer = Some(observer);
         self
     }
@@ -890,44 +958,51 @@ impl<S: RuntimeScalar> BiCgStabSolver<S> {
     /// 确保工作向量大小正确
     fn ensure_workspace(&mut self, n: usize) {
         if self.r.len() != n {
-            self.r = vec![S::ZERO; n];
-            self.r0 = vec![S::ZERO; n];
-            self.p = vec![S::ZERO; n];
-            self.v = vec![S::ZERO; n];
-            self.s = vec![S::ZERO; n];
-            self.t = vec![S::ZERO; n];
-            self.z = vec![S::ZERO; n];
+            self.r = self.backend.alloc(n);
+            self.r0 = self.backend.alloc(n);
+            self.p = self.backend.alloc(n);
+            self.v = self.backend.alloc(n);
+            self.s = self.backend.alloc(n);
+            self.t = self.backend.alloc(n);
+            self.z = self.backend.alloc(n);
         }
+        self.r.fill(B::Scalar::ZERO);
+        self.r0.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
+        self.v.fill(B::Scalar::ZERO);
+        self.s.fill(B::Scalar::ZERO);
+        self.t.fill(B::Scalar::ZERO);
+        self.z.fill(B::Scalar::ZERO);
     }
 }
 
-impl<S> IterativeSolver<S> for BiCgStabSolver<S>
+impl<B> IterativeSolver<B> for BiCgStabSolver<B>
 where
-    S: RuntimeScalar,
+    B: Backend,
 {
-    fn solve<P: ScalarPreconditioner<S>>(
+    fn solve<P: Preconditioner<B>>(
         &mut self,
-        matrix: &CsrMatrix<S>,
-        b: &[S],
-        x: &mut [S],
+        matrix: &CsrMatrix<B::Scalar>,
+        b: &B::Buffer<B::Scalar>,
+        x: &mut B::Buffer<B::Scalar>,
         precond: &P,
-    ) -> SolverResult<S> {
+    ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = S::from_f64(self.config.rtol).unwrap_or(S::EPSILON);
-        let atol = S::from_f64(self.config.atol).unwrap_or(S::MIN_POSITIVE);
-        let breakdown_tol = S::from_f64(1e-30).unwrap_or(S::MIN_POSITIVE);
-        let stag_tol = S::from_f64(self.config.stagnation_tol).unwrap_or(S::MIN_POSITIVE);
-        let div_factor = S::from_f64(1e6).unwrap_or(S::MAX);
+        let rtol = self.backend.scalar_from_f64(self.config.rtol);
+        let atol = self.backend.scalar_from_f64(self.config.atol);
+        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
+        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
+        let div_factor = self.backend.scalar_from_f64(1e6);
 
         // r = b - A*x
-        spmv_kernel(matrix, x, &mut self.r);
+        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
 
-        let initial_norm = norm2(&self.r);
-        let b_norm = norm2(b);
+        let initial_norm = self.backend.norm2(&self.r);
+        let b_norm = self.backend.norm2(b);
         let use_absolute = b_norm <= atol;
         let effective_tol = if use_absolute {
             atol
@@ -941,26 +1016,26 @@ where
                 iterations: 0,
                 residual_norm: initial_norm,
                 initial_residual_norm: initial_norm,
-                relative_residual: S::ZERO,
+                relative_residual: B::Scalar::ZERO,
             };
         }
 
         // r0 = r (shadow residual) - 固定为初始残差，在迭代中保持不变
-        copy(&self.r, &mut self.r0);
+        self.backend.copy(&self.r, &mut self.r0);
 
         // 标准 BiCGStab: rho_old 用于计算 beta
-        let mut rho_old = S::ONE;
-        let mut alpha = S::ONE;
-        let mut omega = S::ONE;
+        let mut rho_old = B::Scalar::ONE;
+        let mut alpha = B::Scalar::ONE;
+        let mut omega = B::Scalar::ONE;
 
-        self.v.fill(S::ZERO);
-        self.p.fill(S::ZERO);
+        self.v.fill(B::Scalar::ZERO);
+        self.p.fill(B::Scalar::ZERO);
         let mut prev_res = initial_norm;
 
         for iter in 0..self.config.max_iter {
             // 计算 rho = (r0, r)
-            let rho = dot(&self.r0, &self.r);
-            
+            let rho = self.backend.dot(&self.r0, &self.r);
+
             // 检查 rho breakdown
             if rho.abs() < breakdown_tol {
                 if iter == 0 {
@@ -970,18 +1045,18 @@ where
                         iterations: 0,
                         residual_norm: initial_norm,
                         initial_residual_norm: initial_norm,
-                        relative_residual: S::ZERO,
+                        relative_residual: B::Scalar::ZERO,
                     };
                 }
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
-                    residual_norm: norm2(&self.r),
+                    residual_norm: self.backend.norm2(&self.r),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&self.r)
+                        self.backend.norm2(&self.r)
                     } else {
-                        norm2(&self.r) / b_norm
+                        self.backend.norm2(&self.r) / b_norm
                     },
                 };
             }
@@ -989,12 +1064,12 @@ where
             // 计算 beta（第一次迭代时 beta = 0，因为 rho_old = 1, omega = 1）
             let beta = if iter == 0 {
                 // 首次迭代: p = r
-                S::ZERO
+                B::Scalar::ZERO
             } else {
                 // 标准公式: beta = (rho / rho_old) * (alpha / omega)
                 (rho / rho_old) * (alpha / omega)
             };
-            
+
             // 保存 rho 供下次迭代使用
             rho_old = rho;
 
@@ -1004,23 +1079,35 @@ where
             }
 
             // z = M^{-1} * p
-            precond.apply(&self.p, &mut self.z);
+            if let Err(_err) = precond.apply(&self.p, &mut self.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter,
+                    residual_norm: self.backend.norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&self.r)
+                    } else {
+                        self.backend.norm2(&self.r) / b_norm
+                    },
+                };
+            }
 
             // v = A * z
-            spmv_kernel(matrix, &self.z, &mut self.v);
+            spmv_kernel(matrix, self.z.as_slice(), self.v.as_slice_mut());
 
             // alpha = rho / (r0, v)
-            let r0v = dot(&self.r0, &self.v);
+            let r0v = self.backend.dot(&self.r0, &self.v);
             if r0v.abs() < breakdown_tol {
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter,
-                    residual_norm: norm2(&self.r),
+                    residual_norm: self.backend.norm2(&self.r),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&self.r)
+                        self.backend.norm2(&self.r)
                     } else {
-                        norm2(&self.r) / b_norm
+                        self.backend.norm2(&self.r) / b_norm
                     },
                 };
             }
@@ -1032,10 +1119,10 @@ where
             }
 
             // 检查 s 的范数
-            let s_norm = norm2(&self.s);
+            let s_norm = self.backend.norm2(&self.s);
             if s_norm < atol {
                 // x = x + alpha * z
-                axpy(alpha, &self.z, x);
+                self.backend.axpy(alpha, &self.z, x);
                 return SolverResult {
                     status: SolverStatus::Converged,
                     iterations: iter + 1,
@@ -1046,55 +1133,101 @@ where
             }
 
             // z = M^{-1} * s
-            precond.apply(&self.s, &mut self.z);
+            if let Err(_err) = precond.apply(&self.s, &mut self.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter,
+                    residual_norm: self.backend.norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&self.r)
+                    } else {
+                        self.backend.norm2(&self.r) / b_norm
+                    },
+                };
+            }
 
             // t = A * z
-            spmv_kernel(matrix, &self.z, &mut self.t);
+            spmv_kernel(matrix, self.z.as_slice(), self.t.as_slice_mut());
 
             // omega = (t, s) / (t, t)
-            let tt = dot(&self.t, &self.t);
+            let tt = self.backend.dot(&self.t, &self.t);
             if tt.abs() < breakdown_tol {
-                omega = S::ONE;
+                omega = B::Scalar::ONE;
             } else {
-                omega = dot(&self.t, &self.s) / tt;
+                omega = self.backend.dot(&self.t, &self.s) / tt;
             }
-            
+
             // 检查 omega breakdown（omega 过小会导致算法不稳定）
             if omega.abs() < breakdown_tol {
                 // 只更新 x 的 alpha 部分后返回
-                precond.apply(&self.p, &mut self.z);
-                axpy(alpha, &self.z, x);
+                if let Err(_err) = precond.apply(&self.p, &mut self.z) {
+                    return SolverResult {
+                        status: SolverStatus::Stopped,
+                        iterations: iter + 1,
+                        residual_norm: self.backend.norm2(&self.s),
+                        initial_residual_norm: initial_norm,
+                        relative_residual: if use_absolute {
+                            self.backend.norm2(&self.s)
+                        } else {
+                            self.backend.norm2(&self.s) / b_norm
+                        },
+                    };
+                }
+                self.backend.axpy(alpha, &self.z, x);
                 return SolverResult {
                     status: SolverStatus::Stagnated,
                     iterations: iter + 1,
-                    residual_norm: norm2(&self.s),
+                    residual_norm: self.backend.norm2(&self.s),
                     initial_residual_norm: initial_norm,
                     relative_residual: if use_absolute {
-                        norm2(&self.s)
+                        self.backend.norm2(&self.s)
                     } else {
-                        norm2(&self.s) / b_norm
+                        self.backend.norm2(&self.s) / b_norm
                     },
                 };
             }
 
             // x = x + alpha * (M^{-1} p) + omega * (M^{-1} s)
-            precond.apply(&self.p, &mut self.z);
-            axpy(alpha, &self.z, x);
-            precond.apply(&self.s, &mut self.z);
-            axpy(omega, &self.z, x);
+            if let Err(_err) = precond.apply(&self.p, &mut self.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter + 1,
+                    residual_norm: self.backend.norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&self.r)
+                    } else {
+                        self.backend.norm2(&self.r) / b_norm
+                    },
+                };
+            }
+            self.backend.axpy(alpha, &self.z, x);
+            if let Err(_err) = precond.apply(&self.s, &mut self.z) {
+                return SolverResult {
+                    status: SolverStatus::Stopped,
+                    iterations: iter + 1,
+                    residual_norm: self.backend.norm2(&self.r),
+                    initial_residual_norm: initial_norm,
+                    relative_residual: if use_absolute {
+                        self.backend.norm2(&self.r)
+                    } else {
+                        self.backend.norm2(&self.r) / b_norm
+                    },
+                };
+            }
+            self.backend.axpy(omega, &self.z, x);
 
             // r = s - omega * t
             for i in 0..n {
                 self.r[i] = self.s[i] - omega * self.t[i];
             }
 
-            let res_norm = norm2(&self.r);
+            let res_norm = self.backend.norm2(&self.r);
             let rel_res = if use_absolute { res_norm } else { res_norm / b_norm };
 
             if self.config.verbose {
-                if let Some(res_val) = res_norm.to_f64() {
-                    log::trace!("BiCGStab iter {}: residual = {:.6e}", iter + 1, res_val);
-                }
+                log::trace!("BiCGStab iter {}: residual = {:?}", iter + 1, res_norm);
             }
 
             // 检查收敛
@@ -1147,12 +1280,12 @@ where
         SolverResult {
             status: SolverStatus::MaxIterationsReached,
             iterations: self.config.max_iter,
-            residual_norm: norm2(&self.r),
+            residual_norm: self.backend.norm2(&self.r),
             initial_residual_norm: initial_norm,
             relative_residual: if use_absolute {
-                norm2(&self.r)
+                self.backend.norm2(&self.r)
             } else {
-                norm2(&self.r) / b_norm
+                self.backend.norm2(&self.r) / b_norm
             },
         }
     }
@@ -1169,7 +1302,7 @@ mod tests {
     use crate::numerics::linear_algebra::preconditioner::{
         IdentityPreconditioner, JacobiPreconditioner,
     };
-    use crate::core::CpuBackend;
+    use mh_runtime::CpuBackend;
 
     fn create_spd_matrix(n: usize) -> CsrMatrix<f64> {
         // 创建三对角对称正定矩阵
@@ -1188,54 +1321,58 @@ mod tests {
 
     #[test]
     fn test_cg_simple() {
+        let backend = CpuBackend::<f64>::new();
         let matrix = create_spd_matrix(10);
-        let b = vec![1.0; 10];
-        let mut x = vec![0.0; 10];
+        let mut b = backend.alloc(10);
+        b.fill(1.0);
+        let mut x = backend.alloc_init(10, 0.0);
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = ConjugateGradient::<f64>::new(config);
-        let backend = CpuBackend::<f64>::new();
-        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
+        let mut solver = ConjugateGradient::new(backend.clone(), config);
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend.clone());
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < 1e-8);
+        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
     }
 
     #[test]
     fn test_pcg_simple() {
+        let backend = CpuBackend::<f64>::new();
         let matrix = create_spd_matrix(10);
-        let b = vec![1.0; 10];
-        let mut x = vec![0.0; 10];
+        let mut b = backend.alloc(10);
+        b.fill(1.0);
+        let mut x = backend.alloc_init(10, 0.0);
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = PcgSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let mut solver = PcgSolver::new(backend.clone(), config);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < 1e-8);
+        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
     }
 
     #[test]
     fn test_pcg_faster_than_cg() {
+        let backend = CpuBackend::<f64>::new();
         let matrix = create_spd_matrix(50);
-        let b = vec![1.0; 50];
+        let mut b = backend.alloc(50);
+        b.fill(1.0);
 
         // CG
-        let mut x_cg = vec![0.0; 50];
+        let mut x_cg = backend.alloc_init(50, 0.0);
         let config = SolverConfig::new(1e-10, 200);
-        let mut cg_solver = ConjugateGradient::<f64>::new(config.clone());
-        let backend = CpuBackend::<f64>::new();
-        let ident: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
+        let mut cg_solver = ConjugateGradient::new(backend.clone(), config.clone());
+        let ident: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend.clone());
         let cg_result = cg_solver.solve(&matrix, &b, &mut x_cg, &ident);
 
         // PCG
-        let mut x_pcg = vec![0.0; 50];
-        let mut pcg_solver = PcgSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let mut x_pcg = backend.alloc_init(50, 0.0);
+        let mut pcg_solver = PcgSolver::new(backend.clone(), config);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
         let pcg_result = pcg_solver.solve(&matrix, &b, &mut x_pcg, &precond);
 
         // PCG 应该更快收敛
@@ -1246,34 +1383,38 @@ mod tests {
 
     #[test]
     fn test_bicgstab_simple() {
+        let backend = CpuBackend::<f64>::new();
         let matrix = create_spd_matrix(10);
-        let b = vec![1.0; 10];
-        let mut x = vec![0.0; 10];
+        let mut b = backend.alloc(10);
+        b.fill(1.0);
+        let mut x = backend.alloc_init(10, 0.0);
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = BiCgStabSolver::<f64>::new(config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let mut solver = BiCgStabSolver::new(backend.clone(), config);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < 1e-8);
+        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
     }
 
     #[test]
     fn test_already_converged() {
+        let backend = CpuBackend::<f64>::new();
         let matrix = create_spd_matrix(3);
         // b = A * x_exact
         let x_exact = vec![0.25, 0.25, 0.25];
-        let mut b = vec![0.0; 3];
-        spmv_kernel(&matrix, &x_exact, &mut b);
+        let mut x_exact_buf = backend.alloc(3);
+        x_exact_buf.copy_from_slice(&x_exact);
+        let mut b = backend.alloc(3);
+        spmv_kernel(&matrix, x_exact_buf.as_slice(), b.as_slice_mut());
 
-        let mut x = x_exact.clone();
+        let mut x = x_exact_buf.clone();
 
         let config = SolverConfig::new(1e-10, 100);
-        let mut solver = PcgSolver::<f64>::new(config);
-        let backend = CpuBackend::<f64>::new();
-        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend);
+        let mut solver = PcgSolver::new(backend.clone(), config);
+        let precond: IdentityPreconditioner<CpuBackend<f64>> = IdentityPreconditioner::new(backend.clone());
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 

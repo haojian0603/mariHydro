@@ -9,7 +9,7 @@ use num_traits::FromPrimitive;
 use crate::core::Backend;
 use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 
 // workspace 模块在下面的 pub use 中进行重导出
 
@@ -51,7 +51,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     /// 执行单步时间积分
     fn step(
         &mut self,
-        state: &mut ShallowWaterStateGeneric<B>,
+        state: &mut ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         dt: B::Scalar,
@@ -60,7 +60,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     /// 计算稳定时间步长
     fn compute_stable_dt(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         cfl: B::Scalar,
     ) -> B::Scalar;

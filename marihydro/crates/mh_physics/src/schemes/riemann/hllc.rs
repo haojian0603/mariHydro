@@ -17,7 +17,7 @@ use crate::schemes::riemann::traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 
 /// HLLC 求解器（Backend 泛型化）
 ///
@@ -75,7 +75,7 @@ impl<B: Backend> HllcSolver<B> {
     /// 修正接近零的特征速度，避免音速跨越导致的数值振荡。
     #[inline]
     fn entropy_fix(&self, s_star: B::Scalar, s_l: B::Scalar, s_r: B::Scalar) -> B::Scalar {
-        let threshold = FromPrimitive::from_f64(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let threshold = self.params.flux_eps.max(B::Scalar::MIN_POSITIVE);
         if Float::abs(s_star) < threshold {
             return B::Scalar::ZERO;
         }
@@ -182,7 +182,7 @@ impl<B: Backend> HllcSolver<B> {
         }
 
         // 干床状态计算
-        let three: B::Scalar = FromPrimitive::from_f64(3.0).unwrap();
+        let three = B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE;
         let factor = (B::Scalar::TWO * c_r + un_r) / three;
         let h_star = Float::powi(factor, 2) / self.gravity;
 
@@ -223,7 +223,7 @@ impl<B: Backend> HllcSolver<B> {
             return Ok(RiemannFlux::zero());
         }
 
-        let three: B::Scalar = FromPrimitive::from_f64(3.0).unwrap();
+        let three = B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE;
         let factor = (un_l + B::Scalar::TWO * c_l) / three;
         let h_star = Float::powi(factor, 2) / self.gravity;
 

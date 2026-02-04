@@ -9,7 +9,7 @@
 //! 时间步长需满足：Δt ≤ C·min(Δx_i/(|u_i|+√(gh_i)))
 
 use crate::adapter::PhysicsMesh;
-use crate::state::ShallowWaterStateGeneric as ShallowWaterState;
+use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 use mh_runtime::{Backend, CellIndex, RuntimeScalar};
 use num_traits::{Float, FromPrimitive, ToPrimitive};

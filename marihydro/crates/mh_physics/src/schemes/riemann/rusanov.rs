@@ -16,7 +16,7 @@
 //! λ_max = max(|u_L| + c_L, |u_R| + c_R)
 //! c = sqrt(g * h)
 //! ```
-use num_traits::{Float, FromPrimitive, Zero};
+use num_traits::Float;
 use mh_runtime::Vector2D;
 use super::traits::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 use crate::types::NumericalParams;
@@ -43,7 +43,7 @@ impl<S: RuntimeScalar> Default for RusanovConfig<S> {
     fn default() -> Self {
         Self {
             wave_speed_factor: S::ONE,
-            min_wave_speed: S::from_f64(1e-8).unwrap_or(S::ZERO),
+            min_wave_speed: S::EPSILON,
             use_weighted_average: false,
             entropy_fix: false,
         }
@@ -55,13 +55,15 @@ impl<S: RuntimeScalar> RusanovConfig<S> {
     pub fn standard() -> Self {
         Self::default()
     }
+}
 
+impl RusanovConfig<f64> {
     /// 高稳定性配置
     pub fn robust() -> Self {
         Self {
-            wave_speed_factor: S::from_f64(1.2).unwrap_or(S::ONE),
+            wave_speed_factor: 1.2,
             use_weighted_average: true,
-            min_wave_speed: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            min_wave_speed: 1e-6,
             entropy_fix: true,
         }
     }
@@ -69,9 +71,31 @@ impl<S: RuntimeScalar> RusanovConfig<S> {
     /// GPU 优化配置
     pub fn gpu_optimized() -> Self {
         Self {
-            wave_speed_factor: S::ONE,
+            wave_speed_factor: 1.0,
             use_weighted_average: false,
-            min_wave_speed: S::from_f64(1e-8).unwrap_or(S::ZERO),
+            min_wave_speed: 1e-8,
+            entropy_fix: false,
+        }
+    }
+}
+
+impl RusanovConfig<f32> {
+    /// 高稳定性配置
+    pub fn robust() -> Self {
+        Self {
+            wave_speed_factor: 1.2_f32,
+            use_weighted_average: true,
+            min_wave_speed: 1e-6_f32,
+            entropy_fix: true,
+        }
+    }
+
+    /// GPU 优化配置
+    pub fn gpu_optimized() -> Self {
+        Self {
+            wave_speed_factor: 1.0_f32,
+            use_weighted_average: false,
+            min_wave_speed: 1e-8_f32,
             entropy_fix: false,
         }
     }
@@ -92,10 +116,7 @@ pub struct RusanovSolver<B: Backend> {
     config: RusanovConfig<B::Scalar>,
 }
 
-impl<B: Backend> RusanovSolver<B>
-where
-    B::Scalar: Float + FromPrimitive + Zero,
-{
+impl<B: Backend> RusanovSolver<B> {
     /// 创建新的 Rusanov 求解器
     pub fn new(numerical_params: &NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
         Self {
@@ -209,7 +230,7 @@ where
 
         // 静水平衡检测
         let depth_close = (h_l - h_r).abs() <= self.params.h_min;
-        let vel_tol = B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::ZERO);
+        let vel_tol = self.params.flux_eps;
         let still_water = depth_close
             && un_l.abs() <= vel_tol
             && un_r.abs() <= vel_tol
@@ -262,9 +283,9 @@ where
         // 计算物理通量
         let (f_h, f_hun, f_hut) = self.physical_flux(h_wet, un_wet, ut_wet);
 
-        let three = B::Scalar::from_f64(3.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE);
+        let three = B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE;
         let two = B::Scalar::TWO;
-        let nine = B::Scalar::from_f64(9.0).unwrap_or(three * three);
+        let nine = three * three;
 
         // 使用 Riemann 不变量的 Ritter 溃坝解
         let (mass, mom_n, mom_t) = if wet_on_left {
@@ -277,7 +298,7 @@ where
                 let u_star = (two * c_wet + un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
+                let denom = un_wet.abs().max(self.params.flux_eps);
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -291,7 +312,7 @@ where
                 let u_star = -(two * c_wet - un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
+                let denom = un_wet.abs().max(self.params.flux_eps);
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -311,10 +332,7 @@ where
 // RiemannSolver trait 实现
 // ============================================================================
 
-impl<B: Backend> RiemannSolver for RusanovSolver<B>
-where
-    B::Scalar: Float + FromPrimitive + Zero,
-{
+impl<B: Backend> RiemannSolver for RusanovSolver<B> {
     type Scalar = B::Scalar;
     type Vector2D = B::Vector2D;
 

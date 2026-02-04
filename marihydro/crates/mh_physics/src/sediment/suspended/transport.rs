@@ -19,7 +19,6 @@ use super::resuspension::ResuspensionSource;
 use mh_runtime::DeviceBuffer as RuntimeDeviceBuffer;
 use super::settling::SettlingVelocity;
 use mh_runtime::RuntimeScalar;
-use num_traits::{Float, FromPrimitive};
 
 /// 悬移质输运求解器
 ///
@@ -28,7 +27,7 @@ pub struct SuspendedTransport<B: Backend> {
     /// 通用输运求解器（对流-扩散）
     transport_solver: TracerTransportSolver<B>,
     /// 床面交换源项
-    source: ResuspensionSource<B::Scalar>,
+    source: ResuspensionSource<B>,
     /// 沉降速度信息
     settling: SettlingVelocity<B::Scalar>,
     /// 浓度场 [kg/m³]
@@ -44,15 +43,15 @@ pub struct SuspendedTransport<B: Backend> {
 impl<B> SuspendedTransport<B>
 where
     B: Backend + Clone,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建新的悬移质输运求解器
     pub fn new_with_backend(backend: B, n_cells: usize, properties: SedimentProperties, physics: PhysicalConstants) -> Self {
         // 自动计算沉降速度
-        let settling = SettlingVelocity::auto(&properties, &physics);
+        let settling = SettlingVelocity::auto(&backend, &properties, &physics);
         
         // 创建床面源项
-        let source = ResuspensionSource::new(properties)
+        let source = ResuspensionSource::new(backend.clone(), properties)
             .with_settling_velocity(settling.ws);
         
         // 配置 tracer 求解器（默认使用常数扩散系数）

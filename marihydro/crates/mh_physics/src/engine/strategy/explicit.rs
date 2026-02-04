@@ -11,7 +11,7 @@ use super::workspace::SolverWorkspaceGeneric;
 use crate::core::Backend;
 use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use num_traits::FromPrimitive;
 use num_traits::Float;
 
@@ -179,7 +179,7 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
     
     fn step(
         &mut self,
-        state: &mut ShallowWaterStateGeneric<B>,
+        state: &mut ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         dt: B::Scalar,
@@ -333,7 +333,7 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
     
     fn compute_stable_dt(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         mesh: &dyn MeshTopology<B>,
         cfl: B::Scalar,
     ) -> B::Scalar {
@@ -343,6 +343,7 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
         
         let h_dry = self.h_dry;
         let gravity = self.gravity;
+        let zero = B::Scalar::ZERO;
         let tiny = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE);
         let default_dt = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         

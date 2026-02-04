@@ -67,8 +67,8 @@ pub use manager::{
 
 // 剪切应力
 pub use shear_stress::{
-    ShearStress, ShearStressCalculator, ManningCoeff, ChezyCoeff,
-    shields_parameter, shields_critical_soulsby, shields_from_tau,
+    ShearStress, ShearStressCalculator, ManningCoeffBuf, ChezyCoeffBuf,
+    ShearStressBatchError, shields_parameter, shields_critical_soulsby, shields_from_tau,
 };
 
 // 交换

@@ -551,7 +551,7 @@ impl StructuredMesh {
         }
 
         // 边界面：南、北、西、东
-        let mut push_boundary = |center: Point2D, normal: Point3D, length: f64, owner: u32, boundary_id: u32| {
+        let mut push_boundary = |center: Point2D, normal: Point3D, length: f64, owner: u32, boundary_id: u32| -> MeshResult<()> {
             let owner_center = cell_center[owner as usize];
             face_center.push(center);
             face_normal.push(normal);
@@ -565,31 +565,32 @@ impl StructuredMesh {
             face_dist_o2n.push(0.0);
             face_boundary_id.push(Some(boundary_id));
             boundary_face_indices.push(to_u32(face_center.len() - 1, "边界面索引")?);
+            Ok(())
         };
 
         // South
         for i in 0..nx {
             let owner = to_u32(cell_index(i, 0), "单元索引")?;
             let center = Point2D::new(ox + (i as f64 + 0.5) * dx, oy);
-            push_boundary(center, Point3D::new(0.0, -1.0, 0.0), dx, owner, 0);
+            push_boundary(center, Point3D::new(0.0, -1.0, 0.0), dx, owner, 0)?;
         }
         // North
         for i in 0..nx {
             let owner = to_u32(cell_index(i, ny - 1), "单元索引")?;
             let center = Point2D::new(ox + (i as f64 + 0.5) * dx, oy + ny as f64 * dy);
-            push_boundary(center, Point3D::new(0.0, 1.0, 0.0), dx, owner, 1);
+            push_boundary(center, Point3D::new(0.0, 1.0, 0.0), dx, owner, 1)?;
         }
         // West
         for j in 0..ny {
             let owner = to_u32(cell_index(0, j), "单元索引")?;
             let center = Point2D::new(ox, oy + (j as f64 + 0.5) * dy);
-            push_boundary(center, Point3D::new(-1.0, 0.0, 0.0), dy, owner, 2);
+            push_boundary(center, Point3D::new(-1.0, 0.0, 0.0), dy, owner, 2)?;
         }
         // East
         for j in 0..ny {
             let owner = to_u32(cell_index(nx - 1, j), "单元索引")?;
             let center = Point2D::new(ox + nx as f64 * dx, oy + (j as f64 + 0.5) * dy);
-            push_boundary(center, Point3D::new(1.0, 0.0, 0.0), dy, owner, 3);
+            push_boundary(center, Point3D::new(1.0, 0.0, 0.0), dy, owner, 3)?;
         }
 
         let mut cell_face_offsets = Vec::with_capacity(n_cells + 1);

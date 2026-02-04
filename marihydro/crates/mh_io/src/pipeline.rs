@@ -96,22 +96,22 @@ pub enum OutputRequest {
     /// 写入 VTU 文件（ASCII 格式）
     WriteVtuAscii {
         path: PathBuf,
-        mesh_data: MeshSnapshot,
-        state_data: StateSnapshot,
+        mesh_data: MeshSnapshot<f64>,
+        state_data: StateSnapshot<f64>,
         time: f64,
     },
     /// 写入 VTU 文件（二进制格式）
     WriteVtuBinary {
         path: PathBuf,
-        mesh_data: MeshSnapshot,
-        state_data: StateSnapshot,
+        mesh_data: MeshSnapshot<f64>,
+        state_data: StateSnapshot<f64>,
         time: f64,
     },
     /// 写入检查点
     WriteCheckpoint {
         path: PathBuf,
-        state_data: StateSnapshot,
-        mesh_snapshot: Option<MeshSnapshot>,
+        state_data: StateSnapshot<f64>,
+        mesh_snapshot: Option<MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     },
@@ -326,8 +326,8 @@ impl IoPipeline {
     pub fn write_vtu_ascii(
         &self,
         path: impl Into<PathBuf>,
-        mesh: MeshSnapshot,
-        state: StateSnapshot,
+        mesh: MeshSnapshot<f64>,
+        state: StateSnapshot<f64>,
         time: f64,
     ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuAscii {
@@ -342,8 +342,8 @@ impl IoPipeline {
     pub fn write_vtu_binary(
         &self,
         path: impl Into<PathBuf>,
-        mesh: MeshSnapshot,
-        state: StateSnapshot,
+        mesh: MeshSnapshot<f64>,
+        state: StateSnapshot<f64>,
         time: f64,
     ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuBinary {
@@ -358,8 +358,8 @@ impl IoPipeline {
     pub fn write_checkpoint(
         &self,
         path: impl Into<PathBuf>,
-        state: StateSnapshot,
-        mesh: Option<MeshSnapshot>,
+        state: StateSnapshot<f64>,
+        mesh: Option<MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     ) -> crate::error::IoResult<()> {
@@ -554,8 +554,8 @@ impl IoPipeline {
     /// VTU ASCII 写入实现
     fn write_vtu_ascii_impl(
         path: &Path,
-        mesh: &MeshSnapshot,
-        state: &StateSnapshot,
+        mesh: &MeshSnapshot<f64>,
+        state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
@@ -752,8 +752,8 @@ impl IoPipeline {
     /// VTU 二进制写入实现
     fn write_vtu_binary_impl(
         path: &Path,
-        mesh: &MeshSnapshot,
-        state: &StateSnapshot,
+        mesh: &MeshSnapshot<f64>,
+        state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
@@ -780,8 +780,8 @@ impl IoPipeline {
     /// 检查点写入实现
     fn write_checkpoint_impl(
         path: &Path,
-        state: &StateSnapshot,
-        mesh: Option<&MeshSnapshot>,
+        state: &StateSnapshot<f64>,
+        mesh: Option<&MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     ) -> PipelineResult<()> {

@@ -4,7 +4,7 @@
 
 use crate::core::{Backend, DeviceBuffer, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use crate::vertical::sigma::SigmaCoordinate;
 
 /// 垂向剖面
@@ -96,49 +96,54 @@ pub struct ConcentrationProfile;
 
 impl ConcentrationProfile {
     /// 恢复垂向浓度剖面（返回每层中心浓度）
-    pub fn recover<S: Scalar>(
-        c_avg: S,
-        h: S,
+    pub fn recover<B: Backend>(
+        backend: &B,
+        c_avg: B::Scalar,
+        h: B::Scalar,
         n_layers: usize,
-        settling_velocity: S,
-        diffusivity: S,
+        settling_velocity: B::Scalar,
+        diffusivity: B::Scalar,
         method: ConcentrationProfileMethod,
-    ) -> Vec<S> {
+    ) -> B::Buffer<B::Scalar> {
         if n_layers == 0 {
-            return Vec::new();
+            return backend.alloc(0);
         }
-        if h <= S::ZERO || c_avg <= S::ZERO {
-            return vec![S::ZERO; n_layers];
+        if h <= B::Scalar::ZERO || c_avg <= B::Scalar::ZERO {
+            return backend.alloc_init(n_layers, B::Scalar::ZERO);
         }
 
-        let dz = h / S::from_usize(n_layers).unwrap_or(S::ONE);
-        let kv = diffusivity.max(S::from_f64(1e-12).unwrap_or(S::ZERO));
+        let n_layers_s = backend.scalar_from_f64(n_layers as f64);
+        let dz = h / n_layers_s;
+        let kv = diffusivity.max(backend.scalar_from_f64(1e-12));
         let ws = settling_velocity.abs();
 
-        let mut weights = vec![S::ZERO; n_layers];
-        let mut sum_w = S::ZERO;
+        let mut weights = backend.alloc_init(n_layers, B::Scalar::ZERO);
+        let weights_slice = weights
+            .try_as_slice_mut()
+            .unwrap_or_else(|| panic!("backend buffer not accessible"));
+        let mut sum_w = B::Scalar::ZERO;
 
         for k in 0..n_layers {
-            let z = dz * S::from_f64(k as f64 + 0.5).unwrap_or(S::ZERO);
+            let z = dz * backend.scalar_from_f64(k as f64 + 0.5);
             let w = match method {
-                ConcentrationProfileMethod::Uniform => S::ONE,
+                ConcentrationProfileMethod::Uniform => B::Scalar::ONE,
                 ConcentrationProfileMethod::Exponential => {
-                    let exponent = -(ws * z).safe_div(kv, S::ZERO);
+                    let exponent = -(ws * z).safe_div(kv, B::Scalar::ZERO);
                     exponent.exp()
                 }
             };
-            weights[k] = w;
+            weights_slice[k] = w;
             sum_w = sum_w + w;
         }
 
-        let scale = if sum_w > S::ZERO {
-            c_avg * S::from_usize(n_layers).unwrap_or(S::ONE) / sum_w
+        let scale = if sum_w > B::Scalar::ZERO {
+            c_avg * n_layers_s / sum_w
         } else {
             c_avg
         };
 
-        for w in &mut weights {
-            *w = (*w * scale).max(S::ZERO);
+        for w in weights_slice.iter_mut() {
+            *w = (*w * scale).max(B::Scalar::ZERO);
         }
 
         weights
@@ -170,10 +175,10 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
             sigma: SigmaCoordinate::uniform(n_layers),
-            roughness: backend.alloc_init(n_cells, <B::Scalar as Scalar>::from_config(0.01).unwrap_or(B::Scalar::ZERO)), // 默认糙率
+            roughness: backend.alloc_init(n_cells, backend.scalar_from_f64(0.01)), // 默认糙率
             n_layers,
             method,
-            von_karman: <B::Scalar as Scalar>::from_config(VON_KARMAN).unwrap_or(B::Scalar::ZERO),
+            von_karman: backend.scalar_from_f64(VON_KARMAN),
             backend,
         }
     }
@@ -206,7 +211,7 @@ impl<B: Backend> ProfileRestorer<B> {
     // 从2D状态恢复垂向剖面（通用后端，按层均匀分配）
     pub fn restore(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         output: &mut VerticalProfile<B>,
     ) {
         // 尽量通过切片访问以兼容 CPU/GPU，失败则直接返回

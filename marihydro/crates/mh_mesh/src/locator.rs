@@ -215,6 +215,8 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     /// 计算重心坐标
     pub fn compute_barycentric(&self, cell: usize, x: f64, y: f64) -> [f64; 3] {
         let vertices = self.mesh.get_cell_vertices(cell);
+        let deg_tol = self.tolerance.degenerate_tol;
+        let inside_tol = self.tolerance.inside_tol;
 
         if vertices.len() < 3 {
             return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
@@ -222,7 +224,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
         if vertices.len() > 3 {
             for i in 1..vertices.len().saturating_sub(1) {
-                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y) {
+                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y, inside_tol, deg_tol) {
                     return bary;
                 }
             }
@@ -231,7 +233,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
         let (v0, v1, v2) = (&vertices[0], &vertices[1], &vertices[2]);
 
         let denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
-        if denom.abs() < 1e-12 {
+        if denom.abs() < deg_tol {
             return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
         }
 
@@ -239,7 +241,12 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
         let l2 = ((v2.y - v0.y) * (x - v2.x) + (v0.x - v2.x) * (y - v2.y)) / denom;
         let l3 = 1.0 - l1 - l2;
 
-        [l1, l2, l3]
+        let tol = -inside_tol;
+        if l1 >= tol && l2 >= tol && l3 >= tol {
+            [l1, l2, l3]
+        } else {
+            [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+        }
     }
 
     /// 查找最近的边界面
@@ -277,7 +284,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
                     + bary[2] * vertex_values[2];
             }
             for i in 1..vertices.len().saturating_sub(1) {
-                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y) {
+                if let Some(bary) = barycentric_in_tri(&vertices[0], &vertices[i], &vertices[i + 1], x, y, self.tolerance.inside_tol, self.tolerance.degenerate_tol) {
                     return bary[0] * vertex_values[0]
                         + bary[1] * vertex_values[i]
                         + bary[2] * vertex_values[i + 1];
@@ -522,7 +529,7 @@ fn point_on_segment_tol(x: f64, y: f64, a: &Point2D, b: &Point2D, tol: f64) -> b
     let apy = y - a.y;
 
     let ab_len2 = abx * abx + aby * aby;
-    if ab_len2 <= 1e-30 {
+    if ab_len2 <= tol * tol {
         let dx = x - a.x;
         let dy = y - a.y;
         return dx * dx + dy * dy <= tol * tol;
@@ -631,15 +638,23 @@ mod tests {
     }
 }
 
-fn barycentric_in_tri(a: &Point2D, b: &Point2D, c: &Point2D, x: f64, y: f64) -> Option<[f64; 3]> {
+fn barycentric_in_tri(
+    a: &Point2D,
+    b: &Point2D,
+    c: &Point2D,
+    x: f64,
+    y: f64,
+    inside_tol: f64,
+    degenerate_tol: f64,
+) -> Option<[f64; 3]> {
     let denom = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-    if denom.abs() < 1e-12 {
+    if denom.abs() < degenerate_tol {
         return None;
     }
     let l1 = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / denom;
     let l2 = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / denom;
     let l3 = 1.0 - l1 - l2;
-    let tol = -1e-12;
+    let tol = -inside_tol;
     if l1 >= tol && l2 >= tol && l3 >= tol {
         Some([l1, l2, l3])
     } else {

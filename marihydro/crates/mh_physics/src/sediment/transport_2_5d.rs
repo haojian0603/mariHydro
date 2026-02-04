@@ -6,10 +6,10 @@
 //! 这是一个独立的扩展模块，不侵入2D核心。
 
 use crate::core::Backend;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use crate::vertical::profile::{ProfileMethod, ProfileRestorer, VerticalProfile};
 use mh_runtime::RuntimeScalar;
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 
 /// 2.5D 泥沙输运求解器
 pub struct Transport2_5D<B: Backend> {
@@ -54,13 +54,13 @@ pub struct Transport2_5DConfig<S: RuntimeScalar> {
     pub min_diffusivity: S,
 }
 
-impl<S: RuntimeScalar> Default for Transport2_5DConfig<S> {
-    fn default() -> Self {
+impl<S: RuntimeScalar> Transport2_5DConfig<S> {
+    pub fn with_backend_defaults<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
             recover_profile: true,
             profile_method: ConcentrationProfileMethod::Exponential,
-            min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO),
-            min_diffusivity: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            min_depth: backend.scalar_from_f64(1e-6),
+            min_diffusivity: backend.scalar_from_f64(1e-6),
         }
     }
 }
@@ -68,7 +68,7 @@ impl<S: RuntimeScalar> Default for Transport2_5DConfig<S> {
 impl<B> Transport2_5D<B>
 where
     B: Backend + Clone,
-    B::Scalar: RuntimeScalar + FromPrimitive + Float,
+    B::Scalar: RuntimeScalar + Float,
 {
     /// 创建求解器（显式指定后端）
     pub fn new_with_backend(
@@ -84,7 +84,7 @@ where
             n_layers,
             settling_velocity,
             diffusion_coeff,
-            Transport2_5DConfig::default(),
+            Transport2_5DConfig::with_backend_defaults(&backend),
         )
     }
 
@@ -127,7 +127,7 @@ where
     /// 执行一步输运计算
     pub fn step(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         dt: B::Scalar,
     ) {
         if !dt.is_finite() || dt <= B::Scalar::ZERO {
@@ -143,7 +143,7 @@ where
     }
 
     /// 恢复垂向浓度剖面（基于深度平均浓度）
-    fn recover_concentration_profile(&mut self, state: &ShallowWaterStateGeneric<B>) {
+    fn recover_concentration_profile(&mut self, state: &ShallowWaterState<B>) {
         let h: &B::Buffer<B::Scalar> = &state.h;
         let n_cells = state.n_cells();
         let n_layers = self.n_layers;
@@ -211,7 +211,7 @@ where
     /// 垂向输运（扩散+沉降）
     fn compute_vertical_transport(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         dt: B::Scalar,
     ) {
         let h: &B::Buffer<B::Scalar> = &state.h;

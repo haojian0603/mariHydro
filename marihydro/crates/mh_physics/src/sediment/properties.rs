@@ -10,7 +10,7 @@
 //! - **Layer 4 别名**: `SedimentProperties = SedimentPropertiesGeneric<f64>`
 //! - **配置驱动**: 所有物理常数从 `PhysicalConstants` 获取
 
-use mh_runtime::RuntimeScalar as Scalar;
+use mh_runtime::{Backend, RuntimeScalar as Scalar};
 use serde::{Deserialize, Serialize};
 
 use crate::types::PhysicalConstants;
@@ -39,8 +39,8 @@ impl SedimentType {
     ///
     /// # 参数
     /// - `d50_mm`: 中值粒径 [mm]
-    pub fn from_diameter<S: Scalar>(d50_mm: S) -> Self {
-        let d = d50_mm.to_f64().unwrap_or(0.0);
+    pub fn from_diameter(d50_mm: f64) -> Self {
+        let d = d50_mm;
         if d < 0.004 {
             Self::Clay
         } else if d < 0.063 {
@@ -204,24 +204,40 @@ impl<S: Scalar> SedimentPropertiesGeneric<S> {
     ///
     /// 该方法需要 `PhysicalConstants` 使用相同的标量类型，
     /// 当前 PhysicalConstants 使用 f64，因此需要转换。
-    pub fn shields_number(&self, tau_b: S, physics: &PhysicalConstants) -> S {
-        let rho_s_f64 = self.rho_s.to_f64().unwrap_or(0.0);
-        let d50_f64 = self.d50.to_f64().unwrap_or(0.0);
-        let tau_b_f64 = tau_b.to_f64().unwrap_or(0.0);
-        
-        let result = tau_b_f64 / ((rho_s_f64 - physics.rho_water) * physics.g * d50_f64);
-        S::from_f64(result).unwrap_or(S::ZERO)
+    pub fn shields_number<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        tau_b: S,
+        physics: &PhysicalConstants,
+    ) -> S {
+        let rho_w = backend.scalar_from_f64(physics.rho_water);
+        let g = backend.scalar_from_f64(physics.g);
+        let denom = (self.rho_s - rho_w) * g * self.d50;
+        if denom.abs() < S::MIN_POSITIVE {
+            return S::ZERO;
+        }
+        tau_b / denom
     }
 
     /// 判断是否起动
-    pub fn is_mobile(&self, tau_b: S, physics: &PhysicalConstants) -> bool {
-        let shields = self.shields_number(tau_b, physics);
+    pub fn is_mobile<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        tau_b: S,
+        physics: &PhysicalConstants,
+    ) -> bool {
+        let shields = self.shields_number(backend, tau_b, physics);
         shields > self.critical_shields
     }
 
     /// 获取超临界希尔兹数
-    pub fn excess_shields(&self, tau_b: S, physics: &PhysicalConstants) -> S {
-        let shields = self.shields_number(tau_b, physics);
+    pub fn excess_shields<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        tau_b: S,
+        physics: &PhysicalConstants,
+    ) -> S {
+        let shields = self.shields_number(backend, tau_b, physics);
         if shields > self.critical_shields {
             shields - self.critical_shields
         } else {
@@ -316,37 +332,40 @@ mod tests {
 
     #[test]
     fn test_shields_number() {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
         let props = SedimentProperties::from_d50_mm(0.5);
         let physics = PhysicalConstants::freshwater();
         let tau_b = 1.0; // Pa
         
-        let theta = props.shields_number(tau_b, &physics);
+        let theta = props.shields_number(&backend, tau_b, &physics);
         assert!(theta > 0.0);
     }
 
     #[test]
     fn test_is_mobile() {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
         let props = SedimentProperties::from_d50_mm(0.5);
         let physics = PhysicalConstants::freshwater();
         
         // 低剪切应力不起动
-        assert!(!props.is_mobile(0.01, &physics));
+        assert!(!props.is_mobile(&backend, 0.01, &physics));
         
         // 高剪切应力起动
-        assert!(props.is_mobile(10.0, &physics));
+        assert!(props.is_mobile(&backend, 10.0, &physics));
     }
 
     #[test]
     fn test_excess_shields() {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
         let props = SedimentProperties::from_d50_mm(0.5);
         let physics = PhysicalConstants::freshwater();
         
         // 低于临界，返回接近0的值
-        let excess_low = props.excess_shields(0.01, &physics);
+        let excess_low = props.excess_shields(&backend, 0.01, &physics);
         assert!(excess_low.abs() < 1e-10);
         
         // 高于临界，返回正值
-        assert!(props.excess_shields(10.0, &physics) > 0.0);
+        assert!(props.excess_shields(&backend, 10.0, &physics) > 0.0);
     }
 
     #[test]

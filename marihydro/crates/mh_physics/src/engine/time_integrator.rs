@@ -5,7 +5,7 @@
 //! 实现强稳定保持Runge-Kutta方法，支持Backend泛型化。
 //! 时间参数使用B::Scalar，确保与状态变量精度一致。
 
-use crate::state::{RhsBuffers, ShallowWaterStateGeneric as ShallowWaterState};
+use crate::state::{RhsBuffers, ShallowWaterState};
 use crate::Backend;
 use mh_foundation::{MhError, MhResult};
 use mh_runtime::RuntimeScalar;
@@ -17,7 +17,7 @@ pub trait RhsComputer<B: Backend> {
         &mut self,
         state: &ShallowWaterState<B>,
         time: B::Scalar,
-        output: &mut RhsBuffers<B::Scalar>,
+        output: &mut RhsBuffers<B>,
     ) -> MhResult<B::Scalar>;
 }
 
@@ -44,16 +44,16 @@ pub struct ForwardEuler<B: Backend>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
-    rhs: RhsBuffers<B::Scalar>,
+    rhs: RhsBuffers<B>,
 }
 
 impl<B: Backend> ForwardEuler<B>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
-    pub fn new(n_cells: usize, n_tracers: usize) -> Self {
+    pub fn new(backend: B, n_cells: usize, n_tracers: usize) -> Self {
         Self {
-            rhs: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs: RhsBuffers::with_tracers(backend, n_cells, n_tracers),
         }
     }
 }
@@ -105,8 +105,8 @@ where
     B::Buffer<B::Scalar>: Send + Sync,
 {
     state_1: ShallowWaterState<B>,
-    rhs_1: RhsBuffers<B::Scalar>,
-    rhs_2: RhsBuffers<B::Scalar>,
+    rhs_1: RhsBuffers<B>,
+    rhs_2: RhsBuffers<B>,
 }
 
 impl<B: Backend> SspRk2<B>
@@ -116,8 +116,8 @@ where
     pub fn new(backend: B, n_cells: usize, n_tracers: usize) -> Self {
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(backend.clone(), n_cells),
-            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::with_tracers(backend.clone(), n_cells, n_tracers),
+            rhs_2: RhsBuffers::with_tracers(backend, n_cells, n_tracers),
         }
     }
 }
@@ -192,9 +192,9 @@ where
 {
     state_1: ShallowWaterState<B>,
     state_2: ShallowWaterState<B>,
-    rhs_1: RhsBuffers<B::Scalar>,
-    rhs_2: RhsBuffers<B::Scalar>,
-    rhs_3: RhsBuffers<B::Scalar>,
+    rhs_1: RhsBuffers<B>,
+    rhs_2: RhsBuffers<B>,
+    rhs_3: RhsBuffers<B>,
 }
 
 impl<B: Backend> SspRk3<B>
@@ -205,9 +205,9 @@ where
         Self {
             state_1: ShallowWaterState::<B>::new_with_backend(backend.clone(), n_cells),
             state_2: ShallowWaterState::<B>::new_with_backend(backend.clone(), n_cells),
-            rhs_1: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_2: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
-            rhs_3: RhsBuffers::<B::Scalar>::with_tracers(n_cells, n_tracers),
+            rhs_1: RhsBuffers::with_tracers(backend.clone(), n_cells, n_tracers),
+            rhs_2: RhsBuffers::with_tracers(backend.clone(), n_cells, n_tracers),
+            rhs_3: RhsBuffers::with_tracers(backend, n_cells, n_tracers),
         }
     }
 }
@@ -331,14 +331,14 @@ where
         match kind {
             TimeIntegratorKind::ForwardEuler => Self {
                 kind,
-                euler: Some(ForwardEuler::<B>::new(n_cells, n_tracers)),
+                euler: Some(ForwardEuler::<B>::new(backend, n_cells, n_tracers)),
                 rk2: None,
                 rk3: None,
             },
             TimeIntegratorKind::SspRk2 => Self {
                 kind,
                 euler: None,
-                rk2: Some(SspRk2::<B>::new(backend, n_cells, n_tracers)),
+                rk2: Some(SspRk2::<B>::new(backend.clone(), n_cells, n_tracers)),
                 rk3: None,
             },
             TimeIntegratorKind::SspRk3 => Self {
@@ -411,7 +411,7 @@ mod tests {
             &mut self,
             state: &ShallowWaterState<B>,
             _time: B::Scalar,
-            output: &mut RhsBuffers<B::Scalar>,
+            output: &mut RhsBuffers<B>,
         ) -> MhResult<B::Scalar> {
             let n = state.n_cells();
             for i in 0..n {
@@ -427,7 +427,7 @@ mod tests {
         let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 10);
         state.h.fill(1.0);
 
-        let mut integrator = ForwardEuler::<CpuBackend<f64>>::new(10, 0);
+        let mut integrator = ForwardEuler::<CpuBackend<f64>>::new(backend, 10, 0);
         let mut rhs = TestRhs;
         let dt = 0.1;
 

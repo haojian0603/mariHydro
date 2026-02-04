@@ -182,6 +182,7 @@ fn test_pressure_solve_convergence_rate() {
     use mh_physics::numerics::linear_algebra::{
         CsrBuilder, JacobiPreconditioner, PcgSolver, SolverConfig, IterativeSolver,
     };
+    use mh_runtime::{Backend, CpuBackend};
 
     type JacobiF64 = JacobiPreconditioner<CpuBackend<f64>>;
 
@@ -200,27 +201,32 @@ fn test_pressure_solve_convergence_rate() {
     }
     let matrix = builder.build();
 
+    let backend = CpuBackend::<f64>::new();
+
     // RHS
-    let rhs: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.01).sin()).collect();
+    let mut rhs = backend.alloc(n);
+    for i in 0..n {
+        rhs[i] = ((i as f64) * 0.01).sin();
+    }
 
     // 预条件器 - 使用Backend单例
-    let precond = JacobiF64::from_matrix(&matrix).expect("创建预条件器失败");
+    let precond = JacobiF64::from_matrix(&backend, &matrix).expect("创建预条件器失败");
 
     // 求解器
     let config = SolverConfig::new(1e-10, 100);
-    let mut solver = PcgSolver::new(config);
+    let mut solver = PcgSolver::new(backend.clone(), config);
 
-    let mut x = vec![0.0; n];
+    let mut x = backend.alloc_init(n, 0.0);
     let result = solver.solve(&matrix, &rhs, &mut x, &precond);
 
     // 计算实际残差
-    let mut residual = vec![0.0; n];
-    matrix.mul_vec(&x, &mut residual);
+    let mut residual = backend.alloc(n);
+    matrix.mul_vec(x.as_slice(), residual.as_slice_mut());
     let res_norm: f64 = (0..n)
         .map(|i| (rhs[i] - residual[i]).powi(2))
         .sum::<f64>()
         .sqrt();
-    let rhs_norm: f64 = rhs.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let rhs_norm: f64 = rhs.as_slice().iter().map(|v| v * v).sum::<f64>().sqrt();
     let rel_res = res_norm / rhs_norm;
 
     let nnz = matrix.nnz();

@@ -2,7 +2,7 @@
 
 use crate::core::{Backend, DeviceBuffer};
 use mh_runtime::RuntimeScalar as Scalar;
-use num_traits::{Float, ToPrimitive};
+use num_traits::Float;
 
 /// 沉降求解器配置
 #[derive(Debug, Clone)]
@@ -19,14 +19,32 @@ pub struct SettlingConfig<S: Scalar> {
     pub min_depth: S,
 }
 
-impl<S: Scalar> Default for SettlingConfig<S> {
-    fn default() -> Self {
+impl<S: Scalar> SettlingConfig<S> {
+    /// 创建配置
+    pub fn new(
+        settling_velocity: S,
+        implicit: bool,
+        tolerance: S,
+        max_iterations: usize,
+        min_depth: S,
+    ) -> Self {
         Self {
-            settling_velocity: S::from_f64(0.001).unwrap_or(S::ZERO),
+            settling_velocity,
+            implicit,
+            tolerance,
+            max_iterations,
+            min_depth,
+        }
+    }
+
+    /// 使用后端默认值创建配置
+    pub fn with_backend_defaults<B: Backend<Scalar = S>>(backend: &B) -> Self {
+        Self {
+            settling_velocity: backend.scalar_from_f64(0.001),
             implicit: true,
-            tolerance: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            tolerance: backend.scalar_from_f64(1e-6),
             max_iterations: 10,
-            min_depth: S::from_f64(0.01).unwrap_or(S::ZERO),
+            min_depth: backend.scalar_from_f64(0.01),
         }
     }
 }
@@ -92,7 +110,7 @@ impl<B: Backend> SettlingSolver<B> {
             return result;
         }
 
-        self.c_old.copy_from_slice(&concentration.copy_to_vec());
+        self.backend.copy(concentration, &mut self.c_old);
         
         // 计算隐式系数
         let n_coeff = depth.len().min(self.coeff.len());
@@ -127,7 +145,10 @@ impl<B: Backend> SettlingSolver<B> {
                 for i in 0..n {
                     let h = Float::max(h_slice[i], self.config.min_depth);
                     let updated = Float::max(c_old[i] * coeff[i], B::Scalar::ZERO);
-                    let denom = Float::max(Float::abs(c_new[i]), <B::Scalar as Scalar>::from_config(1e-12).unwrap_or(B::Scalar::ZERO));
+                    let denom = Float::max(
+                        Float::abs(c_new[i]),
+                        self.backend.scalar_from_f64(1e-12),
+                    );
                     let rel = Float::abs(updated - c_new[i]) / denom;
                     max_rel = Float::max(max_rel, rel);
                     settled = settled + Float::max(c_old[i] - updated, B::Scalar::ZERO) * h;
@@ -141,7 +162,10 @@ impl<B: Backend> SettlingSolver<B> {
                 for i in 0..n {
                     let h = Float::max(depth_host[i], self.config.min_depth);
                     let updated = Float::max(c_old_host[i] * coeff_host[i], B::Scalar::ZERO);
-                    let denom = Float::max(Float::abs(c_new_host[i]), <B::Scalar as Scalar>::from_config(1e-12).unwrap_or(B::Scalar::ZERO));
+                    let denom = Float::max(
+                        Float::abs(c_new_host[i]),
+                        self.backend.scalar_from_f64(1e-12),
+                    );
                     let rel = Float::abs(updated - c_new_host[i]) / denom;
                     max_rel = Float::max(max_rel, rel);
                     settled = settled + Float::max(c_old_host[i] - updated, B::Scalar::ZERO) * h;
@@ -152,12 +176,12 @@ impl<B: Backend> SettlingSolver<B> {
 
             result.max_relative_change = max_rel;
             result.total_settled_mass = settled;
-            if max_rel.to_f64() < self.config.tolerance.to_f64() {
+            if max_rel < self.config.tolerance {
                 result.converged = true;
                 break;
             }
 
-            self.c_old.copy_from_slice(&concentration.copy_to_vec());
+            self.backend.copy(concentration, &mut self.c_old);
         }
 
         result

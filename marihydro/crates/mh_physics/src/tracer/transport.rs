@@ -5,7 +5,7 @@
 //! 本模块提供示踪剂对流-扩散方程的求解功能，采用Backend泛型设计，
 //! 支持f32/f64精度切换和GPU后端扩展。
 
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use super::state::{TracerField, TracerState};
@@ -61,12 +61,23 @@ pub struct TracerDiffusionConfig<S: RuntimeScalar> {
     pub use_smagorinsky: bool,
 }
 
-impl<S: RuntimeScalar> Default for TracerDiffusionConfig<S> {
+impl Default for TracerDiffusionConfig<f64> {
     fn default() -> Self {
         Self {
             enabled: true,
-            horizontal_diffusivity: S::from_f64(10.0).unwrap_or(S::ZERO),
-            smagorinsky_coefficient: S::from_f64(0.2).unwrap_or(S::ZERO),
+            horizontal_diffusivity: 10.0,
+            smagorinsky_coefficient: 0.2,
+            use_smagorinsky: false,
+        }
+    }
+}
+
+impl Default for TracerDiffusionConfig<f32> {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            horizontal_diffusivity: 10.0,
+            smagorinsky_coefficient: 0.2,
             use_smagorinsky: false,
         }
     }
@@ -79,7 +90,7 @@ impl<S: RuntimeScalar> TracerDiffusionConfig<S> {
             enabled: true,
             horizontal_diffusivity: diffusivity,
             use_smagorinsky: false,
-            smagorinsky_coefficient: S::from_f64(0.2).unwrap_or(S::ZERO),
+            smagorinsky_coefficient: S::ZERO,
         }
     }
 
@@ -105,8 +116,9 @@ impl<S: RuntimeScalar> TracerDiffusionConfig<S> {
 
     /// 计算Smagorinsky扩散系数
     #[inline]
-    pub fn compute_smagorinsky_diffusivity(
+    pub fn compute_smagorinsky_diffusivity<B: Backend<Scalar = S>>(
         &self,
+        backend: &B,
         grid_scale: S,
         strain_rate_magnitude: S,
     ) -> S {
@@ -114,8 +126,8 @@ impl<S: RuntimeScalar> TracerDiffusionConfig<S> {
         let cs_delta = cs * grid_scale;
         let k = cs_delta * cs_delta * strain_rate_magnitude;
 
-        let k_min = S::from_f64(1e-6).unwrap_or(S::ZERO);
-        let k_max = S::from_f64(1e4).unwrap_or(S::ONE);
+        let k_min = backend.scalar_from_f64(1e-6);
+        let k_max = backend.scalar_from_f64(1e4);
         k.clamp_value(k_min, k_max)
     }
 }
@@ -137,14 +149,27 @@ pub struct TracerTransportConfig<S: RuntimeScalar> {
     pub c_max: Option<S>,
 }
 
-impl<S: RuntimeScalar> Default for TracerTransportConfig<S> {
+impl Default for TracerTransportConfig<f64> {
     fn default() -> Self {
         Self {
             advection_scheme: TracerAdvectionScheme::default(),
             diffusion: TracerDiffusionConfig::default(),
-            h_min: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            h_min: 1e-6,
             enable_clipping: true,
-            c_min: S::ZERO,
+            c_min: 0.0,
+            c_max: None,
+        }
+    }
+}
+
+impl Default for TracerTransportConfig<f32> {
+    fn default() -> Self {
+        Self {
+            advection_scheme: TracerAdvectionScheme::default(),
+            diffusion: TracerDiffusionConfig::default(),
+            h_min: 1e-6,
+            enable_clipping: true,
+            c_min: 0.0,
             c_max: None,
         }
     }
@@ -233,12 +258,14 @@ impl<B: Backend> SmagorinskyData<B> {
         right_cell: Option<usize>,
     ) -> B::Scalar {
         let k_left = config.compute_smagorinsky_diffusivity(
+            &self.backend,
             self.grid_scales[left_cell],
             self.strain_rate_magnitudes[left_cell],
         );
 
         if let Some(right) = right_cell {
             let k_right = config.compute_smagorinsky_diffusivity(
+                &self.backend,
                 self.grid_scales[right],
                 self.strain_rate_magnitudes[right],
             );
@@ -259,13 +286,6 @@ pub struct TracerTransportSolver<B: Backend> {
     config: TracerTransportConfig<B::Scalar>,
     face_fluxes: Vec<TracerFaceFlux<B::Scalar>>,
     backend: B,
-}
-
-impl TracerTransportSolver<CpuBackend<f64>> {
-    /// 创建CPU f64后端求解器
-    pub fn new(config: TracerTransportConfig<f64>) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), config)
-    }
 }
 
 impl<B: Backend> TracerTransportSolver<B> {
@@ -331,8 +351,8 @@ impl<B: Backend> TracerTransportSolver<B> {
         flow_data: &[FaceFlowData<B>],
         cell_volumes: &B::Buffer<B::Scalar>,
         face_distances: &B::Buffer<B::Scalar>,
-    ) {
-        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, None);
+    ) -> Result<(), TracerError> {
+        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, None)
     }
 
     /// 计算所有面的通量并累加到RHS（带Smagorinsky模型支持）
@@ -343,8 +363,8 @@ impl<B: Backend> TracerTransportSolver<B> {
         cell_volumes: &B::Buffer<B::Scalar>,
         face_distances: &B::Buffer<B::Scalar>,
         smagorinsky_data: &SmagorinskyData<B>,
-    ) {
-        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, Some(smagorinsky_data));
+    ) -> Result<(), TracerError> {
+        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, Some(smagorinsky_data))
     }
 
     /// 内部实现：计算RHS
@@ -355,22 +375,24 @@ impl<B: Backend> TracerTransportSolver<B> {
         cell_volumes: &B::Buffer<B::Scalar>,
         face_distances: &B::Buffer<B::Scalar>,
         smagorinsky_data: Option<&SmagorinskyData<B>>,
-    ) {
+    ) -> Result<(), TracerError> {
         field.clear_rhs();
 
         if self.face_fluxes.len() < flow_data.len() {
             self.face_fluxes.resize(flow_data.len(), TracerFaceFlux::default());
         }
 
+        let concentration = field.concentration_slice()?;
         for (i, face) in flow_data.iter().enumerate() {
             if face.h_face <= self.config.h_min || !face.h_face.is_finite() {
                 self.face_fluxes[i] = TracerFaceFlux::default();
                 continue;
             }
 
-            let c_left = field.concentration_slice()[face.left_cell];
-            let c_right = face.right_cell
-                .map(|idx| field.concentration_slice()[idx])
+            let c_left = concentration[face.left_cell];
+            let c_right = face
+                .right_cell
+                .map(|idx| concentration[idx])
                 .unwrap_or(c_left);
 
             let advective = self.compute_advective_flux_upwind(
@@ -410,28 +432,30 @@ impl<B: Backend> TracerTransportSolver<B> {
             let flux = advective + diffusive;
             let vol_left = cell_volumes[face.left_cell];
             if vol_left > B::Scalar::ZERO {
-                field.add_rhs(face.left_cell, -flux / vol_left);
+                field.add_rhs(face.left_cell, -flux / vol_left)?;
             }
 
             if let Some(right_cell) = face.right_cell {
                 let vol_right = cell_volumes[right_cell];
                 if vol_right > B::Scalar::ZERO {
-                    field.add_rhs(right_cell, flux / vol_right);
+                    field.add_rhs(right_cell, flux / vol_right)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// 时间步进更新（显式欧拉）
-    pub fn update_forward_euler(&self, field: &mut TracerField<B>, dt: B::Scalar) {
-        field.apply_euler_update(dt);
+    pub fn update_forward_euler(&self, field: &mut TracerField<B>, dt: B::Scalar) -> Result<(), TracerError> {
+        field.apply_euler_update(dt)
     }
 
     /// 应用浓度限制
-    pub fn apply_clipping(&self, field: &mut TracerField<B>) {
+    pub fn apply_clipping(&self, field: &mut TracerField<B>) -> Result<(), TracerError> {
         if self.config.enable_clipping {
-            field.clamp_concentration(self.config.c_min, self.config.c_max);
+            field.clamp_concentration(self.config.c_min, self.config.c_max)?;
         }
+        Ok(())
     }
 
     /// 完整的单步更新流程
@@ -441,13 +465,14 @@ impl<B: Backend> TracerTransportSolver<B> {
         flow_data: &[FaceFlowData<B>],
         cell_volumes: &B::Buffer<B::Scalar>,
         face_distances: &B::Buffer<B::Scalar>,
-        water_depths: &[B::Scalar],
+        water_depths: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
-    ) {
-        self.compute_rhs(field, flow_data, cell_volumes, face_distances);
-        self.update_forward_euler(field, dt);
-        field.update_concentration_from_conserved(water_depths, self.config.h_min);
-        self.apply_clipping(field);
+    ) -> Result<(), TracerError> {
+        self.compute_rhs(field, flow_data, cell_volumes, face_distances)?;
+        self.update_forward_euler(field, dt)?;
+        field.update_concentration_from_conserved(water_depths, self.config.h_min)?;
+        self.apply_clipping(field)?;
+        Ok(())
     }
 
     /// 计算示踪剂的CFL限制时间步
@@ -511,10 +536,11 @@ impl<B: Backend> MultiTracerSolver<B> {
         face_distances: &B::Buffer<B::Scalar>,
         water_depths: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
-    ) {
+    ) -> Result<(), TracerError> {
         for (_, field) in state.iter_mut() {
-            self.solver.step(field, flow_data, cell_volumes, face_distances, water_depths, dt);
+            self.solver.step(field, flow_data, cell_volumes, face_distances, water_depths, dt)?;
         }
+        Ok(())
     }
 
     pub fn solver(&self) -> &TracerTransportSolver<B> {
@@ -634,16 +660,18 @@ mod tests {
     fn test_single_step_f64() {
         let backend = CpuBackend::<f64>::new();
         let mut solver = TracerTransportSolver::<CpuBackend<f64>>::new_with_backend(backend, TracerTransportConfig::default());
-        let props = TracerProperties::<f64>::salinity().with_background(0.0);
-        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), props, 3);
+        let backend_field = CpuBackend::<f64>::new();
+        let props = TracerProperties::<f64>::salinity(&backend_field).with_background(0.0);
+        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(backend_field.clone(), props, 3);
         
         let concentrations = [10.0, 5.0, 0.0];
         for (i, &c) in concentrations.iter().enumerate() {
-            field.concentration_slice_mut()[i] = c;
+            field.concentration_slice_mut().unwrap()[i] = c;
         }
 
-        let depths = vec![1.0, 1.0, 1.0];
-        field.update_conserved_from_depth(&depths);
+        let mut depths = backend_field.alloc(3);
+        depths.copy_from_slice(&[1.0, 1.0, 1.0]);
+        field.update_conserved_from_depth(&depths).unwrap();
 
         let flow_data = vec![
             FaceFlowData {
@@ -666,21 +694,29 @@ mod tests {
             },
         ];
 
-        let volumes = vec![1.0, 1.0, 1.0];
-        let distances = vec![1.0, 1.0];
+        let mut volumes = backend_field.alloc(3);
+        volumes.copy_from_slice(&[1.0, 1.0, 1.0]);
+        let mut distances = backend_field.alloc(2);
+        distances.copy_from_slice(&[1.0, 1.0]);
 
-        solver.step(&mut field, &flow_data, &volumes, &distances, &depths, 0.1);
+        solver
+            .step(&mut field, &flow_data, &volumes, &distances, &depths, 0.1)
+            .unwrap();
 
         // 上游单元0的浓度应因质量流出而降低，验证物理单调性
-        assert!(field.concentration_slice()[0] < 10.0);
+        assert!(field.concentration_slice().unwrap()[0] < 10.0);
     }
 
     #[test]
     fn test_multi_tracer_solver_f64() {
         let backend = CpuBackend::<f64>::new();
         let mut state = TracerState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 10);
-        state.add_tracer(TracerProperties::<f64>::salinity()).unwrap();
-        state.add_tracer(TracerProperties::<f64>::temperature()).unwrap();
+        state
+            .add_tracer(TracerProperties::<f64>::salinity(&backend))
+            .unwrap();
+        state
+            .add_tracer(TracerProperties::<f64>::temperature(&backend))
+            .unwrap();
 
         let _solver = MultiTracerSolver::<CpuBackend<f64>>::new_with_backend(backend, TracerTransportConfig::default());
 
@@ -694,10 +730,12 @@ mod tests {
         let config = TracerTransportConfig::<f32>::default();
         let mut solver = TracerTransportSolver::<CpuBackend<f32>>::new_with_backend(backend.clone(), config);
         
-        let props = TracerProperties::<f32>::salinity();
+        let props = TracerProperties::<f32>::salinity(&backend);
         let mut field = TracerField::<CpuBackend<f32>>::new_with_backend(backend.clone(), props, 100);
         
         assert_eq!(field.len(), 100);
-        solver.compute_rhs(&mut field, &[], &backend.alloc(100), &backend.alloc(0));
+        solver
+            .compute_rhs(&mut field, &[], &backend.alloc(100), &backend.alloc(0))
+            .unwrap();
     }
 }

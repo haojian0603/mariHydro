@@ -170,7 +170,7 @@ pub struct Checkpoint {
     /// 时间步数
     pub step: usize,
     /// 状态数据
-    pub state: StateSnapshot,
+    pub state: StateSnapshot<f64>,
     /// 配置摘要哈希（用于验证）
     pub config_hash: Option<u64>,
     /// 创建时间戳
@@ -202,7 +202,7 @@ impl Default for CheckpointLoadOptions {
 
 impl Checkpoint {
     /// 创建新检查点
-    pub fn new(time: f64, step: usize, state: StateSnapshot) -> Self {
+    pub fn new(time: f64, step: usize, state: StateSnapshot<f64>) -> Self {
         Self {
             version: CHECKPOINT_VERSION,
             time,
@@ -230,7 +230,7 @@ impl Checkpoint {
     }
 
     /// 从网格快照计算哈希
-    pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot) -> Self {
+    pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot<f64>) -> Self {
         self.mesh_hash = mesh.compute_hash();
         self
     }
@@ -324,7 +324,7 @@ impl Checkpoint {
     }
 
     /// 从文件加载并校验网格一致性
-    pub fn load_with_mesh(path: &Path, mesh: &MeshSnapshot, strict: bool) -> CheckpointResult<Self> {
+    pub fn load_with_mesh(path: &Path, mesh: &MeshSnapshot<f64>, strict: bool) -> CheckpointResult<Self> {
         let options = CheckpointLoadOptions {
             expected_mesh_hash: Some(mesh.compute_hash()),
             strict,
@@ -607,6 +607,7 @@ impl Checkpoint {
     }
 
     /// 计算 CRC32 校验和（统一使用 crc32fast）
+    #[allow(dead_code)]
     fn compute_crc32(data: &[u8]) -> u32 {
         let mut hasher = crc32fast::Hasher::new();
         hasher.update(data);
@@ -614,6 +615,7 @@ impl Checkpoint {
     }
 }
 
+#[allow(dead_code)]
 fn read_u32(data: &[u8], offset: &mut usize) -> CheckpointResult<u32> {
     if *offset + 4 > data.len() {
         return Err(CheckpointError::Corrupted("unexpected EOF".into()));
@@ -623,6 +625,7 @@ fn read_u32(data: &[u8], offset: &mut usize) -> CheckpointResult<u32> {
     Ok(v)
 }
 
+#[allow(dead_code)]
 fn read_u64(data: &[u8], offset: &mut usize) -> CheckpointResult<u64> {
     if *offset + 8 > data.len() {
         return Err(CheckpointError::Corrupted("unexpected EOF".into()));
@@ -632,6 +635,7 @@ fn read_u64(data: &[u8], offset: &mut usize) -> CheckpointResult<u64> {
     Ok(v)
 }
 
+#[allow(dead_code)]
 fn read_f64(data: &[u8], offset: &mut usize) -> CheckpointResult<f64> {
     read_u64(data, offset).map(f64::from_bits)
 }
@@ -760,7 +764,7 @@ mod tests {
     use super::*;
     
 
-    fn create_test_state() -> StateSnapshot {
+    fn create_test_state() -> StateSnapshot<f64> {
         StateSnapshot::from_state_data(
             vec![1.0, 2.0, 3.0],
             vec![0.1, 0.2, 0.3],

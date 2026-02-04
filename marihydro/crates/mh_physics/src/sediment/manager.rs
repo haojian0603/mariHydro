@@ -14,30 +14,32 @@
 //! 3. **可扩展**: 支持多种泥沙粒径和分层
 
 use crate::core::Backend;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use mh_runtime::RuntimeScalar as Scalar;
-use num_traits::{Float, FromPrimitive, ToPrimitive};
 use std::marker::PhantomData;
 
 /// 泥沙系统错误
 #[derive(Debug, Clone)]
-pub enum SedimentError {
+pub enum SedimentError<S: Scalar> {
     /// 质量守恒违反
     ConservationViolation {
-        expected: f64,
-        actual: f64,
-        relative_error: f64,
+        expected: S,
+        actual: S,
+        relative_error: S,
     },
     /// 负质量
     NegativeMass {
         cell: usize,
-        value: f64,
+        value: S,
     },
     /// 无效参数
     InvalidParameter(String),
 }
 
-impl std::fmt::Display for SedimentError {
+impl<S> std::fmt::Display for SedimentError<S>
+where
+    S: Scalar + std::fmt::LowerExp,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SedimentError::ConservationViolation { expected, actual, relative_error } => {
@@ -54,7 +56,11 @@ impl std::fmt::Display for SedimentError {
     }
 }
 
-impl std::error::Error for SedimentError {}
+impl<S> std::error::Error for SedimentError<S>
+where
+    S: Scalar + std::fmt::Debug + std::fmt::Display,
+{
+}
 
 /// 泥沙系统配置
 #[derive(Debug, Clone)]
@@ -77,17 +83,32 @@ pub struct SedimentConfigGeneric<S: Scalar> {
     pub min_depth: S,
 }
 
-impl<S: Scalar> Default for SedimentConfigGeneric<S> {
+impl Default for SedimentConfigGeneric<f64> {
     fn default() -> Self {
         Self {
-            tau_critical: S::from_f64(0.1).unwrap_or(S::ZERO),
-            erosion_rate: S::from_f64(1e-4).unwrap_or(S::ZERO),
-            settling_velocity: S::from_f64(0.001).unwrap_or(S::ZERO),
-            sediment_density: S::from_f64(2650.0).unwrap_or(S::ZERO),
-            water_density: S::from_f64(998.2).unwrap_or(S::ZERO),
-            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
-            conservation_tolerance: S::from_f64(1e-10).unwrap_or(S::ZERO),
-            min_depth: S::from_f64(1e-4).unwrap_or(S::ZERO),
+            tau_critical: 0.1,
+            erosion_rate: 1e-4,
+            settling_velocity: 0.001,
+            sediment_density: 2650.0,
+            water_density: 998.2,
+            porosity: 0.4,
+            conservation_tolerance: 1e-10,
+            min_depth: 1e-4,
+        }
+    }
+}
+
+impl Default for SedimentConfigGeneric<f32> {
+    fn default() -> Self {
+        Self {
+            tau_critical: 0.1_f32,
+            erosion_rate: 1e-4_f32,
+            settling_velocity: 0.001_f32,
+            sediment_density: 2650.0_f32,
+            water_density: 998.2_f32,
+            porosity: 0.4_f32,
+            conservation_tolerance: 1e-10_f32,
+            min_depth: 1e-4_f32,
         }
     }
 }
@@ -179,7 +200,6 @@ pub struct SedimentManagerGeneric<B: Backend> {
 impl<B> SedimentManagerGeneric<B>
 where
     B: Backend + Clone,
-    B::Scalar: Float + FromPrimitive + ToPrimitive,
 {
     /// 创建新的泥沙管理器
     pub fn new_with_backend(backend: B, n_cells: usize, config: SedimentConfigGeneric<B::Scalar>) -> Self {
@@ -227,7 +247,6 @@ where
 impl<B> SedimentManagerGeneric<B>
 where
     B: Backend + Clone,
-    B::Scalar: Float + FromPrimitive + ToPrimitive,
 {
     /// 使用默认后端创建（便捷）
     pub fn new(n_cells: usize, config: SedimentConfigGeneric<B::Scalar>) -> Self where B: Default {
@@ -264,7 +283,7 @@ where
     }
 
     /// 从水动力状态更新守恒量
-    pub fn update_conserved(&mut self, state: &ShallowWaterStateGeneric<B>) {
+    pub fn update_conserved(&mut self, state: &ShallowWaterState<B>) {
         let n_cells = self.state.n_cells;
         for i in 0..n_cells {
             self.state.conserved[i] = state.h[i] * self.state.concentration[i];
@@ -289,7 +308,7 @@ where
     /// 计算床面剪切应力（Manning）
     pub fn compute_bed_shear_stress(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         manning_n: &[B::Scalar],
     ) {
         let n_cells = self.state.n_cells;
@@ -320,7 +339,7 @@ where
     /// 计算侵蚀/沉降交换通量
     pub fn compute_exchange_flux(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
     ) {
         let n_cells = self.state.n_cells;
         let tau_c = self.config.tau_critical;
@@ -363,11 +382,11 @@ where
     /// 单步更新泥沙系统
     pub fn step(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         cell_areas: &[B::Scalar],
         manning_n: &[B::Scalar],
         dt: B::Scalar,
-    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
+    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError<B::Scalar>> {
         if !dt.is_finite() || dt <= B::Scalar::ZERO {
             return Err(SedimentError::InvalidParameter("dt must be positive".to_string()));
         }
@@ -438,9 +457,9 @@ where
     /// 验证质量守恒
     pub fn verify_conservation(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         cell_areas: &[B::Scalar],
-    ) -> Result<(), SedimentError> {
+    ) -> Result<(), SedimentError<B::Scalar>> {
         if !self.initialized {
             return Ok(());
         }
@@ -464,9 +483,9 @@ where
 
         if relative_error > rel_tol && error > abs_tol {
             return Err(SedimentError::ConservationViolation {
-                expected: self.initial_total_mass.to_f64().unwrap_or(0.0),
-                actual: total_current.to_f64().unwrap_or(0.0),
-                relative_error: relative_error.to_f64().unwrap_or(0.0),
+                expected: self.initial_total_mass,
+                actual: total_current,
+                relative_error,
             });
         }
 
@@ -476,12 +495,12 @@ where
     /// 完整的悬移质步进（包含对流-扩散输运）
     pub fn step_suspended_transport(
         &mut self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         cell_areas: &[B::Scalar],
         tracer_rhs: &mut [B::Scalar],
         manning_n: &[B::Scalar],
         _dt: B::Scalar,
-    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError> {
+    ) -> Result<SedimentFluxStats<B::Scalar>, SedimentError<B::Scalar>> {
         let n_cells = self.state.n_cells;
         let h_min = self.config.min_depth;
         let ws = self.config.settling_velocity;
@@ -615,7 +634,7 @@ mod tests {
         manager.set_initial_concentration(&conc);
         
         // 创建水动力状态
-        let mut state = ShallowWaterStateGeneric::new_with_backend(
+        let mut state = ShallowWaterState::new_with_backend(
             CpuBackend::<f64>::new(), 10
         );
         for i in 0..10 {

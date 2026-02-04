@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use num_traits::Float;
 
-use mh_runtime::{Backend, CpuBackend, DeviceBuffer, RuntimeScalar as Scalar};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar as Scalar};
 
 // ============================================================
 // 示踪剂类型
@@ -100,7 +100,7 @@ impl TracerType {
 
 /// 示踪剂物理属性
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TracerProperties<S: Scalar = f64> {
+pub struct TracerProperties<S: Scalar> {
     /// 示踪剂类型
     pub tracer_type: TracerType,
 
@@ -132,13 +132,13 @@ pub struct TracerProperties<S: Scalar = f64> {
 
 impl<S: Scalar> TracerProperties<S> {
     /// 创建默认盐度示踪剂
-    pub fn salinity() -> Self {
+    pub fn salinity<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
             tracer_type: TracerType::Salinity,
             name: "Salinity".to_string(),
             unit: "PSU".to_string(),
-            molecular_diffusivity: S::from_f64(1.5e-9).unwrap_or(S::ZERO),
-            background_value: S::from_f64(35.0).unwrap_or(S::ZERO),
+            molecular_diffusivity: backend.scalar_from_f64(1.5e-9),
+            background_value: backend.scalar_from_f64(35.0),
             decay_rate: S::ZERO,
             settling_velocity: S::ZERO,
             enabled: true,
@@ -146,13 +146,13 @@ impl<S: Scalar> TracerProperties<S> {
     }
 
     /// 创建默认温度示踪剂
-    pub fn temperature() -> Self {
+    pub fn temperature<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
             tracer_type: TracerType::Temperature,
             name: "Temperature".to_string(),
             unit: "°C".to_string(),
-            molecular_diffusivity: S::from_f64(1.4e-7).unwrap_or(S::ZERO),
-            background_value: S::from_f64(20.0).unwrap_or(S::ZERO),
+            molecular_diffusivity: backend.scalar_from_f64(1.4e-7),
+            background_value: backend.scalar_from_f64(20.0),
             decay_rate: S::ZERO,
             settling_velocity: S::ZERO,
             enabled: true,
@@ -160,7 +160,7 @@ impl<S: Scalar> TracerProperties<S> {
     }
 
     /// 创建默认泥沙示踪剂
-    pub fn sediment() -> Self {
+    pub fn sediment<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
             tracer_type: TracerType::Sediment,
             name: "Suspended Sediment".to_string(),
@@ -168,18 +168,18 @@ impl<S: Scalar> TracerProperties<S> {
             molecular_diffusivity: S::ZERO, // 主要靠湍流扩散
             background_value: S::ZERO,
             decay_rate: S::ZERO,
-            settling_velocity: S::from_f64(1e-4).unwrap_or(S::ZERO), // 0.1 mm/s
+            settling_velocity: backend.scalar_from_f64(1e-4), // 0.1 mm/s
             enabled: true,
         }
     }
 
     /// 创建自定义示踪剂
-    pub fn custom(id: u16, name: &str, unit: &str) -> Self {
+    pub fn custom<B: Backend<Scalar = S>>(backend: &B, id: u16, name: &str, unit: &str) -> Self {
         Self {
             tracer_type: TracerType::Custom(id),
             name: name.to_string(),
             unit: unit.to_string(),
-            molecular_diffusivity: S::from_f64(1e-9).unwrap_or(S::ZERO),
+            molecular_diffusivity: backend.scalar_from_f64(1e-9),
             background_value: S::ZERO,
             decay_rate: S::ZERO,
             settling_velocity: S::ZERO,
@@ -212,11 +212,6 @@ impl<S: Scalar> TracerProperties<S> {
     }
 }
 
-impl<S: Scalar> Default for TracerProperties<S> {
-    fn default() -> Self {
-        Self::salinity()
-    }
-}
 
 // ============================================================
 // 示踪剂场（Backend 泛型化）
@@ -224,10 +219,20 @@ impl<S: Scalar> Default for TracerProperties<S> {
 
 /// 示踪剂场统计量
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TracerFieldStats<S: Scalar = f64> {
+pub struct TracerFieldStats<S: Scalar> {
     pub min: S,
     pub max: S,
     pub mean: S,
+}
+
+impl<S: Scalar> Default for TracerFieldStats<S> {
+    fn default() -> Self {
+        Self {
+            min: S::ZERO,
+            max: S::ZERO,
+            mean: S::ZERO,
+        }
+    }
 }
 
 /// 单个示踪剂的场数据
@@ -353,71 +358,99 @@ impl<B: Backend> TracerField<B> {
     
     // ========== 通用访问方法（所有 Backend 可用） ==========
     
-    /// 获取浓度切片（通用）
+    /// 获取浓度切片（需要 CPU 可访问）
     #[inline]
-    pub fn concentration_slice(&self) -> &[B::Scalar] {
-        self.concentration.as_slice()
+    pub fn concentration_slice(&self) -> Result<&[B::Scalar], TracerError> {
+        self.concentration
+            .try_as_slice()
+            .ok_or(TracerError::BackendAccess { field: "concentration" })
     }
     
-    /// 获取浓度可变切片（通用）
+    /// 获取浓度可变切片（需要 CPU 可访问）
     #[inline]
-    pub fn concentration_slice_mut(&mut self) -> &mut [B::Scalar] {
-        self.concentration.as_slice_mut()
+    pub fn concentration_slice_mut(&mut self) -> Result<&mut [B::Scalar], TracerError> {
+        self.concentration
+            .try_as_slice_mut()
+            .ok_or(TracerError::BackendAccess { field: "concentration" })
     }
     
-    /// 获取守恒量切片（通用）
+    /// 获取守恒量切片（需要 CPU 可访问）
     #[inline]
-    pub fn conserved_slice(&self) -> &[B::Scalar] {
-        self.conserved.as_slice()
+    pub fn conserved_slice(&self) -> Result<&[B::Scalar], TracerError> {
+        self.conserved
+            .try_as_slice()
+            .ok_or(TracerError::BackendAccess { field: "conserved" })
     }
     
-    /// 获取守恒量可变切片（通用）
+    /// 获取守恒量可变切片（需要 CPU 可访问）
     #[inline]
-    pub fn conserved_slice_mut(&mut self) -> &mut [B::Scalar] {
-        self.conserved.as_slice_mut()
+    pub fn conserved_slice_mut(&mut self) -> Result<&mut [B::Scalar], TracerError> {
+        self.conserved
+            .try_as_slice_mut()
+            .ok_or(TracerError::BackendAccess { field: "conserved" })
     }
     
-    /// 获取 RHS 切片（通用）
+    /// 获取 RHS 切片（需要 CPU 可访问）
     #[inline]
-    pub fn rhs_slice(&self) -> &[B::Scalar] {
-        self.rhs.as_slice()
+    pub fn rhs_slice(&self) -> Result<&[B::Scalar], TracerError> {
+        self.rhs
+            .try_as_slice()
+            .ok_or(TracerError::BackendAccess { field: "rhs" })
     }
     
-    /// 获取 RHS 可变切片（通用）
+    /// 获取 RHS 可变切片（需要 CPU 可访问）
     #[inline]
-    pub fn rhs_slice_mut(&mut self) -> &mut [B::Scalar] {
-        self.rhs.as_slice_mut()
+    pub fn rhs_slice_mut(&mut self) -> Result<&mut [B::Scalar], TracerError> {
+        self.rhs
+            .try_as_slice_mut()
+            .ok_or(TracerError::BackendAccess { field: "rhs" })
     }
     
-    /// 累加值到 RHS（通用）
+    /// 累加值到 RHS（需要 CPU 可访问）
     #[inline]
-    pub fn add_rhs(&mut self, cell_idx: usize, value: B::Scalar) {
-        self.rhs.as_slice_mut()[cell_idx] = self.rhs.as_slice()[cell_idx] + value;
+    pub fn add_rhs(&mut self, cell_idx: usize, value: B::Scalar) -> Result<(), TracerError> {
+        let rhs = self.rhs_slice_mut()?;
+        rhs[cell_idx] = rhs[cell_idx] + value;
+        Ok(())
     }
     
-    /// 从守恒量更新浓度（通用）
-    pub fn update_concentration_from_conserved(&mut self, water_depths: &[B::Scalar], h_min: B::Scalar) {
-        debug_assert_eq!(water_depths.len(), self.n_cells);
-        let concentration = self.concentration.as_slice_mut();
-        let conserved = self.conserved.as_slice();
+    /// 从守恒量更新浓度（需要 CPU 可访问）
+    pub fn update_concentration_from_conserved(
+        &mut self,
+        water_depths: &B::Buffer<B::Scalar>,
+        h_min: B::Scalar,
+    ) -> Result<(), TracerError> {
+        if water_depths.len() != self.n_cells {
+            return Err(TracerError::SizeMismatch {
+                expected: self.n_cells,
+                actual: water_depths.len(),
+            });
+        }
+        let depths = water_depths
+            .try_as_slice()
+            .ok_or(TracerError::BackendAccess { field: "water_depths" })?;
+        let concentration = self.concentration_slice_mut()?;
+        let conserved = self.conserved_slice()?;
         for i in 0..self.n_cells {
-            let h = if water_depths[i] > h_min { water_depths[i] } else { h_min };
+            let h = if depths[i] > h_min { depths[i] } else { h_min };
             concentration[i] = conserved[i] / h;
         }
+        Ok(())
     }
     
-    /// 使用显式欧拉格式更新守恒量（通用）
-    pub fn apply_euler_update(&mut self, dt: B::Scalar) {
-        let conserved = self.conserved.as_slice_mut();
-        let rhs = self.rhs.as_slice();
+    /// 使用显式欧拉格式更新守恒量（需要 CPU 可访问）
+    pub fn apply_euler_update(&mut self, dt: B::Scalar) -> Result<(), TracerError> {
+        let conserved = self.conserved_slice_mut()?;
+        let rhs = self.rhs_slice()?;
         for i in 0..self.n_cells {
             conserved[i] = conserved[i] + dt * rhs[i];
         }
+        Ok(())
     }
     
-    /// 限制浓度在物理范围内（通用）
-    pub fn clamp_concentration(&mut self, c_min: B::Scalar, c_max: Option<B::Scalar>) {
-        let concentration = self.concentration.as_slice_mut();
+    /// 限制浓度在物理范围内（需要 CPU 可访问）
+    pub fn clamp_concentration(&mut self, c_min: B::Scalar, c_max: Option<B::Scalar>) -> Result<(), TracerError> {
+        let concentration = self.concentration_slice_mut()?;
         for c in concentration.iter_mut() {
             if *c < c_min {
                 *c = c_min;
@@ -428,67 +461,61 @@ impl<B: Backend> TracerField<B> {
                 }
             }
         }
+        Ok(())
     }
-}
 
-/// CPU f64 后端的便捷方法
-impl TracerField<CpuBackend<f64>> {
-    /// 使用默认 CPU f64 后端创建
-    pub fn new(properties: TracerProperties<f64>, n_cells: usize) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), properties, n_cells)
-    }
-    
-    /// 从水深更新守恒量
-    pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
-        debug_assert_eq!(water_depths.len(), self.n_cells);
-        for i in 0..self.n_cells {
-            self.conserved[i] = water_depths[i] * self.concentration[i];
+    /// 从水深更新守恒量（需要 CPU 可访问）
+    pub fn update_conserved_from_depth(
+        &mut self,
+        water_depths: &B::Buffer<B::Scalar>,
+    ) -> Result<(), TracerError> {
+        if water_depths.len() != self.n_cells {
+            return Err(TracerError::SizeMismatch {
+                expected: self.n_cells,
+                actual: water_depths.len(),
+            });
         }
+        let depths = water_depths
+            .try_as_slice()
+            .ok_or(TracerError::BackendAccess { field: "water_depths" })?;
+        let concentration = self.concentration_slice()?;
+        let conserved = self.conserved_slice_mut()?;
+        for i in 0..self.n_cells {
+            conserved[i] = depths[i] * concentration[i];
+        }
+        Ok(())
     }
-    
+
     /// 应用衰减
-    pub fn apply_decay(&mut self, dt: f64) {
+    pub fn apply_decay(&mut self, dt: B::Scalar) -> Result<(), TracerError> {
         let k = self.properties.decay_rate;
-        if k > 0.0 {
+        if k > B::Scalar::ZERO {
             let factor = (-k * dt).exp();
-            for c in self.concentration.iter_mut() {
+            let concentration = self.concentration_slice_mut()?;
+            for c in concentration.iter_mut() {
                 *c *= factor;
             }
-            for hc in self.conserved.iter_mut() {
+            let conserved = self.conserved_slice_mut()?;
+            for hc in conserved.iter_mut() {
                 *hc *= factor;
             }
         }
+        Ok(())
     }
-    
-    /// 计算场统计量
-    pub fn statistics(&self) -> TracerFieldStats<f64> {
+
+    /// 计算场统计量（使用 Backend 归约）
+    pub fn statistics(&self) -> TracerFieldStats<B::Scalar> {
         if self.n_cells == 0 {
             return TracerFieldStats::default();
         }
-        
-        let mut min = f64::MAX;
-        let mut max = f64::MIN;
-        let mut sum = 0.0;
-        
-        for &c in self.concentration.iter() {
-            min = min.min(c);
-            max = max.max(c);
-            sum += c;
-        }
-        
+        let min = self.backend.reduce_min(&self.concentration);
+        let max = self.backend.reduce_max(&self.concentration);
+        let sum = self.backend.reduce_sum(&self.concentration);
         TracerFieldStats {
             min,
             max,
-            mean: sum / self.n_cells as f64,
+            mean: sum / self.backend.scalar_from_f64(self.n_cells as f64),
         }
-    }
-}
-
-/// CPU f32 后端的便捷方法
-impl TracerField<CpuBackend<f32>> {
-    /// 使用 CPU f32 后端创建
-    pub fn new_f32(properties: TracerProperties<f32>, n_cells: usize) -> Self {
-        Self::new_with_backend(CpuBackend::<f32>::new(), properties, n_cells)
     }
 }
 
@@ -644,32 +671,36 @@ impl<B: Backend> TracerState<B> {
     }
 }
 
-/// CPU f64 后端的便捷方法
-impl TracerState<CpuBackend<f64>> {
-    /// 使用默认 CPU f64 后端创建
-    pub fn new(n_cells: usize) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells)
-    }
-    
+impl<B: Backend> TracerState<B> {
     /// 从水深更新所有守恒量
-    pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
+    pub fn update_conserved_from_depth(
+        &mut self,
+        water_depths: &B::Buffer<B::Scalar>,
+    ) -> Result<(), TracerError> {
         for field in self.fields.values_mut() {
-            field.update_conserved_from_depth(water_depths);
+            field.update_conserved_from_depth(water_depths)?;
         }
+        Ok(())
     }
 
     /// 从守恒量更新所有浓度
-    pub fn update_concentration_from_conserved(&mut self, water_depths: &[f64], h_min: f64) {
+    pub fn update_concentration_from_conserved(
+        &mut self,
+        water_depths: &B::Buffer<B::Scalar>,
+        h_min: B::Scalar,
+    ) -> Result<(), TracerError> {
         for field in self.fields.values_mut() {
-            field.update_concentration_from_conserved(water_depths, h_min);
+            field.update_concentration_from_conserved(water_depths, h_min)?;
         }
+        Ok(())
     }
 
     /// 应用衰减到所有示踪剂
-    pub fn apply_all_decay(&mut self, dt: f64) {
+    pub fn apply_all_decay(&mut self, dt: B::Scalar) -> Result<(), TracerError> {
         for field in self.fields.values_mut() {
-            field.apply_decay(dt);
+            field.apply_decay(dt)?;
         }
+        Ok(())
     }
 }
 
@@ -703,6 +734,9 @@ pub enum TracerError {
     /// 非有限值
     #[error("示踪剂 {tracer:?} 包含非有限值")]
     NonFiniteValue { tracer: TracerType },
+    /// 后端缓冲区不可访问
+    #[error("后端缓冲区不可访问: {field}")]
+    BackendAccess { field: &'static str },
 }
 
 // ============================================================
@@ -712,6 +746,7 @@ pub enum TracerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     fn approx_eq(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-10
@@ -731,7 +766,8 @@ mod tests {
 
     #[test]
     fn test_tracer_properties() {
-        let props: TracerProperties<f64> = TracerProperties::salinity()
+        let backend = CpuBackend::<f64>::new();
+        let props: TracerProperties<f64> = TracerProperties::salinity(&backend)
             .with_background(30.0)
             .with_diffusivity(2e-9);
 
@@ -742,49 +778,56 @@ mod tests {
 
     #[test]
     fn test_tracer_field_creation() {
-        let props: TracerProperties<f64> = TracerProperties::salinity();
-        let field = TracerField::<CpuBackend<f64>>::new(props, 100);
+        let backend = CpuBackend::<f64>::new();
+        let props: TracerProperties<f64> = TracerProperties::salinity(&backend);
+        let field = TracerField::<CpuBackend<f64>>::new_with_backend(backend, props, 100);
 
         assert_eq!(field.len(), 100);
         assert_eq!(field.tracer_type(), TracerType::Salinity);
-        assert!(approx_eq(field.concentration_slice()[0], 35.0)); // 背景值
+        assert!(approx_eq(field.concentration_slice().unwrap()[0], 35.0)); // 背景值
     }
 
     #[test]
     fn test_tracer_field_conserved() {
-        let props: TracerProperties<f64> = TracerProperties::salinity().with_background(10.0);
-        let mut field = TracerField::<CpuBackend<f64>>::new(props, 3);
+        let backend = CpuBackend::<f64>::new();
+        let props: TracerProperties<f64> = TracerProperties::salinity(&backend).with_background(10.0);
+        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(backend.clone(), props, 3);
 
         // 假设水深
-        let depths = vec![1.0, 2.0, 3.0];
-        field.update_conserved_from_depth(&depths);
+        let mut depths = backend.alloc(3);
+        depths.copy_from_slice(&[1.0, 2.0, 3.0]);
+        field.update_conserved_from_depth(&depths).unwrap();
 
-        assert!(approx_eq(field.conserved_slice()[0], 10.0)); // 1.0 * 10
-        assert!(approx_eq(field.conserved_slice()[1], 20.0)); // 2.0 * 10
-        assert!(approx_eq(field.conserved_slice()[2], 30.0)); // 3.0 * 10
+        let conserved = field.conserved_slice().unwrap();
+        assert!(approx_eq(conserved[0], 10.0)); // 1.0 * 10
+        assert!(approx_eq(conserved[1], 20.0)); // 2.0 * 10
+        assert!(approx_eq(conserved[2], 30.0)); // 3.0 * 10
     }
 
     #[test]
     fn test_tracer_field_decay() {
-        let props: TracerProperties<f64> = TracerProperties::salinity()
+        let backend = CpuBackend::<f64>::new();
+        let props: TracerProperties<f64> = TracerProperties::salinity(&backend)
             .with_background(100.0)
             .with_decay_rate(0.1);
-        let mut field = TracerField::<CpuBackend<f64>>::new(props, 1);
+        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(backend, props, 1);
 
-        field.apply_decay(1.0);
+        field.apply_decay(1.0).unwrap();
         // 精确指数衰减解：C = C0 * exp(-k * dt)
         let expected = 100.0 * (-0.1_f64).exp();
-        assert!((field.concentration_slice()[0] - expected).abs() < 1e-12);
+        assert!((field.concentration_slice().unwrap()[0] - expected).abs() < 1e-12);
     }
 
     #[test]
     fn test_tracer_field_statistics() {
-        let props: TracerProperties<f64> = TracerProperties::salinity();
-        let mut field = TracerField::<CpuBackend<f64>>::new(props, 3);
+        let backend = CpuBackend::<f64>::new();
+        let props: TracerProperties<f64> = TracerProperties::salinity(&backend);
+        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(backend, props, 3);
         
-        field.concentration_slice_mut()[0] = 10.0;
-        field.concentration_slice_mut()[1] = 20.0;
-        field.concentration_slice_mut()[2] = 30.0;
+        let concentration = field.concentration_slice_mut().unwrap();
+        concentration[0] = 10.0;
+        concentration[1] = 20.0;
+        concentration[2] = 30.0;
 
         let stats = field.statistics();
         assert!(approx_eq(stats.min, 10.0));
@@ -792,18 +835,20 @@ mod tests {
         assert!(approx_eq(stats.mean, 20.0));
 
         // 测试限制
-        field.clamp_concentration(15.0, Some(25.0));
-        assert!(approx_eq(field.concentration_slice()[0], 15.0));
-        assert!(approx_eq(field.concentration_slice()[1], 20.0));
-        assert!(approx_eq(field.concentration_slice()[2], 25.0));
+        field.clamp_concentration(15.0, Some(25.0)).unwrap();
+        let concentration = field.concentration_slice().unwrap();
+        assert!(approx_eq(concentration[0], 15.0));
+        assert!(approx_eq(concentration[1], 20.0));
+        assert!(approx_eq(concentration[2], 25.0));
     }
 
     #[test]
     fn test_tracer_state() {
-        let mut state = TracerState::<CpuBackend<f64>>::new(100);
+        let backend = CpuBackend::<f64>::new();
+        let mut state = TracerState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 100);
 
-        state.add_tracer(TracerProperties::salinity()).unwrap();
-        state.add_tracer(TracerProperties::temperature()).unwrap();
+        state.add_tracer(TracerProperties::salinity(&backend)).unwrap();
+        state.add_tracer(TracerProperties::temperature(&backend)).unwrap();
 
         assert_eq!(state.len(), 2);
         assert!(state.contains(TracerType::Salinity));
@@ -813,10 +858,11 @@ mod tests {
 
     #[test]
     fn test_duplicate_tracer_error() {
-        let mut state = TracerState::<CpuBackend<f64>>::new(100);
+        let backend = CpuBackend::<f64>::new();
+        let mut state = TracerState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 100);
 
-        state.add_tracer(TracerProperties::salinity()).unwrap();
-        let result = state.add_tracer(TracerProperties::salinity());
+        state.add_tracer(TracerProperties::salinity(&backend)).unwrap();
+        let result = state.add_tracer(TracerProperties::salinity(&backend));
 
         assert!(result.is_err());
         assert!(matches!(
@@ -827,13 +873,17 @@ mod tests {
 
     #[test]
     fn test_tracer_state_update() {
-        let mut state = TracerState::<CpuBackend<f64>>::new(3);
-        state.add_tracer(TracerProperties::salinity().with_background(10.0)).unwrap();
+        let backend = CpuBackend::<f64>::new();
+        let mut state = TracerState::<CpuBackend<f64>>::new_with_backend(backend.clone(), 3);
+        state
+            .add_tracer(TracerProperties::salinity(&backend).with_background(10.0))
+            .unwrap();
 
-        let depths = vec![1.0, 2.0, 3.0];
-        state.update_conserved_from_depth(&depths);
+        let mut depths = backend.alloc(3);
+        depths.copy_from_slice(&[1.0, 2.0, 3.0]);
+        state.update_conserved_from_depth(&depths).unwrap();
 
         let field = state.get(TracerType::Salinity).unwrap();
-        assert!(approx_eq(field.conserved_slice()[1], 20.0));
+        assert!(approx_eq(field.conserved_slice().unwrap()[1], 20.0));
     }
 }

@@ -67,17 +67,19 @@ fn test_transport_formula_mpm() {
     use mh_physics::sediment::formulas::{MeyerPeterMullerFormula, TransportFormula};
     use mh_physics::sediment::properties::SedimentProperties;
     use mh_physics::types::PhysicalConstants;
+    use mh_runtime::CpuBackend;
 
-    let formula = MeyerPeterMullerFormula::new();
+    let backend = CpuBackend::<f64>::new();
+    let formula = MeyerPeterMullerFormula::new(&backend);
     let sediment = SedimentProperties::from_d50_mm(1.0);  // 1mm 粒径
     let physics = PhysicalConstants::seawater();
 
     // 无剪切应力时输沙率为零
-    let qb: f64 = formula.compute_from_shear_stress(0.0, &sediment, &physics);
+    let qb: f64 = formula.compute_from_shear_stress(&backend, 0.0, &sediment, &physics);
     assert!(qb.abs() < 1e-20);
 
     // 有剪切应力时输沙率为正
-    let qb: f64 = formula.compute_from_shear_stress(10.0, &sediment, &physics);
+    let qb: f64 = formula.compute_from_shear_stress(&backend, 10.0, &sediment, &physics);
     assert!(qb >= 0.0);
 }
 
@@ -101,8 +103,10 @@ fn test_morphology_config() {
 #[test]
 fn test_tracer_boundary_manager() {
     use mh_physics::tracer::boundary::{TracerBoundaryCondition, TracerBoundaryManager, TracerBoundaryType};
+    use mh_runtime::CpuBackend;
 
-    let mut manager = TracerBoundaryManager::new(10);
+    let backend = CpuBackend::<f64>::new();
+    let mut manager = TracerBoundaryManager::new(backend, 10);
 
     manager.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0));
     manager.set_boundary(9, TracerBoundaryCondition::neumann(-0.01));
@@ -189,7 +193,7 @@ fn test_vector_ops() {
 #[test]
 fn test_pcg_solver_simple() {
     use mh_physics::numerics::{CsrBuilder, IterativeSolver, JacobiPreconditioner, PcgSolver, SolverConfig};
-    use mh_runtime::CpuBackend;
+    use mh_runtime::{Backend, CpuBackend};
 
     // 简单对称正定矩阵
     let mut builder = CsrBuilder::<f64>::new_square(3);
@@ -202,17 +206,19 @@ fn test_pcg_solver_simple() {
     builder.set(2, 2, 4.0);
 
     let mat = builder.build();
-    let b = vec![1.0, 2.0, 3.0];
-    let mut x = vec![0.0; 3];
+    let backend = CpuBackend::<f64>::new();
+    let mut b = backend.alloc(3);
+    b.copy_from_slice(&[1.0, 2.0, 3.0]);
+    let mut x = backend.alloc_init(3, 0.0);
 
     let config = SolverConfig::new(1e-10, 100);
-    let mut solver = PcgSolver::new(config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&mat).unwrap();
+    let mut solver = PcgSolver::new(backend.clone(), config);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &mat).unwrap();
 
     let result = solver.solve(&mat, &b, &mut x, &precond);
 
     assert!(result.is_converged());
-    assert!(result.relative_residual < 1e-8);
+    assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
 }
 
 // ============================================================

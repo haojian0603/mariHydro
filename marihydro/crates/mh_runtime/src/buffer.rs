@@ -277,7 +277,7 @@ impl<T: Pod + Clone + Send + Sync> CpuBufferPool<T> {
             }
         };
 
-        let mut buffer = match buffer {
+        let buffer = match buffer {
             Some(buf) => buf,
             None => {
                 let mut buf = vec![initial_value; len];

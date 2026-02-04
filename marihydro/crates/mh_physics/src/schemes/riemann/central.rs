@@ -5,7 +5,7 @@
 //! 提供无耗散的中心通量，用于稳定性/对比测试。
 
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
-use num_traits::{Float, FromPrimitive, Zero};
+use num_traits::Float;
 
 use crate::types::NumericalParams;
 use super::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
@@ -15,10 +15,7 @@ pub struct CentralSolver<B: Backend> {
     params: SolverParams<B::Scalar>,
 }
 
-impl<B: Backend> CentralSolver<B>
-where
-    B::Scalar: Float + FromPrimitive + Zero,
-{
+impl<B: Backend> CentralSolver<B> {
     /// 创建新的中心差分求解器
     pub fn new(numerical_params: &NumericalParams<B::Scalar>, gravity: B::Scalar) -> Self {
         Self {
@@ -72,9 +69,9 @@ where
 
         let (f_h, f_hun, f_hut) = self.physical_flux(h_wet, un_wet, ut_wet);
 
-        let three = B::Scalar::from_f64(3.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE);
+        let three = B::Scalar::ONE + B::Scalar::ONE + B::Scalar::ONE;
         let two = B::Scalar::TWO;
-        let nine = B::Scalar::from_f64(9.0).unwrap_or(three * three);
+        let nine = three * three;
 
         let (mass, mom_n, mom_t) = if wet_on_left {
             if un_wet >= c_wet {
@@ -86,7 +83,7 @@ where
                 let u_star = (two * c_wet + un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
+                let denom = un_wet.abs().max(self.params.flux_eps);
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -100,7 +97,7 @@ where
                 let u_star = -(two * c_wet - un_wet) / three;
                 let f_mass = h_star * u_star;
                 let f_mom = h_star * u_star * u_star + B::Scalar::HALF * g * h_star * h_star;
-                let denom = un_wet.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
+                let denom = un_wet.abs().max(self.params.flux_eps);
                 let f_mom_t = h_star * u_star * ut_wet / denom;
                 (f_mass, f_mom, f_mom_t)
             }
@@ -110,10 +107,7 @@ where
     }
 }
 
-impl<B: Backend> RiemannSolver for CentralSolver<B>
-where
-    B::Scalar: Float + FromPrimitive + Zero,
-{
+impl<B: Backend> RiemannSolver for CentralSolver<B> {
     type Scalar = B::Scalar;
     type Vector2D = B::Vector2D;
 

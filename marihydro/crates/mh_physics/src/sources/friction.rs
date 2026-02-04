@@ -30,7 +30,7 @@ use super::traits::{
 };
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
+use crate::state::ShallowWaterState;
 
 /// Manning 摩擦配置
 #[derive(Debug, Clone)]
@@ -386,62 +386,65 @@ impl ChezyFriction {
 
 /// Manning 摩擦配置（泛型）
 #[derive(Debug, Clone)]
-pub struct ManningFrictionConfigGeneric<S: Scalar> {
+pub struct ManningFrictionConfigGeneric<B: Backend> {
     /// 重力加速度 [m/s²]
-    pub gravity: S,
+    pub gravity: B::Scalar,
     /// 每个单元的 Manning 系数 [s/m^{1/3}]
-    pub manning_n: Vec<S>,
+    pub manning_n: B::Buffer<B::Scalar>,
     /// 最小水深（用于避免除零）[m]
-    pub min_depth: S,
+    pub min_depth: B::Scalar,
     /// 最大摩擦系数（用于稳定性）
-    pub max_cf: S,
+    pub max_cf: B::Scalar,
 }
 
-impl<S: Scalar> ManningFrictionConfigGeneric<S> {
+impl<B: Backend> ManningFrictionConfigGeneric<B> {
     /// 创建均匀 Manning 系数配置
-    pub fn uniform(n_cells: usize, manning_n: S) -> Self {
+    pub fn uniform(backend: &B, n_cells: usize, manning_n: B::Scalar) -> Self {
         Self {
-            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
-            manning_n: vec![manning_n; n_cells],
-            min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO),
-            max_cf: S::from_f64(100.0).unwrap_or(S::ZERO),
+            gravity: backend.scalar_from_f64(9.81),
+            manning_n: backend.alloc_init(n_cells, manning_n),
+            min_depth: backend.scalar_from_f64(1e-6),
+            max_cf: backend.scalar_from_f64(100.0),
         }
     }
 
     /// 从 Manning 系数数组创建
-    pub fn from_array(manning_n: Vec<S>) -> Self {
+    pub fn from_array(backend: &B, manning_n: &[B::Scalar]) -> Self {
+        let mut buffer = backend.alloc_init(manning_n.len(), B::Scalar::ZERO);
+        buffer.as_slice_mut().copy_from_slice(manning_n);
         Self {
-            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
-            manning_n,
-            min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO),
-            max_cf: S::from_f64(100.0).unwrap_or(S::ZERO),
+            gravity: backend.scalar_from_f64(9.81),
+            manning_n: buffer,
+            min_depth: backend.scalar_from_f64(1e-6),
+            max_cf: backend.scalar_from_f64(100.0),
         }
     }
 }
 
 /// 泛型 Manning 摩擦源项（后端无关）
 pub struct ManningFrictionGeneric<B: Backend> {
-    config: ManningFrictionConfigGeneric<B::Scalar>,
+    config: ManningFrictionConfigGeneric<B>,
     backend: B,
     enabled: bool,
 }
 
 impl<B: Backend> ManningFrictionGeneric<B> {
     /// 创建新的 Manning 摩擦源项
-    pub fn new(backend: B, config: ManningFrictionConfigGeneric<B::Scalar>) -> Self {
+    pub fn new(backend: B, config: ManningFrictionConfigGeneric<B>) -> Self {
         Self { config, backend, enabled: true }
     }
 
     /// 创建均匀 Manning 系数的摩擦源项
     pub fn uniform(backend: B, n_cells: usize, manning_n: B::Scalar) -> Self {
-        Self::new(backend, ManningFrictionConfigGeneric::uniform(n_cells, manning_n))
+        let config = ManningFrictionConfigGeneric::uniform(&backend, n_cells, manning_n);
+        Self::new(backend, config)
     }
 
     /// 获取后端引用
     pub fn backend(&self) -> &B { &self.backend }
 
     /// 获取配置引用
-    pub fn config(&self) -> &ManningFrictionConfigGeneric<B::Scalar> { &self.config }
+    pub fn config(&self) -> &ManningFrictionConfigGeneric<B> { &self.config }
 
     /// 设置启用状态
     pub fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
@@ -470,7 +473,7 @@ macro_rules! impl_manning_friction_generic {
             fn compute_cell(
                 &self,
                 cell: usize,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 ctx: &SourceContextGeneric<$scalar>,
             ) -> SourceContributionGeneric<$scalar> {
                 let h = state.h[cell];
@@ -513,7 +516,7 @@ macro_rules! impl_manning_friction_generic {
 
             fn accumulate(
                 &self,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 rhs_h: &mut Vec<$scalar>,
                 rhs_hu: &mut Vec<$scalar>,
                 rhs_hv: &mut Vec<$scalar>,
@@ -540,37 +543,42 @@ impl_manning_friction_generic!(f64);
 
 /// Chezy 摩擦配置（泛型）
 #[derive(Debug, Clone)]
-pub struct ChezyFrictionConfigGeneric<S: Scalar> {
+pub struct ChezyFrictionConfigGeneric<B: Backend> {
     /// 重力加速度 [m/s²]
-    pub gravity: S,
+    pub gravity: B::Scalar,
     /// 每个单元的 Chezy 系数 [m^{1/2}/s]
-    pub chezy_c: Vec<S>,
+    pub chezy_c: B::Buffer<B::Scalar>,
     /// 最小水深 [m]
-    pub min_depth: S,
+    pub min_depth: B::Scalar,
 }
 
-impl<S: Scalar> ChezyFrictionConfigGeneric<S> {
+impl<B: Backend> ChezyFrictionConfigGeneric<B> {
     /// 创建均匀 Chezy 系数配置
-    pub fn uniform(n_cells: usize, chezy_c: S) -> Self {
-        Self { gravity: S::from_f64(9.81).unwrap_or(S::ZERO), chezy_c: vec![chezy_c; n_cells], min_depth: S::from_f64(1e-6).unwrap_or(S::ZERO) }
+    pub fn uniform(backend: &B, n_cells: usize, chezy_c: B::Scalar) -> Self {
+        Self {
+            gravity: backend.scalar_from_f64(9.81),
+            chezy_c: backend.alloc_init(n_cells, chezy_c),
+            min_depth: backend.scalar_from_f64(1e-6),
+        }
     }
 }
 
 /// 泛型 Chezy 摩擦源项
 pub struct ChezyFrictionGeneric<B: Backend> {
-    config: ChezyFrictionConfigGeneric<B::Scalar>,
+    config: ChezyFrictionConfigGeneric<B>,
     #[allow(dead_code)]
     backend: B,
     enabled: bool,
 }
 
 impl<B: Backend> ChezyFrictionGeneric<B> {
-    pub fn new(backend: B, config: ChezyFrictionConfigGeneric<B::Scalar>) -> Self {
+    pub fn new(backend: B, config: ChezyFrictionConfigGeneric<B>) -> Self {
         Self { config, backend, enabled: true }
     }
 
     pub fn uniform(backend: B, n_cells: usize, chezy_c: B::Scalar) -> Self {
-        Self::new(backend, ChezyFrictionConfigGeneric::uniform(n_cells, chezy_c))
+        let config = ChezyFrictionConfigGeneric::uniform(&backend, n_cells, chezy_c);
+        Self::new(backend, config)
     }
 }
 
@@ -590,7 +598,7 @@ macro_rules! impl_chezy_friction_generic {
             fn compute_cell(
                 &self,
                 cell: usize,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 ctx: &SourceContextGeneric<$scalar>,
             ) -> SourceContributionGeneric<$scalar> {
                 let h = state.h[cell];
@@ -629,7 +637,7 @@ macro_rules! impl_chezy_friction_generic {
 
             fn accumulate(
                 &self,
-                state: &ShallowWaterStateGeneric<CpuBackend<$scalar>>,
+                state: &ShallowWaterState<CpuBackend<$scalar>>,
                 rhs_h: &mut Vec<$scalar>,
                 rhs_hu: &mut Vec<$scalar>,
                 rhs_hv: &mut Vec<$scalar>,

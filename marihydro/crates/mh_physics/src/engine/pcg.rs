@@ -174,18 +174,6 @@ where
         Self { diag, n, backend }
     }
     
-    /// 从现有对角线创建（向后兼容）
-    pub fn from_diag(diag: B::Buffer<B::Scalar>, n: usize) -> Self
-    where
-        B: Default,
-    {
-        Self {
-            diag,
-            n,
-            backend: B::default(),
-        }
-    }
-
     /// 获取矩阵维度
     #[inline]
     pub fn dimension(&self) -> usize {
@@ -379,7 +367,10 @@ where
         self.ensure_capacity(n);
         let workspace = &mut self.workspace;
 
-        matrix.apply(x, &mut workspace.ap);
+        let mut x_buf = self.backend.alloc(n);
+        x_buf.copy_from_slice(x.as_slice());
+
+        matrix.apply(&x_buf, &mut workspace.ap);
         for i in 0..n {
             workspace.r[i] = b[i] - workspace.ap[i];
         }
@@ -389,6 +380,7 @@ where
 
         let eps = B::Scalar::from_f64(self.config.atol).unwrap_or(B::Scalar::ZERO);
         if b_norm < eps {
+            x.copy_from_slice(x_buf.as_slice());
             return PcgResult {
                 converged: true,
                 iterations: 0,
@@ -423,7 +415,7 @@ where
             let alpha = rho / p_ap;
 
             for i in 0..n {
-                x[i] = x[i] + alpha * workspace.p[i];
+                x_buf[i] = x_buf[i] + alpha * workspace.p[i];
                 workspace.r[i] = workspace.r[i] - alpha * workspace.ap[i];
             }
 
@@ -432,6 +424,7 @@ where
             let rtol = B::Scalar::from_f64(self.config.rtol).unwrap_or(B::Scalar::ZERO);
 
             if r_norm < eps || relative_residual < rtol {
+                x.copy_from_slice(x_buf.as_slice());
                 return PcgResult {
                     converged: true,
                     iterations: iter + 1,

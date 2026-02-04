@@ -25,9 +25,10 @@ use crate::sources::traits::{
     SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
-use crate::waves::radiation_stress::{RadiationStressCalculator, RadiationStressTensor, WaveField};
+use crate::state::ShallowWaterState;
+use crate::waves::radiation_stress::{RadiationStressCalculatorGeneric, RadiationStressTensorGeneric, WaveFieldGeneric, WaveFieldError};
 use crate::core::CpuBackend;
+use mh_runtime::DeviceBuffer;
 
 /// 波浪辐射应力源项
 ///
@@ -35,11 +36,11 @@ use crate::core::CpuBackend;
 pub struct WaveRadiationSource {
     /// 辐射应力计算器（预留用于未来扩展）
     #[allow(dead_code)]
-    calculator: RadiationStressCalculator,
+    calculator: RadiationStressCalculatorGeneric<CpuBackend<f64>>,
     /// 波场数据
-    wave_field: WaveField,
+    wave_field: WaveFieldGeneric<CpuBackend<f64>>,
     /// 辐射应力场
-    stress: Vec<RadiationStressTensor>,
+    stress: Vec<RadiationStressTensorGeneric<f64>>,
     /// 辐射应力梯度 (∂S_xx/∂x + ∂S_xy/∂y, ∂S_xy/∂x + ∂S_yy/∂y)
     stress_gradient: Vec<(f64, f64)>,
     /// 水密度 [kg/m³]
@@ -53,10 +54,11 @@ pub struct WaveRadiationSource {
 impl WaveRadiationSource {
     /// 创建新的波浪辐射应力源项
     pub fn new(n_cells: usize) -> Self {
+        let backend = CpuBackend::<f64>::new();
         Self {
-            calculator: RadiationStressCalculator::new(n_cells),
-            wave_field: WaveField::new(n_cells),
-            stress: vec![RadiationStressTensor::default(); n_cells],
+            calculator: RadiationStressCalculatorGeneric::<CpuBackend<f64>>::new(backend.clone(), n_cells),
+            wave_field: WaveFieldGeneric::<CpuBackend<f64>>::new(backend, n_cells),
+            stress: vec![RadiationStressTensorGeneric::<f64>::default(); n_cells],
             stress_gradient: vec![(0.0, 0.0); n_cells],
             rho_water: 1025.0,
             enabled: true,
@@ -65,42 +67,78 @@ impl WaveRadiationSource {
     }
 
     /// 设置波场数据
-    pub fn set_wave_field(&mut self, wave_field: WaveField) {
+    pub fn set_wave_field(&mut self, wave_field: WaveFieldGeneric<CpuBackend<f64>>) {
         self.wave_field = wave_field;
         self.gradient_computed = false;
     }
 
     /// 更新波场参数（单一均匀波浪）
-    pub fn set_uniform_waves(&mut self, height: f64, period: f64, direction: f64, depth: &[f64]) {
-        let n_cells = self.wave_field.height.len();
+    pub fn set_uniform_waves(&mut self, height: f64, period: f64, direction: f64, depth: &[f64]) -> Result<(), WaveFieldError> {
+        let n_cells = self.wave_field.len();
+        let height_buf = self.wave_field.height.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("height buffer not accessible".to_string())
+        })?;
+        let period_buf = self.wave_field.period.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("period buffer not accessible".to_string())
+        })?;
+        let direction_buf = self.wave_field.direction.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("direction buffer not accessible".to_string())
+        })?;
+        let wavenumber = self.wave_field.wavenumber.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("wavenumber buffer not accessible".to_string())
+        })?;
+        let group_factor = self.wave_field.group_factor.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("group_factor buffer not accessible".to_string())
+        })?;
+        let wavelength = self.wave_field.wavelength.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("wavelength buffer not accessible".to_string())
+        })?;
+        let energy = self.wave_field.energy.try_as_slice_mut().ok_or_else(|| {
+            WaveFieldError::BackendAccess("energy buffer not accessible".to_string())
+        })?;
+
         for i in 0..n_cells {
-            self.wave_field.height[i] = height;
-            self.wave_field.period[i] = period;
-            self.wave_field.direction[i] = direction;
+            height_buf[i] = height;
+            period_buf[i] = period;
+            direction_buf[i] = direction;
             
             // 计算波数和群速度因子
             let h = depth.get(i).copied().unwrap_or(10.0);
-            let (k, n) = crate::waves::radiation_stress::compute_wavenumber_and_n(period, h);
-            self.wave_field.wavenumber[i] = k;
-            self.wave_field.group_factor[i] = n;
-            self.wave_field.wavelength[i] = 2.0 * std::f64::consts::PI / k;
+            let omega = 2.0 * std::f64::consts::PI / period.max(1e-6);
+            let (k, n) = crate::waves::radiation_stress::compute_wavenumber_and_n(omega, h);
+            wavenumber[i] = k;
+            group_factor[i] = n;
+            wavelength[i] = 2.0 * std::f64::consts::PI / k;
             
             // 能量密度
             let rho_g = self.rho_water * 9.81;
-            self.wave_field.energy[i] = rho_g * height * height / 8.0;
+            energy[i] = rho_g * height * height / 8.0;
         }
         self.gradient_computed = false;
+        Ok(())
     }
 
     /// 计算辐射应力场
     pub fn compute_stress(&mut self) {
-        let n_cells = self.wave_field.height.len();
+        let n_cells = self.wave_field.len();
+        let energy = match self.wave_field.energy.try_as_slice() {
+            Some(v) => v,
+            None => return,
+        };
+        let group_factor = match self.wave_field.group_factor.try_as_slice() {
+            Some(v) => v,
+            None => return,
+        };
+        let direction = match self.wave_field.direction.try_as_slice() {
+            Some(v) => v,
+            None => return,
+        };
         for i in 0..n_cells {
             // 使用 RadiationStressTensor::compute 直接计算每个单元的辐射应力
-            self.stress[i] = RadiationStressTensor::compute(
-                self.wave_field.energy[i],
-                self.wave_field.group_factor[i],
-                self.wave_field.direction[i],
+            self.stress[i] = RadiationStressTensorGeneric::<f64>::compute(
+                energy[i],
+                group_factor[i],
+                direction[i],
             );
         }
     }
@@ -144,12 +182,12 @@ impl WaveRadiationSource {
     }
 
     /// 获取辐射应力场
-    pub fn stress(&self) -> &[RadiationStressTensor] {
+    pub fn stress(&self) -> &[RadiationStressTensorGeneric<f64>] {
         &self.stress
     }
 
     /// 获取波场
-    pub fn wave_field(&self) -> &WaveField {
+    pub fn wave_field(&self) -> &WaveFieldGeneric<CpuBackend<f64>> {
         &self.wave_field
     }
 }
@@ -236,7 +274,7 @@ impl SourceTermGeneric<CpuBackend<f64>> for WaveRadiationSourceGeneric {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         ctx: &SourceContextGeneric<f64>,
     ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
@@ -250,7 +288,7 @@ impl SourceTermGeneric<CpuBackend<f64>> for WaveRadiationSourceGeneric {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         _rhs_h: &mut Vec<f64>,
         rhs_hu: &mut Vec<f64>,
         rhs_hv: &mut Vec<f64>,

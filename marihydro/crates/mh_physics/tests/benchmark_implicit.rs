@@ -5,12 +5,11 @@
 //! 测试不同规模问题的求解性能，验证算法可扩展性。
 //! 需在release模式下运行：cargo test --release benchmark_ -- --ignored --nocapture
 
-use mh_foundation::AlignedVec;
 use mh_physics::numerics::linear_algebra::{
     CsrBuilder, CsrMatrix, ConjugateGradient, IterativeSolver, JacobiPreconditioner,
-    IdentityPreconditioner, Preconditioner, ScalarPreconditioner, SolverConfig, SolverResult,
+    IdentityPreconditioner, Preconditioner, SolverConfig, SolverResult,
 };
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, CpuBackend, DeviceBuffer};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -74,9 +73,9 @@ fn generate_laplacian_5pt(n: usize) -> CsrMatrix<f64> {
 }
 
 /// 生成对称正定随机右端向量
-fn generate_rhs(size: usize, seed: u64) -> AlignedVec<f64> {
+fn generate_rhs(size: usize, seed: u64, backend: &CpuBackend<f64>) -> <CpuBackend<f64> as Backend>::Buffer<f64> {
     let mut state = seed;
-    let mut rhs = AlignedVec::zeros(size);
+    let mut rhs = backend.alloc(size);
     
     for i in 0..size {
         state = state.wrapping_mul(1103515245).wrapping_add(12345);
@@ -87,16 +86,17 @@ fn generate_rhs(size: usize, seed: u64) -> AlignedVec<f64> {
 }
 
 /// 运行单个基准测试
-fn run_benchmark<P: Preconditioner<CpuBackend<f64>> + ScalarPreconditioner<f64>>(
+fn run_benchmark<P: Preconditioner<CpuBackend<f64>>>(
     matrix: &CsrMatrix<f64>,
-    rhs: &[f64],
+    rhs: &<CpuBackend<f64> as Backend>::Buffer<f64>,
     preconditioner: &P,
     config: &SolverConfig,
-) -> (Duration, SolverResult<f64>, AlignedVec<f64>) {
+    backend: &CpuBackend<f64>,
+) -> (Duration, SolverResult<f64>, <CpuBackend<f64> as Backend>::Buffer<f64>) {
     let n = matrix.n_rows();
-    let mut x = AlignedVec::zeros(n);
+    let mut x = backend.alloc_init(n, 0.0);
     
-    let mut solver = ConjugateGradient::new(config.clone());
+    let mut solver = ConjugateGradient::new(backend.clone(), config.clone());
     
     let start = Instant::now();
     let result = solver.solve(matrix, rhs, &mut x, preconditioner);
@@ -123,12 +123,13 @@ fn test_csr_matrix_generation() {
 fn test_solver_convergence_small() {
     let n = 10;
     let matrix = generate_laplacian_5pt(n);
-    let rhs = generate_rhs(n * n, 42);
+    let backend = (*BACKEND).clone();
+    let rhs = generate_rhs(n * n, 42, &backend);
     
     let config = SolverConfig::new(1e-10, 1000);
     
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
-    let (elapsed, result, _x) = run_benchmark(&matrix, &rhs, &precond, &config);
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let (elapsed, result, _x) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
     
     println!("小规模问题 ({}x{} = {} 单元): 求解时间 {:?}, 迭代次数 {}", n, n, n * n, elapsed, result.iterations);
     
@@ -140,15 +141,16 @@ fn test_solver_convergence_small() {
 fn test_preconditioner_comparison() {
     let n = 20;
     let matrix = generate_laplacian_5pt(n);
-    let rhs = generate_rhs(n * n, 42);
+    let backend = (*BACKEND).clone();
+    let rhs = generate_rhs(n * n, 42, &backend);
     
     let config = SolverConfig::new(1e-10, 1000);
     
-    let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new((*BACKEND).clone());
-    let (time_no, result_no, _) = run_benchmark(&matrix, &rhs, &no_precond, &config);
+    let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new(backend.clone());
+    let (time_no, result_no, _) = run_benchmark(&matrix, &rhs, &no_precond, &config, &backend);
     
-    let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
-    let (time_jacobi, result_jacobi, _) = run_benchmark(&matrix, &rhs, &jacobi, &config);
+    let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let (time_jacobi, result_jacobi, _) = run_benchmark(&matrix, &rhs, &jacobi, &config, &backend);
     
     println!("预条件器对比 ({}x{}): 无预条件器 {} 次迭代 {:?}, Jacobi {} 次迭代 {:?}", 
              n, n, result_no.iterations, time_no, result_jacobi.iterations, time_jacobi);
@@ -177,10 +179,11 @@ fn benchmark_scaling() {
         let matrix = generate_laplacian_5pt(n);
         let assembly_time = start_asm.elapsed();
         
-        let rhs = generate_rhs(size, 42);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let backend = (*BACKEND).clone();
+        let rhs = generate_rhs(size, 42, &backend);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
         
-        let (solve_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config);
+        let (solve_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
         
         let bench_result = BenchmarkResult {
             problem_size: size,
@@ -235,10 +238,11 @@ fn benchmark_iteration_count() {
     
     for &n in &sizes {
         let matrix = generate_laplacian_5pt(n);
-        let rhs = generate_rhs(n * n, 42);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&matrix).unwrap();
+        let backend = (*BACKEND).clone();
+        let rhs = generate_rhs(n * n, 42, &backend);
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
         
-        let (_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config);
+        let (_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
         
         let iter_per_sqrt_n = result.iterations as f64 / (n as f64).sqrt();
         
@@ -250,14 +254,15 @@ fn benchmark_iteration_count() {
 fn test_spmv_performance_small() {
     let n = 50;
     let matrix = generate_laplacian_5pt(n);
-    let x = generate_rhs(n * n, 42);
-    let mut y = vec![0.0; n * n];
+    let backend = (*BACKEND).clone();
+    let x = generate_rhs(n * n, 42, &backend);
+    let mut y = backend.alloc_init(n * n, 0.0);
     
     let iterations = 100;
     let start = Instant::now();
     
     for _ in 0..iterations {
-        matrix.mul_vec(&x, &mut y);
+        matrix.mul_vec(x.as_slice(), y.as_slice_mut());
     }
     
     let elapsed = start.elapsed();
@@ -279,16 +284,17 @@ fn benchmark_spmv_scaling() {
     
     for &n in &sizes {
         let matrix = generate_laplacian_5pt(n);
-        let x = generate_rhs(n * n, 42);
-        let mut y = vec![0.0; n * n];
+        let backend = (*BACKEND).clone();
+        let x = generate_rhs(n * n, 42, &backend);
+        let mut y = backend.alloc_init(n * n, 0.0);
         
         for _ in 0..10 {
-            matrix.mul_vec(&x, &mut y);
+            matrix.mul_vec(x.as_slice(), y.as_slice_mut());
         }
         
         let start = Instant::now();
         for _ in 0..iterations {
-            matrix.mul_vec(&x, &mut y);
+            matrix.mul_vec(x.as_slice(), y.as_slice_mut());
             y.fill(0.0);
         }
         let elapsed = start.elapsed();

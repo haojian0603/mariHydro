@@ -2,7 +2,7 @@
 
 use crate::core::{Backend, DeviceBuffer};
 use crate::engine::strategy::workspace::SolverWorkspaceGeneric;
-use crate::state::ShallowWaterStateGeneric;
+use crate::state::ShallowWaterState;
 use super::traits::{
     SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
 };
@@ -93,7 +93,7 @@ impl<B: Backend> SourceRegistry<B> {
     /// 累加所有源项贡献到工作区
     pub fn accumulate_all(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
@@ -103,7 +103,7 @@ impl<B: Backend> SourceRegistry<B> {
     /// 仅累加显式源项
     pub fn accumulate_explicit(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
@@ -113,7 +113,7 @@ impl<B: Backend> SourceRegistry<B> {
     /// 仅累加局部隐式源项
     pub fn accumulate_locally_implicit(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
@@ -129,7 +129,7 @@ impl<B: Backend> SourceRegistry<B> {
     #[allow(dead_code)]
     fn accumulate_parallel(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         contributions: &mut [SourceContributionGeneric<B::Scalar>],
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
@@ -170,7 +170,7 @@ impl<B: Backend> SourceRegistry<B> {
 
     fn accumulate_with_filter(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         workspace: &mut SolverWorkspaceGeneric<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
         stiffness_filter: Option<SourceStiffness>,

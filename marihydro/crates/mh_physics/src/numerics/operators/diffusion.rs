@@ -30,7 +30,6 @@
 
 use rayon::prelude::*;
 use mh_runtime::{Backend, CellIndex, DeviceBuffer, FaceIndex, RuntimeScalar};
-use num_traits::{Float, FromPrimitive, ToPrimitive};
 use crate::adapter::PhysicsMesh;
 
 /// 扩散边界条件类型
@@ -131,7 +130,7 @@ impl<S: RuntimeScalar> Default for DiffusionConfig<S> {
         Self {
             nu: S::ONE,
             boundary_conditions: Vec::new(),
-            cfl_safety: S::from_f64(0.25).unwrap_or(S::HALF),
+            cfl_safety: S::HALF * S::HALF,
         }
     }
 }
@@ -153,8 +152,18 @@ impl<S: RuntimeScalar> DiffusionConfig<S> {
 
     /// 设置 CFL 安全系数
     pub fn with_cfl_safety(mut self, safety: S) -> Self {
-        let min = S::from_f64(0.1).unwrap_or(S::HALF * S::from_f64(0.2).unwrap_or(S::HALF));
-        let max = S::from_f64(0.5).unwrap_or(S::HALF + S::HALF);
+        let ten = S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE
+            + S::ONE;
+        let min = S::ONE / ten;
+        let max = S::HALF;
         self.cfl_safety = if safety < min { min } else if safety > max { max } else { safety };
         self
     }
@@ -184,10 +193,7 @@ pub struct DiffusionSolver<'a, B: Backend> {
     backend: B,
 }
 
-impl<'a, B: Backend> DiffusionSolver<'a, B>
-where
-    B::Scalar: RuntimeScalar + Float + FromPrimitive + ToPrimitive,
-{
+impl<'a, B: Backend> DiffusionSolver<'a, B> {
     /// 创建求解器（已是泛型配置）
     pub fn new(mesh: &'a PhysicsMesh, backend: B, config: DiffusionConfig<B::Scalar>) -> Self {
         let min_dist_sq = Self::compute_min_dist_sq(mesh, &backend);
@@ -243,11 +249,23 @@ where
     /// 计算所需子步数以保证稳定性
     pub fn required_substeps(&self, dt: B::Scalar) -> usize {
         let stable_dt = self.estimate_stable_dt();
-        if stable_dt >= dt {
-            1
-        } else {
-            (dt / stable_dt).ceil().to_usize().unwrap_or(1)
+        if !stable_dt.is_finite() || stable_dt <= B::Scalar::ZERO {
+            return 1;
         }
+        if stable_dt >= dt {
+            return 1;
+        }
+
+        let mut n = 1usize;
+        let mut acc = stable_dt;
+        while acc < dt {
+            n += 1;
+            acc += stable_dt;
+            if !acc.is_finite() {
+                break;
+            }
+        }
+        n
     }
 
     /// 计算扩散通量
@@ -341,7 +359,7 @@ where
         field: &B::Buffer<B::Scalar>,
         field_out: &mut B::Buffer<B::Scalar>,
         dt: B::Scalar,
-    ) -> Result<(), DiffusionError> {
+    ) -> Result<(), DiffusionError<B::Scalar>> {
         self.validate_params(dt)?;
 
         let n_cells = self.mesh.cell_count();
@@ -378,7 +396,11 @@ where
     }
 
     /// 原地扩散
-    pub fn apply_inplace(&self, field: &mut B::Buffer<B::Scalar>, dt: B::Scalar) -> Result<(), DiffusionError> {
+    pub fn apply_inplace(
+        &self,
+        field: &mut B::Buffer<B::Scalar>,
+        dt: B::Scalar,
+    ) -> Result<(), DiffusionError<B::Scalar>> {
         let mut temp = self.backend.alloc(field.len());
         self.apply_explicit(field, &mut temp, dt)?;
         field.copy_from_slice(temp.as_slice());
@@ -391,7 +413,7 @@ where
         field: &mut B::Buffer<B::Scalar>,
         dt: B::Scalar,
         n_substeps: usize,
-    ) -> Result<(), DiffusionError> {
+    ) -> Result<(), DiffusionError<B::Scalar>> {
         if n_substeps == 0 {
             return Ok(());
         }
@@ -418,16 +440,20 @@ where
     /// 自动子步扩散
     ///
     /// 自动计算所需子步数以保证稳定性
-    pub fn apply_auto_substeps(&self, field: &mut B::Buffer<B::Scalar>, dt: B::Scalar) -> Result<usize, DiffusionError> {
+    pub fn apply_auto_substeps(
+        &self,
+        field: &mut B::Buffer<B::Scalar>,
+        dt: B::Scalar,
+    ) -> Result<usize, DiffusionError<B::Scalar>> {
         let n_substeps = self.required_substeps(dt);
 
         if n_substeps > 1 {
             // 在需要时记录调试信息
             log::debug!(
-                "扩散需要 {} 个子步以保证稳定性 (ν={:.2e}, dt={:.2e})",
+                "扩散需要 {} 个子步以保证稳定性 (ν={}, dt={})",
                 n_substeps,
-                self.config.nu.to_f64().unwrap_or(0.0),
-                dt.to_f64().unwrap_or(0.0)
+                self.config.nu,
+                dt
             );
         }
 
@@ -436,11 +462,11 @@ where
     }
 
     /// 验证参数
-    fn validate_params(&self, dt: B::Scalar) -> Result<(), DiffusionError> {
+    fn validate_params(&self, dt: B::Scalar) -> Result<(), DiffusionError<B::Scalar>> {
         if self.config.nu < B::Scalar::ZERO {
             return Err(DiffusionError::InvalidParameter {
                 name: "nu",
-                value: self.config.nu.to_f64().unwrap_or(0.0),
+                value: self.config.nu,
                 reason: "扩散系数不能为负".to_string(),
             });
         }
@@ -448,7 +474,7 @@ where
         if dt <= B::Scalar::ZERO {
             return Err(DiffusionError::InvalidParameter {
                 name: "dt",
-                value: dt.to_f64().unwrap_or(0.0),
+                value: dt,
                 reason: "时间步长必须为正".to_string(),
             });
         }
@@ -482,7 +508,7 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
         field_out: &mut B::Buffer<B::Scalar>,
         nu: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
-    ) -> Result<(), DiffusionError> {
+    ) -> Result<(), DiffusionError<B::Scalar>> {
         let n_cells = self.mesh.cell_count();
         let n_faces = self.mesh.face_count();
 
@@ -558,7 +584,7 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
 
 /// 扩散求解错误
 #[derive(Debug, Clone)]
-pub enum DiffusionError {
+pub enum DiffusionError<S: RuntimeScalar> {
     /// 数组尺寸不匹配
     SizeMismatch {
         expected: usize,
@@ -568,12 +594,15 @@ pub enum DiffusionError {
     /// 无效参数
     InvalidParameter {
         name: &'static str,
-        value: f64,
+        value: S,
         reason: String,
     },
 }
 
-impl std::fmt::Display for DiffusionError {
+impl<S> std::fmt::Display for DiffusionError<S>
+where
+    S: RuntimeScalar + std::fmt::Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SizeMismatch {
@@ -594,7 +623,11 @@ impl std::fmt::Display for DiffusionError {
     }
 }
 
-impl std::error::Error for DiffusionError {}
+impl<S> std::error::Error for DiffusionError<S>
+where
+    S: RuntimeScalar + std::fmt::Debug + std::fmt::Display,
+{
+}
 
 // ============================================================================
 // 便捷函数（兼容旧接口）
@@ -723,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_diffusion_error_display() {
-        let err = DiffusionError::SizeMismatch {
+        let err = DiffusionError::<f64>::SizeMismatch {
             expected: 10,
             field_in: 5,
             field_out: 10,

@@ -6,7 +6,7 @@
 
 use crate::core::{Backend, CpuBackend};
 use mh_runtime::RuntimeScalar as Scalar;
-use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
+use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
 use std::marker::PhantomData;
 
@@ -421,13 +421,13 @@ impl<S: Scalar> SourceContextGeneric<S> {
     
     /// 使用默认物理参数创建
     // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn with_defaults(time: f64, dt: S) -> Self {
+    pub fn with_defaults<B: Backend<Scalar = S>>(backend: &B, time: f64, dt: S) -> Self {
         Self {
             time,
             dt,
-            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
-            h_dry: S::from_f64(1e-6).unwrap_or(S::ZERO),
-            h_wet: S::from_f64(1e-4).unwrap_or(S::ZERO),
+            gravity: backend.scalar_from_f64(9.81),
+            h_dry: backend.scalar_from_f64(1e-6),
+            h_wet: backend.scalar_from_f64(1e-4),
         }
     }
     
@@ -455,14 +455,14 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) -> SourceContributionGeneric<B::Scalar>;
     
     /// 批量计算所有单元的源项
     fn compute_batch(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         contributions: &mut [SourceContributionGeneric<B::Scalar>],
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
@@ -475,7 +475,7 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
     /// 累加源项到右端项缓冲区
     fn accumulate(
         &self,
-        state: &ShallowWaterStateGeneric<B>,
+        state: &ShallowWaterState<B>,
         rhs_h: &mut B::Buffer<B::Scalar>,
         rhs_hu: &mut B::Buffer<B::Scalar>,
         rhs_hv: &mut B::Buffer<B::Scalar>,
@@ -528,7 +528,7 @@ impl SourceRegistryGeneric<CpuBackend<f64>> {
     /// 累加所有源项到右端项缓冲区
     pub fn accumulate_all(
         &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
+        state: &ShallowWaterState<CpuBackend<f64>>,
         rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
         rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
