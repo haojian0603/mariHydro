@@ -3,7 +3,7 @@
 //! GeoJSON 格式读写
 
 use crate::error::{MeshError, MeshResult};
-use crate::frozen::FrozenMesh;
+use crate::FrozenMesh;
 use mh_geo::Point2D;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

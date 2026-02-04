@@ -421,7 +421,7 @@ mod tests {
             assert!((density - 100.0).abs() < 1e-10);
             assert!((height - 1.0).abs() < 1e-10);
         } else {
-            assert!(false, "Expected Rigid type");
+            unreachable!("Expected Rigid type");
         }
     }
 

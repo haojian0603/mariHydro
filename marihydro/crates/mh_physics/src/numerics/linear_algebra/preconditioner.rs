@@ -56,7 +56,7 @@ impl std::error::Error for PreconditionerError {}
 
 /// 预条件器 Trait（Backend 感知）
 ///
-/// 所有预条件器必须实现此 trait，支持动态分发和静态泛型。
+/// 所有预条件器必须实现此 trait，使用静态分发。
 pub trait Preconditioner<B: Backend>: Send + Sync {
     /// 应用预条件: y = M⁻¹ * x
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) -> Result<(), PreconditionerError>;
@@ -658,13 +658,13 @@ pub struct PreconditionerFactory;
 
 impl PreconditionerFactory {
     /// 创建默认预条件器（Jacobi）
-    pub fn default<B: Backend>(backend: &B) -> Box<dyn Preconditioner<B>> {
-        Box::new(JacobiPreconditioner::new(backend.clone()))
+    pub fn default<B: Backend>(backend: &B) -> PreconditionerAny<B> {
+        PreconditionerAny::Jacobi(JacobiPreconditioner::new(backend.clone()))
     }
 
     /// 创建 Jacobi 预条件器
-    pub fn jacobi<B: Backend>(backend: &B) -> Box<dyn Preconditioner<B>> {
-        Box::new(JacobiPreconditioner::new(backend.clone()))
+    pub fn jacobi<B: Backend>(backend: &B) -> PreconditionerAny<B> {
+        PreconditionerAny::Jacobi(JacobiPreconditioner::new(backend.clone()))
     }
 
     /// 创建 SSOR 预条件器
@@ -672,15 +672,84 @@ impl PreconditionerFactory {
         backend: &B,
         matrix: &CsrMatrix<B::Scalar>,
         params: SsorParams,
-    ) -> Result<Box<dyn Preconditioner<B>>, PreconditionerError> {
-        Ok(Box::new(SsorPreconditioner::from_matrix(backend.clone(), Arc::new(matrix.clone()), params)?))
+    ) -> Result<PreconditionerAny<B>, PreconditionerError> {
+        Ok(PreconditionerAny::Ssor(
+            SsorPreconditioner::from_matrix(backend.clone(), Arc::new(matrix.clone()), params)?,
+        ))
     }
 
     /// 创建 ILU(0) 预条件器
     pub fn ilu0<B: Backend>(
         backend: &B,
         matrix: &CsrMatrix<B::Scalar>,
-    ) -> Result<Box<dyn Preconditioner<B>>, PreconditionerError> {
-        Ok(Box::new(Ilu0Preconditioner::from_matrix(backend.clone(), matrix)?))
+    ) -> Result<PreconditionerAny<B>, PreconditionerError> {
+        Ok(PreconditionerAny::Ilu0(Ilu0Preconditioner::from_matrix(
+            backend.clone(),
+            matrix,
+        )?))
+    }
+}
+
+/// 预条件器静态封装
+#[derive(Debug, Clone)]
+pub enum PreconditionerAny<B: Backend> {
+    /// 恒等
+    Identity(IdentityPreconditioner<B>),
+    /// Jacobi
+    Jacobi(JacobiPreconditioner<B>),
+    /// SSOR
+    Ssor(SsorPreconditioner<B>),
+    /// ILU(0)
+    Ilu0(Ilu0Preconditioner<B>),
+}
+
+impl<B: Backend> Preconditioner<B> for PreconditionerAny<B> {
+    fn apply(
+        &self,
+        x: &B::Buffer<B::Scalar>,
+        y: &mut B::Buffer<B::Scalar>,
+    ) -> Result<(), PreconditionerError> {
+        match self {
+            Self::Identity(inner) => inner.apply(x, y),
+            Self::Jacobi(inner) => inner.apply(x, y),
+            Self::Ssor(inner) => inner.apply(x, y),
+            Self::Ilu0(inner) => inner.apply(x, y),
+        }
+    }
+
+    fn update(&mut self, matrix: &CsrMatrix<B::Scalar>) -> Result<(), PreconditionerError> {
+        match self {
+            Self::Identity(inner) => inner.update(matrix),
+            Self::Jacobi(inner) => inner.update(matrix),
+            Self::Ssor(inner) => inner.update(matrix),
+            Self::Ilu0(inner) => inner.update(matrix),
+        }
+    }
+
+    fn diagonal(&self) -> Option<&B::Buffer<B::Scalar>> {
+        match self {
+            Self::Identity(inner) => inner.diagonal(),
+            Self::Jacobi(inner) => inner.diagonal(),
+            Self::Ssor(inner) => inner.diagonal(),
+            Self::Ilu0(inner) => inner.diagonal(),
+        }
+    }
+
+    fn stats(&self) -> PreconditionerStatsSnapshot {
+        match self {
+            Self::Identity(inner) => inner.stats(),
+            Self::Jacobi(inner) => inner.stats(),
+            Self::Ssor(inner) => inner.stats(),
+            Self::Ilu0(inner) => inner.stats(),
+        }
+    }
+
+    fn reset_stats(&mut self) {
+        match self {
+            Self::Identity(inner) => inner.reset_stats(),
+            Self::Jacobi(inner) => inner.reset_stats(),
+            Self::Ssor(inner) => inner.reset_stats(),
+            Self::Ilu0(inner) => inner.reset_stats(),
+        }
     }
 }

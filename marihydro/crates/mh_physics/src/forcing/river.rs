@@ -105,7 +105,7 @@ impl RiverProvider {
         let mut out_q = Vec::with_capacity(tuples.len());
         let mut last_t = None;
         for (t, q) in tuples {
-            if last_t.map_or(true, |lt| t > lt) {
+            if last_t.is_none_or(|lt| t > lt) {
                 out_t.push(t);
                 out_q.push(q);
                 last_t = Some(t);

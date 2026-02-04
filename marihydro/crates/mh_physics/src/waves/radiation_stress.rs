@@ -4,7 +4,7 @@
 //!
 //! 实现波浪辐射应力张量及其梯度计算，用于波流耦合模拟。
 
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 
@@ -89,7 +89,10 @@ impl<S: RuntimeScalar> WaveParametersGeneric<S> {
 
 /// 波场数据（Backend 感知）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "B::Buffer<B::Scalar>: Serialize", deserialize = "B::Buffer<B::Scalar>: DeserializeOwned"))]
+#[serde(bound(
+    serialize = "B::Buffer<B::Scalar>: Serialize, B::Scalar: Serialize",
+    deserialize = "B::Buffer<B::Scalar>: DeserializeOwned, B::Scalar: DeserializeOwned, B: Default"
+))]
 pub struct WaveFieldGeneric<B: Backend> {
     /// 波高 [m]
     pub height: B::Buffer<B::Scalar>,
@@ -106,7 +109,7 @@ pub struct WaveFieldGeneric<B: Backend> {
     /// 能量密度 [J/m²]
     pub energy: B::Buffer<B::Scalar>,
     /// 后端实例
-    #[serde(skip)]
+    #[serde(skip, default)]
     backend: B,
 }
 
@@ -247,7 +250,7 @@ pub fn compute_wavenumber_and_n<B: Backend>(backend: &B, omega: B::Scalar, depth
         let kh = k * h;
         let tanh_kh = kh.tanh();
         let f = omega * omega - g * k * tanh_kh;
-        let df = -g * (tanh_kh + k * h * (S::ONE - tanh_kh * tanh_kh));
+        let df = -g * (tanh_kh + k * h * (B::Scalar::ONE - tanh_kh * tanh_kh));
 
         let dk = -f / df;
         k = k + dk;

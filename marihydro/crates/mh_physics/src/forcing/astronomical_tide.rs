@@ -94,7 +94,7 @@ impl StationHarmonicTable {
     }
 
     pub fn validate(&self) -> Result<(), AstronomicalTideError> {
-        for (name, harmonics) in &self.stations {
+        for harmonics in self.stations.values() {
             if harmonics.is_empty() {
                 return Err(AstronomicalTideError::EmptyHarmonics);
             }
@@ -832,7 +832,7 @@ impl AstronomicalTideEngine {
         if !timestamp.is_finite() {
             return Err(AstronomicalTideError::InvalidTimestamp { timestamp });
         }
-        if timestamp < Self::MIN_TIMESTAMP || timestamp > Self::MAX_TIMESTAMP {
+        if !(Self::MIN_TIMESTAMP..=Self::MAX_TIMESTAMP).contains(&timestamp) {
             return Err(AstronomicalTideError::TimestampOutOfRange { timestamp });
         }
         Ok(())

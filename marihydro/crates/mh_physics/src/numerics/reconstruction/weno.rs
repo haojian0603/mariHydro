@@ -10,9 +10,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::Backend;
 
-use super::traits::{ReconstructedStateGeneric, ReconstructorGeneric};
+use super::traits::{ReconstructedState, Reconstructor};
 use crate::adapter::{FaceIndex, PhysicsMesh};
 
 /// WENO 重构配置
@@ -50,22 +50,24 @@ struct WenoStencil {
 }
 
 /// WENO 重构器（泛型）
-pub struct WenoReconstructorGeneric<S: RuntimeScalar> {
+pub struct WenoReconstructor<B: Backend> {
     config: WenoConfig,
     mesh: Arc<PhysicsMesh>,
     stencils: Vec<WenoStencil>,
-    _marker: PhantomData<S>,
+    backend: B,
+    _marker: PhantomData<B>,
 }
 
-impl<S: RuntimeScalar> WenoReconstructorGeneric<S> {
+impl<B: Backend> WenoReconstructor<B> {
     /// 创建新的 WENO 重构器
-    pub fn new(config: WenoConfig, mesh: Arc<PhysicsMesh>) -> Self {
+    pub fn new(config: WenoConfig, mesh: Arc<PhysicsMesh>, backend: B) -> Self {
         let config = Self::sanitize_config(config);
         let stencils = Self::build_stencils(&mesh);
         Self {
             config,
             mesh,
             stencils,
+            backend,
             _marker: PhantomData,
         }
     }
@@ -125,11 +127,11 @@ impl<S: RuntimeScalar> WenoReconstructorGeneric<S> {
     }
 
     #[inline]
-    fn weno2_one_side(&self, v_far: S, v_near: S, v_center: S, eps: S) -> S {
-        let d0 = S::from_f64(1.0 / 3.0).unwrap_or(S::ONE);
-        let d1 = S::from_f64(2.0 / 3.0).unwrap_or(S::ONE);
+    fn weno2_one_side(&self, v_far: B::Scalar, v_near: B::Scalar, v_center: B::Scalar, eps: B::Scalar) -> B::Scalar {
+        let d0 = self.backend.scalar_from_f64(1.0 / 3.0);
+        let d1 = self.backend.scalar_from_f64(2.0 / 3.0);
 
-        let half = S::from_f64(0.5).unwrap_or(S::HALF);
+        let half = B::Scalar::HALF;
         let p0 = v_near + half * (v_near - v_far);
         let p1 = v_near + half * (v_center - v_near);
 
@@ -148,39 +150,40 @@ impl<S: RuntimeScalar> WenoReconstructorGeneric<S> {
     }
 }
 
-impl<S: RuntimeScalar> ReconstructorGeneric<S> for WenoReconstructorGeneric<S> {
-    fn compute_gradients(&mut self, _values: &[S]) {
+impl<B: Backend> Reconstructor<B> for WenoReconstructor<B> {
+    fn compute_gradients(&mut self, _values: &B::Buffer<B::Scalar>) {
         // WENO 不需要显式梯度
     }
 
-    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
+    fn reconstruct_scalar(&self, face_id: usize, values: &B::Buffer<B::Scalar>) -> ReconstructedState<B> {
+        let values_slice = values.as_slice();
         let stencil = &self.stencils[face_id];
         let owner = stencil.owner;
 
         let Some(neighbor) = stencil.neighbor else {
-            let v = values[owner];
-            return ReconstructedStateGeneric::from_values(v, v);
+            let v = values_slice[owner];
+            return ReconstructedState::from_values(v, v);
         };
 
         if self.config.order < 2 || !stencil.complete {
-            return ReconstructedStateGeneric::from_values(values[owner], values[neighbor]);
+            return ReconstructedState::from_values(values_slice[owner], values_slice[neighbor]);
         }
 
-        let eps = S::from_f64(self.config.epsilon).unwrap_or(S::EPSILON);
-        let v_l = values[owner];
-        let v_r = values[neighbor];
+        let eps = self.backend.scalar_from_f64(self.config.epsilon);
+        let v_l = values_slice[owner];
+        let v_r = values_slice[neighbor];
 
-        let v_ll = stencil.left_extra.map(|i| values[i]).unwrap_or(v_l);
-        let v_rr = stencil.right_extra.map(|i| values[i]).unwrap_or(v_r);
+        let v_ll = stencil.left_extra.map(|i| values_slice[i]).unwrap_or(v_l);
+        let v_rr = stencil.right_extra.map(|i| values_slice[i]).unwrap_or(v_r);
 
         let q_left = self.weno2_one_side(v_ll, v_l, v_r, eps);
         let q_right = self.weno2_one_side(v_rr, v_r, v_l, eps);
 
-        ReconstructedStateGeneric::new(q_left, q_right)
+        ReconstructedState::new(q_left, q_right)
     }
 
-    fn get_limited_gradient_tuple(&self, _cell_id: usize) -> (S, S) {
-        (S::ZERO, S::ZERO)
+    fn get_limited_gradient_tuple(&self, _cell_id: usize) -> (B::Scalar, B::Scalar) {
+        (B::Scalar::ZERO, B::Scalar::ZERO)
     }
 
     fn is_second_order(&self) -> bool {

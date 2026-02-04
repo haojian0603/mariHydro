@@ -417,7 +417,7 @@ impl StructuredMesh {
     /// 冻结为计算用网格（FrozenMesh）
     ///
     /// 将结构化网格转换为 SoA 布局的只读网格，供物理引擎直接使用。
-    pub fn freeze(&self) -> MeshResult<FrozenMesh<f64>> {
+    pub fn freeze(&self) -> MeshResult<FrozenMesh> {
         let nx = self.config.nx;
         let ny = self.config.ny;
         let dx = self.config.dx;
@@ -678,49 +678,50 @@ impl StructuredMesh {
             .map(|i| to_u32(i, "单元索引"))
             .collect::<MeshResult<Vec<u32>>>()?;
 
-        Ok(FrozenMesh {
-            n_nodes,
-            node_coords,
-            n_cells,
-            cell_center,
-            cell_area,
-            cell_z_bed,
-            cell_node_offsets,
-            cell_node_indices,
-            cell_face_offsets,
-            cell_face_indices,
-            cell_neighbor_offsets,
-            cell_neighbor_indices,
-            n_faces,
-            n_interior_faces: n_h_interior + n_v_interior,
-            face_center,
-            face_normal,
-            face_length,
-            face_z_left,
-            face_z_right,
-            face_owner,
-            face_neighbor,
-            face_delta_owner,
-            face_delta_neighbor,
-            face_dist_o2n,
-            boundary_face_indices,
-            boundary_names: vec![
-                "south".to_string(),
-                "north".to_string(),
-                "west".to_string(),
-                "east".to_string(),
-            ],
-            face_boundary_id,
-            min_cell_size,
-            max_cell_size,
-            cell_refinement_level: vec![0; n_cells],
-            cell_parent,
-            ghost_capacity: 0,
-            cell_original_id,
-            face_original_id,
-            cell_permutation,
-            cell_inv_permutation,
-        })
+        let mut mesh = FrozenMesh::empty_with_cells(n_cells);
+        mesh.n_nodes = n_nodes;
+        mesh.node_coords = node_coords;
+        mesh.n_cells = n_cells;
+        mesh.cell_center = cell_center;
+        mesh.cell_area = cell_area;
+        mesh.cell_z_bed = cell_z_bed;
+        mesh.cell_node_offsets = cell_node_offsets;
+        mesh.cell_node_indices = cell_node_indices;
+        mesh.cell_face_offsets = cell_face_offsets;
+        mesh.cell_face_indices = cell_face_indices;
+        mesh.cell_neighbor_offsets = cell_neighbor_offsets;
+        mesh.cell_neighbor_indices = cell_neighbor_indices;
+        mesh.n_faces = n_faces;
+        mesh.n_interior_faces = n_h_interior + n_v_interior;
+        mesh.face_center = face_center;
+        mesh.face_normal = face_normal;
+        mesh.face_length = face_length;
+        mesh.face_z_left = face_z_left;
+        mesh.face_z_right = face_z_right;
+        mesh.face_owner = face_owner;
+        mesh.face_neighbor = face_neighbor;
+        mesh.face_delta_owner = face_delta_owner;
+        mesh.face_delta_neighbor = face_delta_neighbor;
+        mesh.face_dist_o2n = face_dist_o2n;
+        mesh.boundary_face_indices = boundary_face_indices;
+        mesh.boundary_names = vec![
+            "south".to_string(),
+            "north".to_string(),
+            "west".to_string(),
+            "east".to_string(),
+        ];
+        mesh.face_boundary_id = face_boundary_id;
+        mesh.min_cell_size = min_cell_size;
+        mesh.max_cell_size = max_cell_size;
+        mesh.cell_refinement_level = vec![0; n_cells];
+        mesh.cell_parent = cell_parent;
+        mesh.ghost_capacity = 0;
+        mesh.cell_original_id = cell_original_id;
+        mesh.face_original_id = face_original_id;
+        mesh.cell_permutation = cell_permutation;
+        mesh.cell_inv_permutation = cell_inv_permutation;
+
+        Ok(mesh)
     }
 
     /// 生成所有单元中心坐标

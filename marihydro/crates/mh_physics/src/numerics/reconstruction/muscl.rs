@@ -1,4 +1,4 @@
-//! MUSCL 重构器实现 - 泛型版本
+//! MUSCL 重构器实现 - Backend 泛型版本
 //!
 //! **层级**: Layer 3 - Engine Layer
 //!
@@ -9,54 +9,55 @@
 //!
 //! # 设计原则
 //!
-//! 1. **全泛型**: 实现 `ReconstructorGeneric<S>` 支持任意 RuntimeScalar
+//! 1. **全泛型**: 实现 `Reconstructor<B>` 支持任意 Backend
 //! 2. **无 DVec2**: 所有几何操作使用 `Vector2D` 接口
 //! 3. **泛型标量**: 几何计算在 `S` 上完成
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
+use mh_runtime::{Backend, Vector2D};
 
 use super::config::{GradientType, MusclConfig};
-use super::traits::{ReconstructedStateGeneric, ReconstructorGeneric};
+use super::traits::{ReconstructedState, Reconstructor};
 use crate::adapter::PhysicsMesh;
 use crate::types::{CellIndex, FaceIndex};
-use crate::numerics::gradient::{
-    GradientMethodGeneric, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorageGeneric,
-};
-use crate::numerics::limiter::{create_limiter_generic, LimiterContextGeneric, SlopeLimiterGeneric};
+use crate::numerics::gradient::{GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage};
+use crate::numerics::limiter::{create_limiter, LimiterAny, LimiterContext};
 
 // ============================================================================
 // MUSCL 重构器 - 泛型版本
 // ============================================================================
 
-/// MUSCL 重构器 - 泛型版本
+/// MUSCL 重构器 - Backend 泛型版本
 ///
-/// 实现完整的二阶 MUSCL 重构流程，支持任意 RuntimeScalar 精度。
-pub struct MusclReconstructorGeneric<S: RuntimeScalar> {
+/// 实现完整的二阶 MUSCL 重构流程，支持任意 Backend 精度。
+pub struct MusclReconstructor<B: Backend> {
     /// 配置
     config: MusclConfig,
     
     /// 网格引用
     mesh: Arc<PhysicsMesh>,
+
+    /// 计算后端
+    backend: B,
     
     /// 梯度存储 (S 空间)
-    gradients: ScalarGradientStorageGeneric<S>,
+    gradients: ScalarGradientStorage<B>,
     
     /// 限制因子存储 (S 空间)
-    limiters: Vec<S>,
+    limiters: B::Buffer<B::Scalar>,
     
     /// 梯度计算器
     gradient_computer: GradientComputer,
     
     /// 限制器
-    limiter: Box<dyn SlopeLimiterGeneric<S> + Send + Sync>,
+    limiter: LimiterAny<B>,
     
     /// 网格特征尺度 (f64, 几何量)
     mesh_scale: f64,
     
-    _marker: PhantomData<S>,
+    _marker: PhantomData<B>,
 }
 
 /// 梯度计算器枚举
@@ -65,9 +66,9 @@ enum GradientComputer {
     LeastSquares(LeastSquaresGradient),
 }
 
-impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
+impl<B: Backend> MusclReconstructor<B> {
     /// 创建新的 MUSCL 重构器
-    pub fn new(config: MusclConfig, mesh: Arc<PhysicsMesh>) -> Self {
+    pub fn new(config: MusclConfig, mesh: Arc<PhysicsMesh>, backend: B) -> Self {
         let n_cells = mesh.cell_count();
         
         // 计算网格特征尺度
@@ -84,13 +85,17 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
         };
         
         // 创建限制器 (泛型版本)
-        let limiter = create_limiter_generic::<S>(config.limiter_type, config.venkat_k, mesh_scale);
+        let limiter = create_limiter(&backend, config.limiter_type, config.venkat_k, mesh_scale);
+
+        let mut limiters = backend.alloc(n_cells);
+        limiters.fill(B::Scalar::ONE);
         
         Self {
             config,
             mesh,
-            gradients: ScalarGradientStorageGeneric::new(n_cells),
-            limiters: vec![S::ONE; n_cells],
+            backend,
+            gradients: ScalarGradientStorage::with_backend(&backend, n_cells),
+            limiters,
             gradient_computer,
             limiter,
             mesh_scale,
@@ -103,7 +108,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
         // 如果限制器类型改变，重新创建
         if config.limiter_type != self.config.limiter_type 
            || config.venkat_k != self.config.venkat_k {
-            self.limiter = create_limiter_generic::<S>(config.limiter_type, config.venkat_k, self.mesh_scale);
+            self.limiter = create_limiter(&self.backend, config.limiter_type, config.venkat_k, self.mesh_scale);
         }
         
         // 如果梯度类型改变，重新创建
@@ -127,23 +132,23 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 计算并限制梯度
-    fn compute_and_limit_gradients(&mut self, values: &[S]) {
+    fn compute_and_limit_gradients(&mut self, values: &B::Buffer<B::Scalar>) {
         let n_cells = self.mesh.cell_count();
         
         if !self.config.second_order {
             // 一阶精度：梯度为零
             self.gradients.resize(n_cells);
-            self.limiters.fill(S::ONE);
+            self.limiters.fill(B::Scalar::ONE);
             return;
         }
         
         // 步骤1：计算原始梯度
         match &self.gradient_computer {
             GradientComputer::GreenGauss(gg) => {
-                gg.compute_scalar_gradient(values, &self.mesh, &mut self.gradients);
+                gg.compute_scalar_gradient(&self.backend, values, &self.mesh, &mut self.gradients);
             }
             GradientComputer::LeastSquares(ls) => {
-                ls.compute_scalar_gradient(values, &self.mesh, &mut self.gradients);
+                ls.compute_scalar_gradient(&self.backend, values, &self.mesh, &mut self.gradients);
             }
         }
         
@@ -155,16 +160,18 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 计算限制因子
-    fn compute_limiters(&mut self, values: &[S]) {
+    fn compute_limiters(&mut self, values: &B::Buffer<B::Scalar>) {
         let n_cells = self.mesh.cell_count();
-        let dry_tol = S::from_f64(self.config.dry_tolerance).unwrap_or(S::EPSILON);
+        let dry_tol = self.backend.scalar_from_f64(self.config.dry_tolerance);
+        let values_slice = values.as_slice();
+        let limiters_slice = self.limiters.as_slice_mut();
         
         for cell_id in 0..n_cells {
-            let cell_value = values[cell_id];
+            let cell_value = values_slice[cell_id];
             
             // 检查干单元
             if cell_value < dry_tol {
-                self.limiters[cell_id] = S::ZERO;
+                limiters_slice[cell_id] = B::Scalar::ZERO;
                 continue;
             }
             
@@ -175,7 +182,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
             let (grad_projection, max_distance) = self.compute_max_gradient_projection(cell_id);
             
             // 创建限制器上下文
-            let ctx = LimiterContextGeneric::new(
+            let ctx = LimiterContext::new(
                 cell_value,
                 grad_projection,
                 min_neighbor,
@@ -183,7 +190,7 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
                 max_distance,
             );
             
-            self.limiters[cell_id] = self.limiter.compute_limiter(&ctx);
+            limiters_slice[cell_id] = self.limiter.compute_limiter(&ctx);
             
             // 正定保持：确保重构后水深非负
             if self.config.positivity_preserving {
@@ -193,13 +200,14 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 查找邻居单元的极值
-    fn find_neighbor_extrema(&self, cell_id: usize, values: &[S]) -> (S, S) {
-        let cell_value = values[cell_id];
+    fn find_neighbor_extrema(&self, cell_id: usize, values: &B::Buffer<B::Scalar>) -> (B::Scalar, B::Scalar) {
+        let values_slice = values.as_slice();
+        let cell_value = values_slice[cell_id];
         let mut min_val = cell_value;
         let mut max_val = cell_value;
         
         for neighbor_id in self.mesh.cell_neighbors(CellIndex::new(cell_id)) {
-            let neighbor_value = values[neighbor_id.0];
+            let neighbor_value = values_slice[neighbor_id.0];
             if neighbor_value < min_val {
                 min_val = neighbor_value;
             }
@@ -212,32 +220,30 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 计算最大梯度投影和距离
-    fn compute_max_gradient_projection(&self, cell_id: usize) -> (S, S) {
+    fn compute_max_gradient_projection(&self, cell_id: usize) -> (B::Scalar, B::Scalar) {
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
         let cell_center = self
             .mesh
-            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .cell_center_generic::<B>(CellIndex::new(cell_id))
             .expect("cell_center out of range");
         let cell_center_x = cell_center.x();
         let cell_center_y = cell_center.y();
         
-        let mut max_projection = S::ZERO;
-        let mut max_distance = S::ZERO;
+        let mut max_projection = B::Scalar::ZERO;
+        let mut max_distance = B::Scalar::ZERO;
         
         for face_id in self.mesh.cell_faces(CellIndex::new(cell_id)) {
             let face_center = self
                 .mesh
-                .face_center_generic::<CpuBackend<f64>>(face_id)
+                .face_center_generic::<B>(face_id)
                 .expect("face_center out of range");
 
             let dx = face_center.x() - cell_center_x;
             let dy = face_center.y() - cell_center_y;
             
             let distance = (dx * dx + dy * dy).sqrt();
-            let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
-            let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
-            let projection = (grad_x * dx_s + grad_y * dy_s).abs();
-            let distance_s = S::from_f64(distance).unwrap_or(S::ZERO);
+            let projection = (grad_x * dx + grad_y * dy).abs();
+            let distance_s = distance;
             
             if projection > max_projection {
                 max_projection = projection;
@@ -249,16 +255,16 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
     }
     
     /// 应用正定约束
-    fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: S) {
-        if cell_value <= S::ZERO {
-            self.limiters[cell_id] = S::ZERO;
+    fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: B::Scalar) {
+        if cell_value <= B::Scalar::ZERO {
+            self.limiters[cell_id] = B::Scalar::ZERO;
             return;
         }
         
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
         let cell_center = self
             .mesh
-            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .cell_center_generic::<B>(CellIndex::new(cell_id))
             .expect("cell_center out of range");
         let cell_center_x = cell_center.x();
         let cell_center_y = cell_center.y();
@@ -272,39 +278,37 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
         for face_id in faces {
             let face_center = self
                 .mesh
-                .face_center_generic::<CpuBackend<f64>>(FaceIndex::new(face_id))
+                .face_center_generic::<B>(FaceIndex::new(face_id))
                 .expect("face_center out of range");
 
             let dx = face_center.x() - cell_center_x;
             let dy = face_center.y() - cell_center_y;
-            let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
-            let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
             
-            let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx_s + grad_y * dy_s);
+            let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx + grad_y * dy);
             
-            if reconstructed < S::ZERO {
-                let denominator = grad_x * dx_s + grad_y * dy_s;
-                let eps = S::from_f64(1e-12).unwrap_or(S::EPSILON);
+            if reconstructed < B::Scalar::ZERO {
+                let denominator = grad_x * dx + grad_y * dy;
+                let eps = self.backend.scalar_from_f64(1e-12);
                 if denominator.abs() > eps {
                     let alpha_safe = (-cell_value / denominator).abs();
-                    let alpha_safe = if alpha_safe < S::ONE { alpha_safe } else { S::ONE };
-                    let new_limiter = self.limiters[cell_id] * S::from_f64(0.9).unwrap_or(S::ONE);
+                    let alpha_safe = if alpha_safe < B::Scalar::ONE { alpha_safe } else { B::Scalar::ONE };
+                    let new_limiter = self.limiters[cell_id] * self.backend.scalar_from_f64(0.9);
                     self.limiters[cell_id] = if alpha_safe < new_limiter { alpha_safe } else { new_limiter };
                 } else {
-                    self.limiters[cell_id] = S::ZERO;
+                    self.limiters[cell_id] = B::Scalar::ZERO;
                 }
             }
         }
     }
     
     /// 重构面值
-    fn reconstruct_at_face(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
+    fn reconstruct_at_face(&self, face_id: usize, values: &B::Buffer<B::Scalar>) -> ReconstructedState<B> {
         let fi = FaceIndex::new(face_id);
         let left_cell: usize = self.mesh.face_owner(fi).into();
         let right_cell: Option<usize> = self.mesh.face_neighbor(fi).map(|c| c.into());
         let face_center = self
             .mesh
-            .face_center_generic::<CpuBackend<f64>>(fi)
+            .face_center_generic::<B>(fi)
             .expect("face_center out of range");
         
         // 左侧重构
@@ -317,28 +321,26 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
             left_value
         };
         
-        ReconstructedStateGeneric::new(left_value, right_value)
+        ReconstructedState::new(left_value, right_value)
     }
     
     /// 从单元中心重构到指定点
-    fn reconstruct_at_point(&self, cell_id: usize, point: &impl Vector2D<Scalar = f64>, values: &[S]) -> S {
+    fn reconstruct_at_point(&self, cell_id: usize, point: &impl Vector2D<Scalar = B::Scalar>, values: &B::Buffer<B::Scalar>) -> B::Scalar {
         if !self.config.second_order {
             return values[cell_id];
         }
         
         let cell_center = self
             .mesh
-            .cell_center_generic::<CpuBackend<f64>>(CellIndex::new(cell_id))
+            .cell_center_generic::<B>(CellIndex::new(cell_id))
             .expect("cell_center out of range");
         
         let dx = point.x() - cell_center.x();
         let dy = point.y() - cell_center.y();
-        let dx_s = S::from_f64(dx).unwrap_or(S::ZERO);
-        let dy_s = S::from_f64(dy).unwrap_or(S::ZERO);
         
         let (grad_x, grad_y) = self.gradients.get_tuple(cell_id);
         
-        values[cell_id] + grad_x * dx_s + grad_y * dy_s
+        values[cell_id] + grad_x * dx + grad_y * dy
     }
 }
 
@@ -346,16 +348,16 @@ impl<S: RuntimeScalar> MusclReconstructorGeneric<S> {
 // Trait 实现
 // ============================================================================
 
-impl<S: RuntimeScalar> ReconstructorGeneric<S> for MusclReconstructorGeneric<S> {
-    fn compute_gradients(&mut self, values: &[S]) {
+impl<B: Backend> Reconstructor<B> for MusclReconstructor<B> {
+    fn compute_gradients(&mut self, values: &B::Buffer<B::Scalar>) {
         self.compute_and_limit_gradients(values);
     }
     
-    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
+    fn reconstruct_scalar(&self, face_id: usize, values: &B::Buffer<B::Scalar>) -> ReconstructedState<B> {
         self.reconstruct_at_face(face_id, values)
     }
     
-    fn get_limited_gradient_tuple(&self, cell_id: usize) -> (S, S) {
+    fn get_limited_gradient_tuple(&self, cell_id: usize) -> (B::Scalar, B::Scalar) {
         self.gradients.get_tuple(cell_id)
     }
     
@@ -393,6 +395,7 @@ fn compute_mesh_scale(mesh: &PhysicsMesh) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
     
     #[test]
     fn test_config_creation() {
@@ -409,14 +412,14 @@ mod tests {
     
     #[test]
     fn test_reconstructed_state_basic_f64() {
-        let state = ReconstructedStateGeneric::<f64>::new(1.5, 2.0);
+        let state = ReconstructedState::<CpuBackend<f64>>::new(1.5, 2.0);
         assert_eq!(state.average(), 1.75);
         assert_eq!(state.jump(), 0.5);
     }
     
     #[test]
     fn test_reconstructed_state_basic_f32() {
-        let state = ReconstructedStateGeneric::<f32>::new(1.5, 2.0);
+        let state = ReconstructedState::<CpuBackend<f32>>::new(1.5, 2.0);
         assert!((state.average() - 1.75).abs() < 1e-5);
         assert!((state.jump() - 0.5).abs() < 1e-5);
     }

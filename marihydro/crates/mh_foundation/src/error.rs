@@ -1,4 +1,5 @@
 // crates/mh_foundation/src/error.rs
+#![allow(clippy::items_after_test_module)]
 //! 基础错误类型
 //!
 //! 定义整个项目的基础错误类型，仅包含与基础设施相关的错误。

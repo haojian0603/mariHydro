@@ -12,18 +12,18 @@
 //! ```ignore
 //! use mh_physics::sediment::suspended::settling::{SettlingVelocity, StokesSettling};
 //!
-//! let props = SedimentProperties::from_d50_mm(0.2);
+//! let backend = mh_runtime::CpuBackend::<f64>::new();
+//! let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.2);
 //! let ws = StokesSettling.compute(&props, &physics);
 //! ```
 
-use crate::sediment::properties::SedimentProperties;
+use crate::prelude::*;
+use crate::sediment::properties::SedimentPropertiesGeneric;
 use crate::types::PhysicalConstants;
-use crate::core::Backend;
-use mh_runtime::RuntimeScalar as Scalar;
 use std::marker::PhantomData;
 
 /// 沉降速度公式 trait
-pub trait SettlingFormula<S: Scalar>: Send + Sync {
+pub trait SettlingFormula<S: RuntimeScalar>: Send + Sync {
     /// 公式名称
     fn name(&self) -> &'static str;
     
@@ -31,25 +31,25 @@ pub trait SettlingFormula<S: Scalar>: Send + Sync {
     fn compute<B: Backend<Scalar = S>>(
         &self,
         backend: &B,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S;
 }
 
 /// 沉降速度结果
 #[derive(Debug, Clone, Copy)]
-pub struct SettlingVelocity<S: Scalar> {
+pub struct SettlingVelocity<S: RuntimeScalar> {
     /// 沉降速度 [m/s]
     pub ws: S,
     /// 使用的公式名称
     pub formula: &'static str,
 }
 
-impl<S: Scalar> SettlingVelocity<S> {
+impl<S: RuntimeScalar> SettlingVelocity<S> {
     /// 自动选择最佳公式计算沉降速度
     pub fn auto<B: Backend<Scalar = S>>(
         backend: &B,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> Self {
         // 根据无量纲粒径选择公式
@@ -83,7 +83,7 @@ impl<S: Scalar> SettlingVelocity<S> {
     pub fn with_formula<B: Backend<Scalar = S>, F: SettlingFormula<S>>(
         backend: &B,
         formula: &F,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> Self {
         Self {
@@ -107,23 +107,23 @@ impl<S: Scalar> SettlingVelocity<S> {
 ///
 /// 适用范围：Re_p < 1，D* < 1
 #[derive(Debug, Clone, Copy)]
-pub struct StokesSettling<S: Scalar> {
+pub struct StokesSettling<S: RuntimeScalar> {
     _marker: PhantomData<S>,
 }
 
-impl<S: Scalar> Default for StokesSettling<S> {
+impl<S: RuntimeScalar> Default for StokesSettling<S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Scalar> StokesSettling<S> {
+impl<S: RuntimeScalar> StokesSettling<S> {
     pub fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<S: Scalar> SettlingFormula<S> for StokesSettling<S> {
+impl<S: RuntimeScalar> SettlingFormula<S> for StokesSettling<S> {
     fn name(&self) -> &'static str {
         "Stokes"
     }
@@ -131,11 +131,11 @@ impl<S: Scalar> SettlingFormula<S> for StokesSettling<S> {
     fn compute<B: Backend<Scalar = S>>(
         &self,
         backend: &B,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let s = backend.scalar_from_f64(props.relative_density);
-        let d = backend.scalar_from_f64(props.d50);
+        let s = props.relative_density;
+        let d = props.d50;
         let nu = backend.scalar_from_f64(physics.nu_water);
         let g = backend.scalar_from_f64(physics.g);
         let eighteen = backend.scalar_from_f64(18.0);
@@ -149,23 +149,23 @@ impl<S: Scalar> SettlingFormula<S> for StokesSettling<S> {
 ///
 /// 分段公式，适用于广泛粒径范围
 #[derive(Debug, Clone, Copy)]
-pub struct VanRijnSettling<S: Scalar> {
+pub struct VanRijnSettling<S: RuntimeScalar> {
     _marker: PhantomData<S>,
 }
 
-impl<S: Scalar> Default for VanRijnSettling<S> {
+impl<S: RuntimeScalar> Default for VanRijnSettling<S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Scalar> VanRijnSettling<S> {
+impl<S: RuntimeScalar> VanRijnSettling<S> {
     pub fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<S: Scalar> SettlingFormula<S> for VanRijnSettling<S> {
+impl<S: RuntimeScalar> SettlingFormula<S> for VanRijnSettling<S> {
     fn name(&self) -> &'static str {
         "Van Rijn"
     }
@@ -173,27 +173,29 @@ impl<S: Scalar> SettlingFormula<S> for VanRijnSettling<S> {
     fn compute<B: Backend<Scalar = S>>(
         &self,
         backend: &B,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let s = backend.scalar_from_f64(props.relative_density);
-        let d = backend.scalar_from_f64(props.d50);
+        let s = props.relative_density;
+        let d = props.d50;
         let d_star = props.dimensionless_diameter;
         let nu = backend.scalar_from_f64(physics.nu_water);
         let g = backend.scalar_from_f64(physics.g);
         let one = S::ONE;
+        let d_star_1 = backend.scalar_from_f64(1.0);
+        let d_star_100 = backend.scalar_from_f64(100.0);
         
-        if d_star < 1.0 {
+        if d_star < d_star_1 {
             // Stokes 区
             let eighteen = backend.scalar_from_f64(18.0);
             (s - one) * g * d * d / (eighteen * nu)
-        } else if d_star <= 100.0 {
+        } else if d_star <= d_star_100 {
             // 过渡区
             let eighteen = backend.scalar_from_f64(18.0);
             let ws_stokes = (s - one) * g * d * d / (eighteen * nu);
             let ws_newton = backend.scalar_from_f64(1.1) * ((s - one) * g * d).sqrt();
             // 线性插值
-            let f = backend.scalar_from_f64((d_star - 1.0) / 99.0);
+            let f = (d_star - d_star_1) / backend.scalar_from_f64(99.0);
             ws_stokes * (one - f) + ws_newton * f
         } else {
             // Newton 区
@@ -206,23 +208,23 @@ impl<S: Scalar> SettlingFormula<S> for VanRijnSettling<S> {
 ///
 /// 基于大量实验数据的经验公式
 #[derive(Debug, Clone, Copy)]
-pub struct DietrichSettling<S: Scalar> {
+pub struct DietrichSettling<S: RuntimeScalar> {
     _marker: PhantomData<S>,
 }
 
-impl<S: Scalar> Default for DietrichSettling<S> {
+impl<S: RuntimeScalar> Default for DietrichSettling<S> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: Scalar> DietrichSettling<S> {
+impl<S: RuntimeScalar> DietrichSettling<S> {
     pub fn new() -> Self {
         Self { _marker: PhantomData }
     }
 }
 
-impl<S: Scalar> SettlingFormula<S> for DietrichSettling<S> {
+impl<S: RuntimeScalar> SettlingFormula<S> for DietrichSettling<S> {
     fn name(&self) -> &'static str {
         "Dietrich"
     }
@@ -230,11 +232,11 @@ impl<S: Scalar> SettlingFormula<S> for DietrichSettling<S> {
     fn compute<B: Backend<Scalar = S>>(
         &self,
         backend: &B,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let s = backend.scalar_from_f64(props.relative_density);
-        let d = backend.scalar_from_f64(props.d50);
+        let s = props.relative_density;
+        let d = props.d50;
         let nu = backend.scalar_from_f64(physics.nu_water);
         let g = backend.scalar_from_f64(physics.g);
         let one = S::ONE;
@@ -274,8 +276,8 @@ impl<S: Scalar> SettlingFormula<S> for DietrichSettling<S> {
 mod tests {
     use super::*;
     
-    fn make_props() -> SedimentProperties {
-        SedimentProperties::from_d50_mm(0.2)
+    fn make_props<B: Backend<Scalar = f64>>(backend: &B) -> SedimentPropertiesGeneric<f64> {
+        SedimentPropertiesGeneric::from_d50_mm(backend, 0.2)
     }
     
     fn make_physics() -> PhysicalConstants {
@@ -284,10 +286,10 @@ mod tests {
     
     #[test]
     fn test_stokes_settling() {
-        let props = make_props();
+        let backend = crate::core::CpuBackend::<f64>::new();
+        let props = make_props(&backend);
         let physics = make_physics();
         let stokes = StokesSettling::<f64>::new();
-        let backend = crate::core::CpuBackend::<f64>::new();
         
         let ws = stokes.compute(&backend, &props, &physics);
         assert!(ws > 0.0);
@@ -296,10 +298,10 @@ mod tests {
     
     #[test]
     fn test_van_rijn_settling() {
-        let props = make_props();
+        let backend = crate::core::CpuBackend::<f64>::new();
+        let props = make_props(&backend);
         let physics = make_physics();
         let van_rijn = VanRijnSettling::<f64>::new();
-        let backend = crate::core::CpuBackend::<f64>::new();
         
         let ws = van_rijn.compute(&backend, &props, &physics);
         assert!(ws > 0.0);
@@ -308,10 +310,10 @@ mod tests {
     
     #[test]
     fn test_dietrich_settling() {
-        let props = make_props();
+        let backend = crate::core::CpuBackend::<f64>::new();
+        let props = make_props(&backend);
         let physics = make_physics();
         let dietrich = DietrichSettling::<f64>::new();
-        let backend = crate::core::CpuBackend::<f64>::new();
         
         let ws = dietrich.compute(&backend, &props, &physics);
         assert!(ws > 0.0);
@@ -319,9 +321,9 @@ mod tests {
     
     #[test]
     fn test_auto_selection() {
-        let props = make_props();
-        let physics = make_physics();
         let backend = crate::core::CpuBackend::<f64>::new();
+        let props = make_props(&backend);
+        let physics = make_physics();
         
         let settling = SettlingVelocity::<f64>::auto(&backend, &props, &physics);
         assert!(settling.ws > 0.0);
@@ -338,9 +340,9 @@ mod tests {
     #[test]
     fn test_fine_sand_uses_appropriate_formula() {
         // 细砂 D* < 100
-        let props = SedimentProperties::from_d50_mm(0.1);
-        let physics = make_physics();
         let backend = crate::core::CpuBackend::<f64>::new();
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.1);
+        let physics = make_physics();
         
         let settling = SettlingVelocity::<f64>::auto(&backend, &props, &physics);
         // 应该使用 Van Rijn 或 Stokes
@@ -349,13 +351,14 @@ mod tests {
     
     #[test]
     fn test_f32_precision() {
-        let props = make_props();
+        let backend_f64 = crate::core::CpuBackend::<f64>::new();
+        let props_f64 = make_props(&backend_f64);
         let physics = make_physics();
         let backend_f32 = crate::core::CpuBackend::<f32>::new();
-        let backend_f64 = crate::core::CpuBackend::<f64>::new();
+        let props_f32 = SedimentPropertiesGeneric::from_d50_mm(&backend_f32, 0.2);
         
-        let settling_f32 = SettlingVelocity::<f32>::auto(&backend_f32, &props, &physics);
-        let settling_f64 = SettlingVelocity::<f64>::auto(&backend_f64, &props, &physics);
+        let settling_f32 = SettlingVelocity::<f32>::auto(&backend_f32, &props_f32, &physics);
+        let settling_f64 = SettlingVelocity::<f64>::auto(&backend_f64, &props_f64, &physics);
         
         // f32 and f64 results should be close
         assert!((settling_f32.ws as f64 - settling_f64.ws).abs() < 1e-4);

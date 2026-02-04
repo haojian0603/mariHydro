@@ -255,7 +255,7 @@ fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
     let size = value.get("size").and_then(|v| v.as_array()).ok_or_else(|| {
         GdalError::ReadFailed("gdalinfo 输出缺少 size".to_string())
     })?;
-    let width = size.get(0).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let width = size.first().and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let height = size.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let geo_transform = value
@@ -279,7 +279,7 @@ fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
     let bands = value.get("bands").and_then(|v| v.as_array()).unwrap_or(&empty_bands);
     let band_count = bands.len().max(1);
     let nodata = bands
-        .get(0)
+        .first()
         .and_then(|b| b.get("noDataValue"))
         .and_then(|v| v.as_f64());
 

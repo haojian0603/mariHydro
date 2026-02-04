@@ -7,7 +7,8 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::io::{self, Write};
-use mh_runtime::RuntimeScalar;
+use mh_runtime::Backend;
+use num_traits::ToPrimitive;
 use serde_json;
 
 /// 二进制编码器
@@ -104,10 +105,10 @@ impl Default for BinaryEncoder {
 }
 
 /// 二进制 VTU 完整写入器
-pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
+pub fn write_vtu_binary<W: Write, B: Backend>(
     writer: &mut W,
-    mesh: &crate::snapshot::MeshSnapshot<S>,
-    state: &crate::snapshot::StateSnapshot<S>,
+    mesh: &crate::snapshot::MeshSnapshot<B>,
+    state: &crate::snapshot::StateSnapshot<B>,
     time: f64,
 ) -> io::Result<()> {
     writeln!(writer, r#"<?xml version="1.0"?>"#)?;
@@ -290,6 +291,7 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
 mod tests {
     use super::*;
     use crate::snapshot::{MeshSnapshot, StateSnapshot};
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_binary_encoder_f64() {
@@ -315,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_binary_vtu_output() {
-        let mesh = MeshSnapshot::from_mesh_data(
+        let mesh = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
             4, 1,
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
             vec![vec![0, 1, 2, 3]],
@@ -323,7 +325,7 @@ mod tests {
             vec![0.0],
         );
 
-        let state = StateSnapshot::from_state_data(
+        let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(
             vec![1.0],
             vec![0.1],
             vec![0.0],

@@ -5,11 +5,11 @@
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
-use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, RiemannSolverAny, SolverParams};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
-use crate::numerics::{MusclConfig, MusclReconstructorGeneric, WenoConfig, WenoReconstructorGeneric};
-use crate::numerics::reconstruction::ReconstructedStateGeneric;
-use crate::numerics::ReconstructorGeneric;
+use crate::numerics::{MusclConfig, MusclReconstructor, WenoConfig, WenoReconstructor};
+use crate::numerics::reconstruction::ReconstructedState;
+use crate::numerics::Reconstructor;
 use crate::state::ShallowWaterState;
 use crate::sources::traits::{SourceContextGeneric, SourceTermGeneric};
 use crate::{BoundaryDataProvider, ExternalForcing};
@@ -265,62 +265,62 @@ pub enum NumericalScheme {
 }
 
 /// 标量重构器封装（MUSCL/WENO）
-enum ScalarReconstructor<S: RuntimeScalar> {
-    Muscl(MusclReconstructorGeneric<S>),
-    Weno(WenoReconstructorGeneric<S>),
+enum ScalarReconstructor<B: Backend> {
+    Muscl(MusclReconstructor<B>),
+    Weno(WenoReconstructor<B>),
 }
 
-impl<S: RuntimeScalar> ScalarReconstructor<S> {
-    fn new(mesh: Arc<PhysicsMesh>, scheme: NumericalScheme) -> Self {
+impl<B: Backend + Clone> ScalarReconstructor<B> {
+    fn new(mesh: Arc<PhysicsMesh>, scheme: NumericalScheme, backend: B) -> Self {
         match scheme {
             NumericalScheme::SecondOrderWeno => {
-                Self::Weno(WenoReconstructorGeneric::new(WenoConfig::default(), mesh))
+                Self::Weno(WenoReconstructor::new(WenoConfig::default(), mesh, backend))
             }
             NumericalScheme::FirstOrder => {
-                let mut recon = MusclReconstructorGeneric::new(MusclConfig::first_order(), mesh);
+                let mut recon = MusclReconstructor::new(MusclConfig::first_order(), mesh, backend);
                 recon.set_config(MusclConfig::first_order());
                 Self::Muscl(recon)
             }
             NumericalScheme::SecondOrderMuscl => {
-                Self::Muscl(MusclReconstructorGeneric::new(MusclConfig::default(), mesh))
+                Self::Muscl(MusclReconstructor::new(MusclConfig::default(), mesh, backend))
             }
         }
     }
 
-    fn configure_for_scheme(&mut self, scheme: NumericalScheme, mesh: Arc<PhysicsMesh>) {
+    fn configure_for_scheme(&mut self, scheme: NumericalScheme, mesh: Arc<PhysicsMesh>, backend: B) {
         match scheme {
             NumericalScheme::SecondOrderWeno => {
                 if let ScalarReconstructor::Weno(recon) = self {
                     recon.set_config(WenoConfig::default());
                 } else {
-                    *self = Self::new(mesh, scheme);
+                    *self = Self::new(mesh, scheme, backend);
                 }
             }
             NumericalScheme::SecondOrderMuscl => {
                 if let ScalarReconstructor::Muscl(recon) = self {
                     recon.set_config(MusclConfig::default());
                 } else {
-                    *self = Self::new(mesh, scheme);
+                    *self = Self::new(mesh, scheme, backend);
                 }
             }
             NumericalScheme::FirstOrder => {
                 if let ScalarReconstructor::Muscl(recon) = self {
                     recon.set_config(MusclConfig::first_order());
                 } else {
-                    *self = Self::new(mesh, scheme);
+                    *self = Self::new(mesh, scheme, backend);
                 }
             }
         }
     }
 
-    fn compute_gradients(&mut self, values: &[S]) {
+    fn compute_gradients(&mut self, values: &B::Buffer<B::Scalar>) {
         match self {
             ScalarReconstructor::Muscl(recon) => recon.compute_gradients(values),
             ScalarReconstructor::Weno(recon) => recon.compute_gradients(values),
         }
     }
 
-    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S> {
+    fn reconstruct_scalar(&self, face_id: usize, values: &B::Buffer<B::Scalar>) -> ReconstructedState<B> {
         match self {
             ScalarReconstructor::Muscl(recon) => recon.reconstruct_scalar(face_id, values),
             ScalarReconstructor::Weno(recon) => recon.reconstruct_scalar(face_id, values),
@@ -490,7 +490,7 @@ impl<B: Backend> HydrostaticReconstruction<B> {
 }
 
 /// 浅水方程求解器（Backend泛型）
-pub struct ShallowWaterSolver<B: Backend>
+pub struct ShallowWaterSolver<B: Backend, S: SourceTermGeneric<B>>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
@@ -500,7 +500,7 @@ where
     _gravity: B::Scalar,
     backend: B,
     workspace: SolverWorkspaceGeneric<B>,
-    riemann: Box<dyn RiemannSolver<Scalar = B::Scalar, Vector2D = B::Vector2D>>,
+    riemann: RiemannSolverAny<B>,
     wetting_drying: WettingDryingHandler<B>,
     hydrostatic: HydrostaticReconstruction<B>,
     timestep_ctrl: TimeStepController<B>,
@@ -508,11 +508,11 @@ where
     recon_eta: ScalarReconstructor<B::Scalar>,
     recon_u: ScalarReconstructor<B::Scalar>,
     recon_v: ScalarReconstructor<B::Scalar>,
-    sources: Vec<Box<dyn SourceTermGeneric<B>>>,
+    sources: Vec<S>,
     boundary_provider: Option<Arc<dyn BoundaryDataProvider>>,
 }
 
-impl<B: Backend> ShallowWaterSolver<B>
+impl<B: Backend, S: SourceTermGeneric<B>> ShallowWaterSolver<B, S>
 where
     B::Buffer<B::Scalar>: Send + Sync,
 {
@@ -521,14 +521,14 @@ where
         params: &NumericalParams<B::Scalar>,
         solver_params: &SolverParams<B::Scalar>,
         gravity: B::Scalar,
-    ) -> Box<dyn RiemannSolver<Scalar = B::Scalar, Vector2D = B::Vector2D>> {
+    ) -> RiemannSolverAny<B> {
         match config.riemann_solver {
-            RiemannSolverType::Hllc => Box::new(HllcSolver::<B>::new(solver_params, gravity)),
-            RiemannSolverType::Roe => Box::new(RoeSolver::<B>::new(solver_params, gravity)),
-            RiemannSolverType::Rusanov => Box::new(RusanovSolver::<B>::new(params, gravity)),
+            RiemannSolverType::Hllc => RiemannSolverAny::Hllc(HllcSolver::<B>::new(solver_params, gravity)),
+            RiemannSolverType::Roe => RiemannSolverAny::Roe(RoeSolver::<B>::new(solver_params, gravity)),
+            RiemannSolverType::Rusanov => RiemannSolverAny::Rusanov(RusanovSolver::<B>::new(params, gravity)),
             RiemannSolverType::Central => {
                 log::warn!("Central 求解器未实现，已回退为 Rusanov");
-                Box::new(RusanovSolver::<B>::new(params, gravity))
+                RiemannSolverAny::Rusanov(RusanovSolver::<B>::new(params, gravity))
             }
         }
     }
@@ -551,9 +551,9 @@ where
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params)
             .expect("WettingDryingHandler 初始化失败");
         let hydrostatic = HydrostaticReconstruction::<B>::new(&solver_params, gravity);
-        let recon_eta = ScalarReconstructor::new(mesh.clone(), config.scheme);
-        let recon_u = ScalarReconstructor::new(mesh.clone(), config.scheme);
-        let recon_v = ScalarReconstructor::new(mesh.clone(), config.scheme);
+        let recon_eta = ScalarReconstructor::new(mesh.clone(), config.scheme, backend.clone());
+        let recon_u = ScalarReconstructor::new(mesh.clone(), config.scheme, backend.clone());
+        let recon_v = ScalarReconstructor::new(mesh.clone(), config.scheme, backend.clone());
 
         Self {
             mesh,
@@ -640,9 +640,12 @@ where
         }
 
         let scheme = self.config.scheme;
-        self.recon_eta.configure_for_scheme(scheme, self.mesh.clone());
-        self.recon_u.configure_for_scheme(scheme, self.mesh.clone());
-        self.recon_v.configure_for_scheme(scheme, self.mesh.clone());
+        self.recon_eta
+            .configure_for_scheme(scheme, self.mesh.clone(), self.backend.clone());
+        self.recon_u
+            .configure_for_scheme(scheme, self.mesh.clone(), self.backend.clone());
+        self.recon_v
+            .configure_for_scheme(scheme, self.mesh.clone(), self.backend.clone());
 
         if !self.use_second_order() {
             return;
@@ -993,8 +996,8 @@ where
         }
     }
 
-    pub fn register_source<S: SourceTermGeneric<B> + 'static>(&mut self, source: S) {
-        self.sources.push(Box::new(source));
+    pub fn register_source(&mut self, source: S) {
+        self.sources.push(source);
     }
 
     pub fn clear_sources(&mut self) {

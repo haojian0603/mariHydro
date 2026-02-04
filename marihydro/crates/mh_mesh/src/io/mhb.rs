@@ -27,9 +27,9 @@ use super::fields::Compression;
 use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::fs::File;
-use crate::FrozenMesh;  // FIX: Import from crate root
+use crate::{FrozenMesh, FrozenMeshGeneric};  // FIX: Import from crate root
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, RuntimeScalar};
 use serde_json;
 
 /// MHB 文件魔数
@@ -452,7 +452,7 @@ impl<R: Read + Seek> MhbReader<R> {
 }
 
 /// 便捷函数：保存 MHB 文件
-pub fn save_mhb<S: RuntimeScalar>(path: &Path, mesh: &FrozenMesh<S>) -> Result<()> {
+pub fn save_mhb<B: Backend>(path: &Path, mesh: &FrozenMeshGeneric<B>) -> Result<()> {
     let file = File::create(path)?;
     let writer = MhbWriter::new(file)?;
     write_mesh_fields(writer, mesh)?;
@@ -524,44 +524,43 @@ pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
 
     let ghost_capacity_value = ghost_capacity.iter().copied().max().unwrap_or(0) as usize;
 
-    let mesh = FrozenMesh {
-        n_nodes,
-        node_coords,
-        n_cells,
-        cell_center,
-        cell_area,
-        cell_z_bed,
-        cell_node_offsets,
-        cell_node_indices,
-        cell_face_offsets,
-        cell_face_indices,
-        cell_neighbor_offsets,
-        cell_neighbor_indices,
-        n_faces,
-        n_interior_faces,
-        face_center,
-        face_normal,
-        face_length,
-        face_z_left,
-        face_z_right,
-        face_owner,
-        face_neighbor,
-        face_delta_owner,
-        face_delta_neighbor,
-        face_dist_o2n,
-        boundary_face_indices,
-        boundary_names,
-        face_boundary_id,
-        min_cell_size,
-        max_cell_size,
-        cell_refinement_level,
-        cell_parent,
-        ghost_capacity: ghost_capacity_value,
-        cell_original_id,
-        face_original_id,
-        cell_permutation,
-        cell_inv_permutation,
-    };
+    let mut mesh = FrozenMesh::empty_with_cells(n_cells);
+    mesh.n_nodes = n_nodes;
+    mesh.node_coords = node_coords;
+    mesh.n_cells = n_cells;
+    mesh.cell_center = cell_center;
+    mesh.cell_area = cell_area;
+    mesh.cell_z_bed = cell_z_bed;
+    mesh.cell_node_offsets = cell_node_offsets;
+    mesh.cell_node_indices = cell_node_indices;
+    mesh.cell_face_offsets = cell_face_offsets;
+    mesh.cell_face_indices = cell_face_indices;
+    mesh.cell_neighbor_offsets = cell_neighbor_offsets;
+    mesh.cell_neighbor_indices = cell_neighbor_indices;
+    mesh.n_faces = n_faces;
+    mesh.n_interior_faces = n_interior_faces;
+    mesh.face_center = face_center;
+    mesh.face_normal = face_normal;
+    mesh.face_length = face_length;
+    mesh.face_z_left = face_z_left;
+    mesh.face_z_right = face_z_right;
+    mesh.face_owner = face_owner;
+    mesh.face_neighbor = face_neighbor;
+    mesh.face_delta_owner = face_delta_owner;
+    mesh.face_delta_neighbor = face_delta_neighbor;
+    mesh.face_dist_o2n = face_dist_o2n;
+    mesh.boundary_face_indices = boundary_face_indices;
+    mesh.boundary_names = boundary_names;
+    mesh.face_boundary_id = face_boundary_id;
+    mesh.min_cell_size = min_cell_size;
+    mesh.max_cell_size = max_cell_size;
+    mesh.cell_refinement_level = cell_refinement_level;
+    mesh.cell_parent = cell_parent;
+    mesh.ghost_capacity = ghost_capacity_value;
+    mesh.cell_original_id = cell_original_id;
+    mesh.face_original_id = face_original_id;
+    mesh.cell_permutation = cell_permutation;
+    mesh.cell_inv_permutation = cell_inv_permutation;
 
     mesh.validate()
         .map_err(|e| Error::new(ErrorKind::InvalidData, format!("冻结网格校验失败: {}", e)))?;
@@ -569,7 +568,7 @@ pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
     Ok(mesh)
 }
 
-fn write_mesh_fields<S: RuntimeScalar>(mut writer: MhbWriter<File>, mesh: &FrozenMesh<S>) -> Result<()> {
+fn write_mesh_fields<B: Backend>(mut writer: MhbWriter<File>, mesh: &FrozenMeshGeneric<B>) -> Result<()> {
     writer.write_u64_field("n_nodes", &[mesh.n_nodes as u64])?;
     writer.write_u64_field("n_cells", &[mesh.n_cells as u64])?;
     writer.write_u64_field("n_faces", &[mesh.n_faces as u64])?;
@@ -643,11 +642,11 @@ fn read_count(reader: &mut MhbReader<File>, name: &str) -> Result<usize> {
     match reader.get_field_dtype(name) {
         Ok(DataType::U64) => {
             let values = reader.read_u64_field(name)?;
-            Ok(values.get(0).copied().unwrap_or(0) as usize)
+            Ok(values.first().copied().unwrap_or(0) as usize)
         }
         Ok(DataType::U32) => {
             let values = reader.read_u32_field(name)?;
-            Ok(values.get(0).copied().unwrap_or(0) as usize)
+            Ok(values.first().copied().unwrap_or(0) as usize)
         }
         Ok(dtype) => Err(Error::new(
             ErrorKind::InvalidData,

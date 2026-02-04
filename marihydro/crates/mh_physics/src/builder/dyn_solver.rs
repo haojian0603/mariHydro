@@ -1,77 +1,10 @@
 // crates/mh_physics/src/builder/dyn_solver.rs
 
-//! 动态求解器trait
+//! 求解器运行时结果类型
 //!
-//! 提供运行时多态的求解器接口，使App层可以无泛型地使用求解器。
-//!
-//! # 迁移说明
-//!
-//! 新代码应使用 `mh_config::DynSolver`，本模块保留用于向后兼容。
-
-use mh_config::Precision;
+//! 提供无泛型的结果与状态结构，用于 Layer 4/5 数据交换。
 use std::fmt;
 
-// 从 mh_config 重导出规范接口（供新代码使用）
-pub use mh_config::dyn_solver::DynSolver as ConfigDynSolver;
-
-/// 动态求解器trait（运行时多态）
-///
-/// 所有具体求解器（如 `ShallowWaterSolver<CpuBackend<f32>>`）都自动实现此trait。
-/// App层通过 `Box<dyn DynSolver>` 使用求解器，无需关心底层精度。
-///
-/// # 迁移指南
-///
-/// 新代码建议使用 `mh_config::DynSolver`：
-/// ```ignore
-/// use mh_config::{DynSolver, SolverConfig};
-/// ```
-///
-/// # 示例
-///
-/// ```ignore
-/// let solver = SolverBuilder::new(config).build()?;
-/// while solver.time() < end_time {
-///     let result = solver.step(dt);
-///     println!("t={:.2}, dt={:.4}", solver.time(), result.dt_actual);
-/// }
-/// ```
-pub trait DynSolver: Send + Sync {
-    /// 执行时间步进
-    ///
-    /// # 参数
-    /// - `dt`: 建议时间步长（秒）
-    ///
-    /// # 返回
-    /// 实际使用的时间步结果
-    fn step(&mut self, dt: f64) -> DynStepResult;
-
-    /// 获取当前模拟时间（秒）
-    fn time(&self) -> f64;
-
-    /// 获取当前时间步数
-    fn step_count(&self) -> usize;
-
-    /// 获取使用的精度
-    fn precision(&self) -> Precision;
-
-    /// 导出当前状态（统一为f64）
-    fn export_state(&self) -> DynState;
-
-    /// 获取求解器统计信息
-    fn stats(&self) -> SolverStats;
-
-    /// 获取网格单元数量
-    fn n_cells(&self) -> usize;
-
-    /// 获取网格面数量
-    fn n_faces(&self) -> usize;
-
-    /// 检查求解器是否处于健康状态
-    fn is_healthy(&self) -> bool;
-
-    /// 获取求解器名称
-    fn name(&self) -> &'static str;
-}
 
 /// 动态时间步结果
 #[derive(Debug, Clone)]

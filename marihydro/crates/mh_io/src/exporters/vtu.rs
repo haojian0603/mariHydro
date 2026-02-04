@@ -235,6 +235,7 @@ impl VtuExporter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_header(&self, w: &mut BufWriter<File>, time: f64) -> Result<(), VtuError> {
         let mut config = VtuExportConfig::default();
         config.binary = self.binary;
@@ -270,6 +271,7 @@ impl VtuExporter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_piece<M: VtuMesh, S: VtuState>(
         &self,
         w: &mut BufWriter<File>,
@@ -304,6 +306,7 @@ impl VtuExporter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_points<M: VtuMesh>(&self, w: &mut BufWriter<File>, mesh: &M) -> Result<(), VtuError> {
         let config = VtuExportConfig::default();
         self.write_points_with_config(w, mesh, &config)
@@ -358,6 +361,7 @@ impl VtuExporter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_cells<M: VtuMesh>(&self, w: &mut BufWriter<File>, mesh: &M) -> Result<(), VtuError> {
         let config = VtuExportConfig::default();
         self.write_cells_with_config(w, mesh, &config)
@@ -493,6 +497,7 @@ impl VtuExporter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn write_cell_data<M: VtuMesh, S: VtuState>(
         &self,
         w: &mut BufWriter<File>,

@@ -119,7 +119,7 @@ impl CrsDefinition {
         if !(-90.0..=90.0).contains(&lat) {
             return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0));
         }
-        if lat > 84.0 || lat < -80.0 {
+        if !(-80.0..=84.0).contains(&lat) {
             return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
         }
         let zone = if lon == 180.0 {
@@ -390,7 +390,6 @@ impl Crs {
     }
 
     /// 创建 UTM 投影 CRS
-    #[must_use]
     pub fn utm(zone: u8, north: bool) -> MhResult<Self> {
         if !(1..=60).contains(&zone) {
             return Err(MhError::invalid_input(format!(
@@ -407,7 +406,6 @@ impl Crs {
     }
 
     /// 创建 Web Mercator CRS
-    #[must_use]
     pub fn web_mercator() -> MhResult<Self> {
         Self::from_epsg(3857)
     }
@@ -477,7 +475,6 @@ pub fn crs_from_epsg(code: u32) -> MhResult<Crs> {
 }
 
 /// 根据经纬度自动选择合适的投影 CRS
-#[must_use]
 pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
     if !(-180.0..=180.0).contains(&lon) {
         return Err(MhError::invalid_input(format!("经度超出范围: {}", lon)));
@@ -485,7 +482,7 @@ pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
     if !(-90.0..=90.0).contains(&lat) {
         return Err(MhError::invalid_input(format!("纬度超出范围: {}", lat)));
     }
-    if lat > 84.0 || lat < -80.0 {
+    if !(-80.0..=84.0).contains(&lat) {
         return Err(MhError::invalid_input(format!(
             "UTM 不支持极区纬度: {} (有效范围 -80..=84)",
             lat

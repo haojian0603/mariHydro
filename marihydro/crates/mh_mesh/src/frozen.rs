@@ -1,6 +1,6 @@
 // crates/mh_mesh/src/frozen.rs
 
-//! 冻结网格（FrozenMesh<S>）- 只读计算网格
+//! 冻结网格（FrozenMesh<B>）- 只读计算网格
 //!
 //! 从 HalfEdgeMesh 导出的只读 SoA（Structure of Arrays）布局网格，用于高性能数值计算。
 //! 支持 f32/f64 运行时精度切换，零拷贝序列化，内置空间索引。
@@ -8,7 +8,7 @@
 //! # 设计要点
 //!
 //! 1. **SoA 布局**：连续内存数组，提升缓存命中率
-//! 2. **泛型精度**：`S: RuntimeScalar` 支持 f32/f64 切换
+//! 2. **泛型精度**：`B: Backend` 支持 f32/f64 切换
 //! 3. **不可变性**：冻结后不可修改，线程安全
 //! 4. **空间索引**：内置 R-tree 支持高效点定位
 //! 5. **零拷贝**：支持 mmap 加载和序列化
@@ -16,20 +16,22 @@
 //! # 数据分类
 //!
 //! - **几何数据**：cell_center, node_coords, face_center（保持 f64）
-//! - **物理场数据**：cell_area, cell_z_bed, face_length（泛型 S）
+//! - **物理场数据**：cell_area, cell_z_bed, face_length（泛型 B::Scalar）
 //! - **索引数据**：cell_node_indices, face_owner（保持 u32/usize）
 //!
 //! # 使用示例
 //!
 //! ```rust
 //! use mh_mesh::frozen::FrozenMesh;
-//! use mh_runtime::RuntimeScalar;
+//! use mh_runtime::CpuBackend;
 //!
 //! // 创建空网格（f64 精度）
-//! let mesh: FrozenMesh<f64> = FrozenMesh::empty_with_cells(100);
+//! let backend = CpuBackend::<f64>::new();
+//! let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_cells_backend(backend, 100);
 //!
 //! // 创建空网格（f32 精度，节省内存）
-//! let mesh_f32: FrozenMesh<f32> = FrozenMesh::empty_with_cells(1_000_000);
+//! let backend_f32 = CpuBackend::<f32>::new();
+//! let mesh_f32: FrozenMesh<CpuBackend<f32>> = FrozenMesh::empty_with_cells_backend(backend_f32, 1_000_000);
 //!
 //! // 计算统计信息
 //! let stats = mesh.statistics();
@@ -41,7 +43,8 @@ use crate::locator::MeshLocator;
 use crate::spatial_index::MeshSpatialIndex;
 use crate::traits::{MeshAccess, MeshTopology};
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use thiserror::Error;
@@ -86,7 +89,11 @@ pub enum FrozenMeshError {
 /// 从半边网格导出的只读计算网格，支持 f32/f64 精度运行时切换。
 /// 采用 SoA 布局优化计算性能，不可修改，线程安全。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrozenMesh<S: RuntimeScalar = f64> {
+#[serde(bound(
+    serialize = "B::Buffer<B::Scalar>: Serialize, B::Scalar: Serialize",
+    deserialize = "B::Buffer<B::Scalar>: Deserialize<'de>, B::Scalar: Deserialize<'de>, B: Default"
+))]
+pub struct FrozenMesh<B: Backend> {
     // ===== 节点数据（几何数据）=====
     /// 节点数量（几何拓扑，固定 usize）
     pub n_nodes: usize,
@@ -99,9 +106,9 @@ pub struct FrozenMesh<S: RuntimeScalar = f64> {
     /// 单元中心坐标（2D，几何数据保持 f64）
     pub cell_center: Vec<Point2D>,
     /// 单元面积（物理场数据，泛型 S）
-    pub cell_area: Vec<S>,
+    pub cell_area: B::Buffer<B::Scalar>,
     /// 单元底床高程（物理场数据，泛型 S）
-    pub cell_z_bed: Vec<S>,
+    pub cell_z_bed: B::Buffer<B::Scalar>,
     /// 单元节点索引（压缩格式，索引数据保持 u32）
     pub cell_node_offsets: Vec<usize>,
     /// 单元节点索引列表
@@ -125,11 +132,11 @@ pub struct FrozenMesh<S: RuntimeScalar = f64> {
     /// 面法向量（3D，几何数据）
     pub face_normal: Vec<Point3D>,
     /// 面长度（物理场数据，泛型 S）
-    pub face_length: Vec<S>,
+    pub face_length: B::Buffer<B::Scalar>,
     /// 面左侧高程（物理场数据，泛型 S）
-    pub face_z_left: Vec<S>,
+    pub face_z_left: B::Buffer<B::Scalar>,
     /// 面右侧高程（物理场数据，泛型 S）
-    pub face_z_right: Vec<S>,
+    pub face_z_right: B::Buffer<B::Scalar>,
     /// 面 owner 单元索引（索引数据）
     pub face_owner: Vec<u32>,
     /// 面 neighbor 单元索引（u32::MAX 表示边界）
@@ -139,7 +146,7 @@ pub struct FrozenMesh<S: RuntimeScalar = f64> {
     /// 面到 neighbor 中心的向量（2D，几何数据）
     pub face_delta_neighbor: Vec<Point2D>,
     /// owner 到 neighbor 的距离（物理场数据，泛型 S）
-    pub face_dist_o2n: Vec<S>,
+    pub face_dist_o2n: B::Buffer<B::Scalar>,
 
     // ===== 边界数据 =====
     /// 边界面索引列表（索引数据）
@@ -151,9 +158,9 @@ pub struct FrozenMesh<S: RuntimeScalar = f64> {
 
     // ===== 统计信息（物理场数据，泛型 S）=====
     /// 最小单元尺寸
-    pub min_cell_size: S,
+    pub min_cell_size: B::Scalar,
     /// 最大单元尺寸
-    pub max_cell_size: S,
+    pub max_cell_size: B::Scalar,
 
     // ===== AMR 预分配字段（Phase 2+）=====
     /// 单元细化级别（0=基础网格）
@@ -179,28 +186,34 @@ pub struct FrozenMesh<S: RuntimeScalar = f64> {
     /// 逆排列（原始索引 -> frozen_idx）
     #[serde(default)]
     pub cell_inv_permutation: Vec<u32>,
+
+    /// 计算后端（不序列化）
+    #[serde(skip, default)]
+    backend: B,
 }
 
-impl<S: RuntimeScalar> Default for FrozenMesh<S> {
-    fn default() -> Self {
-        Self::empty()
-    }
-}
-
-impl<S: RuntimeScalar> FrozenMesh<S> {
+impl<B: Backend> FrozenMesh<B> {
     // =========================================================================
     // 构造函数
     // =========================================================================
 
     /// 创建空的冻结网格
-    pub fn empty() -> Self {
+    pub fn empty() -> Self
+    where
+        B: Default,
+    {
+        Self::empty_with_backend(B::default())
+    }
+
+    /// 创建空的冻结网格（显式后端）
+    pub fn empty_with_backend(backend: B) -> Self {
         Self {
             n_nodes: 0,
             node_coords: Vec::new(),
             n_cells: 0,
             cell_center: Vec::new(),
-            cell_area: Vec::new(),
-            cell_z_bed: Vec::new(),
+            cell_area: backend.alloc(0),
+            cell_z_bed: backend.alloc(0),
             cell_node_offsets: vec![0],
             cell_node_indices: Vec::new(),
             cell_face_offsets: vec![0],
@@ -211,19 +224,19 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             n_interior_faces: 0,
             face_center: Vec::new(),
             face_normal: Vec::new(),
-            face_length: Vec::new(),
-            face_z_left: Vec::new(),
-            face_z_right: Vec::new(),
+            face_length: backend.alloc(0),
+            face_z_left: backend.alloc(0),
+            face_z_right: backend.alloc(0),
             face_owner: Vec::new(),
             face_neighbor: Vec::new(),
             face_delta_owner: Vec::new(),
             face_delta_neighbor: Vec::new(),
-            face_dist_o2n: Vec::new(),
+            face_dist_o2n: backend.alloc(0),
             boundary_face_indices: Vec::new(),
             boundary_names: Vec::new(),
             face_boundary_id: Vec::new(),
-            min_cell_size: S::MAX,
-            max_cell_size: S::ZERO,
+            min_cell_size: B::Scalar::MAX,
+            max_cell_size: B::Scalar::ZERO,
             cell_refinement_level: Vec::new(),
             cell_parent: Vec::new(),
             ghost_capacity: 0,
@@ -231,20 +244,29 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             face_original_id: Vec::new(),
             cell_permutation: Vec::new(),
             cell_inv_permutation: Vec::new(),
+            backend,
         }
     }
 
     /// 创建带有指定单元数量的空网格（用于测试）
     ///
     /// 创建的网格有指定数量的单元，但没有实际几何数据，所有面积和高程设为默认值。
-    pub fn empty_with_cells(n_cells: usize) -> Self {
+    pub fn empty_with_cells(n_cells: usize) -> Self
+    where
+        B: Default,
+    {
+        Self::empty_with_cells_backend(B::default(), n_cells)
+    }
+
+    /// 创建带有指定单元数量的空网格（显式后端）
+    pub fn empty_with_cells_backend(backend: B, n_cells: usize) -> Self {
         Self {
             n_nodes: 0,
             node_coords: Vec::new(),
             n_cells,
             cell_center: vec![Point2D::new(0.0, 0.0); n_cells],
-            cell_area: vec![S::ONE; n_cells],
-            cell_z_bed: vec![S::ZERO; n_cells],
+            cell_area: backend.alloc_init(n_cells, B::Scalar::ONE),
+            cell_z_bed: backend.alloc_init(n_cells, B::Scalar::ZERO),
             cell_node_offsets: vec![0; n_cells + 1],
             cell_node_indices: Vec::new(),
             cell_face_offsets: vec![0; n_cells + 1],
@@ -255,19 +277,19 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             n_interior_faces: 0,
             face_center: Vec::new(),
             face_normal: Vec::new(),
-            face_length: Vec::new(),
-            face_z_left: Vec::new(),
-            face_z_right: Vec::new(),
+            face_length: backend.alloc(0),
+            face_z_left: backend.alloc(0),
+            face_z_right: backend.alloc(0),
             face_owner: Vec::new(),
             face_neighbor: Vec::new(),
             face_delta_owner: Vec::new(),
             face_delta_neighbor: Vec::new(),
-            face_dist_o2n: Vec::new(),
+            face_dist_o2n: backend.alloc(0),
             boundary_face_indices: Vec::new(),
             boundary_names: Vec::new(),
             face_boundary_id: Vec::new(),
-            min_cell_size: S::ONE,
-            max_cell_size: S::ONE,
+            min_cell_size: B::Scalar::ONE,
+            max_cell_size: B::Scalar::ONE,
             cell_refinement_level: vec![0; n_cells],
             cell_parent: (0..n_cells as u32).collect(),
             ghost_capacity: 0,
@@ -275,6 +297,7 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             face_original_id: Vec::new(),
             cell_permutation: (0..n_cells as u32).collect(),
             cell_inv_permutation: (0..n_cells as u32).collect(),
+            backend,
         }
     }
 
@@ -322,15 +345,15 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
         self.cell_center[cell]
     }
 
-    /// 单元面积（物理场数据，泛型 S）
+    /// 单元面积（物理场数据，泛型 B::Scalar）
     #[inline]
-    pub fn cell_area(&self, cell: usize) -> S {
+    pub fn cell_area(&self, cell: usize) -> B::Scalar {
         self.cell_area[cell]
     }
 
-    /// 单元底床高程（物理场数据，泛型 S）
+    /// 单元底床高程（物理场数据，泛型 B::Scalar）
     #[inline]
-    pub fn cell_z_bed(&self, cell: usize) -> S {
+    pub fn cell_z_bed(&self, cell: usize) -> B::Scalar {
         self.cell_z_bed[cell]
     }
 
@@ -374,21 +397,21 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
         self.face_normal[face]
     }
 
-    /// 面长度（物理场数据，泛型 S）
+    /// 面长度（物理场数据，泛型 B::Scalar）
     #[inline]
-    pub fn face_length(&self, face: usize) -> S {
+    pub fn face_length(&self, face: usize) -> B::Scalar {
         self.face_length[face]
     }
 
-    /// 面左侧高程（物理场数据，泛型 S）
+    /// 面左侧高程（物理场数据，泛型 B::Scalar）
     #[inline]
-    pub fn face_z_left(&self, face: usize) -> S {
+    pub fn face_z_left(&self, face: usize) -> B::Scalar {
         self.face_z_left[face]
     }
 
-    /// 面右侧高程（物理场数据，泛型 S）
+    /// 面右侧高程（物理场数据，泛型 B::Scalar）
     #[inline]
-    pub fn face_z_right(&self, face: usize) -> S {
+    pub fn face_z_right(&self, face: usize) -> B::Scalar {
         self.face_z_right[face]
     }
 
@@ -511,26 +534,26 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
     // =========================================================================
 
     /// 计算网格统计信息（面积、边长等）
-    pub fn statistics(&self) -> MeshStatistics<S> {
+    pub fn statistics(&self) -> MeshStatistics<B> {
         let (mut min_area, mut max_area, mut total_area) = if self.cell_area.is_empty() {
-            (S::ZERO, S::ZERO, S::ZERO)
+            (B::Scalar::ZERO, B::Scalar::ZERO, B::Scalar::ZERO)
         } else {
-            (S::MAX, S::ZERO, S::ZERO)
+            (B::Scalar::MAX, B::Scalar::ZERO, B::Scalar::ZERO)
         };
 
-        for &area in &self.cell_area {
+        for &area in self.cell_area.as_slice() {
             min_area = min_area.min(area);
             max_area = max_area.max(area);
             total_area = total_area + area;
         }
 
         let (mut min_length, mut max_length) = if self.face_length.is_empty() {
-            (S::ZERO, S::ZERO)
+            (B::Scalar::ZERO, B::Scalar::ZERO)
         } else {
-            (S::MAX, S::ZERO)
+            (B::Scalar::MAX, B::Scalar::ZERO)
         };
 
-        for &len in &self.face_length {
+        for &len in self.face_length.as_slice() {
             min_length = min_length.min(len);
             max_length = max_length.max(len);
         }
@@ -620,8 +643,8 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             }
         }
 
-        for (i, &area) in self.cell_area.iter().enumerate() {
-            if area <= S::ZERO {
+        for (i, &area) in self.cell_area.as_slice().iter().enumerate() {
+            if area <= B::Scalar::ZERO {
                 return Err(FrozenMeshError::NonPositiveArea {
                     cell: i,
                     area: format!("{area:?}"),
@@ -629,8 +652,8 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
             }
         }
 
-        for (i, &len) in self.face_length.iter().enumerate() {
-            if len <= S::ZERO {
+        for (i, &len) in self.face_length.as_slice().iter().enumerate() {
+            if len <= B::Scalar::ZERO {
                 return Err(FrozenMeshError::NonPositiveFaceLength {
                     face: i,
                     length: format!("{len:?}"),
@@ -804,7 +827,10 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
     }
 
     /// 计算网格几何中心（面积加权）
-    pub fn centroid(&self) -> Point2D {
+    pub fn centroid(&self) -> Point2D
+    where
+        B::Scalar: Into<f64>,
+    {
         if self.n_cells == 0 {
             return Point2D::new(0.0, 0.0);
         }
@@ -815,7 +841,7 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 
         for cell in 0..self.n_cells {
             let center = self.cell_center(cell);
-            let area = self.cell_area(cell).to_f64().unwrap();
+            let area: f64 = self.cell_area(cell).into();
             sum_x += center.x * area;
             sum_y += center.y * area;
             total_area += area;
@@ -833,20 +859,20 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 ///
 /// 记录网格的宏观统计信息，用于日志、监控和自适应计算。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeshStatistics<S: RuntimeScalar> {
+pub struct MeshStatistics<B: Backend> {
     pub n_cells: usize,
     pub n_faces: usize,
     pub n_interior_faces: usize,
     pub n_boundary_faces: usize,
     pub n_nodes: usize,
-    pub total_area: S,
-    pub min_cell_area: S,
-    pub max_cell_area: S,
-    pub min_edge_length: S,
-    pub max_edge_length: S,
+    pub total_area: B::Scalar,
+    pub min_cell_area: B::Scalar,
+    pub max_cell_area: B::Scalar,
+    pub min_edge_length: B::Scalar,
+    pub max_edge_length: B::Scalar,
 }
 
-impl<S: RuntimeScalar> std::fmt::Display for MeshStatistics<S> {
+impl<B: Backend> std::fmt::Display for MeshStatistics<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "=== 网格统计 ===")?;
         writeln!(f, "单元数: {}", self.n_cells)?;
@@ -856,18 +882,18 @@ impl<S: RuntimeScalar> std::fmt::Display for MeshStatistics<S> {
             self.n_faces, self.n_interior_faces, self.n_boundary_faces
         )?;
         writeln!(f, "节点数: {}", self.n_nodes)?;
-        writeln!(f, "总面积: {:.2}", self.total_area.to_f64().unwrap())?;
+        writeln!(f, "总面积: {:.2}", self.total_area)?;
         writeln!(
             f,
             "单元面积范围: [{:.2}, {:.2}]",
-            self.min_cell_area.to_f64().unwrap(),
-            self.max_cell_area.to_f64().unwrap()
+            self.min_cell_area,
+            self.max_cell_area
         )?;
         writeln!(
             f,
             "边长范围: [{:.2}, {:.2}]",
-            self.min_edge_length.to_f64().unwrap(),
-            self.max_edge_length.to_f64().unwrap()
+            self.min_edge_length,
+            self.max_edge_length
         )
     }
 }
@@ -876,7 +902,12 @@ impl<S: RuntimeScalar> std::fmt::Display for MeshStatistics<S> {
 // MeshAccess trait 实现
 // =========================================================================
 
-impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
+impl<B: Backend> MeshAccess<B> for FrozenMesh<B> {
+    #[inline]
+    fn backend(&self) -> &B {
+        &self.backend
+    }
+
     #[inline]
     fn n_cells(&self) -> usize {
         self.n_cells
@@ -903,8 +934,8 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
     }
 
     #[inline]
-    fn cell_area(&self, cell: usize) -> f64 {
-        self.cell_area[cell].to_f64().unwrap()
+    fn cell_area(&self, cell: usize) -> B::Scalar {
+        self.cell_area[cell]
     }
 
     #[inline]
@@ -913,8 +944,8 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
     }
 
     #[inline]
-    fn face_length(&self, face: usize) -> f64 {
-        self.face_length[face].to_f64().unwrap()
+    fn face_length(&self, face: usize) -> B::Scalar {
+        self.face_length[face]
     }
 
     #[inline]
@@ -928,8 +959,8 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
     }
 
     #[inline]
-    fn cell_bed_elevation(&self, cell: usize) -> f64 {
-        self.cell_z_bed[cell].to_f64().unwrap()
+    fn cell_bed_elevation(&self, cell: usize) -> B::Scalar {
+        self.cell_z_bed[cell]
     }
 
     #[inline]
@@ -984,30 +1015,30 @@ impl<S: RuntimeScalar> MeshAccess for FrozenMesh<S> {
     }
 
     /// 所有单元面积（运行时转换为 f64 的 Vec）
-    fn all_cell_areas(&self) -> Vec<f64> {
-        self.cell_area.iter().map(|s| (*s).to_f64().unwrap()).collect()
+    fn all_cell_areas(&self) -> Vec<B::Scalar> {
+        self.cell_area.copy_to_vec()
     }
 
     /// 所有单元底床高程（运行时转换为 f64 的 Vec）
-    fn all_cell_bed_elevations(&self) -> Vec<f64> {
-        self.cell_z_bed.iter().map(|s| (*s).to_f64().unwrap()).collect()
+    fn all_cell_bed_elevations(&self) -> Vec<B::Scalar> {
+        self.cell_z_bed.copy_to_vec()
     }
 
     #[inline]
-    fn face_z_left(&self, face: usize) -> f64 {
-        self.face_z_left[face].to_f64().unwrap()
+    fn face_z_left(&self, face: usize) -> B::Scalar {
+        self.face_z_left[face]
     }
 
     #[inline]
-    fn face_z_right(&self, face: usize) -> f64 {
-        self.face_z_right[face].to_f64().unwrap()
+    fn face_z_right(&self, face: usize) -> B::Scalar {
+        self.face_z_right[face]
     }
 }
 
-impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
+impl<B: Backend> MeshTopology<B> for FrozenMesh<B> {
     #[inline]
-    fn face_o2n_distance(&self, face: usize) -> f64 {
-        self.face_dist_o2n[face].to_f64().unwrap()
+    fn face_o2n_distance(&self, face: usize) -> B::Scalar {
+        self.face_dist_o2n[face]
     }
 
     #[inline]
@@ -1021,13 +1052,13 @@ impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
     }
 
     #[inline]
-    fn min_cell_size(&self) -> f64 {
-        self.min_cell_size.to_f64().unwrap()
+    fn min_cell_size(&self) -> B::Scalar {
+        self.min_cell_size
     }
 
     #[inline]
-    fn max_cell_size(&self) -> f64 {
-        self.max_cell_size.to_f64().unwrap()
+    fn max_cell_size(&self) -> B::Scalar {
+        self.max_cell_size
     }
 }
 
@@ -1035,7 +1066,7 @@ impl<S: RuntimeScalar> MeshTopology for FrozenMesh<S> {
 // 空间查询与几何算法
 // =========================================================================
 
-impl<S: RuntimeScalar> FrozenMesh<S> {
+impl<B: Backend> FrozenMesh<B> {
     // =========================================================================
     // 空间索引创建
     // =========================================================================
@@ -1046,7 +1077,7 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
     }
 
     /// 创建网格定位器（支持泛型精度）
-    pub fn create_locator(&self) -> MeshLocator<'_, S> {
+    pub fn create_locator(&self) -> MeshLocator<'_, B> {
         MeshLocator::new(self)
     }
 
@@ -1199,12 +1230,11 @@ impl<S: RuntimeScalar> FrozenMesh<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::RuntimeScalar;
-    use num_traits::ToPrimitive;
+    use mh_runtime::{Backend, CpuBackend};
 
     #[test]
     fn test_empty_frozen_mesh() {
-        let mesh: FrozenMesh<f64> = FrozenMesh::empty();
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty();
         assert_eq!(mesh.n_cells(), 0);
         assert_eq!(mesh.n_faces(), 0);
         assert_eq!(mesh.n_nodes(), 0);
@@ -1212,22 +1242,22 @@ mod tests {
 
     #[test]
     fn test_frozen_mesh_f32() {
-        let mesh: FrozenMesh<f32> = FrozenMesh::empty_with_cells(5);
+        let mesh: FrozenMesh<CpuBackend<f32>> = FrozenMesh::empty_with_cells(5);
         assert_eq!(mesh.n_cells(), 5);
         assert_eq!(mesh.cell_area(0), f32::ONE);
     }
 
     #[test]
     fn test_validate_empty() {
-        let mesh: FrozenMesh<f64> = FrozenMesh::empty();
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty();
         assert!(mesh.validate().is_ok());
     }
 
     #[test]
     fn test_mesh_access_trait() {
-        let mesh: FrozenMesh<f64> = FrozenMesh::empty_with_cells(5);
-        
-        fn check_mesh<M: MeshAccess>(m: &M) -> usize {
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_cells(5);
+
+        fn check_mesh<B: Backend, M: MeshAccess<B>>(m: &M) -> usize {
             m.n_cells()
         }
         
@@ -1236,15 +1266,15 @@ mod tests {
 
     #[test]
     fn test_statistics_f32() {
-        let mesh: FrozenMesh<f32> = FrozenMesh::empty_with_cells(3);
+        let mesh: FrozenMesh<CpuBackend<f32>> = FrozenMesh::empty_with_cells(3);
         let stats = mesh.statistics();
         assert_eq!(stats.n_cells, 3);
-        assert_eq!(stats.total_area.to_f64().unwrap(), 3.0);
+        assert_eq!(stats.total_area, 3.0_f32);
     }
 
     #[test]
     fn test_centroid() {
-        let mesh: FrozenMesh<f64> = FrozenMesh::empty_with_cells(2);
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_cells(2);
         let mesh = FrozenMesh {
             cell_center: vec![Point2D::new(0.0, 0.0), Point2D::new(2.0, 2.0)],
             cell_area: vec![1.0, 1.0],

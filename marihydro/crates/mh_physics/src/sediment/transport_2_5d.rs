@@ -78,13 +78,14 @@ where
         settling_velocity: B::Scalar,
         diffusion_coeff: B::Scalar,
     ) -> Self {
+        let config = Transport2_5DConfig::with_backend_defaults(&backend);
         Self::new_with_config(
             backend,
             n_cells,
             n_layers,
             settling_velocity,
             diffusion_coeff,
-            Transport2_5DConfig::with_backend_defaults(&backend),
+            config,
         )
     }
 

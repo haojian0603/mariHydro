@@ -1,4 +1,5 @@
 // crates/mh_runtime/src/scalar.rs
+#![allow(clippy::items_after_test_module)]
 
 //! RuntimeScalar - 密封的标量类型抽象
 //!
@@ -34,7 +35,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 compile_error!("目标平台缺少 32/64 位原子支持，无法构建并行运行时");
 
 use bytemuck::Pod;
-use num_traits::{Float, FromPrimitive, NumAssign};
+use num_traits::{Float, FromPrimitive, NumAssign, ToPrimitive};
 
 /// 密封模块，禁止外部实现
 mod private {
@@ -96,7 +97,9 @@ pub trait RuntimeScalar:
     + Pod
     + Float
     + FromPrimitive
+    + ToPrimitive
     + NumAssign
+    + PartialOrd
     + Copy
     + Clone
     + Debug
@@ -179,6 +182,18 @@ pub trait RuntimeScalar:
         } else {
             self
         }
+    }
+
+    /// 返回较大值
+    #[inline]
+    fn max_value(self, other: Self) -> Self {
+        if self > other { self } else { other }
+    }
+
+    /// 返回较小值
+    #[inline]
+    fn min_value(self, other: Self) -> Self {
+        if self < other { self } else { other }
     }
 
     /// 安全平方根（负数返回 0）

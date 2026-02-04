@@ -114,8 +114,7 @@
 //! ```
 
 use crate::adapter::PhysicsMesh;
-use crate::types::FaceIndex;
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar as Scalar};
+use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// 扩散系数类型（配置层，硬编码 f64）
@@ -637,7 +636,7 @@ impl<B: Backend> AnisotropicDiffusionOperator<B> {
 
 /// 计算调和平均
 #[inline]
-fn harmonic_mean<S: Scalar>(a: S, b: S) -> S {
+fn harmonic_mean<S: RuntimeScalar>(a: S, b: S) -> S {
     let eps = S::MIN_POSITIVE;
     let two = S::TWO;
     let denom = a + b;

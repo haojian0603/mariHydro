@@ -28,6 +28,7 @@ use mh_physics::{
     },
     state::ShallowWaterState,
     engine::ShallowWaterSolver,
+    sources::NoSource,
     adapter::PhysicsMesh,
     types::NumericalParams,
     Layer3Config,
@@ -46,7 +47,7 @@ static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| {
 /// 获取 Backend 引用
 #[inline(always)]
 fn test_backend() -> &'static CpuBackend<f64> {
-    &*BACKEND
+    &BACKEND
 }
 
 /// 统一状态创建入口（禁止在测试函数中直接调用 new_with_backend）
@@ -70,8 +71,12 @@ fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
 fn create_solver(
     mesh: Arc<PhysicsMesh>,
     config: Layer3Config<f64>,
-) -> ShallowWaterSolver<CpuBackend<f64>> {
-    ShallowWaterSolver::new(mesh, config, test_backend().clone())
+) -> ShallowWaterSolver<CpuBackend<f64>, NoSource<CpuBackend<f64>>> {
+    ShallowWaterSolver::<CpuBackend<f64>, NoSource<CpuBackend<f64>>>::new(
+        mesh,
+        config,
+        test_backend().clone(),
+    )
 }
 
 // ============================================================
@@ -209,7 +214,7 @@ fn test_zero_rhs_instant_convergence() {
     };
 
     let mut solver = PcgSolver::new(backend.clone(), config.clone());
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x_zero, &precond);
 
     // 零初始猜测 + 零RHS = 0次迭代收敛
@@ -229,7 +234,7 @@ fn test_zero_rhs_instant_convergence() {
     let mut x_nonzero = backend.alloc(50);
     x_nonzero.fill(1.0);
     let mut solver2 = PcgSolver::new(backend.clone(), config);
-    let precond2 = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let precond2 = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let result2 = solver2.solve(&matrix, &b, &mut x_nonzero, &precond2);
     
     assert_eq!(
@@ -266,7 +271,7 @@ fn test_ill_conditioned_matrix_stability() {
     };
 
     let mut solver = PcgSolver::new(backend.clone(), config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 必须收敛或明确报告失败
@@ -540,7 +545,7 @@ fn test_solver_on_singular_matrix() {
     };
 
     let mut solver = PcgSolver::new(backend.clone(), config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let result = solver.solve(&matrix, &b, &mut x, &precond);
 
     // 奇异矩阵可能不收敛，但不应panic
@@ -756,7 +761,7 @@ fn test_parallel_solver_consistency() {
             let mut x = backend.alloc_init(100, 0.0);
             let config = SolverConfig::default();
             let mut solver = PcgSolver::new(backend.clone(), config);
-            let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+            let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
             let result = solver.solve(&matrix, &b, &mut x, &precond);
             (result, x)
         })
@@ -792,7 +797,7 @@ fn test_no_memory_leak_in_solver() {
 
         let config = SolverConfig::default();
         let mut solver = PcgSolver::new(backend.clone(), config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
         let _ = solver.solve(&matrix, &b, &mut x, &precond);
     }
 

@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
 use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
+use mh_physics::sources::NoSource;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
@@ -31,8 +32,12 @@ mod test_harness {
     pub fn create_solver(
         mesh: Arc<PhysicsMesh>,
         config: Layer3Config<f64>,
-    ) -> ShallowWaterSolver<CpuBackend<f64>> {
-        ShallowWaterSolver::new(mesh, config, get_backend())
+    ) -> ShallowWaterSolver<CpuBackend<f64>, NoSource<CpuBackend<f64>>> {
+        ShallowWaterSolver::<CpuBackend<f64>, NoSource<CpuBackend<f64>>>::new(
+            mesh,
+            config,
+            get_backend(),
+        )
     }
 }
 

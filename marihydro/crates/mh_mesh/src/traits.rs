@@ -1,4 +1,5 @@
 // crates/mh_mesh/src/traits.rs
+#![allow(clippy::items_after_test_module)]
 
 //! 网格抽象接口（MeshAccess & MeshTopology）
 //!
@@ -47,7 +48,8 @@
 //! ```
 
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::{BoundaryIndex, CellIndex, FaceIndex, NodeIndex};
+use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::Float;
 
 // =========================================================================
 // MeshAccess - 网格只读访问接口
@@ -56,7 +58,9 @@ use mh_runtime::{BoundaryIndex, CellIndex, FaceIndex, NodeIndex};
 /// 网格访问接口（只读）
 ///
 /// 提供对网格几何、拓扑和物理场的统一访问。实现类型必须保证 O(1) 时间复杂度的几何查询。
-pub trait MeshAccess: Send + Sync {
+pub trait MeshAccess<B: Backend>: Send + Sync {
+    /// 获取后端引用
+    fn backend(&self) -> &B;
     // ===== 基本计数 =====
 
     /// 单元总数
@@ -83,13 +87,13 @@ pub trait MeshAccess: Send + Sync {
     fn cell_centroid(&self, cell: usize) -> Point2D;
 
     /// 单元面积
-    fn cell_area(&self, cell: usize) -> f64;
+    fn cell_area(&self, cell: usize) -> B::Scalar;
 
     /// 面中点（2D 坐标）
     fn face_centroid(&self, face: usize) -> Point2D;
 
     /// 面长度（边长）
-    fn face_length(&self, face: usize) -> f64;
+    fn face_length(&self, face: usize) -> B::Scalar;
 
     /// 面外法向量（3D，从 owner 指向 neighbor，已归一化）
     fn face_normal(&self, face: usize) -> Point3D;
@@ -105,7 +109,7 @@ pub trait MeshAccess: Send + Sync {
     fn node_position(&self, node: usize) -> Point3D;
 
     /// 单元底床高程（用于水位-水深转换）
-    fn cell_bed_elevation(&self, cell: usize) -> f64;
+    fn cell_bed_elevation(&self, cell: usize) -> B::Scalar;
 
     // ===== 拓扑查询 =====
 
@@ -150,18 +154,18 @@ pub trait MeshAccess: Send + Sync {
     fn all_cell_centroids(&self) -> &[Point2D];
 
     /// 所有单元面积（运行时转换为 f64，拥有所有权）
-    fn all_cell_areas(&self) -> Vec<f64>;
+    fn all_cell_areas(&self) -> Vec<B::Scalar>;
 
     /// 所有单元底床高程（运行时转换为 f64，拥有所有权）
-    fn all_cell_bed_elevations(&self) -> Vec<f64>;
+    fn all_cell_bed_elevations(&self) -> Vec<B::Scalar>;
 
     // ===== 面高程 =====
 
     /// 面左侧（owner）高程
-    fn face_z_left(&self, face: usize) -> f64;
+    fn face_z_left(&self, face: usize) -> B::Scalar;
 
     /// 面右侧（neighbor）高程
-    fn face_z_right(&self, face: usize) -> f64;
+    fn face_z_right(&self, face: usize) -> B::Scalar;
 }
 
 // =========================================================================
@@ -171,45 +175,52 @@ pub trait MeshAccess: Send + Sync {
 /// 网格拓扑计算接口
 ///
 /// 基于 MeshAccess 提供高级拓扑计算，如距离、权重、特征长度等。
-pub trait MeshTopology: MeshAccess {
+pub trait MeshTopology<B: Backend>: MeshAccess<B> {
     /// 两单元中心距离
     #[inline]
-    fn cell_distance(&self, cell1: usize, cell2: usize) -> f64 {
+    fn cell_distance(&self, cell1: usize, cell2: usize) -> B::Scalar {
         let c1 = self.cell_centroid(cell1);
         let c2 = self.cell_centroid(cell2);
-        ((c2.x - c1.x).powi(2) + (c2.y - c1.y).powi(2)).sqrt()
+        let dx = c2.x - c1.x;
+        let dy = c2.y - c1.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        self.backend().scalar_from_f64(dist)
     }
 
     /// 单元中心到面中心的距离
     #[inline]
-    fn cell_to_face_distance(&self, cell: usize, face: usize) -> f64 {
+    fn cell_to_face_distance(&self, cell: usize, face: usize) -> B::Scalar {
         let cc = self.cell_centroid(cell);
         let fc = self.face_centroid(face);
-        ((fc.x - cc.x).powi(2) + (fc.y - cc.y).powi(2)).sqrt()
+        let dx = fc.x - cc.x;
+        let dy = fc.y - cc.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        self.backend().scalar_from_f64(dist)
     }
 
     /// 面的 owner 到 neighbor 中心距离
-    fn face_o2n_distance(&self, face: usize) -> f64;
+    fn face_o2n_distance(&self, face: usize) -> B::Scalar;
 
     /// 面的几何权重（用于梯度插值，owner 侧权重）
     #[inline]
-    fn face_weight(&self, face: usize) -> f64 {
+    fn face_weight(&self, face: usize) -> B::Scalar {
         let owner = self.face_owner(face);
         let neighbor = match self.face_neighbor(face) {
             Some(n) => n,
-            None => return 1.0,
+            None => return B::Scalar::ONE,
         };
 
         let d_owner = self.cell_to_face_distance(owner, face);
         let d_neighbor = self.cell_to_face_distance(neighbor, face);
         let total = d_owner + d_neighbor;
 
-        if total < 1e-14 { 0.5 } else { d_neighbor / total }
+        let eps = self.backend().scalar_from_f64(1e-14);
+        if total < eps { B::Scalar::HALF } else { d_neighbor / total }
     }
 
     /// 单元特征长度（sqrt(面积)）
     #[inline]
-    fn characteristic_length(&self, cell: usize) -> f64 {
+    fn characteristic_length(&self, cell: usize) -> B::Scalar {
         self.cell_area(cell).sqrt()
     }
 
@@ -220,10 +231,10 @@ pub trait MeshTopology: MeshAccess {
     fn face_delta_neighbor(&self, face: usize) -> Point2D;
 
     /// 全局最小单元尺寸
-    fn min_cell_size(&self) -> f64;
+    fn min_cell_size(&self) -> B::Scalar;
 
     /// 全局最大单元尺寸
-    fn max_cell_size(&self) -> f64;
+    fn max_cell_size(&self) -> B::Scalar;
 }
 
 // =========================================================================
@@ -232,24 +243,24 @@ pub trait MeshTopology: MeshAccess {
 
 /// 单元几何信息（用于物理场计算）
 #[derive(Debug, Clone, Copy)]
-pub struct CellGeometry {
+pub struct CellGeometry<B: Backend> {
     /// 质心坐标
     pub centroid: Point2D,
     /// 面积
-    pub area: f64,
+    pub area: B::Scalar,
     /// 特征长度（sqrt(area)）
-    pub characteristic_length: f64,
+    pub characteristic_length: B::Scalar,
     /// 底床高程
-    pub bed_elevation: f64,
+    pub bed_elevation: B::Scalar,
 }
 
 /// 面几何信息（用于通量计算）
 #[derive(Debug, Clone, Copy)]
-pub struct FaceGeometry {
+pub struct FaceGeometry<B: Backend> {
     /// 面中心
     pub centroid: Point2D,
     /// 面长度
-    pub length: f64,
+    pub length: B::Scalar,
     /// 法向量（2D）
     pub normal: Point2D,
     /// Owner 单元索引
@@ -263,8 +274,8 @@ pub struct FaceGeometry {
 // =========================================================================
 
 /// 网格验证报告（拓扑和质量检查）
-#[derive(Debug, Clone, Default)]
-pub struct ValidationReport {
+#[derive(Debug, Clone)]
+pub struct ValidationReport<B: Backend> {
     /// 是否通过验证
     pub is_valid: bool,
     /// 错误列表（导致计算失败）
@@ -272,12 +283,12 @@ pub struct ValidationReport {
     /// 警告列表（可能影响精度）
     pub warnings: Vec<String>,
     /// 统计信息
-    pub stats: ValidationStats,
+    pub stats: ValidationStats<B>,
 }
 
 /// 验证统计信息
-#[derive(Debug, Clone, Default)]
-pub struct ValidationStats {
+#[derive(Debug, Clone)]
+pub struct ValidationStats<B: Backend> {
     /// 单元数
     pub n_cells: usize,
     /// 面数
@@ -285,16 +296,41 @@ pub struct ValidationStats {
     /// 节点数
     pub n_nodes: usize,
     /// 最小面积
-    pub min_area: f64,
+    pub min_area: B::Scalar,
     /// 最大面积
-    pub max_area: f64,
+    pub max_area: B::Scalar,
     /// 平均面积
-    pub avg_area: f64,
+    pub avg_area: B::Scalar,
     /// 退化单元数（面积接近零）
     pub degenerate_cells: usize,
 }
 
-impl ValidationReport {
+impl<B: Backend> Default for ValidationReport<B> {
+    fn default() -> Self {
+        Self {
+            is_valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            stats: ValidationStats::default(),
+        }
+    }
+}
+
+impl<B: Backend> Default for ValidationStats<B> {
+    fn default() -> Self {
+        Self {
+            n_cells: 0,
+            n_faces: 0,
+            n_nodes: 0,
+            min_area: B::Scalar::ZERO,
+            max_area: B::Scalar::ZERO,
+            avg_area: B::Scalar::ZERO,
+            degenerate_cells: 0,
+        }
+    }
+}
+
+impl<B: Backend> ValidationReport<B> {
     /// 创建通过验证的报告
     pub fn passed() -> Self {
         Self {
@@ -327,18 +363,19 @@ impl ValidationReport {
 /// MeshAccess 扩展方法（提供便捷工具函数）
 ///
 /// 本 trait 为所有实现 MeshAccess 的类型自动提供扩展功能，无需重复实现。
-pub trait MeshAccessExt: MeshAccess {
+pub trait MeshAccessExt<B: Backend>: MeshAccess<B> {
     /// 验证网格拓扑一致性
     ///
     /// 检查项目：
     /// - 面的 owner/neighbor 索引有效性
     /// - 单元面积是否为正
     /// - 边界面配置正确性
-    fn validate_topology(&self) -> ValidationReport {
+    fn validate_topology(&self) -> ValidationReport<B> {
         let mut report = ValidationReport::passed();
         report.stats.n_cells = self.n_cells();
         report.stats.n_faces = self.n_faces();
         report.stats.n_nodes = self.n_nodes();
+        let backend = self.backend();
 
         // 检查 owner/neighbor 索引
         for face in 0..self.n_faces() {
@@ -355,20 +392,22 @@ pub trait MeshAccessExt: MeshAccess {
         }
 
         // 检查单元面积
-        let areas: Vec<f64> = (0..self.n_cells()).map(|i| self.cell_area(i)).collect();
+        let areas: Vec<B::Scalar> = (0..self.n_cells()).map(|i| self.cell_area(i)).collect();
         if areas.is_empty() {
-            report.stats.min_area = 0.0;
-            report.stats.max_area = 0.0;
-            report.stats.avg_area = 0.0;
+            report.stats.min_area = B::Scalar::ZERO;
+            report.stats.max_area = B::Scalar::ZERO;
+            report.stats.avg_area = B::Scalar::ZERO;
         } else {
-            report.stats.min_area = areas.iter().cloned().fold(f64::INFINITY, f64::min);
-            report.stats.max_area = areas.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            report.stats.avg_area = areas.iter().sum::<f64>() / areas.len() as f64;
+            report.stats.min_area = areas.iter().cloned().fold(B::Scalar::MAX, B::Scalar::min);
+            report.stats.max_area = areas.iter().cloned().fold(B::Scalar::MIN, B::Scalar::max);
+            let count = backend.scalar_from_f64(areas.len() as f64);
+            report.stats.avg_area = areas.iter().cloned().fold(B::Scalar::ZERO, |acc, v| acc + v) / count;
+            let small = backend.scalar_from_f64(1e-12);
 
             for (i, &area) in areas.iter().enumerate() {
-                if area <= 0.0 {
+                if area <= B::Scalar::ZERO {
                     report.add_error(format!("单元 {} 面积为负或零: {}", i, area));
-                } else if area < 1e-12 {
+                } else if area < small {
                     report.stats.degenerate_cells += 1;
                     report.add_warning(format!("单元 {} 面积过小: {}", i, area));
                 }
@@ -379,7 +418,7 @@ pub trait MeshAccessExt: MeshAccess {
     }
 
     /// 获取单元几何信息
-    fn cell_geometry(&self, cell: usize) -> CellGeometry {
+    fn cell_geometry(&self, cell: usize) -> CellGeometry<B> {
         CellGeometry {
             centroid: self.cell_centroid(cell),
             area: self.cell_area(cell),
@@ -389,7 +428,7 @@ pub trait MeshAccessExt: MeshAccess {
     }
 
     /// 获取面几何信息
-    fn face_geometry(&self, face: usize) -> FaceGeometry {
+    fn face_geometry(&self, face: usize) -> FaceGeometry<B> {
         FaceGeometry {
             centroid: self.face_centroid(face),
             length: self.face_length(face),
@@ -400,15 +439,15 @@ pub trait MeshAccessExt: MeshAccess {
     }
 
     /// 计算网格总面积
-    fn total_area(&self) -> f64 {
-        (0..self.n_cells()).map(|i| self.cell_area(i)).sum()
+    fn total_area(&self) -> B::Scalar {
+        (0..self.n_cells()).map(|i| self.cell_area(i)).fold(B::Scalar::ZERO, |acc, v| acc + v)
     }
 
     /// 计算边界面总长度
-    fn total_boundary_length(&self) -> f64 {
+    fn total_boundary_length(&self) -> B::Scalar {
         (self.n_internal_faces()..self.n_faces())
             .map(|i| self.face_length(i))
-            .sum()
+            .fold(B::Scalar::ZERO, |acc, v| acc + v)
     }
 
     /// 获取边界面索引列表
@@ -483,7 +522,7 @@ pub trait MeshAccessExt: MeshAccess {
 }
 
 // 自动为所有实现 MeshAccess 的类型提供扩展方法
-impl<T: MeshAccess + ?Sized> MeshAccessExt for T {}
+impl<B: Backend, T: MeshAccess<B> + ?Sized> MeshAccessExt<B> for T {}
 
 // =========================================================================
 // 测试模块
@@ -492,12 +531,14 @@ impl<T: MeshAccess + ?Sized> MeshAccessExt for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     /// Mock 网格用于单元测试
     struct MockMesh {
         n_cells: usize,
         n_faces: usize,
         n_internal_faces: usize,
+        backend: CpuBackend<f64>,
     }
 
     impl MockMesh {
@@ -506,11 +547,13 @@ mod tests {
                 n_cells,
                 n_faces,
                 n_internal_faces,
+                backend: CpuBackend::<f64>::new(),
             }
         }
     }
 
-    impl MeshAccess for MockMesh {
+    impl MeshAccess<CpuBackend<f64>> for MockMesh {
+        fn backend(&self) -> &CpuBackend<f64> { &self.backend }
         fn n_cells(&self) -> usize { self.n_cells }
         fn n_faces(&self) -> usize { self.n_faces }
         fn n_internal_faces(&self) -> usize { self.n_internal_faces }
@@ -573,7 +616,7 @@ mod tests {
 /// 为保持索引分层（基础索引/运行时索引/业务索引），
 /// 本 trait 以运行时索引类型为输入输出，
 /// 并基于 MeshAccess 的 usize 实现提供类型安全包装。
-pub trait MeshAccessTyped: MeshAccess {
+pub trait MeshAccessTyped<B: Backend>: MeshAccess<B> {
     /// 单元质心（强类型索引）
     #[inline]
     fn cell_centroid_idx(&self, cell: CellIndex) -> Point2D {
@@ -582,7 +625,7 @@ pub trait MeshAccessTyped: MeshAccess {
 
     /// 单元面积（强类型索引）
     #[inline]
-    fn cell_area_idx(&self, cell: CellIndex) -> f64 {
+    fn cell_area_idx(&self, cell: CellIndex) -> B::Scalar {
         self.cell_area(cell.get())
     }
 
@@ -594,7 +637,7 @@ pub trait MeshAccessTyped: MeshAccess {
 
     /// 面长度（强类型索引）
     #[inline]
-    fn face_length_idx(&self, face: FaceIndex) -> f64 {
+    fn face_length_idx(&self, face: FaceIndex) -> B::Scalar {
         self.face_length(face.get())
     }
 
@@ -612,7 +655,7 @@ pub trait MeshAccessTyped: MeshAccess {
 
     /// 单元底床高程（强类型索引）
     #[inline]
-    fn cell_bed_elevation_idx(&self, cell: CellIndex) -> f64 {
+    fn cell_bed_elevation_idx(&self, cell: CellIndex) -> B::Scalar {
         self.cell_bed_elevation(cell.get())
     }
 
@@ -666,13 +709,13 @@ pub trait MeshAccessTyped: MeshAccess {
 
     /// 面左侧高程（强类型索引）
     #[inline]
-    fn face_z_left_idx(&self, face: FaceIndex) -> f64 {
+    fn face_z_left_idx(&self, face: FaceIndex) -> B::Scalar {
         self.face_z_left(face.get())
     }
 
     /// 面右侧高程（强类型索引）
     #[inline]
-    fn face_z_right_idx(&self, face: FaceIndex) -> f64 {
+    fn face_z_right_idx(&self, face: FaceIndex) -> B::Scalar {
         self.face_z_right(face.get())
     }
 
@@ -686,4 +729,4 @@ pub trait MeshAccessTyped: MeshAccess {
 }
 
 // 自动为所有 MeshAccess 实现类型提供强类型接口
-impl<T: MeshAccess + ?Sized> MeshAccessTyped for T {}
+impl<B: Backend, T: MeshAccess<B> + ?Sized> MeshAccessTyped<B> for T {}

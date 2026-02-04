@@ -99,7 +99,7 @@ pub mod structures;
 pub use traits::{
     SourceContribution, SourceContext, SourceTerm, SourceHelpers,
     SourceContributionGeneric, SourceContextGeneric, SourceTermGeneric,
-    SourceStiffness, SourceRegistryGeneric,
+    SourceStiffness, SourceRegistryGeneric, NoSource,
 };
 
 pub use registry::SourceRegistry;

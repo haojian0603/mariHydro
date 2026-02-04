@@ -65,13 +65,13 @@ fn test_spatial_timeseries() {
 #[test]
 fn test_transport_formula_mpm() {
     use mh_physics::sediment::formulas::{MeyerPeterMullerFormula, TransportFormula};
-    use mh_physics::sediment::properties::SedimentProperties;
+    use mh_physics::sediment::properties::SedimentPropertiesGeneric;
     use mh_physics::types::PhysicalConstants;
     use mh_runtime::CpuBackend;
 
     let backend = CpuBackend::<f64>::new();
     let formula = MeyerPeterMullerFormula::new(&backend);
-    let sediment = SedimentProperties::from_d50_mm(1.0);  // 1mm 粒径
+    let sediment = SedimentPropertiesGeneric::from_d50_mm(&backend, 1.0);  // 1mm 粒径
     let physics = PhysicalConstants::seawater();
 
     // 无剪切应力时输沙率为零
@@ -122,11 +122,12 @@ fn test_tracer_boundary_manager() {
 #[test]
 fn test_diffusion_coefficient() {
     use mh_physics::tracer::diffusion::DiffusionCoefficient;
+    use mh_physics::CpuBackend;
 
-    let const_coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Constant(10.0);
+    let const_coef: DiffusionCoefficient<CpuBackend<f64>> = DiffusionCoefficient::Constant(10.0);
     assert!((const_coef.effective_at(0, None) - 10.0).abs() < 1e-10);
 
-    let turb_coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Turbulent { molecular: 1.0, schmidt_number: 0.7 };
+    let turb_coef: DiffusionCoefficient<CpuBackend<f64>> = DiffusionCoefficient::Turbulent { molecular: 1.0, schmidt_number: 0.7 };
     let eff = turb_coef.effective_at(0, Some(7.0));
     assert!((eff - 11.0).abs() < 1e-10);
 }
@@ -176,16 +177,23 @@ fn test_csr_mul_vec() {
 #[test]
 fn test_vector_ops() {
     use mh_physics::numerics::{axpy, dot, norm2};
+    use mh_runtime::{Backend, CpuBackend};
+    use num_traits::ToPrimitive;
 
-    let x: Vec<f64> = vec![3.0, 4.0];
-    let mut y: Vec<f64> = vec![1.0, 2.0];
+    let backend = CpuBackend::<f64>::new();
+    let mut x = backend.alloc(2);
+    let mut y = backend.alloc(2);
+    x.copy_from_slice(&[3.0, 4.0]);
+    y.copy_from_slice(&[1.0, 2.0]);
 
-    assert!((norm2(&x) - 5.0).abs() < 1e-14);
+    let n = norm2(&backend, &x).to_f64().unwrap();
+    assert!((n - 5.0).abs() < 1e-14);
 
-    let d = dot(&x, &y).unwrap();
+    let d = dot(&backend, &x, &y).unwrap().to_f64().unwrap();
     assert!((d - 11.0).abs() < 1e-14);
 
-    axpy(2.0, &x, &mut y).unwrap();
+    let alpha = backend.scalar_from_f64(2.0);
+    axpy(&backend, alpha, &x, &mut y).unwrap();
     assert!((y[0] - 7.0).abs() < 1e-14);
     assert!((y[1] - 10.0).abs() < 1e-14);
 }
@@ -213,7 +221,7 @@ fn test_pcg_solver_simple() {
 
     let config = SolverConfig::new(1e-10, 100);
     let mut solver = PcgSolver::new(backend.clone(), config);
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &mat).unwrap();
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &mat).unwrap();
 
     let result = solver.solve(&mat, &b, &mut x, &precond);
 

@@ -210,7 +210,7 @@ fn test_pressure_solve_convergence_rate() {
     }
 
     // 预条件器 - 使用Backend单例
-    let precond = JacobiF64::from_matrix(&backend, &matrix).expect("创建预条件器失败");
+    let precond = JacobiF64::from_matrix(backend.clone(), &matrix).expect("创建预条件器失败");
 
     // 求解器
     let config = SolverConfig::new(1e-10, 100);
@@ -221,7 +221,7 @@ fn test_pressure_solve_convergence_rate() {
 
     // 计算实际残差
     let mut residual = backend.alloc(n);
-    matrix.mul_vec(x.as_slice(), residual.as_slice_mut());
+    matrix.mul_vec(x.as_slice(), residual.as_mut_slice());
     let res_norm: f64 = (0..n)
         .map(|i| (rhs[i] - residual[i]).powi(2))
         .sum::<f64>()

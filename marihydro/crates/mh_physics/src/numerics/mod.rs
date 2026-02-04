@@ -18,22 +18,22 @@ pub mod operators;
 pub mod reconstruction;
 
 pub use gradient::{
-    FaceInterpolation, GradientMethodGeneric, GreenGaussConfig, GreenGaussGradient, LeastSquaresConfig,
-    LeastSquaresGradient, ScalarGradientStorageGeneric, VectorGradientStorageGeneric,
+    FaceInterpolation, GradientMethod, GreenGaussConfig, GreenGaussGradient, LeastSquaresConfig,
+    LeastSquaresGradient, ScalarGradientStorage, VectorGradientStorage,
 };
 
 pub use limiter::{
-    create_limiter_generic,
-    BarthJespersenGeneric,
-    MinmodGeneric,
-    VenkatakrishnanGeneric,
-    SlopeLimiterGeneric, LimiterContextGeneric, NoLimiterGeneric,
+    create_limiter,
+    BarthJespersen,
+    Minmod,
+    Venkatakrishnan,
+    SlopeLimiter, LimiterContext, NoLimiter,
 };
 
 pub use reconstruction::{
     GradientType, MusclConfig,
-    MusclReconstructorGeneric, WenoConfig, WenoReconstructorGeneric,
-    ReconstructedStateGeneric, ReconstructorGeneric,
+    MusclReconstructor, WenoConfig, WenoReconstructor,
+    ReconstructedState, Reconstructor,
 };
 
 // 稀疏线性代数

@@ -132,7 +132,7 @@ impl WaveSpectrum {
     /// 峰值周期
     pub fn peak_period(&self) -> f64 {
         let mut max_e = 0.0;
-        let mut f_peak = self.frequencies.get(0).copied().unwrap_or(1.0);
+        let mut f_peak = self.frequencies.first().copied().unwrap_or(1.0);
         for (i, f) in self.frequencies.iter().copied().enumerate() {
             let e_sum: f64 = self.energy[i].iter().sum();
             if e_sum > max_e {
@@ -236,6 +236,7 @@ impl SpectralWaveSolver {
         let rho = 1025.0;
         let g = 9.81;
 
+        let backend = mh_runtime::CpuBackend::<f64>::new();
         for i in 0..self.params.hs.len().min(depth.len()) {
             let h = depth[i].max(0.1);
             let hs_raw = self.params.hs[i];
@@ -249,7 +250,7 @@ impl SpectralWaveSolver {
             let hs = hs_raw.min(self.config.breaking_gamma * h).max(0.0);
             let dir = self.params.dir[i];
             let omega = 2.0 * PI / tp.max(1e-6);
-            let (_k, n) = compute_wavenumber_and_n(omega, h);
+            let (_k, n) = compute_wavenumber_and_n(&backend, omega, h);
             let energy = rho * g * hs * hs / 8.0;
             let stress = RadiationStressTensorGeneric::<f64>::compute(energy, n, dir);
             self.params.sxx[i] = stress.sxx;

@@ -128,7 +128,7 @@ fn test_solver_convergence_small() {
     
     let config = SolverConfig::new(1e-10, 1000);
     
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let (elapsed, result, _x) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
     
     println!("小规模问题 ({}x{} = {} 单元): 求解时间 {:?}, 迭代次数 {}", n, n, n * n, elapsed, result.iterations);
@@ -149,7 +149,7 @@ fn test_preconditioner_comparison() {
     let no_precond = IdentityPreconditioner::<CpuBackend<f64>>::new(backend.clone());
     let (time_no, result_no, _) = run_benchmark(&matrix, &rhs, &no_precond, &config, &backend);
     
-    let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let jacobi = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let (time_jacobi, result_jacobi, _) = run_benchmark(&matrix, &rhs, &jacobi, &config, &backend);
     
     println!("预条件器对比 ({}x{}): 无预条件器 {} 次迭代 {:?}, Jacobi {} 次迭代 {:?}", 
@@ -181,7 +181,7 @@ fn benchmark_scaling() {
         
         let backend = (*BACKEND).clone();
         let rhs = generate_rhs(size, 42, &backend);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
         
         let (solve_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
         
@@ -240,7 +240,7 @@ fn benchmark_iteration_count() {
         let matrix = generate_laplacian_5pt(n);
         let backend = (*BACKEND).clone();
         let rhs = generate_rhs(n * n, 42, &backend);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
         
         let (_time, result, _) = run_benchmark(&matrix, &rhs, &precond, &config, &backend);
         

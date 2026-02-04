@@ -10,15 +10,15 @@
 //!
 //! # 设计原则
 //!
-//! 1. **全泛型**: 实现 `GradientMethodGeneric<S>` 支持任意 RuntimeScalar
+//! 1. **全泛型**: 实现 `GradientMethod<B>` 支持任意 Backend
 //! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
 //! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
 
-use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
+use mh_runtime::{Backend, Vector2D};
 use rayon::prelude::*;
 use log::debug;
 
-use super::traits::{GradientMethodGeneric, ScalarGradientStorageGeneric, VectorGradientStorageGeneric};
+use super::traits::{GradientMethod, ScalarGradientStorage, VectorGradientStorage};
 use crate::adapter::PhysicsMesh;
 use crate::types::CellIndex;
 
@@ -68,7 +68,7 @@ impl Default for GreenGaussConfig {
 ///
 /// # 泛型支持
 ///
-/// 实现 `GradientMethodGeneric<S>` 支持 f32/f64 精度切换。
+/// 实现 `GradientMethod<B>` 支持 f32/f64 精度切换。
 /// 内部几何数据使用 f64（来自 PhysicsMesh），在计算时转换为目标精度 S。
 #[derive(Debug, Clone)]
 pub struct GreenGaussGradient {
@@ -149,32 +149,33 @@ impl GreenGaussGradient {
     /// 计算单个单元的梯度 - 泛型版本
     ///
     /// 几何数据从 PhysicsMesh 获取 (f64)，转换为 S 进行计算
-    fn compute_cell_gradient<S: RuntimeScalar>(
+    fn compute_cell_gradient<B: Backend>(
         &self,
+        backend: &B,
         cell: usize,
-        field: &[S],
+        field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
-    ) -> (S, S) {
+    ) -> (B::Scalar, B::Scalar) {
         let cell_idx = CellIndex::new(cell);
         let area_f64 = mesh.cell_area_unchecked(cell_idx);
         
         if area_f64 < 1e-14 {
-            return (S::ZERO, S::ZERO);
+            return (B::Scalar::ZERO, B::Scalar::ZERO);
         }
 
         // 边界单元强制零梯度
         if self.config.force_zero_gradient_at_boundary && self.is_boundary_cell(cell, mesh) {
-            return (S::ZERO, S::ZERO);
+            return (B::Scalar::ZERO, B::Scalar::ZERO);
         }
 
         let cell_center = mesh
-            .cell_center_generic::<CpuBackend<f64>>(cell_idx)
+            .cell_center_generic::<B>(cell_idx)
             .expect("cell_center out of range");
         let cell_center_x = cell_center.x();
         let cell_center_y = cell_center.y();
         let phi_c = field[cell];
-        let mut grad_x = S::ZERO;
-        let mut grad_y = S::ZERO;
+        let mut grad_x = B::Scalar::ZERO;
+        let mut grad_y = B::Scalar::ZERO;
 
         for face in mesh.cell_faces(cell_idx) {
             let owner = mesh.face_owner(face);
@@ -189,12 +190,12 @@ impl GreenGaussGradient {
 
             // 几何数据 (f64)
             let normal = mesh
-                .face_normal_generic::<CpuBackend<f64>>(face)
+                .face_normal_generic::<B>(face)
                 .expect("face_normal out of range");
-            let length = mesh.face_length(face);
-            let sign = if is_owner { 1.0 } else { -1.0 };
-            let ds_x = S::from_f64(normal.x() * length * sign).unwrap_or(S::ZERO);
-            let ds_y = S::from_f64(normal.y() * length * sign).unwrap_or(S::ZERO);
+            let length = backend.scalar_from_f64(mesh.face_length(face));
+            let sign = if is_owner { B::Scalar::ONE } else { -B::Scalar::ONE };
+            let ds_x = normal.x() * length * sign;
+            let ds_y = normal.y() * length * sign;
 
             // 计算面值
             let phi_face = if let Some(neigh) = neighbor {
@@ -202,14 +203,14 @@ impl GreenGaussGradient {
 
                 match self.config.face_interpolation {
                     FaceInterpolation::Arithmetic => {
-                        S::HALF * (phi_c + field[other.get()])
+                        B::Scalar::HALF * (phi_c + field[other.get()])
                     }
                     FaceInterpolation::DistanceWeighted => {
                         let face_center = mesh
-                            .face_center_generic::<CpuBackend<f64>>(face)
+                            .face_center_generic::<B>(face)
                             .expect("face_center out of range");
                         let other_center = mesh
-                            .cell_center_generic::<CpuBackend<f64>>(other)
+                            .cell_center_generic::<B>(other)
                             .expect("cell_center out of range");
 
                         let dx_self = face_center.x() - cell_center_x;
@@ -220,11 +221,13 @@ impl GreenGaussGradient {
                         let dy_other = face_center.y() - other_center.y();
                         let d_other = (dx_other * dx_other + dy_other * dy_other).sqrt();
 
+                        let eps = backend.scalar_from_f64(1e-14);
                         Self::distance_weighted_interpolate(
                             phi_c,
                             field[other.get()],
-                            S::from_f64(d_self).unwrap_or(S::ONE),
-                            S::from_f64(d_other).unwrap_or(S::ONE),
+                            d_self,
+                            d_other,
+                            eps,
                         )
                     }
                 }
@@ -236,48 +239,53 @@ impl GreenGaussGradient {
             grad_y = grad_y + ds_y * phi_face;
         }
 
-        let area = S::from_f64(area_f64).unwrap_or(S::ONE);
+        let area = backend.scalar_from_f64(area_f64);
         (grad_x / area, grad_y / area)
     }
 
     /// 距离加权插值 - 泛型版本
     #[inline]
-    fn distance_weighted_interpolate<S: RuntimeScalar>(
-        phi_o: S, phi_n: S, d_o: S, d_n: S
-    ) -> S {
+    fn distance_weighted_interpolate<B: Backend>(
+        phi_o: B::Scalar,
+        phi_n: B::Scalar,
+        d_o: B::Scalar,
+        d_n: B::Scalar,
+        eps: B::Scalar,
+    ) -> B::Scalar {
         let d_total = d_o + d_n;
-        let eps = S::from_f64(1e-14).unwrap_or(S::MIN_POSITIVE);
         if d_total < eps {
-            S::HALF * (phi_o + phi_n)
+            B::Scalar::HALF * (phi_o + phi_n)
         } else {
             (phi_n * d_o + phi_o * d_n) / d_total
         }
     }
 
     /// 串行计算标量梯度 - 泛型版本
-    fn compute_scalar_serial<S: RuntimeScalar>(
+    fn compute_scalar_serial<B: Backend>(
         &self,
-        field: &[S],
+        backend: &B,
+        field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
-        output: &mut ScalarGradientStorageGeneric<S>,
+        output: &mut ScalarGradientStorage<B>,
     ) {
         output.reset();
         for cell in 0..mesh.cell_count() {
-            let grad = self.compute_cell_gradient(cell, field, mesh);
+            let grad = self.compute_cell_gradient(backend, cell, field, mesh);
             output.set_tuple(cell, grad);
         }
     }
 
     /// 并行计算标量梯度 - 泛型版本
-    fn compute_scalar_parallel<S: RuntimeScalar>(
+    fn compute_scalar_parallel<B: Backend>(
         &self,
-        field: &[S],
+        backend: &B,
+        field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
-        output: &mut ScalarGradientStorageGeneric<S>,
+        output: &mut ScalarGradientStorage<B>,
     ) {
-        let grads: Vec<(S, S)> = (0..mesh.cell_count())
+        let grads: Vec<(B::Scalar, B::Scalar)> = (0..mesh.cell_count())
             .into_par_iter()
-            .map(|cell| self.compute_cell_gradient(cell, field, mesh))
+            .map(|cell| self.compute_cell_gradient(backend, cell, field, mesh))
             .collect();
 
         for (i, g) in grads.into_iter().enumerate() {
@@ -296,41 +304,43 @@ impl Default for GreenGaussGradient {
 // 泛型 trait 实现
 // ============================================================
 
-impl<S: RuntimeScalar> GradientMethodGeneric<S> for GreenGaussGradient {
+impl<B: Backend> GradientMethod<B> for GreenGaussGradient {
     fn compute_scalar_gradient(
         &self,
-        field: &[S],
+        backend: &B,
+        field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
-        output: &mut ScalarGradientStorageGeneric<S>,
+        output: &mut ScalarGradientStorage<B>,
     ) {
         if output.len() != mesh.cell_count() {
             output.resize(mesh.cell_count());
         }
 
         if self.config.parallel && mesh.cell_count() >= self.config.parallel_threshold {
-            self.compute_scalar_parallel(field, mesh, output);
+            self.compute_scalar_parallel(backend, field, mesh, output);
         } else {
-            self.compute_scalar_serial(field, mesh, output);
+            self.compute_scalar_serial(backend, field, mesh, output);
         }
     }
 
     fn compute_vector_gradient(
         &self,
-        field_u: &[S],
-        field_v: &[S],
+        backend: &B,
+        field_u: &B::Buffer<B::Scalar>,
+        field_v: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
-        output: &mut VectorGradientStorageGeneric<S>,
+        output: &mut VectorGradientStorage<B>,
     ) {
         if output.len() != mesh.cell_count() {
             output.resize(mesh.cell_count());
         }
 
         // 分别计算 u 和 v 的梯度
-        let mut grad_u = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
-        let mut grad_v = ScalarGradientStorageGeneric::<S>::new(mesh.cell_count());
+        let mut grad_u = ScalarGradientStorage::with_backend(backend, mesh.cell_count());
+        let mut grad_v = ScalarGradientStorage::with_backend(backend, mesh.cell_count());
 
-        self.compute_scalar_gradient(field_u, mesh, &mut grad_u);
-        self.compute_scalar_gradient(field_v, mesh, &mut grad_v);
+        self.compute_scalar_gradient(backend, field_u, mesh, &mut grad_u);
+        self.compute_scalar_gradient(backend, field_v, mesh, &mut grad_v);
 
         // 复制到输出
         output.du_dx = grad_u.grad_x;
@@ -357,73 +367,70 @@ mod tests {
     use super::*;
     use mh_geo::{Point2D, Point3D};
     use mh_mesh::FrozenMesh;
+    use mh_runtime::CpuBackend;
 
     /// 创建简单的 2x1 网格
     fn create_test_mesh() -> PhysicsMesh {
-        let frozen = FrozenMesh {
-            n_nodes: 6,
-            node_coords: vec![
-                Point3D::new(0.0, 0.0, 0.0),
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(2.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-                Point3D::new(1.0, 1.0, 0.0),
-                Point3D::new(2.0, 1.0, 0.0),
-            ],
-            n_cells: 2,
-            cell_center: vec![
-                Point2D::new(0.5, 0.5),
-                Point2D::new(1.5, 0.5),
-            ],
-            cell_area: vec![1.0, 1.0],
-            cell_z_bed: vec![0.0, 0.0],
-            cell_node_offsets: vec![0, 4, 8],
-            cell_node_indices: vec![0, 1, 4, 3, 1, 2, 5, 4],
-            cell_face_offsets: vec![0, 4, 8],
-            cell_face_indices: vec![0, 1, 2, 3, 0, 4, 5, 6],
-            cell_neighbor_offsets: vec![0, 1, 2],
-            cell_neighbor_indices: vec![1, 0],
-            n_faces: 7,
-            n_interior_faces: 1,
-            face_center: vec![
-                Point2D::new(1.0, 0.5),
-                Point2D::new(0.5, 0.0),
-                Point2D::new(0.0, 0.5),
-                Point2D::new(0.5, 1.0),
-                Point2D::new(1.5, 0.0),
-                Point2D::new(2.0, 0.5),
-                Point2D::new(1.5, 1.0),
-            ],
-            face_normal: vec![
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(0.0, -1.0, 0.0),
-                Point3D::new(-1.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-                Point3D::new(0.0, -1.0, 0.0),
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-            ],
-            face_length: vec![1.0; 7],
-            face_z_left: vec![0.0; 7],
-            face_z_right: vec![0.0; 7],
-            face_owner: vec![0, 0, 0, 0, 1, 1, 1],
-            face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
-            face_delta_owner: vec![Point2D::new(0.0, 0.0); 7],
-            face_delta_neighbor: vec![Point2D::new(0.0, 0.0); 7],
-            face_dist_o2n: vec![1.0; 7],
-            boundary_face_indices: (1..7).map(|i| i as u32).collect(),
-            boundary_names: vec!["boundary".to_string()],
-            face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
-            min_cell_size: 1.0,
-            max_cell_size: 1.0,
-            cell_refinement_level: vec![0; 2],
-            cell_parent: vec![0, 1],
-            ghost_capacity: 0,
-            cell_original_id: Vec::new(),
-            face_original_id: Vec::new(),
-            cell_permutation: Vec::new(),
-            cell_inv_permutation: Vec::new(),
-        };
+        let mut frozen = FrozenMesh::empty_with_cells(2);
+        frozen.n_nodes = 6;
+        frozen.node_coords = vec![
+            Point3D::new(0.0, 0.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(2.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+            Point3D::new(1.0, 1.0, 0.0),
+            Point3D::new(2.0, 1.0, 0.0),
+        ];
+        frozen.n_cells = 2;
+        frozen.cell_center = vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)];
+        frozen.cell_area = vec![1.0, 1.0];
+        frozen.cell_z_bed = vec![0.0, 0.0];
+        frozen.cell_node_offsets = vec![0, 4, 8];
+        frozen.cell_node_indices = vec![0, 1, 4, 3, 1, 2, 5, 4];
+        frozen.cell_face_offsets = vec![0, 4, 8];
+        frozen.cell_face_indices = vec![0, 1, 2, 3, 0, 4, 5, 6];
+        frozen.cell_neighbor_offsets = vec![0, 1, 2];
+        frozen.cell_neighbor_indices = vec![1, 0];
+        frozen.n_faces = 7;
+        frozen.n_interior_faces = 1;
+        frozen.face_center = vec![
+            Point2D::new(1.0, 0.5),
+            Point2D::new(0.5, 0.0),
+            Point2D::new(0.0, 0.5),
+            Point2D::new(0.5, 1.0),
+            Point2D::new(1.5, 0.0),
+            Point2D::new(2.0, 0.5),
+            Point2D::new(1.5, 1.0),
+        ];
+        frozen.face_normal = vec![
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, -1.0, 0.0),
+            Point3D::new(-1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+            Point3D::new(0.0, -1.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+        ];
+        frozen.face_length = vec![1.0; 7];
+        frozen.face_z_left = vec![0.0; 7];
+        frozen.face_z_right = vec![0.0; 7];
+        frozen.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
+        frozen.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
+        frozen.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
+        frozen.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
+        frozen.face_dist_o2n = vec![1.0; 7];
+        frozen.boundary_face_indices = (1..7).map(|i| i as u32).collect();
+        frozen.boundary_names = vec!["boundary".to_string()];
+        frozen.face_boundary_id = vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)];
+        frozen.min_cell_size = 1.0;
+        frozen.max_cell_size = 1.0;
+        frozen.cell_refinement_level = vec![0; 2];
+        frozen.cell_parent = vec![0, 1];
+        frozen.ghost_capacity = 0;
+        frozen.cell_original_id = Vec::new();
+        frozen.face_original_id = Vec::new();
+        frozen.cell_permutation = Vec::new();
+        frozen.cell_inv_permutation = Vec::new();
 
         PhysicsMesh::from_frozen(&frozen)
     }
@@ -432,11 +439,13 @@ mod tests {
     fn test_green_gauss_uniform_field_f64() {
         let mesh = create_test_mesh();
         let gg = GreenGaussGradient::new();
+        let backend = CpuBackend::<f64>::new();
 
-        let field: Vec<f64> = vec![1.0, 1.0];
-        let mut output = ScalarGradientStorageGeneric::<f64>::new(2);
+        let mut field = backend.alloc(2);
+        field.copy_from_slice(&[1.0, 1.0]);
+        let mut output = ScalarGradientStorage::with_backend(&backend, 2);
 
-        gg.compute_scalar_gradient(&field, &mesh, &mut output);
+        gg.compute_scalar_gradient(&backend, &field, &mesh, &mut output);
 
         for i in 0..2 {
             let (gx, gy) = output.get_tuple(i);
@@ -449,11 +458,13 @@ mod tests {
     fn test_green_gauss_uniform_field_f32() {
         let mesh = create_test_mesh();
         let gg = GreenGaussGradient::new();
+        let backend = CpuBackend::<f32>::new();
 
-        let field: Vec<f32> = vec![1.0f32, 1.0f32];
-        let mut output = ScalarGradientStorageGeneric::<f32>::new(2);
+        let mut field = backend.alloc(2);
+        field.copy_from_slice(&[1.0f32, 1.0f32]);
+        let mut output = ScalarGradientStorage::with_backend(&backend, 2);
 
-        gg.compute_scalar_gradient(&field, &mesh, &mut output);
+        gg.compute_scalar_gradient(&backend, &field, &mesh, &mut output);
 
         for i in 0..2 {
             let (gx, gy) = output.get_tuple(i);
@@ -466,11 +477,13 @@ mod tests {
     fn test_green_gauss_linear_field() {
         let mesh = create_test_mesh();
         let gg = GreenGaussGradient::new().with_parallel(false);
+        let backend = CpuBackend::<f64>::new();
 
-        let field: Vec<f64> = vec![0.5, 1.5];
-        let mut output = ScalarGradientStorageGeneric::<f64>::new(2);
+        let mut field = backend.alloc(2);
+        field.copy_from_slice(&[0.5, 1.5]);
+        let mut output = ScalarGradientStorage::with_backend(&backend, 2);
 
-        gg.compute_scalar_gradient(&field, &mesh, &mut output);
+        gg.compute_scalar_gradient(&backend, &field, &mesh, &mut output);
 
         let (grad0x, _) = output.get_tuple(0);
         let (grad1x, _) = output.get_tuple(1);
@@ -486,7 +499,7 @@ mod tests {
             .with_threshold(500)
             .with_distance_weighted();
 
-        assert!(!<GreenGaussGradient as GradientMethodGeneric<f64>>::supports_parallel(&gg));
+        assert!(!<GreenGaussGradient as GradientMethod<CpuBackend<f64>>>::supports_parallel(&gg));
         assert_eq!(gg.config.parallel_threshold, 500);
         assert_eq!(gg.config.face_interpolation, FaceInterpolation::DistanceWeighted);
     }
@@ -495,12 +508,15 @@ mod tests {
     fn test_vector_gradient() {
         let mesh = create_test_mesh();
         let gg = GreenGaussGradient::new().with_parallel(false);
+        let backend = CpuBackend::<f64>::new();
 
-        let u: Vec<f64> = vec![0.5, 1.5];
-        let v: Vec<f64> = vec![0.0, 0.0];
-        let mut output = VectorGradientStorageGeneric::<f64>::new(2);
+        let mut u = backend.alloc(2);
+        let mut v = backend.alloc(2);
+        u.copy_from_slice(&[0.5, 1.5]);
+        v.copy_from_slice(&[0.0, 0.0]);
+        let mut output = VectorGradientStorage::with_backend(&backend, 2);
 
-        gg.compute_vector_gradient(&u, &v, &mesh, &mut output);
+        gg.compute_vector_gradient(&backend, &u, &v, &mesh, &mut output);
 
         assert!(output.du_dx[0] > 0.0 || output.du_dx[1] > 0.0);
         assert!(output.dv_dy[0].abs() < 1e-6);
@@ -510,16 +526,18 @@ mod tests {
     #[test]
     fn test_boundary_caching() {
         let mesh = create_test_mesh();
+        let backend = CpuBackend::<f64>::new();
         
         let gg_no_cache = GreenGaussGradient::new();
         let gg_with_cache = GreenGaussGradient::new().with_boundary_cache(&mesh);
 
-        let field: Vec<f64> = vec![1.0, 1.0];
-        let mut output1 = ScalarGradientStorageGeneric::<f64>::new(2);
-        let mut output2 = ScalarGradientStorageGeneric::<f64>::new(2);
+        let mut field = backend.alloc(2);
+        field.copy_from_slice(&[1.0, 1.0]);
+        let mut output1 = ScalarGradientStorage::with_backend(&backend, 2);
+        let mut output2 = ScalarGradientStorage::with_backend(&backend, 2);
 
-        gg_no_cache.compute_scalar_gradient(&field, &mesh, &mut output1);
-        gg_with_cache.compute_scalar_gradient(&field, &mesh, &mut output2);
+        gg_no_cache.compute_scalar_gradient(&backend, &field, &mesh, &mut output1);
+        gg_with_cache.compute_scalar_gradient(&backend, &field, &mesh, &mut output2);
 
         for i in 0..2 {
             let (g1x, g1y) = output1.get_tuple(i);

@@ -22,9 +22,8 @@
 //!
 //! ## Chezy 公式
 
-use crate::core::Backend;
+use crate::prelude::*;
 use crate::types::PhysicalConstants;
-use mh_runtime::RuntimeScalar;
 use serde::{Deserialize, Serialize};
 
 /// 剪切应力计算结果
@@ -181,12 +180,6 @@ impl<'a, B: Backend> ManningCoeffBuf<'a, B> {
     }
 }
 
-impl<'a, B: Backend> From<B::Scalar> for ManningCoeffBuf<'a, B> {
-    fn from(val: B::Scalar) -> Self {
-        ManningCoeffBuf::Uniform(val)
-    }
-}
-
 impl<'a, B: Backend> ManningCoeffBuf<'a, B> {
     /// 从 Backend 缓冲区创建 ManningCoeffBuf
     pub fn from_buffer(buf: &'a B::Buffer<B::Scalar>) -> Self {
@@ -207,12 +200,6 @@ impl<'a, B: Backend> ChezyCoeffBuf<'a, B> {
             ChezyCoeffBuf::Uniform(v) => *v,
             ChezyCoeffBuf::Buffer(buf) => buf[idx],
         }
-    }
-}
-
-impl<'a, B: Backend> From<B::Scalar> for ChezyCoeffBuf<'a, B> {
-    fn from(val: B::Scalar) -> Self {
-        ChezyCoeffBuf::Uniform(val)
     }
 }
 
@@ -412,7 +399,7 @@ mod tests {
             &h_buf,
             &u_buf,
             &v_buf,
-            ManningCoeffBuf::from(0.03),
+            ManningCoeffBuf::Uniform(0.03),
             &mut tau,
             &mut tau_x,
             &mut tau_y,

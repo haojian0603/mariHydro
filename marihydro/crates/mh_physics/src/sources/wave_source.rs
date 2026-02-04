@@ -97,6 +97,7 @@ impl WaveRadiationSource {
             WaveFieldError::BackendAccess("energy buffer not accessible".to_string())
         })?;
 
+        let backend = CpuBackend::<f64>::new();
         for i in 0..n_cells {
             height_buf[i] = height;
             period_buf[i] = period;
@@ -105,7 +106,7 @@ impl WaveRadiationSource {
             // 计算波数和群速度因子
             let h = depth.get(i).copied().unwrap_or(10.0);
             let omega = 2.0 * std::f64::consts::PI / period.max(1e-6);
-            let (k, n) = crate::waves::radiation_stress::compute_wavenumber_and_n(omega, h);
+            let (k, n) = crate::waves::radiation_stress::compute_wavenumber_and_n(&backend, omega, h);
             wavenumber[i] = k;
             group_factor[i] = n;
             wavelength[i] = 2.0 * std::f64::consts::PI / k;

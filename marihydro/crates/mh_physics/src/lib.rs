@@ -11,7 +11,7 @@
 //!     └─> 通过 builder 桥接
 //! Layer 4 (构建层): mh_physics::builder (枚举 → 泛型)
 //!     └─> 生成具体类型
-//! Layer 3 (引擎层): ShallowWaterSolver<B: Backend> (全泛型)
+//! Layer 3 (引擎层): ShallowWaterSolver<B: Backend, S: SourceTermGeneric<B>> (全泛型)
 //! ```
 //! 
 //! # 快速开始
@@ -20,7 +20,7 @@
 //! 
 //! ```
 //! use mh_config::SolverConfig;  // 从mh_config导入正确的Layer 4配置
-//! use mh_physics::Layer3Config;
+//! use mh_physics::{Layer3Config, NoSource};
 //! use mh_runtime::CpuBackend;
 //! 
 //! // 1. 创建 Layer 4 配置（无泛型，易用）
@@ -30,7 +30,11 @@
 //! let layer3_config: Layer3Config<f64> = Layer3Config::from_layer4(&layer4_config).unwrap();
 //! 
 //! // 3. 创建求解器（需要网格，参见示例）
-//! // let solver = ShallowWaterSolver::new(mesh, layer3_config, CpuBackend::<f64>::new());
+//! // let solver = ShallowWaterSolver::<CpuBackend<f64>, NoSource<CpuBackend<f64>>>::new(
+//! //     mesh,
+//! //     layer3_config,
+//! //     CpuBackend::<f64>::new(),
+//! // );
 //! 
 //! // 验证配置转换成功（默认CFL为0.9）
 //! assert_eq!(layer3_config.params.cfl, 0.9);
@@ -116,7 +120,7 @@ pub use types::{
 // 重导出源项类型
 pub use sources::{
     SourceContribution, SourceContext, SourceTerm, SourceHelpers,
-    CoriolisConfig, CoriolisSource,
+    CoriolisConfig, CoriolisSource, NoSource,
 };
 
 // 重导出边界条件类型
@@ -135,7 +139,56 @@ pub use tracer::{
 
 // 重导出统一错误类型
 pub use error::{PhysicsError, PhysicsResult};
+pub use sediment::SedimentError;
 
 // 重导出配置桥接类型（测试用）
 pub use config_bridge::Layer3Config;
+
+/// 统一 Prelude 模块
+pub mod prelude {
+    //! 所有 mh_physics 用户必须导入的 Prelude
+
+    // 从 mh_runtime 导入所有
+    pub use mh_runtime::prelude::*;
+
+    // 物理层核心类型
+    pub use crate::{
+        PhysicsError, PhysicsResult,
+        Backend, CpuBackend,
+    };
+
+    // 网格与索引
+    pub use crate::{
+        CellIndex, FaceIndex, NodeIndex,
+        MeshTopology, PhysicsMesh, UnstructuredMeshAdapter,
+    };
+
+    // 求解器
+    pub use crate::{
+        ShallowWaterSolver, TimeIntegrator, TimeIntegratorKind,
+        RiemannSolver, HllcSolver, RiemannFlux,
+    };
+
+    // 状态
+    pub use crate::{
+        ShallowWaterState, ConservedState, Flux, RhsBuffers,
+    };
+
+    // 示踪剂
+    pub use crate::tracer::{
+        TracerError, TracerField, TracerState, TracerType, TracerProperties,
+        TracerTransportSolver, TracerFaceFlux,
+    };
+
+    // 泥沙
+    pub use crate::sediment::{
+        SedimentError, SedimentPropertiesGeneric, SedimentStateGeneric,
+        TransportFormula, MeyerPeterMullerFormula, VanRijn1984Formula,
+    };
+
+    // 边界
+    pub use crate::boundary::{
+        BoundaryCondition, BoundaryKind, BoundaryManager,
+    };
+}
 

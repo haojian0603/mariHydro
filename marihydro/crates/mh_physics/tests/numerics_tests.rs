@@ -115,7 +115,7 @@ fn test_bicgstab_shadow_residual_fixed() {
     let start = Instant::now();
 
     // 创建求解器
-    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
     let config = SolverConfig::new(1e-10, 100);
     let mut solver = BiCgStabSolver::new(backend.clone(), config);
 
@@ -180,7 +180,7 @@ fn test_ssor_preconditioner_mathematical() {
     // 创建SSOR预条件器，ω=1.2
     let backend = CpuBackend::<f64>::new();
     let precond = SsorPreconditioner::<CpuBackend<f64>>::from_matrix(
-        &backend,
+        backend.clone(),
         std::sync::Arc::new(matrix.clone()),
         SsorParams { omega: 1.2, min_diagonal: 1e-12 },
     ).unwrap();
@@ -328,7 +328,7 @@ fn test_ilu0_pivot_regularization() {
     let start = Instant::now();
 
     // 创建ILU(0)预条件器
-    let precond = Ilu0Preconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+    let precond = Ilu0Preconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
 
     // 测试预条件效果
     let mut r = backend.alloc(n);

@@ -583,7 +583,7 @@ mod tests {
             let mh_err: MhError = geo_err.into();
             match mh_err {
                 MhError::Internal { .. } => {},
-                _ => assert!(false, "应转换为Internal类型"),
+                _ => unreachable!("应转换为Internal类型"),
             }
         }
     }
@@ -603,7 +603,7 @@ mod tests {
             let mh_err: MhError = geo_err.into();
             match mh_err {
                 MhError::InvalidInput { .. } => {},
-                _ => assert!(false, "应转换为InvalidInput类型"),
+                _ => unreachable!("应转换为InvalidInput类型"),
             }
         }
     }

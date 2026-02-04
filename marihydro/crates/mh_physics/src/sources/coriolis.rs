@@ -21,10 +21,7 @@
 //! ```
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
-use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
-// ALLOW_F64: 数学常数
-use std::f64::consts::PI;
+use crate::prelude::*;
 
 // 注意：CpuBackend 已在上方导入
 
@@ -63,7 +60,7 @@ impl CoriolisConfig {
     /// * `lat_deg` - 纬度 [度]
     // ALLOW_F64: 物理参数
     pub fn from_latitude(lat_deg: f64) -> Self {
-        let f = 2.0 * EARTH_ANGULAR_VELOCITY * (lat_deg * PI / 180.0).sin();
+        let f = 2.0 * EARTH_ANGULAR_VELOCITY * (lat_deg * std::f64::consts::PI / 180.0).sin();
         Self::new(f)
     }
 
@@ -176,7 +173,6 @@ impl CoriolisSource {
 use super::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
-use crate::state::ShallowWaterState;
 use mh_runtime::{Backend, RuntimeScalar};
 
 /// 泛型科氏力配置

@@ -27,6 +27,8 @@
 //! let flux = solver.solve(h_l, h_r, vel_l, vel_r, normal)?;
 //! ```
 
+use mh_runtime::Backend;
+
 mod adaptive;
 mod central;
 mod hllc;
@@ -70,3 +72,69 @@ pub use adaptive::{
 pub use batch::{
     BatchRiemannSolver, BatchCellStates, BatchNormals, BatchFluxes,
 };
+
+/// 黎曼求解器枚举（静态分发）
+#[derive(Clone)]
+pub enum RiemannSolverAny<B: Backend> {
+    Hllc(HllcSolver<B>),
+    Roe(RoeSolver<B>),
+    Rusanov(RusanovSolver<B>),
+    Central(CentralSolver<B>),
+}
+
+impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
+    type Scalar = B::Scalar;
+    type Vector2D = B::Vector2D;
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Hllc(solver) => solver.name(),
+            Self::Roe(solver) => solver.name(),
+            Self::Rusanov(solver) => solver.name(),
+            Self::Central(solver) => solver.name(),
+        }
+    }
+
+    fn capabilities(&self) -> SolverCapabilities {
+        match self {
+            Self::Hllc(solver) => solver.capabilities(),
+            Self::Roe(solver) => solver.capabilities(),
+            Self::Rusanov(solver) => solver.capabilities(),
+            Self::Central(solver) => solver.capabilities(),
+        }
+    }
+
+    fn solve(
+        &self,
+        h_left: Self::Scalar,
+        h_right: Self::Scalar,
+        vel_left: Self::Vector2D,
+        vel_right: Self::Vector2D,
+        normal: Self::Vector2D,
+    ) -> Result<RiemannFlux<Self::Scalar>, RiemannError> {
+        match self {
+            Self::Hllc(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
+            Self::Roe(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
+            Self::Rusanov(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
+            Self::Central(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
+        }
+    }
+
+    fn gravity(&self) -> Self::Scalar {
+        match self {
+            Self::Hllc(solver) => solver.gravity(),
+            Self::Roe(solver) => solver.gravity(),
+            Self::Rusanov(solver) => solver.gravity(),
+            Self::Central(solver) => solver.gravity(),
+        }
+    }
+
+    fn dry_threshold(&self) -> Self::Scalar {
+        match self {
+            Self::Hllc(solver) => solver.dry_threshold(),
+            Self::Roe(solver) => solver.dry_threshold(),
+            Self::Rusanov(solver) => solver.dry_threshold(),
+            Self::Central(solver) => solver.dry_threshold(),
+        }
+    }
+}

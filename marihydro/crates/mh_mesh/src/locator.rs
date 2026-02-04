@@ -1,13 +1,14 @@
 // crates/mh_mesh/src/locator.rs
+#![allow(clippy::items_after_test_module)]
 
 //! 网格点定位器（泛型版本）
 //!
-//! 提供高级的点定位功能，支持 FrozenMesh<S> 泛型。
+//! 提供高级的点定位功能，支持 FrozenMesh<B> 泛型。
 
 use crate::frozen::FrozenMesh;
 use crate::spatial_index::MeshSpatialIndex;
 use mh_geo::Point2D;
-use mh_runtime::RuntimeScalar;
+use mh_runtime::Backend;
 use std::cell::Cell;
 
 // ============================================================
@@ -110,18 +111,18 @@ impl LocateResult {
 /// 网格定位器（泛型版本）
 ///
 /// 提供高效的点定位和空间查询功能。
-pub struct MeshLocator<'a, S: RuntimeScalar> {
+pub struct MeshLocator<'a, B: Backend> {
     /// 空间索引
     index: MeshSpatialIndex,
     /// 网格引用
-    mesh: &'a FrozenMesh<S>,
+    mesh: &'a FrozenMesh<B>,
     /// 容差配置
     tolerance: LocateTolerance,
 }
 
-impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
+impl<'a, B: Backend> MeshLocator<'a, B> {
     /// 从冻结网格创建定位器（使用默认容差）
-    pub fn new(mesh: &'a FrozenMesh<S>) -> Self {
+    pub fn new(mesh: &'a FrozenMesh<B>) -> Self {
         let index = MeshSpatialIndex::build(mesh.n_cells(), |i| mesh.get_cell_vertices(i));
         Self {
             index,
@@ -131,7 +132,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     }
 
     /// 使用自定义容差创建定位器
-    pub fn with_tolerance(mesh: &'a FrozenMesh<S>, tolerance: LocateTolerance) -> Self {
+    pub fn with_tolerance(mesh: &'a FrozenMesh<B>, tolerance: LocateTolerance) -> Self {
         let index = MeshSpatialIndex::build(mesh.n_cells(), |i| mesh.get_cell_vertices(i));
         Self {
             index,
@@ -141,7 +142,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
     }
 
     /// 从已有的空间索引创建定位器
-    pub fn with_index(mesh: &'a FrozenMesh<S>, index: MeshSpatialIndex) -> Self {
+    pub fn with_index(mesh: &'a FrozenMesh<B>, index: MeshSpatialIndex) -> Self {
         Self {
             index,
             mesh,
@@ -151,7 +152,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 从已有的空间索引和自定义容差创建定位器
     pub fn with_index_and_tolerance(
-        mesh: &'a FrozenMesh<S>,
+        mesh: &'a FrozenMesh<B>,
         index: MeshSpatialIndex,
         tolerance: LocateTolerance,
     ) -> Self {
@@ -296,7 +297,7 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 
     /// 获取网格引用
     #[inline]
-    pub fn mesh(&self) -> &FrozenMesh<S> {
+    pub fn mesh(&self) -> &FrozenMesh<B> {
         self.mesh
     }
 
@@ -312,8 +313,8 @@ impl<'a, S: RuntimeScalar> MeshLocator<'a, S> {
 // =========================================================================
 
 /// 缓存定位器（泛型版本）
-pub struct CachedLocator<'a, S: RuntimeScalar> {
-    locator: MeshLocator<'a, S>,
+pub struct CachedLocator<'a, B: Backend> {
+    locator: MeshLocator<'a, B>,
     last_cell: Cell<Option<usize>>,
     cache_hits: Cell<u64>,
     total_queries: Cell<u64>,
@@ -351,9 +352,9 @@ impl LocatorCacheStats {
     }
 }
 
-impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
+impl<'a, B: Backend> CachedLocator<'a, B> {
     /// 创建新的缓存定位器
-    pub fn new(mesh: &'a FrozenMesh<S>) -> Self {
+    pub fn new(mesh: &'a FrozenMesh<B>) -> Self {
         Self {
             locator: MeshLocator::new(mesh),
             last_cell: Cell::new(None),
@@ -364,7 +365,7 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
     }
 
     /// 使用自定义容差创建缓存定位器
-    pub fn with_tolerance(mesh: &'a FrozenMesh<S>, tolerance: LocateTolerance) -> Self {
+    pub fn with_tolerance(mesh: &'a FrozenMesh<B>, tolerance: LocateTolerance) -> Self {
         Self {
             locator: MeshLocator::with_tolerance(mesh, tolerance),
             last_cell: Cell::new(None),
@@ -454,13 +455,13 @@ impl<'a, S: RuntimeScalar> CachedLocator<'a, S> {
 
     /// 获取内部定位器引用
     #[inline]
-    pub fn inner(&self) -> &MeshLocator<'a, S> {
+    pub fn inner(&self) -> &MeshLocator<'a, B> {
         &self.locator
     }
 }
 
 /// 从 FrozenMesh 获取单元顶点坐标
-fn get_cell_vertices_from_mesh<S: RuntimeScalar>(mesh: &FrozenMesh<S>, cell: usize) -> Vec<Point2D> {
+fn get_cell_vertices_from_mesh<B: Backend>(mesh: &FrozenMesh<B>, cell: usize) -> Vec<Point2D> {
     let node_indices = mesh.cell_nodes(cell);
     node_indices
         .iter()
@@ -550,9 +551,9 @@ fn point_on_segment_tol(x: f64, y: f64, a: &Point2D, b: &Point2D, tol: f64) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::RuntimeScalar;
+    use mh_runtime::CpuBackend;
 
-    fn create_test_mesh<S: RuntimeScalar>() -> FrozenMesh<S> {
+    fn create_test_mesh() -> FrozenMesh<CpuBackend<f64>> {
         let mut mesh = FrozenMesh::empty_with_cells(1);
 
         mesh.n_nodes = 3;
@@ -589,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_mesh_locator_creation() {
-        let mesh = create_test_mesh::<f64>();
+        let mesh = create_test_mesh();
         let locator = MeshLocator::new(&mesh);
 
         assert_eq!(locator.spatial_index().n_cells(), 1);
@@ -597,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_barycentric_computation() {
-        let mesh = create_test_mesh::<f64>();
+        let mesh = create_test_mesh();
         let locator = MeshLocator::new(&mesh);
 
         let bary = locator.compute_barycentric(0, 0.5, 1.0 / 3.0);
@@ -607,7 +608,7 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let mesh = create_test_mesh::<f64>();
+        let mesh = create_test_mesh();
         let locator = MeshLocator::new(&mesh);
 
         assert!(locator.contains(0.5, 0.3));
@@ -616,7 +617,7 @@ mod tests {
 
     #[test]
     fn test_find_cell() {
-        let mesh = create_test_mesh::<f64>();
+        let mesh = create_test_mesh();
         let locator = MeshLocator::new(&mesh);
 
         assert_eq!(locator.find_cell(0.5, 0.3), Some(0));
@@ -625,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_cached_locator() {
-        let mesh = create_test_mesh::<f64>();
+        let mesh = create_test_mesh();
         let cached = CachedLocator::new(&mesh);
         
         // 第一次查询：填充缓存（预期未命中）

@@ -334,7 +334,7 @@ impl DateTime {
         if minute > 59 {
             return Err(CfTimeError::InvalidDate(format!("无效的分钟: {}", minute)));
         }
-        if !second.is_finite() || second < 0.0 || second >= 60.0 {
+        if !second.is_finite() || !(0.0..60.0).contains(&second) {
             return Err(CfTimeError::InvalidDate(format!("无效的秒数: {}", second)));
         }
 

@@ -12,10 +12,12 @@
 //! ## 使用方式
 //!
 //! ```ignore
-//! use mh_physics::numerics::reconstruction::{MusclReconstructorGeneric, MusclConfig};
+//! use mh_physics::numerics::reconstruction::{MusclReconstructor, MusclConfig};
+//! use mh_runtime::CpuBackend;
 //!
+//! let backend = CpuBackend::<f64>::new();
 //! let config = MusclConfig::default();
-//! let reconstructor = MusclReconstructorGeneric::<f64>::new(config, mesh);
+//! let reconstructor = MusclReconstructor::new(config, mesh, backend);
 //!
 //! // 计算梯度
 //! reconstructor.compute_gradients(&cell_values);
@@ -36,13 +38,13 @@ mod config;
 mod weno;
 
 // ============================================================================
-// 泛型 API (Layer 3) - 主要导出
+// Backend API (Layer 3) - 主要导出
 // ============================================================================
 
-pub use traits::{ReconstructorGeneric, ReconstructedStateGeneric};
-pub use muscl::MusclReconstructorGeneric;
+pub use traits::{ReconstructedState, Reconstructor};
+pub use muscl::MusclReconstructor;
 pub use config::{MusclConfig, GradientType};
-pub use weno::{WenoConfig, WenoReconstructorGeneric};
+pub use weno::{WenoConfig, WenoReconstructor};
 
 #[cfg(test)]
 mod tests {

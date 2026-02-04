@@ -324,10 +324,11 @@ mod tests {
     use super::*;
     use crate::schemes::riemann::SolverParams;
     use mh_runtime::CpuBackend;
+    use num_traits::FromPrimitive;
 
     fn create_solver<B: Backend>(gravity: B::Scalar) -> HllcSolver<B> {
         let mut params = SolverParams::default();
-        params.h_dry = B::Scalar::from_f64(1e-6).unwrap();
+        params.h_dry = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
         HllcSolver::new(&params, gravity)
     }
 

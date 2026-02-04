@@ -218,7 +218,7 @@ impl<S: Scalar> TracerProperties<S> {
 // ============================================================
 
 /// 示踪剂场统计量
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct TracerFieldStats<S: Scalar> {
     pub min: S,
     pub max: S,
@@ -429,9 +429,10 @@ impl<B: Backend> TracerField<B> {
         let depths = water_depths
             .try_as_slice()
             .ok_or(TracerError::BackendAccess { field: "water_depths" })?;
-        let concentration = self.concentration_slice_mut()?;
-        let conserved = self.conserved_slice()?;
-        for i in 0..self.n_cells {
+        let n_cells = self.n_cells;
+        let conserved = self.conserved.try_as_slice().ok_or(TracerError::BackendAccess { field: "conserved" })?;
+        let concentration = self.concentration.try_as_slice_mut().ok_or(TracerError::BackendAccess { field: "concentration" })?;
+        for i in 0..n_cells {
             let h = if depths[i] > h_min { depths[i] } else { h_min };
             concentration[i] = conserved[i] / h;
         }
@@ -440,9 +441,10 @@ impl<B: Backend> TracerField<B> {
     
     /// 使用显式欧拉格式更新守恒量（需要 CPU 可访问）
     pub fn apply_euler_update(&mut self, dt: B::Scalar) -> Result<(), TracerError> {
-        let conserved = self.conserved_slice_mut()?;
-        let rhs = self.rhs_slice()?;
-        for i in 0..self.n_cells {
+        let n_cells = self.n_cells;
+        let rhs = self.rhs.try_as_slice().ok_or(TracerError::BackendAccess { field: "rhs" })?;
+        let conserved = self.conserved.try_as_slice_mut().ok_or(TracerError::BackendAccess { field: "conserved" })?;
+        for i in 0..n_cells {
             conserved[i] = conserved[i] + dt * rhs[i];
         }
         Ok(())
@@ -478,9 +480,10 @@ impl<B: Backend> TracerField<B> {
         let depths = water_depths
             .try_as_slice()
             .ok_or(TracerError::BackendAccess { field: "water_depths" })?;
-        let concentration = self.concentration_slice()?;
-        let conserved = self.conserved_slice_mut()?;
-        for i in 0..self.n_cells {
+        let n_cells = self.n_cells;
+        let concentration = self.concentration.try_as_slice().ok_or(TracerError::BackendAccess { field: "concentration" })?;
+        let conserved = self.conserved.try_as_slice_mut().ok_or(TracerError::BackendAccess { field: "conserved" })?;
+        for i in 0..n_cells {
             conserved[i] = depths[i] * concentration[i];
         }
         Ok(())

@@ -507,8 +507,8 @@ mod tests {
     
     #[test]
     fn test_config_value() {
-        let v = ConfigValue::Float(3.14);
-        assert!((v.as_f64().unwrap() - 3.14).abs() < 1e-10);
+        let v = ConfigValue::Float(std::f64::consts::PI);
+        assert!((v.as_f64().unwrap() - std::f64::consts::PI).abs() < 1e-10);
         
         let v = ConfigValue::Integer(42);
         assert_eq!(v.as_i64().unwrap(), 42);

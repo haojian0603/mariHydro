@@ -28,9 +28,10 @@
 //! ```rust,ignore
 //! use mh_io::checkpoint::Checkpoint;
 //! use mh_io::snapshot::StateSnapshot;
+//! use mh_runtime::CpuBackend;
 //!
 //! // 保存检查点
-//! let state = StateSnapshot::from_state_data(h, hu, hv);
+//! let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(h, hu, hv);
 //! let checkpoint = Checkpoint::new(100.0, 1000, state);
 //! checkpoint.save(Path::new("checkpoint.mhck"))?;
 //!
@@ -44,6 +45,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use crate::snapshot::{MeshSnapshot, StateSnapshot};
+use mh_runtime::CpuBackend;
 
 // ============================================================
 // 错误类型
@@ -170,7 +172,7 @@ pub struct Checkpoint {
     /// 时间步数
     pub step: usize,
     /// 状态数据
-    pub state: StateSnapshot<f64>,
+    pub state: StateSnapshot<CpuBackend<f64>>,
     /// 配置摘要哈希（用于验证）
     pub config_hash: Option<u64>,
     /// 创建时间戳
@@ -202,7 +204,7 @@ impl Default for CheckpointLoadOptions {
 
 impl Checkpoint {
     /// 创建新检查点
-    pub fn new(time: f64, step: usize, state: StateSnapshot<f64>) -> Self {
+    pub fn new(time: f64, step: usize, state: StateSnapshot<CpuBackend<f64>>) -> Self {
         Self {
             version: CHECKPOINT_VERSION,
             time,
@@ -230,7 +232,7 @@ impl Checkpoint {
     }
 
     /// 从网格快照计算哈希
-    pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot<f64>) -> Self {
+    pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot<CpuBackend<f64>>) -> Self {
         self.mesh_hash = mesh.compute_hash();
         self
     }
@@ -324,7 +326,7 @@ impl Checkpoint {
     }
 
     /// 从文件加载并校验网格一致性
-    pub fn load_with_mesh(path: &Path, mesh: &MeshSnapshot<f64>, strict: bool) -> CheckpointResult<Self> {
+    pub fn load_with_mesh(path: &Path, mesh: &MeshSnapshot<CpuBackend<f64>>, strict: bool) -> CheckpointResult<Self> {
         let options = CheckpointLoadOptions {
             expected_mesh_hash: Some(mesh.compute_hash()),
             strict,
@@ -475,7 +477,7 @@ impl Checkpoint {
             });
         }
 
-        let mut state = StateSnapshot::from_state_data(h, hu, hv);
+        let mut state = StateSnapshot::<CpuBackend<f64>>::from_state_data(h, hu, hv);
         if let Some(z_data) = z {
             state = state.with_bed(z_data);
         }
@@ -518,13 +520,11 @@ impl Checkpoint {
         }
 
         if let Some(expected) = options.expected_mesh_hash {
-            if self.mesh_hash != expected {
-                if options.strict || self.mesh_hash != 0 {
-                    return Err(CheckpointError::MeshHashMismatch {
-                        expected,
-                        found: self.mesh_hash,
-                    });
-                }
+            if self.mesh_hash != expected && (options.strict || self.mesh_hash != 0) {
+                return Err(CheckpointError::MeshHashMismatch {
+                    expected,
+                    found: self.mesh_hash,
+                });
             }
         }
 
@@ -762,10 +762,10 @@ impl CheckpointManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use mh_runtime::CpuBackend;
 
-    fn create_test_state() -> StateSnapshot<f64> {
-        StateSnapshot::from_state_data(
+    fn create_test_state() -> StateSnapshot<CpuBackend<f64>> {
+        StateSnapshot::<CpuBackend<f64>>::from_state_data(
             vec![1.0, 2.0, 3.0],
             vec![0.1, 0.2, 0.3],
             vec![0.0, 0.0, 0.0],
@@ -808,7 +808,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_checkpoint_bed.mhck");
 
-        let state = StateSnapshot::from_state_data(
+        let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(
             vec![1.0, 2.0, 3.0],
             vec![0.0; 3],
             vec![0.0; 3],

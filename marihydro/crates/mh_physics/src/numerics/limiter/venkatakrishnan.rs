@@ -21,29 +21,29 @@
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and convergence to steady state solutions".
 //! AIAA Paper 93-0880.
 
-use mh_runtime::RuntimeScalar;
-use super::traits::{LimiterContextGeneric, SlopeLimiterGeneric};
+use mh_runtime::Backend;
+use super::traits::{LimiterContext, SlopeLimiter};
 
-/// 泛型 Venkatakrishnan 限制器
+/// Venkatakrishnan 限制器
 #[derive(Debug, Clone, Copy)]
-pub struct VenkatakrishnanGeneric<S: RuntimeScalar> {
-    k: S,
-    eps_squared: S,
-    tol: S,
+pub struct Venkatakrishnan<B: Backend> {
+    k: B::Scalar,
+    eps_squared: B::Scalar,
+    tol: B::Scalar,
 }
 
-impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
+impl<B: Backend> Venkatakrishnan<B> {
     /// 创建新的限制器
     ///
     /// # 参数
     /// - `k`: K 参数，控制限制强度
     /// - `mesh_scale`: 网格特征尺度
     #[inline]
-    pub fn new(k: S, mesh_scale: S) -> Self {
-        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+    pub fn new(k: B::Scalar, mesh_scale: B::Scalar) -> Self {
+        let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
             mesh_scale
         } else {
-            S::ONE
+            B::Scalar::ONE
         };
         let kh = k * scale;
         let eps_squared = kh * kh * kh;
@@ -51,17 +51,17 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
         Self {
             k,
             eps_squared,
-            tol: S::from_f64(1e-12).unwrap_or(S::MIN_POSITIVE),
+            tol: B::Scalar::MIN_POSITIVE,
         }
     }
 
     /// 创建具有自定义容差的限制器
     #[inline]
-    pub fn with_tolerance(k: S, mesh_scale: S, tol: S) -> Self {
-        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+    pub fn with_tolerance(k: B::Scalar, mesh_scale: B::Scalar, tol: B::Scalar) -> Self {
+        let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
             mesh_scale
         } else {
-            S::ONE
+            B::Scalar::ONE
         };
         let kh = k * scale;
         let eps_squared = kh * kh * kh;
@@ -73,49 +73,25 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
         }
     }
 
-    /// 适合激波捕获的预设 (K=0.1)
-    #[inline]
-    pub fn for_shock_capturing(mesh_scale: S) -> Self {
-        Self::new(S::from_f64(0.1).unwrap_or(S::ZERO), mesh_scale)
-    }
-
-    /// 适合干湿过渡的预设 (K=0.3，默认)
-    #[inline]
-    pub fn for_wetting_drying(mesh_scale: S) -> Self {
-        Self::new(S::from_f64(0.3).unwrap_or(S::ZERO), mesh_scale)
-    }
-
-    /// 适合光滑流动的预设 (K=2.0)
-    #[inline]
-    pub fn for_smooth_flow(mesh_scale: S) -> Self {
-        Self::new(S::TWO, mesh_scale)
-    }
-
-    /// 最小限制的预设 (K=5.0)
-    #[inline]
-    pub fn minimal_limiting(mesh_scale: S) -> Self {
-        Self::new(S::from_f64(5.0).unwrap_or(S::ZERO), mesh_scale)
-    }
-
     /// 获取 K 参数
     #[inline]
-    pub fn k(&self) -> S {
+    pub fn k(&self) -> B::Scalar {
         self.k
     }
 
     /// 获取 ε² 值
     #[inline]
-    pub fn eps_squared(&self) -> S {
+    pub fn eps_squared(&self) -> B::Scalar {
         self.eps_squared
     }
 
     /// 更新网格尺度
     #[inline]
-    pub fn update_mesh_scale(&mut self, mesh_scale: S) {
-        let scale = if mesh_scale.is_finite() && mesh_scale > S::ZERO {
+    pub fn update_mesh_scale(&mut self, mesh_scale: B::Scalar) {
+        let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
             mesh_scale
         } else {
-            S::ONE
+            B::Scalar::ONE
         };
         let kh = self.k * scale;
         self.eps_squared = kh * kh * kh;
@@ -123,53 +99,44 @@ impl<S: RuntimeScalar> VenkatakrishnanGeneric<S> {
 
     /// 计算光滑限制函数
     #[inline]
-    fn phi(&self, x: S, y: S) -> S {
+    fn phi(&self, x: B::Scalar, y: B::Scalar) -> B::Scalar {
         let x2 = x * x;
         let y2 = y * y;
         let eps2 = self.eps_squared;
         
-        let numerator = (y2 + eps2) * x + S::TWO * x2 * y;
-        let denominator = y2 + S::TWO * x2 + x * y + eps2;
+        let numerator = (y2 + eps2) * x + B::Scalar::TWO * x2 * y;
+        let denominator = y2 + B::Scalar::TWO * x2 + x * y + eps2;
         
         if denominator.abs() < self.tol {
-            S::ONE
+            B::Scalar::ONE
         } else {
             numerator / denominator
         }
     }
 }
 
-impl<S: RuntimeScalar> Default for VenkatakrishnanGeneric<S> {
-    /// 默认构造器使用 mesh_scale=1.0
-    /// 实际使用时必须调用 update_mesh_scale() 更新
+impl<B: Backend> SlopeLimiter<B> for Venkatakrishnan<B> {
     #[inline]
-    fn default() -> Self {
-        Self::for_wetting_drying(S::ONE)
-    }
-}
-
-impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for VenkatakrishnanGeneric<S> {
-    #[inline]
-    fn compute_limiter(&self, ctx: &LimiterContextGeneric<S>) -> S {
+    fn compute_limiter(&self, ctx: &LimiterContext<B>) -> B::Scalar {
         if ctx.is_gradient_zero(self.tol) {
-            return S::ONE;
+            return B::Scalar::ONE;
         }
         
         let delta = ctx.gradient;
         
-        if delta > S::ZERO {
+        if delta > B::Scalar::ZERO {
             let delta_max = ctx.delta_max();
             if delta_max < self.tol {
-                S::ZERO
+                B::Scalar::ZERO
             } else {
-                self.phi(delta, delta_max).min(S::ONE)
+                self.phi(delta, delta_max).min(B::Scalar::ONE)
             }
         } else {
             let delta_min = ctx.delta_min();
             if delta_min > -self.tol {
-                S::ZERO
+                B::Scalar::ZERO
             } else {
-                self.phi(-delta, -delta_min).min(S::ONE)
+                self.phi(-delta, -delta_min).min(B::Scalar::ONE)
             }
         }
     }
@@ -183,40 +150,30 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for VenkatakrishnanGeneric<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
     
-    // 测试用类型别名
-    type Venkatakrishnan = VenkatakrishnanGeneric<f64>;
-    type VenkatakrishnanF32 = VenkatakrishnanGeneric<f32>;
-    type LimiterContext = LimiterContextGeneric<f64>;
+    type BackendF64 = CpuBackend<f64>;
+    type BackendF32 = CpuBackend<f32>;
 
     #[test]
     fn test_creation_f64() {
-        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
         assert_eq!(limiter.k(), 5.0);
         assert!((limiter.eps_squared() - 0.125).abs() < 1e-10);
     }
 
     #[test]
     fn test_creation_f32() {
-        let limiter = VenkatakrishnanF32::new(5.0f32, 0.1f32);
+        let limiter = Venkatakrishnan::<BackendF32>::new(5.0f32, 0.1f32);
         assert_eq!(limiter.k(), 5.0f32);
         assert!((limiter.eps_squared() - 0.125f32).abs() < 1e-6f32);
     }
 
     #[test]
     fn test_with_tolerance() {
-        let limiter = Venkatakrishnan::with_tolerance(5.0, 0.1, 1e-8);
-        let ctx = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::with_tolerance(5.0, 0.1, 1e-8);
+        let ctx = LimiterContext::<BackendF64>::new(1.0, 0.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx), 1.0);
-    }
-
-    #[test]
-    fn test_default() {
-        let limiter_f64 = Venkatakrishnan::default();
-        assert!((limiter_f64.k() - 0.3).abs() < 1e-10);
-
-        let limiter_f32 = VenkatakrishnanF32::default();
-        assert!((limiter_f32.k() - 0.3f32).abs() < 1e-6f32);
     }
 
     #[test]
@@ -243,16 +200,16 @@ mod tests {
 
     #[test]
     fn test_small_gradient_f64() {
-        let limiter = Venkatakrishnan::new(5.0, 0.1);
-        let ctx = LimiterContext::new(1.0, 0.1, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
+        let ctx = LimiterContext::<BackendF64>::new(1.0, 0.1, 0.5, 1.5, 0.1);
         let alpha = limiter.compute_limiter(&ctx);
         assert!((0.0..=1.0).contains(&alpha));
     }
 
     #[test]
     fn test_small_gradient_f32() {
-        let limiter = VenkatakrishnanF32::new(5.0f32, 0.1f32);
-        let ctx = LimiterContextGeneric::<f32>::new(
+        let limiter = Venkatakrishnan::<BackendF32>::new(5.0f32, 0.1f32);
+        let ctx = LimiterContext::<BackendF32>::new(
             1.0f32, 0.1f32, 0.5f32, 1.5f32, 0.1f32
         );
         let alpha = limiter.compute_limiter(&ctx);
@@ -262,11 +219,11 @@ mod tests {
     #[test]
     fn test_k_parameter_sensitivity() {
         let mesh_scale = 0.1;
-        let limiter_k1 = Venkatakrishnan::new(1.0, mesh_scale);
-        let limiter_k5 = Venkatakrishnan::new(5.0, mesh_scale);
-        let limiter_k10 = Venkatakrishnan::new(10.0, mesh_scale);
+        let limiter_k1 = Venkatakrishnan::<BackendF64>::new(1.0, mesh_scale);
+        let limiter_k5 = Venkatakrishnan::<BackendF64>::new(5.0, mesh_scale);
+        let limiter_k10 = Venkatakrishnan::<BackendF64>::new(10.0, mesh_scale);
 
-        let ctx = LimiterContext::new(1.0, 0.4, 0.5, 1.5, 0.1);
+        let ctx = LimiterContext::<BackendF64>::new(1.0, 0.4, 0.5, 1.5, 0.1);
         let alpha_k1 = limiter_k1.compute_limiter(&ctx);
         let alpha_k5 = limiter_k5.compute_limiter(&ctx);
         let alpha_k10 = limiter_k10.compute_limiter(&ctx);
@@ -279,8 +236,8 @@ mod tests {
 
     #[test]
     fn test_large_gradient() {
-        let limiter = Venkatakrishnan::new(1.0, 0.01);
-        let ctx = LimiterContext::new(1.0, 0.8, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(1.0, 0.01);
+        let ctx = LimiterContext::<BackendF64>::new(1.0, 0.8, 0.5, 1.5, 0.1);
         let alpha = limiter.compute_limiter(&ctx);
         assert!(alpha < 1.0);
         assert!(alpha > 0.0);
@@ -288,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_update_mesh_scale() {
-        let mut limiter = Venkatakrishnan::new(5.0, 0.1);
+        let mut limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
         assert!((limiter.eps_squared() - 0.125).abs() < 1e-10);
 
         limiter.update_mesh_scale(0.2);
@@ -297,12 +254,12 @@ mod tests {
 
     #[test]
     fn test_smoothness() {
-        let limiter = Venkatakrishnan::new(5.0, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
         let gradients: Vec<f64> = (1..=100).map(|i| i as f64 * 0.01).collect();
         let alphas: Vec<f64> = gradients
             .iter()
             .map(|&g| {
-                let ctx = LimiterContext::new(1.0, g, 0.5, 1.5, 0.1);
+                let ctx = LimiterContext::<BackendF64>::new(1.0, g, 0.5, 1.5, 0.1);
                 limiter.compute_limiter(&ctx)
             })
             .collect();
@@ -315,23 +272,23 @@ mod tests {
 
     #[test]
     fn test_symmetry() {
-        let limiter = Venkatakrishnan::new(5.0, 0.1);
-        let ctx_pos = LimiterContext::new(1.0, 0.3, 0.5, 1.5, 0.1);
-        let ctx_neg = LimiterContext::new(1.0, -0.3, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
+        let ctx_pos = LimiterContext::<BackendF64>::new(1.0, 0.3, 0.5, 1.5, 0.1);
+        let ctx_neg = LimiterContext::<BackendF64>::new(1.0, -0.3, 0.5, 1.5, 0.1);
         assert!((limiter.compute_limiter(&ctx_pos) - limiter.compute_limiter(&ctx_neg)).abs() < 1e-10);
     }
 
     #[test]
     fn test_at_maximum() {
-        let limiter = Venkatakrishnan::new(1.0, 0.01);
-        let ctx = LimiterContext::new(1.5, 0.3, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(1.0, 0.01);
+        let ctx = LimiterContext::<BackendF64>::new(1.5, 0.3, 0.5, 1.5, 0.1);
         let alpha = limiter.compute_limiter(&ctx);
         assert!(alpha < 0.1);
     }
 
     #[test]
     fn test_limiter_bounded() {
-        let limiter = Venkatakrishnan::new(3.0, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(3.0, 0.1);
         let test_cases = vec![
             (1.0, 0.5, 0.0, 2.0),
             (1.0, -0.5, 0.0, 2.0),
@@ -340,7 +297,7 @@ mod tests {
         ];
 
         for (q, g, q_min, q_max) in test_cases {
-            let ctx = LimiterContext::new(q, g, q_min, q_max, 0.1);
+            let ctx = LimiterContext::<BackendF64>::new(q, g, q_min, q_max, 0.1);
             let alpha = limiter.compute_limiter(&ctx);
             assert!((0.0..=1.0).contains(&alpha));
         }

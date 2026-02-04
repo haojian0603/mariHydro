@@ -22,12 +22,10 @@
 use super::{SemiImplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
 use crate::core::Backend;
-use crate::engine::pcg::{PcgSolver, PcgConfig, PreconditionerType, PoissonMatrixBuilder};
+use crate::engine::pcg::{PcgConfig, PcgSolver, PoissonMatrixBuilder, PreconditionerType};
 use crate::mesh::MeshTopology;
+use crate::prelude::*;
 use crate::state::ShallowWaterState;
-use num_traits::FromPrimitive;
-use mh_runtime::{DeviceBuffer, RuntimeScalar};
-use num_traits::Float;
 
 /// 泛型半隐式策略
 /// 
@@ -142,10 +140,10 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
         let n_cells = mesh.n_cells();
         self.ensure_capacity(n_cells);
 
-        let gravity = B::Scalar::from_f64(self.config.gravity).unwrap_or(B::Scalar::ZERO);
-        let h_min = B::Scalar::from_f64(self.config.h_min).unwrap_or(B::Scalar::ZERO);
-        let theta = B::Scalar::from_f64(self.config.theta).unwrap_or(B::Scalar::HALF);
-        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+        let gravity = self.backend.scalar_from_f64(self.config.gravity);
+        let h_min = self.backend.scalar_from_f64(self.config.h_min);
+        let theta = self.backend.scalar_from_f64(self.config.theta);
+        let half = B::Scalar::HALF;
 
         let h: &[B::Scalar] = &state.h;
         let hu: &[B::Scalar] = &state.hu;
@@ -168,19 +166,19 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
             }
         }
 
-        let mut cell_areas: Vec<B::Scalar> = Vec::with_capacity(n_cells);
+        let mut cell_areas = self.backend.alloc(n_cells);
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
             if !area.is_finite() || area <= B::Scalar::ZERO {
-                cell_areas.push(B::Scalar::ZERO);
+                cell_areas[i] = B::Scalar::ZERO;
             } else {
-                cell_areas.push(area);
+                cell_areas[i] = area;
             }
         }
 
         let matrix = PoissonMatrixBuilder::new(n_cells).build_csr(
             mesh,
-            &cell_areas,
+            cell_areas.as_slice(),
             dt,
             gravity,
             theta,
@@ -190,7 +188,7 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
 
         let diag_matrix = match PoissonMatrixBuilder::new(n_cells).build_diagonal(
             &self.backend,
-            &cell_areas,
+            cell_areas.as_slice(),
             dt,
             gravity,
             theta,
@@ -249,8 +247,8 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
 
             eta_prime.copy_from_slice(eta_buf.as_slice());
         } else {
-            let eps = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON);
-            let rtol = B::Scalar::from_f64(self.config.solver_rtol).unwrap_or(B::Scalar::EPSILON);
+            let eps = self.backend.scalar_from_f64(1e-14);
+            let rtol = self.backend.scalar_from_f64(self.config.solver_rtol);
             for iter in 0..self.config.solver_max_iter {
                 let mut max_residual = B::Scalar::ZERO;
 

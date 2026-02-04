@@ -38,19 +38,17 @@
 
 use super::traits::{TurbulenceClosure, VelocityGradient};
 use crate::adapter::PhysicsMesh;
-use crate::types::CellIndex;
-use crate::core::{Backend, CpuBackend};
+use crate::prelude::*;
 use crate::sources::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
-use mh_runtime::{RuntimeScalar as Scalar, Vector2D};
 use std::marker::PhantomData;
 
 /// 湍流模型类型（完全泛型化）
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[derive(Default)]
-pub enum TurbulenceModel<S: Scalar> {
+pub enum TurbulenceModel<S: RuntimeScalar> {
     /// 无湍流（推荐用于浅水方程）
     #[default]
     None,
@@ -66,7 +64,7 @@ pub enum TurbulenceModel<S: Scalar> {
     Smagorinsky { cs: S },
 }
 
-impl<S: Scalar> TurbulenceModel<S> {
+impl<S: RuntimeScalar> TurbulenceModel<S> {
     /// Smagorinsky 常数的默认值
     #[inline]
     pub fn default_smagorinsky_constant<B: Backend<Scalar = S>>(backend: &B) -> S {

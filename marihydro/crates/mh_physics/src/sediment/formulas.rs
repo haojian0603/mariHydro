@@ -18,17 +18,17 @@
 //!
 //! ```ignore
 //! use mh_physics::sediment::formulas::{TransportFormulaBuilder, TransportFormula};
-//! use mh_physics::sediment::SedimentProperties;
+//! use mh_physics::sediment::SedimentPropertiesGeneric;
 //!
-//! let props = SedimentProperties::from_d50_mm(0.5);
 //! let backend = mh_runtime::CpuBackend::<f64>::new();
+//! let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
 //! let formula = TransportFormulaBuilder::<f64>::new("mpm").build(&backend);
 //!
 //! let theta = 0.1;  // Shields 参数
 //! let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
 //! ```
 
-use super::properties::SedimentProperties;
+use super::properties::SedimentPropertiesGeneric;
 use crate::types::PhysicalConstants;
 use mh_runtime::{Backend, RuntimeScalar as Scalar};
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         backend: &B,
         theta: S,
         theta_cr: S,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
     ) -> S;
 
     /// 计算有量纲输沙率 [m²/s]
@@ -70,17 +70,16 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         &self,
         backend: &B,
         theta: S,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let theta_cr = backend.scalar_from_f64(props.critical_shields);
-        let phi = self.compute_phi(backend, theta, theta_cr, props);
+        let phi = self.compute_phi(backend, theta, props.critical_shields, props);
         if phi <= S::ZERO {
             return S::ZERO;
         }
 
-        let d = backend.scalar_from_f64(props.d50);
-        let s = backend.scalar_from_f64(props.relative_density);
+        let d = props.d50;
+        let s = props.relative_density;
         let g = backend.scalar_from_f64(physics.g);
         let scale = ((s - S::ONE) * g * d * d * d).sqrt();
         phi * scale
@@ -90,10 +89,18 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         &self,
         backend: &B,
         tau_b: S,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let theta = props.shields_number(backend, tau_b, physics);
+        let rho_w = backend.scalar_from_f64(physics.rho_water);
+        let g = backend.scalar_from_f64(physics.g);
+        let rho_s = props.rho_s;
+        let d50 = props.d50;
+        let denom = (rho_s - rho_w) * g * d50;
+        if denom.abs() < S::MIN_POSITIVE {
+            return S::ZERO;
+        }
+        let theta = tau_b / denom;
         self.compute_dimensional(backend, theta, props, physics)
     }
 
@@ -105,7 +112,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         backend: &B,
         tau_bx: S,
         tau_by: S,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> (S, S) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
@@ -121,6 +128,59 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
     /// 是否考虑坡度效应
     fn uses_slope_effect(&self) -> bool {
         false
+    }
+}
+
+/// 输沙公式枚举（静态分发）
+#[derive(Debug, Clone)]
+pub enum TransportFormulaAny<S: Scalar> {
+    MeyerPeterMuller(MeyerPeterMullerFormula<S>),
+    VanRijn(VanRijn1984Formula<S>),
+    Einstein(EinsteinFormula<S>),
+    EngelundHansen(EngelundHansenFormula<S>),
+}
+
+impl<S: Scalar> TransportFormula<S> for TransportFormulaAny<S> {
+    fn name(&self) -> &'static str {
+        match self {
+            TransportFormulaAny::MeyerPeterMuller(f) => f.name(),
+            TransportFormulaAny::VanRijn(f) => f.name(),
+            TransportFormulaAny::Einstein(f) => f.name(),
+            TransportFormulaAny::EngelundHansen(f) => f.name(),
+        }
+    }
+
+    fn id(&self) -> &'static str {
+        match self {
+            TransportFormulaAny::MeyerPeterMuller(f) => f.id(),
+            TransportFormulaAny::VanRijn(f) => f.id(),
+            TransportFormulaAny::Einstein(f) => f.id(),
+            TransportFormulaAny::EngelundHansen(f) => f.id(),
+        }
+    }
+
+    fn compute_phi<B: Backend<Scalar = S>>(
+        &self,
+        backend: &B,
+        theta: S,
+        theta_cr: S,
+        props: &SedimentPropertiesGeneric<S>,
+    ) -> S {
+        match self {
+            TransportFormulaAny::MeyerPeterMuller(f) => f.compute_phi(backend, theta, theta_cr, props),
+            TransportFormulaAny::VanRijn(f) => f.compute_phi(backend, theta, theta_cr, props),
+            TransportFormulaAny::Einstein(f) => f.compute_phi(backend, theta, theta_cr, props),
+            TransportFormulaAny::EngelundHansen(f) => f.compute_phi(backend, theta, theta_cr, props),
+        }
+    }
+
+    fn uses_slope_effect(&self) -> bool {
+        match self {
+            TransportFormulaAny::MeyerPeterMuller(f) => f.uses_slope_effect(),
+            TransportFormulaAny::VanRijn(f) => f.uses_slope_effect(),
+            TransportFormulaAny::Einstein(f) => f.uses_slope_effect(),
+            TransportFormulaAny::EngelundHansen(f) => f.uses_slope_effect(),
+        }
     }
 }
 
@@ -189,7 +249,7 @@ impl<S: Scalar> TransportFormula<S> for MeyerPeterMullerFormula<S> {
         _backend: &B,
         theta: S,
         theta_cr: S,
-        _props: &SedimentProperties,
+        _props: &SedimentPropertiesGeneric<S>,
     ) -> S {
         let excess = theta - theta_cr;
         if excess <= S::ZERO {
@@ -243,7 +303,7 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         backend: &B,
         theta: S,
         theta_cr: S,
-        props: &SedimentProperties,
+        props: &SedimentPropertiesGeneric<S>,
     ) -> S {
         // 临界 Shields 参数保护：防止除零
         // 使用 1e-10 作为最小值，确保数值稳定性
@@ -376,7 +436,7 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
         backend: &B,
         theta: S,
         _theta_cr: S,
-        _props: &SedimentProperties,
+        _props: &SedimentPropertiesGeneric<S>,
     ) -> S {
         // 防止除零和溢出
         if theta < backend.scalar_from_f64(1e-14) {
@@ -451,7 +511,7 @@ impl<S: Scalar> TransportFormula<S> for EngelundHansenFormula<S> {
         backend: &B,
         theta: S,
         _theta_cr: S,
-        _props: &SedimentProperties,
+        _props: &SedimentPropertiesGeneric<S>,
     ) -> S {
         if theta < backend.scalar_from_f64(1e-14) {
             return S::ZERO;
@@ -479,16 +539,16 @@ impl<S: Scalar> TransportFormulaBuilder<S> {
     }
 
     /// 根据配置构建公式实例
-    pub fn build<B: Backend<Scalar = S>>(self, backend: &B) -> Box<dyn TransportFormula<S>> {
+    pub fn build<B: Backend<Scalar = S>>(self, backend: &B) -> TransportFormulaAny<S> {
         match self.formula_id.to_lowercase().replace(['_', ' '], "-").as_str() {
-            "mpm" | "meyer-peter-muller" => Box::new(MeyerPeterMullerFormula::<S>::new(backend)),
-            "wong-parker" | "wp" => Box::new(MeyerPeterMullerFormula::<S>::wong_parker(backend)),
-            "vanrijn" | "van-rijn" | "vr84" => Box::new(VanRijn1984Formula::<S>::new(backend)),
-            "einstein" | "ein" => Box::new(EinsteinFormula::<S>::new()),
-            "engelund-hansen" | "eh" => Box::new(EngelundHansenFormula::<S>::new(backend)),
+            "mpm" | "meyer-peter-muller" => TransportFormulaAny::MeyerPeterMuller(MeyerPeterMullerFormula::<S>::new(backend)),
+            "wong-parker" | "wp" => TransportFormulaAny::MeyerPeterMuller(MeyerPeterMullerFormula::<S>::wong_parker(backend)),
+            "vanrijn" | "van-rijn" | "vr84" => TransportFormulaAny::VanRijn(VanRijn1984Formula::<S>::new(backend)),
+            "einstein" | "ein" => TransportFormulaAny::Einstein(EinsteinFormula::<S>::new()),
+            "engelund-hansen" | "eh" => TransportFormulaAny::EngelundHansen(EngelundHansenFormula::<S>::new(backend)),
             _ => {
                 log::warn!("未知输沙公式 '{}'，使用 Meyer-Peter-Müller", self.formula_id);
-                Box::new(MeyerPeterMullerFormula::<S>::new(backend))
+                TransportFormulaAny::MeyerPeterMuller(MeyerPeterMullerFormula::<S>::new(backend))
             }
         }
     }
@@ -503,15 +563,15 @@ pub fn available_formulas() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    fn make_sand() -> SedimentProperties {
-        SedimentProperties::from_d50_mm(0.5) // 中砂
+    fn make_sand<B: Backend<Scalar = f64>>(backend: &B) -> SedimentPropertiesGeneric<f64> {
+        SedimentPropertiesGeneric::from_d50_mm(backend, 0.5) // 中砂
     }
 
     #[test]
     fn test_mpm_below_critical() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
-        let props = make_sand();
+        let props = make_sand(&backend);
 
         // 低于临界 Shields 数时不输沙
         let phi = formula.compute_phi(&backend, 0.01, props.critical_shields, &props);
@@ -522,7 +582,7 @@ mod tests {
     fn test_mpm_above_critical() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
-        let props = make_sand();
+        let props = make_sand(&backend);
 
         // 高于临界时有输沙
         let theta = props.critical_shields * 2.0;
@@ -538,7 +598,7 @@ mod tests {
     fn test_vanrijn_formula() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = VanRijn1984Formula::<f64>::new(&backend);
-        let props = make_sand();
+        let props = make_sand(&backend);
 
         let theta = props.critical_shields * 2.0;
         let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
@@ -549,7 +609,7 @@ mod tests {
     fn test_einstein_formula() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = EinsteinFormula::<f64>::new();
-        let props = make_sand();
+        let props = make_sand(&backend);
 
         // 高 Shields 数时有输沙
         let phi = formula.compute_phi(&backend, 0.5, 0.0, &props);
@@ -577,7 +637,7 @@ mod tests {
     fn test_dimensional_transport() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
-        let props = make_sand();
+        let props = make_sand(&backend);
         let physics = PhysicalConstants::freshwater();
 
         let tau_b = 5.0; // Pa

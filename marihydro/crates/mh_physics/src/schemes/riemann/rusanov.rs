@@ -401,7 +401,7 @@ pub fn create_robust_rusanov_solver(gravity: f64) -> RusanovSolver<CpuBackend<f6
         gravity,
         ..Default::default()
     };
-    RusanovSolver::<CpuBackend<f64>>::from_params_with_config(params, RusanovConfig::robust())
+    RusanovSolver::<CpuBackend<f64>>::from_params_with_config(params, RusanovConfig::<f64>::robust())
 }
 
 // ============================================================================
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn test_robust_config() {
         let params = SolverParams::<f64>::default();
-        let solver: RusanovSolver<CpuBackend<f64>> = RusanovSolver::from_params_with_config(params, RusanovConfig::robust());
+        let solver: RusanovSolver<CpuBackend<f64>> = RusanovSolver::from_params_with_config(params, RusanovConfig::<f64>::robust());
 
         assert!(solver.config().wave_speed_factor > 1.0);
         assert!(solver.config().use_weighted_average);

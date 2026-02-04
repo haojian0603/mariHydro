@@ -2,18 +2,20 @@
 //!
 //! 提供梯度限制器用于控制二阶精度重构的振荡:
 //!
-//! - `SlopeLimiterGeneric<S>` - 泛型限制器 trait
-//! - `NoLimiterGeneric<S>` - 无限制（一阶精度）
-//! - `BarthJespersenGeneric<S>` - Barth-Jespersen 限制器（严格 TVD）
-//! - `VenkatakrishnanGeneric<S>` - Venkatakrishnan 限制器（光滑，保单调）
-//! - `MinmodGeneric<S>` - Minmod 限制器（最耗散）
+//! - `SlopeLimiter<B>` - Backend 驱动限制器 trait
+//! - `NoLimiter<B>` - 无限制（一阶精度）
+//! - `BarthJespersen<B>` - Barth-Jespersen 限制器（严格 TVD）
+//! - `Venkatakrishnan<B>` - Venkatakrishnan 限制器（光滑，保单调）
+//! - `Minmod<B>` - Minmod 限制器（最耗散）
 //!
 //! ## 使用方式
 //!
 //! ```ignore
-//! use mh_physics::numerics::limiter::{SlopeLimiterGeneric, VenkatakrishnanGeneric};
+//! use mh_physics::numerics::limiter::{SlopeLimiter, Venkatakrishnan};
+//! use mh_runtime::CpuBackend;
 //!
-//! let limiter = VenkatakrishnanGeneric::<f64>::new(5.0, mesh_scale);
+//! let backend = CpuBackend::<f64>::new();
+//! let limiter = Venkatakrishnan::<CpuBackend<f64>>::new(backend.scalar_from_f64(5.0), backend.scalar_from_f64(mesh_scale));
 //! let alpha = limiter.compute_limiter(&ctx);
 //! // grad_limited = grad_i * alpha
 //! ```
@@ -22,26 +24,69 @@
 //!
 //! | 限制器 | 耗散性 | 光滑性 | 适用场景 |
 //! |--------|--------|--------|----------|
-//! | BarthJespersenGeneric | 中等 | 不光滑 | 需要严格 TVD 保证 |
-//! | VenkatakrishnanGeneric | 低 | 光滑 | 通用推荐，平衡精度与稳定性 |
-//! | MinmodGeneric | 高 | 光滑 | 强激波，需要最大稳定性 |
+//! | BarthJespersen | 中等 | 不光滑 | 需要严格 TVD 保证 |
+//! | Venkatakrishnan | 低 | 光滑 | 通用推荐，平衡精度与稳定性 |
+//! | Minmod | 高 | 光滑 | 强激波，需要最大稳定性 |
 
 mod traits;
 mod barth_jespersen;
 mod venkatakrishnan;
 mod minmod;
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::Backend;
 use crate::types::LimiterType;
 
 // ============================================================================
 // 泛型 API (Layer 3) - 主要导出
 // ============================================================================
 
-pub use traits::{SlopeLimiterGeneric, LimiterContextGeneric, NoLimiterGeneric};
-pub use barth_jespersen::BarthJespersenGeneric;
-pub use venkatakrishnan::VenkatakrishnanGeneric;
-pub use minmod::MinmodGeneric;
+pub use traits::{LimiterContext, NoLimiter, SlopeLimiter};
+pub use barth_jespersen::BarthJespersen;
+pub use venkatakrishnan::Venkatakrishnan;
+pub use minmod::Minmod;
+
+/// 静态分发限制器封装
+#[derive(Debug, Clone)]
+pub enum LimiterAny<B: Backend> {
+    /// 无限制
+    None(NoLimiter<B>),
+    /// Barth-Jespersen
+    BarthJespersen(BarthJespersen<B>),
+    /// Venkatakrishnan
+    Venkatakrishnan(Venkatakrishnan<B>),
+    /// Minmod
+    Minmod(Minmod<B>),
+}
+
+impl<B: Backend> SlopeLimiter<B> for LimiterAny<B> {
+    #[inline]
+    fn compute_limiter(&self, ctx: &LimiterContext<B>) -> B::Scalar {
+        match self {
+            Self::None(inner) => inner.compute_limiter(ctx),
+            Self::BarthJespersen(inner) => inner.compute_limiter(ctx),
+            Self::Venkatakrishnan(inner) => inner.compute_limiter(ctx),
+            Self::Minmod(inner) => inner.compute_limiter(ctx),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::None(inner) => inner.name(),
+            Self::BarthJespersen(inner) => inner.name(),
+            Self::Venkatakrishnan(inner) => inner.name(),
+            Self::Minmod(inner) => inner.name(),
+        }
+    }
+
+    fn compute_limiters(&self, contexts: &[LimiterContext<B>]) -> Vec<B::Scalar> {
+        match self {
+            Self::None(inner) => inner.compute_limiters(contexts),
+            Self::BarthJespersen(inner) => inner.compute_limiters(contexts),
+            Self::Venkatakrishnan(inner) => inner.compute_limiters(contexts),
+            Self::Minmod(inner) => inner.compute_limiters(contexts),
+        }
+    }
+}
 
 // ============================================================================
 // 泛型限制器工厂函数
@@ -56,19 +101,22 @@ pub use minmod::MinmodGeneric;
 ///
 /// # 注意
 /// `k` 和 `mesh_scale` 使用 f64 输入，内部转换为 S 类型
-pub fn create_limiter_generic<S: RuntimeScalar>(
-    limiter_type: LimiterType, 
+pub fn create_limiter<B: Backend>(
+    backend: &B,
+    limiter_type: LimiterType,
     k: f64,
     mesh_scale: f64,
-) -> Box<dyn SlopeLimiterGeneric<S> + Send + Sync> {
-    let k_s = S::from_f64(k).unwrap_or(S::ONE);
-    let scale_s = S::from_f64(mesh_scale).unwrap_or(S::ONE);
+) -> LimiterAny<B> {
+    let k_s = backend.scalar_from_f64(k);
+    let scale_s = backend.scalar_from_f64(mesh_scale);
     
     match limiter_type {
-        LimiterType::None => Box::new(NoLimiterGeneric::<S>::new()),
-        LimiterType::BarthJespersen => Box::new(BarthJespersenGeneric::<S>::new()),
-        LimiterType::Venkatakrishnan => Box::new(VenkatakrishnanGeneric::new(k_s, scale_s)),
-        LimiterType::Minmod => Box::new(MinmodGeneric::<S>::new()),
+        LimiterType::None => LimiterAny::None(NoLimiter::<B>::new()),
+        LimiterType::BarthJespersen => LimiterAny::BarthJespersen(BarthJespersen::<B>::new()),
+        LimiterType::Venkatakrishnan => {
+            LimiterAny::Venkatakrishnan(Venkatakrishnan::<B>::new(k_s, scale_s))
+        }
+        LimiterType::Minmod => LimiterAny::Minmod(Minmod::<B>::new()),
     }
 }
 
@@ -78,8 +126,9 @@ mod tests {
     
     #[test]
     fn test_create_limiter_none() {
-        let limiter = create_limiter_generic::<f64>(LimiterType::None, 5.0, 1.0);
-        let ctx = LimiterContextGeneric::<f64> {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let limiter = create_limiter(&backend, LimiterType::None, 5.0, 1.0);
+        let ctx = LimiterContext::<mh_runtime::CpuBackend<f64>> {
             cell_value: 1.0,
             gradient: 0.5,
             min_neighbor: 0.5,
@@ -91,8 +140,9 @@ mod tests {
     
     #[test]
     fn test_create_limiter_barth_jespersen() {
-        let limiter = create_limiter_generic::<f64>(LimiterType::BarthJespersen, 5.0, 1.0);
-        let ctx = LimiterContextGeneric::<f64> {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let limiter = create_limiter(&backend, LimiterType::BarthJespersen, 5.0, 1.0);
+        let ctx = LimiterContext::<mh_runtime::CpuBackend<f64>> {
             cell_value: 1.0,
             gradient: 0.0,
             min_neighbor: 0.5,
@@ -105,8 +155,9 @@ mod tests {
     
     #[test]
     fn test_create_limiter_venkatakrishnan() {
-        let limiter = create_limiter_generic::<f64>(LimiterType::Venkatakrishnan, 5.0, 1.0);
-        let ctx = LimiterContextGeneric::<f64> {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let limiter = create_limiter(&backend, LimiterType::Venkatakrishnan, 5.0, 1.0);
+        let ctx = LimiterContext::<mh_runtime::CpuBackend<f64>> {
             cell_value: 1.0,
             gradient: 0.0,
             min_neighbor: 0.5,
@@ -118,8 +169,9 @@ mod tests {
     
     #[test]
     fn test_create_limiter_minmod() {
-        let limiter = create_limiter_generic::<f64>(LimiterType::Minmod, 5.0, 1.0);
-        let ctx = LimiterContextGeneric::<f64> {
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let limiter = create_limiter(&backend, LimiterType::Minmod, 5.0, 1.0);
+        let ctx = LimiterContext::<mh_runtime::CpuBackend<f64>> {
             cell_value: 1.0,
             gradient: 0.0,
             min_neighbor: 0.5,

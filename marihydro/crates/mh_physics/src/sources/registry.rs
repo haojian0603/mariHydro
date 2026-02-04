@@ -1,6 +1,6 @@
 // crates/mh_physics/src/sources/registry.rs
 
-use crate::core::{Backend, DeviceBuffer};
+use crate::core::Backend;
 use crate::engine::strategy::workspace::SolverWorkspaceGeneric;
 use crate::state::ShallowWaterState;
 use super::traits::{
@@ -9,10 +9,10 @@ use super::traits::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// 源项注册中心
-pub struct SourceRegistry<B: Backend> {
+/// 源项注册中心（静态分发）
+pub struct SourceRegistry<B: Backend, S: SourceTermGeneric<B>> {
     /// 已注册的源项
-    sources: Vec<Box<dyn SourceTermGeneric<B>>>,
+    sources: Vec<S>,
     /// 名称到索引的映射
     name_index: HashMap<String, usize>,
     /// 启用状态
@@ -24,7 +24,7 @@ pub struct SourceRegistry<B: Backend> {
     contributions: RefCell<Vec<SourceContributionGeneric<B::Scalar>>>,
 }
 
-impl<B: Backend> SourceRegistry<B> {
+impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistry<B, S> {
     pub fn new() -> Self {
         Self {
             sources: Vec::new(),
@@ -36,27 +36,26 @@ impl<B: Backend> SourceRegistry<B> {
     }
     
     /// 注册源项
-    pub fn register<S: SourceTermGeneric<B> + 'static>(&mut self, source: S) -> usize {
+    pub fn register(&mut self, source: S) -> usize {
         let name = source.name().to_string();
         let idx = self.sources.len();
-        self.sources.push(Box::new(source));
+        self.sources.push(source);
         self.name_index.insert(name, idx);
         self.enabled.push(true);
         idx
     }
     
     /// 按名称获取源项
-    pub fn get(&self, name: &str) -> Option<&dyn SourceTermGeneric<B>> {
+    pub fn get(&self, name: &str) -> Option<&S> {
         self.name_index
             .get(name)
             .and_then(|&idx| self.sources.get(idx))
-            .map(|s| s.as_ref())
     }
     
     /// 按名称获取可变源项
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut dyn SourceTermGeneric<B>> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut S> {
         let idx = *self.name_index.get(name)?;
-        Some(self.sources.get_mut(idx)?.as_mut())
+        Some(self.sources.get_mut(idx)?)
     }
     
     /// 启用/禁用源项
@@ -145,11 +144,10 @@ impl<B: Backend> SourceRegistry<B> {
     pub fn filter_by_stiffness(
         &self,
         stiffness: SourceStiffness,
-    ) -> Vec<&dyn SourceTermGeneric<B>> {
+    ) -> Vec<&S> {
         self.sources
             .iter()
             .filter(|s| s.stiffness() == stiffness)
-            .map(|s| s.as_ref())
             .collect()
     }
 
@@ -209,6 +207,6 @@ impl<B: Backend> SourceRegistry<B> {
     }
 }
 
-impl<B: Backend> Default for SourceRegistry<B> {
+impl<B: Backend, S: SourceTermGeneric<B>> Default for SourceRegistry<B, S> {
     fn default() -> Self { Self::new() }
 }

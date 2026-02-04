@@ -40,9 +40,6 @@ pub mod gpu;
 pub use mh_runtime::DeviceBuffer;
 pub use mh_runtime::{Backend, CpuBackend, MemoryLocation};
 
-// DefaultBackend 需要单独定义
-pub type DefaultBackend = CpuBackend<f64>;
-
 // AlignedBuffer - AlignedVec 的 DeviceBuffer 适配器
 pub use buffer::AlignedBuffer;
 

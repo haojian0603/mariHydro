@@ -40,7 +40,7 @@ impl GpuStatus {
 	pub fn detect() -> Self {
 		#[cfg(not(feature = "cuda"))]
 		{
-			return Self::NotCompiled;
+			Self::NotCompiled
 		}
 
 		#[cfg(feature = "cuda")]

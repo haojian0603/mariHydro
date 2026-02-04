@@ -2,7 +2,7 @@
 //!
 //! 提供悬移质（悬浮在水中的泥沙）输运功能：
 //! - [`SettlingVelocity`]: 沉降速度计算
-//! - [`ResuspensionSource`]: 再悬浮/侵蚀源项
+//! - [`ResuspensionSourceGeneric`]: 再悬浮/侵蚀源项
 //! - [`SuspendedTransport`]: 悬移质输运求解器
 //!
 //! # 与 tracer 模块的关系
@@ -17,5 +17,5 @@ pub mod resuspension;
 pub mod transport;
 
 pub use settling::{SettlingFormula, SettlingVelocity, StokesSettling, DietrichSettling, VanRijnSettling};
-pub use resuspension::{ErosionFormula, ResuspensionSource, SmithMcLean, GarciaParker};
+pub use resuspension::{ErosionFormula, ResuspensionSourceGeneric, SmithMcLean, GarciaParker};
 pub use transport::SuspendedTransport;

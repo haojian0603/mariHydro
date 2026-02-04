@@ -177,7 +177,7 @@ impl<V, F> HalfEdgeMesh<V, F> {
     /// 边数量 (半边数/2)
     #[inline]
     pub fn n_edges(&self) -> usize {
-        if self.halfedges.len() % 2 != 0 {
+        if !self.halfedges.len().is_multiple_of(2) {
             return 0;
         }
         self.halfedges.len() / 2

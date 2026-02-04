@@ -10,7 +10,7 @@
 //! 1. **单轨泛型**: 所有接口基于 `RuntimeScalar` 泛型，无 Legacy f64 别名
 //! 2. **Backend 无关**: 使用 `(S, S)` 元组表示向量，不依赖 glam::DVec2
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 
 // ============================================================
 // 泛型重构状态
@@ -20,42 +20,42 @@ use mh_runtime::RuntimeScalar;
 ///
 /// 包含面两侧（左/右）的重构值，用于通量计算。
 #[derive(Debug, Clone, Copy)]
-pub struct ReconstructedStateGeneric<S: RuntimeScalar> {
+pub struct ReconstructedState<B: Backend> {
     /// 左侧单元的重构值
-    pub left: S,
+    pub left: B::Scalar,
     
     /// 右侧单元的重构值
-    pub right: S,
+    pub right: B::Scalar,
 }
 
-impl<S: RuntimeScalar> ReconstructedStateGeneric<S> {
+impl<B: Backend> ReconstructedState<B> {
     /// 创建新的重构状态
-    pub fn new(left: S, right: S) -> Self {
+    pub fn new(left: B::Scalar, right: B::Scalar) -> Self {
         Self { left, right }
     }
     
     /// 从单个值创建（一阶精度）
-    pub fn from_values(left: S, right: S) -> Self {
+    pub fn from_values(left: B::Scalar, right: B::Scalar) -> Self {
         Self { left, right }
     }
     
     /// 计算面平均值
-    pub fn average(&self) -> S {
-        S::HALF * (self.left + self.right)
+    pub fn average(&self) -> B::Scalar {
+        B::Scalar::HALF * (self.left + self.right)
     }
     
     /// 计算跳跃 (right - left)
-    pub fn jump(&self) -> S {
+    pub fn jump(&self) -> B::Scalar {
         self.right - self.left
     }
     
     /// 计算绝对最大值
-    pub fn max_abs(&self) -> S {
+    pub fn max_abs(&self) -> B::Scalar {
         self.left.abs().max(self.right.abs())
     }
     
     /// 确保正定（用于水深）
-    pub fn ensure_positive(&mut self, min_value: S) {
+    pub fn ensure_positive(&mut self, min_value: B::Scalar) {
         if self.left < min_value {
             self.left = min_value;
         }
@@ -65,9 +65,9 @@ impl<S: RuntimeScalar> ReconstructedStateGeneric<S> {
     }
 }
 
-impl<S: RuntimeScalar> Default for ReconstructedStateGeneric<S> {
+impl<B: Backend> Default for ReconstructedState<B> {
     fn default() -> Self {
-        Self { left: S::ZERO, right: S::ZERO }
+        Self { left: B::Scalar::ZERO, right: B::Scalar::ZERO }
     }
 }
 
@@ -79,9 +79,9 @@ impl<S: RuntimeScalar> Default for ReconstructedStateGeneric<S> {
 ///
 /// 所有重构方案实现此 trait。
 #[allow(dead_code)]
-pub trait ReconstructorGeneric<S: RuntimeScalar>: Send + Sync {
+pub trait Reconstructor<B: Backend>: Send + Sync {
     /// 计算所有单元的梯度
-    fn compute_gradients(&mut self, values: &[S]);
+    fn compute_gradients(&mut self, values: &B::Buffer<B::Scalar>);
     
     /// 重构标量场的面值
     ///
@@ -91,10 +91,14 @@ pub trait ReconstructorGeneric<S: RuntimeScalar>: Send + Sync {
     ///
     /// # Returns
     /// 面两侧的重构值
-    fn reconstruct_scalar(&self, face_id: usize, values: &[S]) -> ReconstructedStateGeneric<S>;
+    fn reconstruct_scalar(
+        &self,
+        face_id: usize,
+        values: &B::Buffer<B::Scalar>,
+    ) -> ReconstructedState<B>;
     
     /// 获取限制后的梯度 (返回元组)
-    fn get_limited_gradient_tuple(&self, cell_id: usize) -> (S, S);
+    fn get_limited_gradient_tuple(&self, cell_id: usize) -> (B::Scalar, B::Scalar);
     
     /// 是否启用二阶精度
     fn is_second_order(&self) -> bool;
@@ -106,10 +110,11 @@ pub trait ReconstructorGeneric<S: RuntimeScalar>: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
     
     #[test]
     fn test_reconstructed_state() {
-        let state = ReconstructedStateGeneric::<f64>::new(1.0, 2.0);
+        let state = ReconstructedState::<CpuBackend<f64>>::new(1.0, 2.0);
         assert_eq!(state.left, 1.0);
         assert_eq!(state.right, 2.0);
         assert_eq!(state.average(), 1.5);
@@ -118,7 +123,7 @@ mod tests {
     
     #[test]
     fn test_reconstructed_state_ensure_positive() {
-        let mut state = ReconstructedStateGeneric::<f64>::new(-0.1, 0.5);
+        let mut state = ReconstructedState::<CpuBackend<f64>>::new(-0.1, 0.5);
         state.ensure_positive(0.0);
         assert_eq!(state.left, 0.0);
         assert_eq!(state.right, 0.5);

@@ -71,7 +71,7 @@ pub enum SolverError {
 
 /// 运行时求解器接口（无泛型）
 ///
-/// 所有具体求解器（如 `ShallowWaterSolver<B>`）都应实现此 trait，
+/// 所有具体求解器（如 `ShallowWaterSolver<B, S>`）都应实现此 trait，
 /// 以支持在应用层进行类型擦除的多态调用。
 ///
 /// # 示例

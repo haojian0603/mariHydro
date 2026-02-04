@@ -125,12 +125,6 @@ pub struct SolverResult<S: RuntimeScalar> {
     pub relative_residual: S,
 }
 
-/// 迭代过程观察者（早停钩子）
-pub trait IterationObserver<S: RuntimeScalar>: Send + Sync {
-    /// 返回 true 则提前停止
-    fn should_stop(&mut self, iter: usize, residual_norm: S, relative_residual: S) -> bool;
-}
-
 impl<S: RuntimeScalar> SolverResult<S> {
     /// 是否成功收敛
     pub fn is_converged(&self) -> bool {
@@ -303,7 +297,6 @@ pub struct ConjugateGradient<B: Backend> {
     r: B::Buffer<B::Scalar>,
     p: B::Buffer<B::Scalar>,
     ap: B::Buffer<B::Scalar>,
-    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
 impl<B: Backend> ConjugateGradient<B> {
@@ -318,19 +311,7 @@ impl<B: Backend> ConjugateGradient<B> {
             r,
             p,
             ap,
-            observer: None,
         }
-    }
-
-    /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
-        self.observer = observer;
-    }
-
-    /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
-        self.observer = Some(observer);
-        self
     }
 
     /// 确保工作向量大小正确
@@ -451,18 +432,6 @@ where
                 };
             }
 
-            if let Some(observer) = self.observer.as_mut() {
-                if observer.should_stop(iter + 1, res_norm, rel_res) {
-                    return SolverResult {
-                        status: SolverStatus::Stopped,
-                        iterations: iter + 1,
-                        residual_norm: res_norm,
-                        initial_residual_norm: initial_norm,
-                        relative_residual: rel_res,
-                    };
-                }
-            }
-
             prev_res = res_norm;
 
             // beta = r'r_new / r'r_old
@@ -505,7 +474,6 @@ pub struct PcgSolver<B: Backend> {
     z: B::Buffer<B::Scalar>,
     p: B::Buffer<B::Scalar>,
     ap: B::Buffer<B::Scalar>,
-    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
 impl<B: Backend> PcgSolver<B> {
@@ -522,19 +490,7 @@ impl<B: Backend> PcgSolver<B> {
             z,
             p,
             ap,
-            observer: None,
         }
-    }
-
-    /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
-        self.observer = observer;
-    }
-
-    /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
-        self.observer = Some(observer);
-        self
     }
 
     /// 确保工作向量大小正确
@@ -673,18 +629,6 @@ impl<B: Backend> PcgSolver<B> {
                     initial_residual_norm: initial_norm,
                     relative_residual: rel_res,
                 };
-            }
-
-            if let Some(observer) = self.observer.as_mut() {
-                if observer.should_stop(iter + 1, res_norm, rel_res) {
-                    return SolverResult {
-                        status: SolverStatus::Stopped,
-                        iterations: iter + 1,
-                        residual_norm: res_norm,
-                        initial_residual_norm: initial_norm,
-                        relative_residual: rel_res,
-                    };
-                }
             }
 
             prev_res = res_norm;
@@ -845,18 +789,6 @@ where
                 };
             }
 
-            if let Some(observer) = self.observer.as_mut() {
-                if observer.should_stop(iter + 1, res_norm, rel_res) {
-                    return SolverResult {
-                        status: SolverStatus::Stopped,
-                        iterations: iter + 1,
-                        residual_norm: res_norm,
-                        initial_residual_norm: initial_norm,
-                        relative_residual: rel_res,
-                    };
-                }
-            }
-
             prev_res = res_norm;
 
             // z = M^{-1} * r
@@ -917,7 +849,6 @@ pub struct BiCgStabSolver<B: Backend> {
     s: B::Buffer<B::Scalar>,
     t: B::Buffer<B::Scalar>,
     z: B::Buffer<B::Scalar>,
-    observer: Option<Box<dyn IterationObserver<B::Scalar>>>,
 }
 
 impl<B: Backend> BiCgStabSolver<B> {
@@ -940,19 +871,7 @@ impl<B: Backend> BiCgStabSolver<B> {
             s,
             t,
             z,
-            observer: None,
         }
-    }
-
-    /// 设置迭代观察者
-    pub fn set_observer(&mut self, observer: Option<Box<dyn IterationObserver<B::Scalar>>>) {
-        self.observer = observer;
-    }
-
-    /// 通过 builder 风格设置迭代观察者
-    pub fn with_observer(mut self, observer: Box<dyn IterationObserver<B::Scalar>>) -> Self {
-        self.observer = Some(observer);
-        self
     }
 
     /// 确保工作向量大小正确
@@ -1251,18 +1170,6 @@ where
                 };
             }
 
-            if let Some(observer) = self.observer.as_mut() {
-                if observer.should_stop(iter + 1, res_norm, rel_res) {
-                    return SolverResult {
-                        status: SolverStatus::Stopped,
-                        iterations: iter + 1,
-                        residual_norm: res_norm,
-                        initial_residual_norm: initial_norm,
-                        relative_residual: rel_res,
-                    };
-                }
-            }
-
             prev_res = res_norm;
 
             // 检查发散
@@ -1347,7 +1254,7 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = PcgSolver::new(backend.clone(), config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
@@ -1372,7 +1279,7 @@ mod tests {
         // PCG
         let mut x_pcg = backend.alloc_init(50, 0.0);
         let mut pcg_solver = PcgSolver::new(backend.clone(), config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
         let pcg_result = pcg_solver.solve(&matrix, &b, &mut x_pcg, &precond);
 
         // PCG 应该更快收敛
@@ -1391,7 +1298,7 @@ mod tests {
 
         let config = SolverConfig::new(1e-10, 100);
         let mut solver = BiCgStabSolver::new(backend.clone(), config);
-        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(&backend, &matrix).unwrap();
+        let precond = JacobiPreconditioner::<CpuBackend<f64>>::from_matrix(backend.clone(), &matrix).unwrap();
 
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 

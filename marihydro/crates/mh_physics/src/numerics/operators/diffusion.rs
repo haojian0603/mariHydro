@@ -29,7 +29,7 @@
 //! 使用 `estimate_stable_dt()` 或 `apply_diffusion_auto_substeps()` 自动处理。
 
 use rayon::prelude::*;
-use mh_runtime::{Backend, CellIndex, DeviceBuffer, FaceIndex, RuntimeScalar};
+use crate::prelude::*;
 use crate::adapter::PhysicsMesh;
 
 /// 扩散边界条件类型

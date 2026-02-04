@@ -62,12 +62,15 @@ pub mod topology;
 // 结构化网格
 pub mod structured;
 
+use mh_runtime::CpuBackend;
+
 // 重新导出核心类型
 pub use attributes::{
     AttributeStats, AttributeStore, ATTR_BED_ELEVATION, ATTR_DISCHARGE_X, ATTR_DISCHARGE_Y,
     ATTR_MANNING_N, ATTR_VELOCITY_X, ATTR_VELOCITY_Y, ATTR_WATER_DEPTH, ATTR_WATER_SURFACE,
 };
-pub use frozen::{FrozenMesh, MeshStatistics};
+pub use frozen::{FrozenMesh as FrozenMeshGeneric, MeshStatistics};
+pub type FrozenMesh = FrozenMeshGeneric<CpuBackend<f64>>;
 pub use halfedge::{Face, HalfEdge, HalfEdgeMesh, Vertex};
 pub use error::{MeshError, MeshResult};
 
@@ -82,7 +85,7 @@ pub use spatial_index::{CellEnvelope, MeshSpatialIndex, SpatialBounds, SpatialIn
 pub use locator::{
     CachedLocator, LocateResult, LocateTolerance, LocatorCacheStats, MeshLocator,
 };
-pub use converter::{MeshStatisticsExt, SimpleMeshData};
+pub use converter::{MeshStatisticsExt, SimpleMeshDataGeneric};
 
 // 网格生成
 pub mod generation;

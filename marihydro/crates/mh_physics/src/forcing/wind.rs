@@ -90,7 +90,7 @@ impl WindProvider {
         let mut out_v = Vec::with_capacity(tuples.len());
         let mut last_t = None;
         for (t, u, v) in tuples {
-            if last_t.map_or(true, |lt| t > lt) {
+            if last_t.is_none_or(|lt| t > lt) {
                 out_t.push(t);
                 out_u.push(u);
                 out_v.push(v);

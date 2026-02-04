@@ -599,7 +599,7 @@ mod tests {
 
         // 正常情况
         let phi = limiter.compute(-1.0, 1.0, 0.5);
-        assert!(phi >= 0.0 && phi <= 1.0);
+        assert!((0.0..=1.0).contains(&phi));
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
             venkat_k: 5.0,
         };
         let phi = apply_limiter_with_context(LimiterType::Venkatakrishnan, 0.0, Some(&ctx));
-        assert!(phi >= 0.0 && phi <= 1.0);
+        assert!((0.0..=1.0).contains(&phi));
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod tests {
             venkat_k: 5.0,
         };
         let phi = apply_limiter_with_context(LimiterType::BarthJespersen, 0.0, Some(&ctx));
-        assert!(phi >= 0.0 && phi <= 1.0);
+        assert!((0.0..=1.0).contains(&phi));
     }
 
     #[test]

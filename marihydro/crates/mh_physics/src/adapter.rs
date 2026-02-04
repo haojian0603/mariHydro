@@ -541,70 +541,68 @@ mod tests {
     // 创建测试用的FrozenMesh
     fn create_test_mesh() -> FrozenMesh {
         use mh_geo::{Point2D, Point3D};
-        
-        FrozenMesh {
-            n_nodes: 6,
-            node_coords: vec![
-                Point3D::new(0.0, 0.0, 0.0),
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(2.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-                Point3D::new(1.0, 1.0, 0.0),
-                Point3D::new(2.0, 1.0, 0.0),
-            ],
-            n_cells: 2,
-            cell_center: vec![
-                Point2D::new(0.5, 0.5),
-                Point2D::new(1.5, 0.5),
-            ],
-            cell_area: vec![1.0, 1.0],
-            cell_z_bed: vec![0.0, 0.0],
-            cell_node_offsets: vec![0, 4, 8],
-            cell_node_indices: vec![0, 1, 4, 3, 1, 2, 5, 4],
-            cell_face_offsets: vec![0, 4, 8],
-            cell_face_indices: vec![0, 1, 2, 3, 0, 4, 5, 6],
-            cell_neighbor_offsets: vec![0, 1, 2],
-            cell_neighbor_indices: vec![1, 0],
-            n_faces: 7,
-            n_interior_faces: 1,
-            face_center: vec![
-                Point2D::new(1.0, 0.5),
-                Point2D::new(0.5, 0.0),
-                Point2D::new(0.0, 0.5),
-                Point2D::new(0.5, 1.0),
-                Point2D::new(1.5, 0.0),
-                Point2D::new(2.0, 0.5),
-                Point2D::new(1.5, 1.0),
-            ],
-            face_normal: vec![
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(0.0, -1.0, 0.0),
-                Point3D::new(-1.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-                Point3D::new(0.0, -1.0, 0.0),
-                Point3D::new(1.0, 0.0, 0.0),
-                Point3D::new(0.0, 1.0, 0.0),
-            ],
-            face_length: vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-            face_z_left: vec![0.0; 7],
-            face_z_right: vec![0.0; 7],
-            face_owner: vec![0, 0, 0, 0, 1, 1, 1],
-            face_neighbor: vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX],
-            face_delta_owner: vec![Point2D::new(0.0, 0.0); 7],
-            face_delta_neighbor: vec![Point2D::new(0.0, 0.0); 7],
-            face_dist_o2n: vec![1.0; 7],
-            boundary_face_indices: vec![1, 2, 3, 4, 5, 6],
-            boundary_names: vec!["boundary".to_string()],
-            face_boundary_id: vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
-            min_cell_size: 1.0,
-            max_cell_size: 1.0,
-            cell_refinement_level: vec![0; 2],
-            cell_parent: vec![0, 1],
-            ghost_capacity: 0,
-            cell_original_id: Vec::new(),
-            face_original_id: Vec::new(),
-            cell_permutation: Vec::new(),
-            cell_inv_permutation: Vec::new(),
-        }
+
+        let mut mesh = FrozenMesh::empty_with_cells(2);
+        mesh.n_nodes = 6;
+        mesh.node_coords = vec![
+            Point3D::new(0.0, 0.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(2.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+            Point3D::new(1.0, 1.0, 0.0),
+            Point3D::new(2.0, 1.0, 0.0),
+        ];
+        mesh.n_cells = 2;
+        mesh.cell_center = vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)];
+        mesh.cell_area = vec![1.0, 1.0];
+        mesh.cell_z_bed = vec![0.0, 0.0];
+        mesh.cell_node_offsets = vec![0, 4, 8];
+        mesh.cell_node_indices = vec![0, 1, 4, 3, 1, 2, 5, 4];
+        mesh.cell_face_offsets = vec![0, 4, 8];
+        mesh.cell_face_indices = vec![0, 1, 2, 3, 0, 4, 5, 6];
+        mesh.cell_neighbor_offsets = vec![0, 1, 2];
+        mesh.cell_neighbor_indices = vec![1, 0];
+        mesh.n_faces = 7;
+        mesh.n_interior_faces = 1;
+        mesh.face_center = vec![
+            Point2D::new(1.0, 0.5),
+            Point2D::new(0.5, 0.0),
+            Point2D::new(0.0, 0.5),
+            Point2D::new(0.5, 1.0),
+            Point2D::new(1.5, 0.0),
+            Point2D::new(2.0, 0.5),
+            Point2D::new(1.5, 1.0),
+        ];
+        mesh.face_normal = vec![
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, -1.0, 0.0),
+            Point3D::new(-1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+            Point3D::new(0.0, -1.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+        ];
+        mesh.face_length = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        mesh.face_z_left = vec![0.0; 7];
+        mesh.face_z_right = vec![0.0; 7];
+        mesh.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
+        mesh.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
+        mesh.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
+        mesh.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
+        mesh.face_dist_o2n = vec![1.0; 7];
+        mesh.boundary_face_indices = vec![1, 2, 3, 4, 5, 6];
+        mesh.boundary_names = vec!["boundary".to_string()];
+        mesh.face_boundary_id = vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)];
+        mesh.min_cell_size = 1.0;
+        mesh.max_cell_size = 1.0;
+        mesh.cell_refinement_level = vec![0; 2];
+        mesh.cell_parent = vec![0, 1];
+        mesh.ghost_capacity = 0;
+        mesh.cell_original_id = Vec::new();
+        mesh.face_original_id = Vec::new();
+        mesh.cell_permutation = Vec::new();
+        mesh.cell_inv_permutation = Vec::new();
+
+        mesh
     }
 }

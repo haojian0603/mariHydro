@@ -17,19 +17,23 @@
 //!
 //! ```text
 //! // ✅ 正确：Layer 4 → Builder → Layer 3
-//! use mh_physics::{Layer3Config, ShallowWaterSolver};
+//! use mh_physics::{Layer3Config, NoSource, ShallowWaterSolver};
 //! use mh_runtime::CpuBackend;
 //! 
 //! fn layer4_code() {
 //!     let config = Layer3Config::default();
-//!     let solver = ShallowWaterSolver::new(mesh, config, CpuBackend::<f64>::new());
+//!     let solver = ShallowWaterSolver::<CpuBackend<f64>, NoSource<CpuBackend<f64>>>::new(
+//!         mesh,
+//!         config,
+//!         CpuBackend::<f64>::new(),
+//!     );
 //! }
 //! ```
 //!
 //! # 转换链
 //!
 //! ```text
-//! SolverConfig (Layer 4, f64) → SolverBuilder → ShallowWaterSolver<B> (Layer 3, 泛型)
+//! SolverConfig (Layer 4, f64) → SolverBuilder → ShallowWaterSolver<B, S> (Layer 3, 泛型)
 //! ```
 //!
 //! # 设计原则
@@ -42,21 +46,21 @@
 //!     │                    │
 //!     │                    ▼ (精度分发)
 //!     │               ┌────────────────┐
-//!     │               │ Precision::F32 │──> ShallowWaterSolver<CpuBackend<f32>>
-//!     │               │ Precision::F64 │──> ShallowWaterSolver<CpuBackend<f64>>
+//!     │               │ Precision::F32 │──> ShallowWaterSolver<CpuBackend<f32>, S>
+//!     │               │ Precision::F64 │──> ShallowWaterSolver<CpuBackend<f64>, S>
 //!     │               └────────────────┘
 //!     │                    │
 //!     ▼                    ▼
-//! DynSolver trait <── Box<dyn DynSolver>
+//! SolverHandle 枚举（静态分发）
 //! ```
 
 pub mod dyn_solver;
 pub mod config;
 pub mod solver_builder;
 
-pub use dyn_solver::{DynSolver, DynState, DynStepResult};
+pub use dyn_solver::{DynState, DynStepResult};
 pub use config::SolverConfig;
-pub use solver_builder::{SolverBuilder, BuildError};
+pub use solver_builder::{SolverBuilder, BuildError, SolverHandle};
 
 // ============================================
 // 🔥 编译期架构保护（防止Layer 3滥用）

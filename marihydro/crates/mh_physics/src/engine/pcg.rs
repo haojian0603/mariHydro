@@ -4,11 +4,10 @@
 //! 主要用于半隐式时间积分中的压力泊松方程求解。
 
 use crate::core::Backend;
-use crate::mesh::{MeshTopology, MeshGeometry};
+use crate::mesh::{MeshGeometry, MeshTopology};
 use crate::numerics::linear_algebra::csr::{CsrBuilder, CsrMatrix};
-use mh_runtime::{DeviceBuffer, RuntimeScalar};
+use crate::prelude::*;
 use mh_foundation::{MhError, MhResult};
-use num_traits::{FromPrimitive, Float};
 
 /// PCG 求解器配置（Layer 4，保持 f64）
 /// 
@@ -323,6 +322,7 @@ fn dot_product<S: RuntimeScalar>(x: &[S], y: &[S], n: usize) -> S {
 }
 
 fn apply_preconditioner<B: Backend>(
+    backend: &B,
     r: &B::Buffer<B::Scalar>,
     z: &mut B::Buffer<B::Scalar>,
     config: &PcgConfig,
@@ -335,7 +335,7 @@ fn apply_preconditioner<B: Backend>(
         (PreconditionerType::Jacobi, Some(diag)) => {
             for i in 0..n {
                 let d = diag.diag[i];
-                let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::ZERO);
+                let eps = backend.scalar_from_f64(1e-30);
                 if d.abs() > eps {
                     z[i] = r[i] / d;
                 } else {
@@ -353,7 +353,7 @@ fn apply_preconditioner<B: Backend>(
 
 impl<B: Backend> PcgSolver<B>
 where
-    B::Scalar: RuntimeScalar + FromPrimitive + Float,
+    B::Scalar: RuntimeScalar,
     B::Buffer<B::Scalar>: Send + Sync,
 {
     pub fn solve<M: SparseMvp<B>>(
@@ -378,7 +378,7 @@ where
         let b_norm = dot_product(&b.as_slice()[..n], &b.as_slice()[..n], n).sqrt();
         let initial_r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
 
-        let eps = B::Scalar::from_f64(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        let eps = self.backend.scalar_from_f64(self.config.atol);
         if b_norm < eps {
             x.copy_from_slice(x_buf.as_slice());
             return PcgResult {
@@ -390,7 +390,7 @@ where
             };
         }
 
-        apply_preconditioner(&workspace.r, &mut workspace.z, &self.config, precond, n);
+        apply_preconditioner(&self.backend, &workspace.r, &mut workspace.z, &self.config, precond, n);
 
         for i in 0..n {
             workspace.p[i] = workspace.z[i];
@@ -402,7 +402,7 @@ where
             matrix.apply(&workspace.p, &mut workspace.ap);
 
             let p_ap = dot_product(&workspace.p.as_slice()[..n], &workspace.ap.as_slice()[..n], n);
-            let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::ZERO);
+            let eps = self.backend.scalar_from_f64(1e-30);
             if p_ap.abs() < eps {
                 return PcgResult {
                     converged: false,
@@ -421,7 +421,7 @@ where
 
             let r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
             let relative_residual = r_norm / b_norm;
-            let rtol = B::Scalar::from_f64(self.config.rtol).unwrap_or(B::Scalar::ZERO);
+            let rtol = self.backend.scalar_from_f64(self.config.rtol);
 
             if r_norm < eps || relative_residual < rtol {
                 x.copy_from_slice(x_buf.as_slice());
@@ -434,7 +434,7 @@ where
                 };
             }
 
-            apply_preconditioner(&workspace.r, &mut workspace.z, &self.config, precond, n);
+            apply_preconditioner(&self.backend, &workspace.r, &mut workspace.z, &self.config, precond, n);
 
             let rho_new = dot_product(&workspace.r.as_slice()[..n], &workspace.z.as_slice()[..n], n);
             let beta = rho_new / rho;
@@ -500,7 +500,7 @@ impl PoissonMatrixBuilder {
     ) -> MhResult<DiagonalMatrix<B>>
     where
         B::Buffer<B::Scalar>: Send + Sync,
-        B::Scalar: RuntimeScalar + FromPrimitive + Float,
+        B::Scalar: RuntimeScalar,
     {
         if cell_areas.len() != self.n_cells {
             return Err(MhError::size_mismatch("cell_areas", self.n_cells, cell_areas.len()));
@@ -520,14 +520,14 @@ impl PoissonMatrixBuilder {
             )));
         }
 
-        let g_min = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let g_min = backend.scalar_from_f64(1e-6);
         if gravity <= g_min {
             return Err(MhError::invalid_input(
                 "重力加速度过小，可能导致数值不稳定".to_string(),
             ));
         }
 
-        let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let eps = backend.scalar_from_f64(1e-30);
         let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
 
         Ok(DiagonalMatrix::from_fn(backend.clone(), self.n_cells, |i| {
@@ -557,12 +557,12 @@ impl PoissonMatrixBuilder {
     ) -> CsrMatrix<B::Scalar>
     where
         B::Buffer<B::Scalar>: Send + Sync,
-        B::Scalar: RuntimeScalar + FromPrimitive + Float,
+        B::Scalar: RuntimeScalar,
     {
         assert_eq!(cell_areas.len(), self.n_cells, "cell_areas 长度不匹配");
         assert_eq!(h.len(), self.n_cells, "h 长度不匹配");
 
-        let eps = B::Scalar::from_f64(1e-30).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let eps = B::Scalar::MIN_POSITIVE;
         let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
         let alpha = gravity * theta_safe * dt * dt;
 

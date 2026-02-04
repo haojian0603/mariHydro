@@ -13,14 +13,13 @@
 //! 2. **质量守恒**: 严格保证泥沙质量守恒
 //! 3. **可扩展**: 支持多种泥沙粒径和分层
 
-use crate::core::Backend;
+use crate::prelude::*;
 use crate::state::ShallowWaterState;
-use mh_runtime::RuntimeScalar as Scalar;
 use std::marker::PhantomData;
 
 /// 泥沙系统错误
 #[derive(Debug, Clone)]
-pub enum SedimentError<S: Scalar> {
+pub enum SedimentError<S: RuntimeScalar> {
     /// 质量守恒违反
     ConservationViolation {
         expected: S,
@@ -38,7 +37,7 @@ pub enum SedimentError<S: Scalar> {
 
 impl<S> std::fmt::Display for SedimentError<S>
 where
-    S: Scalar + std::fmt::LowerExp,
+    S: RuntimeScalar + std::fmt::LowerExp,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -58,13 +57,13 @@ where
 
 impl<S> std::error::Error for SedimentError<S>
 where
-    S: Scalar + std::fmt::Debug + std::fmt::Display,
+    S: RuntimeScalar + std::fmt::Debug + std::fmt::Display + std::fmt::LowerExp,
 {
 }
 
 /// 泥沙系统配置
 #[derive(Debug, Clone)]
-pub struct SedimentConfigGeneric<S: Scalar> {
+pub struct SedimentConfigGeneric<S: RuntimeScalar> {
     /// 临界剪切应力 [Pa]
     pub tau_critical: S,
     /// 侵蚀系数 [kg/m²/s/Pa]
@@ -115,7 +114,7 @@ impl Default for SedimentConfigGeneric<f32> {
 
 /// 泥沙交换通量统计
 #[derive(Debug, Clone, Default)]
-pub struct SedimentFluxStats<S: Scalar> {
+pub struct SedimentFluxStats<S: RuntimeScalar> {
     /// 总侵蚀量 [kg]
     pub total_erosion: S,
     /// 总沉降量 [kg]

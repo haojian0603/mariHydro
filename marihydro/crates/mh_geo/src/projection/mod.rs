@@ -351,7 +351,7 @@ pub fn wgs84_to_auto_utm(lon: f64, lat: f64) -> MhResult<(f64, f64, u8, bool)> {
     if !(-90.0..=90.0).contains(&lat) {
         return Err(GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0).into());
     }
-    if lat > 84.0 || lat < -80.0 {
+    if !(-80.0..=84.0).contains(&lat) {
         return Err(GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0).into());
     }
     let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;

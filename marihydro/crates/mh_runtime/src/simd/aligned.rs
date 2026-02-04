@@ -216,7 +216,7 @@ impl<T> AlignedVec<T> {
     /// 检查对齐
     #[inline]
     pub fn is_aligned(&self) -> bool {
-        (self.ptr.as_ptr() as usize) % Self::ALIGNMENT == 0
+        (self.ptr.as_ptr() as usize).is_multiple_of(Self::ALIGNMENT)
     }
 }
 
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let original: AlignedVec<f64> = aligned_filled(10, 3.14);
+        let original: AlignedVec<f64> = aligned_filled(10, std::f64::consts::PI);
         let cloned = original.clone();
 
         assert_eq!(original.len(), cloned.len());

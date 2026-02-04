@@ -18,7 +18,7 @@
 //!
 //! ```text
 //! Layer 4: mh_config   → Precision, SolverConfig, DynSolver
-//! Layer 3: mh_physics  → ShallowWaterSolver<B: Backend>
+//! Layer 3: mh_physics  → ShallowWaterSolver<B: Backend, S: SourceTermGeneric<B>>
 //! Layer 2: mh_runtime  → Backend, RuntimeScalar, DeviceBuffer (本层)
 //! Layer 1: mh_foundation → Arena, Dimension, AlignedVec
 //! ```
@@ -75,15 +75,27 @@ pub use arena_ext::{
 pub use metrics::{MetricsCollector, MetricsSnapshot, Timer};
 pub use numerics::KahanSum;
 pub use error::RuntimeError;
-/// SafeIndex 是 SafeIdx 的别名（向后兼容）
-pub type SafeIndex<Tag> = arena_ext::SafeIdx<Tag>;
 
 /// Prelude 模块
 pub mod prelude {
     //! 常用类型预导入
+    // 核心类型
     pub use crate::{
-        RuntimeScalar, Backend, CpuBackend, DeviceBuffer,
-        CellIndex, FaceIndex, NodeIndex, EdgeIndex, VertexIndex, HalfEdgeIndex,
+        Backend, CpuBackend, RuntimeScalar, DeviceBuffer, MemoryLocation, Vector2D,
+        CellIndex, FaceIndex, NodeIndex, EdgeIndex, VertexIndex, HalfEdgeIndex, BoundaryIndex,
+        INVALID_INDEX,
         Tolerance, RuntimeError,
     };
+
+    // 数学运算
+    pub use num_traits::{Float, FromPrimitive, ToPrimitive, NumAssign};
+
+    // 原子操作
+    pub use std::sync::atomic::Ordering;
+
+    // 缓冲区相关
+    pub use crate::buffer::{GpuBufferDescriptor, BufferPoolConfig, CpuBufferPool, PooledBuffer};
+
+    // 标量常数
+    pub use crate::scalar::{AtomicScalar, AtomicF32, AtomicF64};
 }

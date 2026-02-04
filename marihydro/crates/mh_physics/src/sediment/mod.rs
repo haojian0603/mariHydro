@@ -41,7 +41,7 @@ pub mod suspended;
 // ============================================================
 
 // 泥沙属性
-pub use properties::{SedimentClass, SedimentProperties, SedimentType};
+pub use properties::{SedimentClassGeneric, SedimentPropertiesGeneric, SedimentType};
 
 // 输沙公式（全部泛型化）
 pub use formulas::{
@@ -54,7 +54,7 @@ pub use morphology::{MorphodynamicsSolver, MorphologyConfig, MorphologyStats};
 
 // 悬移质
 pub use suspended::{
-    ErosionFormula, GarciaParker, ResuspensionSource, SettlingFormula, SettlingVelocity,
+    ErosionFormula, GarciaParker, ResuspensionSourceGeneric, SettlingFormula, SettlingVelocity,
     SmithMcLean, SuspendedTransport,
 };
 pub use suspended::{DietrichSettling, StokesSettling, VanRijnSettling};

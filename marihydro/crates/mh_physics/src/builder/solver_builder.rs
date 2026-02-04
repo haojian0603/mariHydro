@@ -5,7 +5,7 @@
 //! 实现从无泛型配置到泛型引擎的桥梁。
 
 use super::config::{ConfigError, SolverConfig};
-use super::dyn_solver::{DynSolver, DynState, DynStepResult, SolverStats};
+use super::dyn_solver::{DynState, DynStepResult, SolverStats};
 use crate::builder::config::Precision;
 use mh_runtime::{RuntimeScalar, Tolerance};
 use std::time::Instant;
@@ -121,7 +121,7 @@ impl SolverBuilder {
     /// 构建求解器
     ///
     /// 根据配置中的精度选择实例化对应的泛型求解器。
-    pub fn build(mut self) -> Result<Box<dyn DynSolver>, BuildError> {
+    pub fn build(mut self) -> Result<SolverHandle, BuildError> {
         // 验证配置
         self.config.validate()?;
         
@@ -166,7 +166,7 @@ impl SolverBuilder {
         }
     }
 
-    fn build_f32(self) -> Result<Box<dyn DynSolver>, BuildError> {
+    fn build_f32(self) -> Result<SolverHandle, BuildError> {
         let solver = SimpleSolver::<f32>::new(
             self.config.clone(),
             self.n_cells,
@@ -175,10 +175,10 @@ impl SolverBuilder {
             self.initial_v.unwrap(),
             self.bathymetry.unwrap(),
         );
-        Ok(Box::new(solver))
+        Ok(SolverHandle::F32(solver))
     }
 
-    fn build_f64(self) -> Result<Box<dyn DynSolver>, BuildError> {
+    fn build_f64(self) -> Result<SolverHandle, BuildError> {
         let solver = SimpleSolver::<f64>::new(
             self.config.clone(),
             self.n_cells,
@@ -187,7 +187,85 @@ impl SolverBuilder {
             self.initial_v.unwrap(),
             self.bathymetry.unwrap(),
         );
-        Ok(Box::new(solver))
+        Ok(SolverHandle::F64(solver))
+    }
+}
+
+/// 静态分发的求解器句柄
+pub enum SolverHandle {
+    F32(SimpleSolver<f32>),
+    F64(SimpleSolver<f64>),
+}
+
+impl SolverHandle {
+    pub fn step(&mut self, dt: f64) -> DynStepResult {
+        match self {
+            Self::F32(s) => s.step_dyn(dt),
+            Self::F64(s) => s.step_dyn(dt),
+        }
+    }
+
+    pub fn time(&self) -> f64 {
+        match self {
+            Self::F32(s) => s.time_dyn(),
+            Self::F64(s) => s.time_dyn(),
+        }
+    }
+
+    pub fn step_count(&self) -> usize {
+        match self {
+            Self::F32(s) => s.step_count_dyn(),
+            Self::F64(s) => s.step_count_dyn(),
+        }
+    }
+
+    pub fn precision(&self) -> Precision {
+        match self {
+            Self::F32(_) => Precision::F32,
+            Self::F64(_) => Precision::F64,
+        }
+    }
+
+    pub fn export_state(&self) -> DynState {
+        match self {
+            Self::F32(s) => s.export_state_dyn(),
+            Self::F64(s) => s.export_state_dyn(),
+        }
+    }
+
+    pub fn stats(&self) -> SolverStats {
+        match self {
+            Self::F32(s) => s.stats_dyn(),
+            Self::F64(s) => s.stats_dyn(),
+        }
+    }
+
+    pub fn n_cells(&self) -> usize {
+        match self {
+            Self::F32(s) => s.n_cells_dyn(),
+            Self::F64(s) => s.n_cells_dyn(),
+        }
+    }
+
+    pub fn n_faces(&self) -> usize {
+        match self {
+            Self::F32(s) => s.n_faces_dyn(),
+            Self::F64(s) => s.n_faces_dyn(),
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        match self {
+            Self::F32(s) => s.is_healthy_dyn(),
+            Self::F64(s) => s.is_healthy_dyn(),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::F32(s) => s.name_dyn(),
+            Self::F64(s) => s.name_dyn(),
+        }
     }
 }
 
@@ -264,11 +342,11 @@ where
     }
 }
 
-impl<S: RuntimeScalar + Default> DynSolver for SimpleSolver<S>
+impl<S: RuntimeScalar + Default> SimpleSolver<S>
 where
     Tolerance<S>: Default,
 {
-    fn step(&mut self, dt: f64) -> DynStepResult {
+    fn step_dyn(&mut self, dt: f64) -> DynStepResult {
         let dt_s = S::from_f64(dt).unwrap_or(S::ZERO);
         let (dt_actual, max_cfl, mass_error) = self.step_internal(dt_s);
         
@@ -290,23 +368,15 @@ where
         )
     }
 
-    fn time(&self) -> f64 {
+    fn time_dyn(&self) -> f64 {
         self.time.to_f64().unwrap_or(0.0)
     }
 
-    fn step_count(&self) -> usize {
+    fn step_count_dyn(&self) -> usize {
         self.step_count
     }
 
-    fn precision(&self) -> Precision {
-        if std::any::TypeId::of::<S>() == std::any::TypeId::of::<f32>() {
-            Precision::F32
-        } else {
-            Precision::F64
-        }
-    }
-
-    fn export_state(&self) -> DynState {
+    fn export_state_dyn(&self) -> DynState {
         DynState {
             h: self.h.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
             u: self.u.iter().map(|x| x.to_f64().unwrap_or(0.0)).collect(),
@@ -317,26 +387,26 @@ where
         }
     }
 
-    fn stats(&self) -> SolverStats {
+    fn stats_dyn(&self) -> SolverStats {
         self.stats.clone()
     }
 
-    fn n_cells(&self) -> usize {
+    fn n_cells_dyn(&self) -> usize {
         self.n_cells
     }
 
-    fn n_faces(&self) -> usize {
+    fn n_faces_dyn(&self) -> usize {
         0 // 简化实现
     }
 
-    fn is_healthy(&self) -> bool {
+    fn is_healthy_dyn(&self) -> bool {
         // 检查是否有NaN或Inf
         self.h.iter().all(|x| x.is_safe())
             && self.u.iter().all(|x| x.is_safe())
             && self.v.iter().all(|x| x.is_safe())
     }
 
-    fn name(&self) -> &'static str {
+    fn name_dyn(&self) -> &'static str {
         "SimpleSolver"
     }
 }

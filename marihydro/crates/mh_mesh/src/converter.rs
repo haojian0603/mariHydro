@@ -6,30 +6,31 @@
 //!
 //! # 功能特性
 //!
-//! - `SimpleMeshData`: 简化网格数据结构，适用于 GPU 传输
+//! - `SimpleMeshDataGeneric<S>`: 简化网格数据结构，适用于 GPU 传输
 //! - `MeshStatisticsExt`: 扩展的网格统计信息
 //! - 格式转换工具函数
 //!
 //! # 示例
 //!
 //! ```ignore
-//! use mh_mesh::converter::SimpleMeshData;
+//! use mh_mesh::converter::SimpleMeshDataGeneric;
 //! use mh_mesh::FrozenMesh;
 //!
 //! let frozen_mesh = FrozenMesh::empty();
-//! let simple_data = SimpleMeshData::from_frozen(&frozen_mesh);
+//! let simple_data = SimpleMeshDataGeneric::<f32>::from_frozen(&frozen_mesh);
 //!
 //! println!("GPU 数据大小: {} bytes", simple_data.memory_usage());
 //! ```
 
 use crate::frozen::FrozenMesh;
-use num_traits::FromPrimitive;
+use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 /// 简化网格数据（用于 GPU 传输）
 ///
 /// 将网格数据转换为连续的数组格式，便于 GPU 缓冲区传输。
-/// 支持 f32/f64 精度，默认导出 `SimpleMeshData` 为 f32。
+/// 支持 f32/f64 精度，需要显式指定 `SimpleMeshDataGeneric<S>`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimpleMeshDataGeneric<S> {
     /// 节点数
@@ -82,97 +83,60 @@ pub struct SimpleMeshDataGeneric<S> {
 
     /// 边界面索引列表
     pub boundary_faces: Vec<u32>,
+
 }
 
-/// 默认简化网格数据（f32）
-pub type SimpleMeshData = SimpleMeshDataGeneric<f32>;
 
-/// f32 简化网格数据
-pub type SimpleMeshDataF32 = SimpleMeshDataGeneric<f32>;
-
-/// f64 简化网格数据
-pub type SimpleMeshDataF64 = SimpleMeshDataGeneric<f64>;
-
-impl<S> SimpleMeshDataGeneric<S>
-where
-    S: Copy + FromPrimitive + Serialize + for<'de> Deserialize<'de>,
-{
-    /// 从 FrozenMesh 转换
-    ///
-    /// 将 FrozenMesh 中的数据转换为适合 GPU 使用的格式。
-    pub fn from_frozen(mesh: &FrozenMesh) -> Self {
-        // 节点坐标
-        let node_coords: Vec<S> = mesh
+impl SimpleMeshDataGeneric<f32> {
+    /// 从 FrozenMesh 转换（输出 f32）
+    pub fn from_frozen<B: Backend>(mesh: &FrozenMesh<B>) -> Self
+    where
+        B::Scalar: RuntimeScalar + ToPrimitive,
+    {
+        let node_coords: Vec<f32> = mesh
             .node_coords
             .iter()
-            .flat_map(|p| {
-                [
-                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                    S::from_f64(p.z).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                ]
-            })
+            .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
 
-        // 单元中心
-        let cell_centers: Vec<S> = mesh
+        let cell_centers: Vec<f32> = mesh
             .cell_center
             .iter()
-            .flat_map(|p| {
-                [
-                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                ]
-            })
+            .flat_map(|p| [p.x as f32, p.y as f32])
             .collect();
 
-        // 单元面积
-        let cell_areas: Vec<S> = mesh
+        let cell_areas: Vec<f32> = mesh
             .cell_area
+            .as_slice()
             .iter()
-            .map(|&x| S::from_f64(x).unwrap_or_else(|| S::from_f64(0.0).unwrap()))
+            .map(|&x| x.to_f64().unwrap_or(0.0) as f32)
             .collect();
 
-        // 单元节点索引
         let cell_nodes: Vec<u32> = mesh.cell_node_indices.clone();
         let cell_offsets: Vec<u32> = mesh.cell_node_offsets.iter().map(|&x| x as u32).collect();
 
-        // 面数据
         let face_owner = mesh.face_owner.clone();
         let face_neighbor = mesh.face_neighbor.clone();
 
-        // 面法向量（只取 x, y 分量）
-        let face_normals: Vec<S> = mesh
+        let face_normals: Vec<f32> = mesh
             .face_normal
             .iter()
-            .flat_map(|n| {
-                [
-                    S::from_f64(n.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                    S::from_f64(n.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                ]
-            })
+            .flat_map(|n| [n.x as f32, n.y as f32])
             .collect();
 
-        // 面长度
-        let face_lengths: Vec<S> = mesh
+        let face_lengths: Vec<f32> = mesh
             .face_length
+            .as_slice()
             .iter()
-            .map(|&x| S::from_f64(x).unwrap_or_else(|| S::from_f64(0.0).unwrap()))
+            .map(|&x| x.to_f64().unwrap_or(0.0) as f32)
             .collect();
 
-        // 面中心
-        let face_centers: Vec<S> = mesh
+        let face_centers: Vec<f32> = mesh
             .face_center
             .iter()
-            .flat_map(|p| {
-                [
-                    S::from_f64(p.x).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                    S::from_f64(p.y).unwrap_or_else(|| S::from_f64(0.0).unwrap()),
-                ]
-            })
+            .flat_map(|p| [p.x as f32, p.y as f32])
             .collect();
 
-        // 边界面索引
         let boundary_faces = mesh.boundary_face_indices.clone();
 
         Self {
@@ -193,7 +157,81 @@ where
             boundary_faces,
         }
     }
+}
 
+impl SimpleMeshDataGeneric<f64> {
+    /// 从 FrozenMesh 转换（输出 f64）
+    pub fn from_frozen<B: Backend>(mesh: &FrozenMesh<B>) -> Self
+    where
+        B::Scalar: RuntimeScalar + ToPrimitive,
+    {
+        let node_coords: Vec<f64> = mesh
+            .node_coords
+            .iter()
+            .flat_map(|p| [p.x, p.y, p.z])
+            .collect();
+
+        let cell_centers: Vec<f64> = mesh
+            .cell_center
+            .iter()
+            .flat_map(|p| [p.x, p.y])
+            .collect();
+
+        let cell_areas: Vec<f64> = mesh
+            .cell_area
+            .as_slice()
+            .iter()
+            .map(|&x| x.to_f64().unwrap_or(0.0))
+            .collect();
+
+        let cell_nodes: Vec<u32> = mesh.cell_node_indices.clone();
+        let cell_offsets: Vec<u32> = mesh.cell_node_offsets.iter().map(|&x| x as u32).collect();
+
+        let face_owner = mesh.face_owner.clone();
+        let face_neighbor = mesh.face_neighbor.clone();
+
+        let face_normals: Vec<f64> = mesh
+            .face_normal
+            .iter()
+            .flat_map(|n| [n.x, n.y])
+            .collect();
+
+        let face_lengths: Vec<f64> = mesh
+            .face_length
+            .as_slice()
+            .iter()
+            .map(|&x| x.to_f64().unwrap_or(0.0))
+            .collect();
+
+        let face_centers: Vec<f64> = mesh
+            .face_center
+            .iter()
+            .flat_map(|p| [p.x, p.y])
+            .collect();
+
+        let boundary_faces = mesh.boundary_face_indices.clone();
+
+        Self {
+            n_nodes: mesh.n_nodes,
+            n_cells: mesh.n_cells,
+            n_faces: mesh.n_faces,
+            n_interior_faces: mesh.n_interior_faces,
+            node_coords,
+            cell_centers,
+            cell_areas,
+            cell_nodes,
+            cell_offsets,
+            face_owner,
+            face_neighbor,
+            face_normals,
+            face_lengths,
+            face_centers,
+            boundary_faces,
+        }
+    }
+}
+
+impl<S: Copy> SimpleMeshDataGeneric<S> {
     /// 计算内存占用（字节）
     pub fn memory_usage(&self) -> usize {
         let scalar_size = std::mem::size_of::<S>();
@@ -368,21 +406,27 @@ pub struct MeshStatisticsExt {
 
 impl MeshStatisticsExt {
     /// 从 FrozenMesh 计算扩展统计信息
-    pub fn from_frozen(mesh: &FrozenMesh) -> Self {
-        let areas = &mesh.cell_area;
-        let lengths = &mesh.face_length;
+    pub fn from_frozen<B: Backend>(mesh: &FrozenMesh<B>) -> Self
+    where
+        B::Scalar: Into<f64>,
+    {
+        let areas = mesh.cell_area.as_slice();
+        let lengths = mesh.face_length.as_slice();
 
         // 单元面积统计
         let (min_area, max_area, avg_area, std_area) = if areas.is_empty() {
             (0.0, 0.0, 0.0, 0.0)
         } else {
-            let min_area = areas.iter().cloned().fold(f64::MAX, f64::min);
-            let max_area = areas.iter().cloned().fold(f64::MIN, f64::max);
-            let sum_area: f64 = areas.iter().sum();
+            let min_area = areas.iter().map(|&a| a.into()).fold(f64::MAX, f64::min);
+            let max_area = areas.iter().map(|&a| a.into()).fold(f64::MIN, f64::max);
+            let sum_area: f64 = areas.iter().map(|&a| a.into()).sum();
             let avg_area = sum_area / areas.len() as f64;
             let variance: f64 = areas
                 .iter()
-                .map(|&a| (a - avg_area).powi(2))
+                .map(|&a| {
+                    let v: f64 = a.into();
+                    (v - avg_area).powi(2)
+                })
                 .sum::<f64>()
                 / areas.len() as f64;
             let std_area = variance.sqrt();
@@ -393,9 +437,9 @@ impl MeshStatisticsExt {
         let (min_length, max_length, avg_length) = if lengths.is_empty() {
             (0.0, 0.0, 0.0)
         } else {
-            let min_length = lengths.iter().cloned().fold(f64::MAX, f64::min);
-            let max_length = lengths.iter().cloned().fold(f64::MIN, f64::max);
-            let avg_length = lengths.iter().sum::<f64>() / lengths.len() as f64;
+            let min_length = lengths.iter().map(|&l| l.into()).fold(f64::MAX, f64::min);
+            let max_length = lengths.iter().map(|&l| l.into()).fold(f64::MIN, f64::max);
+            let avg_length = lengths.iter().map(|&l| l.into()).sum::<f64>() / lengths.len() as f64;
             (min_length, max_length, avg_length)
         };
 
@@ -477,8 +521,9 @@ impl std::fmt::Display for MeshStatisticsExt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
-    fn create_test_mesh() -> FrozenMesh {
+    fn create_test_mesh() -> FrozenMesh<CpuBackend<f64>> {
         let mut mesh = FrozenMesh::empty_with_cells(2);
 
         // 添加节点
@@ -530,7 +575,7 @@ mod tests {
     #[test]
     fn test_simple_mesh_data_creation() {
         let mesh = create_test_mesh();
-        let simple = SimpleMeshData::from_frozen(&mesh);
+        let simple = SimpleMeshDataGeneric::<f32>::from_frozen(&mesh);
 
         assert_eq!(simple.n_nodes, 4);
         assert_eq!(simple.n_cells, 2);
@@ -540,7 +585,7 @@ mod tests {
     #[test]
     fn test_simple_mesh_data_validate() {
         let mesh = create_test_mesh();
-        let simple = SimpleMeshData::from_frozen(&mesh);
+        let simple = SimpleMeshDataGeneric::<f32>::from_frozen(&mesh);
 
         assert!(simple.validate().is_ok());
     }
@@ -548,7 +593,7 @@ mod tests {
     #[test]
     fn test_simple_mesh_data_memory_usage() {
         let mesh = create_test_mesh();
-        let simple = SimpleMeshData::from_frozen(&mesh);
+        let simple = SimpleMeshDataGeneric::<f32>::from_frozen(&mesh);
 
         let memory = simple.memory_usage();
         assert!(memory > 0);
@@ -557,7 +602,7 @@ mod tests {
     #[test]
     fn test_simple_mesh_data_getters() {
         let mesh = create_test_mesh();
-        let simple = SimpleMeshData::from_frozen(&mesh);
+        let simple = SimpleMeshDataGeneric::<f32>::from_frozen(&mesh);
 
         let (x, y, z) = simple.get_node_coords(0);
         assert_eq!(x, 0.0);

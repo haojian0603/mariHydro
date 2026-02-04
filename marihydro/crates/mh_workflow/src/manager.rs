@@ -195,11 +195,9 @@ impl<S: Storage> WorkflowManager<S> {
 
         tracing::info!("Job submitted: {}", id);
 
-        if self.config.auto_start {
-            if self.active_jobs.read().len() < self.config.max_concurrent {
-                if let Some(next) = self.pop_next_job()? {
-                    let _ = self.start_job(next.id);
-                }
+        if self.config.auto_start && self.active_jobs.read().len() < self.config.max_concurrent {
+            if let Some(next) = self.pop_next_job()? {
+                let _ = self.start_job(next.id);
             }
         }
 

@@ -11,14 +11,12 @@
 //! 本模块复用 `tracer::TracerTransportSolver` 处理对流-扩散，
 //! 只需实现泥沙特有的床面交换源项。
 
-use crate::core::Backend;
-use crate::sediment::properties::SedimentProperties;
+use crate::prelude::*;
+use crate::sediment::properties::SedimentPropertiesGeneric;
 use crate::tracer::{TracerAdvectionScheme, TracerDiffusionConfig, TracerTransportConfig, TracerTransportSolver};
 use crate::types::PhysicalConstants;
-use super::resuspension::ResuspensionSource;
-use mh_runtime::DeviceBuffer as RuntimeDeviceBuffer;
+use super::resuspension::{ResuspensionSourceGeneric, SmithMcLean};
 use super::settling::SettlingVelocity;
-use mh_runtime::RuntimeScalar;
 
 /// 悬移质输运求解器
 ///
@@ -27,7 +25,7 @@ pub struct SuspendedTransport<B: Backend> {
     /// 通用输运求解器（对流-扩散）
     transport_solver: TracerTransportSolver<B>,
     /// 床面交换源项
-    source: ResuspensionSource<B>,
+    source: ResuspensionSourceGeneric<B, SmithMcLean<B::Scalar>>,
     /// 沉降速度信息
     settling: SettlingVelocity<B::Scalar>,
     /// 浓度场 [kg/m³]
@@ -46,12 +44,17 @@ where
     B::Scalar: RuntimeScalar,
 {
     /// 创建新的悬移质输运求解器
-    pub fn new_with_backend(backend: B, n_cells: usize, properties: SedimentProperties, physics: PhysicalConstants) -> Self {
+    pub fn new_with_backend(
+        backend: B,
+        n_cells: usize,
+        properties: SedimentPropertiesGeneric<B::Scalar>,
+        physics: PhysicalConstants,
+    ) -> Self {
         // 自动计算沉降速度
         let settling = SettlingVelocity::auto(&backend, &properties, &physics);
         
         // 创建床面源项
-        let source = ResuspensionSource::new(backend.clone(), properties)
+        let source = ResuspensionSourceGeneric::new(backend.clone(), properties)
             .with_settling_velocity(settling.ws);
         
         // 配置 tracer 求解器（默认使用常数扩散系数）
@@ -219,7 +222,7 @@ where
     }
     
     /// 获取泥沙属性
-    pub fn properties(&self) -> &SedimentProperties {
+    pub fn properties(&self) -> &SedimentPropertiesGeneric<B::Scalar> {
         self.source.properties()
     }
     
@@ -236,7 +239,7 @@ where
         // 需要乘以水深转换为面通量
         let flux = -source * h; // [kg/m²/s]，负号因为侵蚀使床面降低
         
-        let rho_s = self.backend.scalar_from_f64(self.source.properties().rho_s);
+        let rho_s = self.source.properties().rho_s;
         flux / ((B::Scalar::ONE - porosity) * rho_s)
     }
     
@@ -251,8 +254,8 @@ mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
     
-    fn make_props() -> SedimentProperties {
-        SedimentProperties::from_d50_mm(0.2)
+    fn make_props<B: Backend<Scalar = f64>>(backend: &B) -> SedimentPropertiesGeneric<f64> {
+        SedimentPropertiesGeneric::from_d50_mm(backend, 0.2)
     }
     
     fn make_physics() -> PhysicalConstants {
@@ -261,10 +264,11 @@ mod tests {
     
     #[test]
     fn test_suspended_transport_new() {
-        let props = make_props();
+        let backend = CpuBackend::<f64>::new();
+        let props = make_props(&backend);
         let physics = make_physics();
         
-        let transport = SuspendedTransport::new_with_backend(CpuBackend::<f64>::new(), 100, props, physics);
+        let transport = SuspendedTransport::new_with_backend(backend, 100, props, physics);
         
         assert_eq!(transport.concentration().len(), 100);
         assert!(transport.settling_velocity() > 0.0);
@@ -272,10 +276,9 @@ mod tests {
     
     #[test]
     fn test_source_term_calculation() {
-        let props = make_props();
-        let physics = make_physics();
-        
         let backend = CpuBackend::<f64>::new();
+        let props = make_props(&backend);
+        let physics = make_physics();
         let mut transport = SuspendedTransport::new_with_backend(backend.clone(), 10, props, physics);
         
         // 设置初始浓度
@@ -294,10 +297,9 @@ mod tests {
     
     #[test]
     fn test_step_source_only() {
-        let props = make_props();
-        let physics = make_physics();
-        
         let backend = CpuBackend::<f64>::new();
+        let props = make_props(&backend);
+        let physics = make_physics();
         let mut transport = SuspendedTransport::new_with_backend(backend.clone(), 10, props, physics);
         
         // 初始浓度为0，高剪切力

@@ -483,24 +483,73 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
     );
 }
 
-/// 源项注册中心（兼容旧版）
-pub struct SourceRegistryGeneric<B: Backend> {
+/// 空源项（静态分发占位）
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoSource<B: Backend> {
+    _marker: PhantomData<B>,
+}
+
+impl<B: Backend> NoSource<B> {
+    #[inline]
+    pub fn new() -> Self {
+        Self { _marker: PhantomData }
+    }
+}
+
+impl<B: Backend> SourceTermGeneric<B> for NoSource<B> {
+    fn name(&self) -> &'static str { "NoSource" }
+
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+    fn is_enabled(&self) -> bool { false }
+
+    fn compute_cell(
+        &self,
+        _cell: usize,
+        _state: &ShallowWaterState<B>,
+        _ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        SourceContributionGeneric::zero()
+    }
+
+    fn compute_batch(
+        &self,
+        state: &ShallowWaterState<B>,
+        contributions: &mut [SourceContributionGeneric<B::Scalar>],
+        _ctx: &SourceContextGeneric<B::Scalar>,
+    ) {
+        for cell in 0..state.n_cells() {
+            contributions[cell] = SourceContributionGeneric::zero();
+        }
+    }
+
+    fn accumulate(
+        &self,
+        _state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        _rhs_hu: &mut B::Buffer<B::Scalar>,
+        _rhs_hv: &mut B::Buffer<B::Scalar>,
+        _ctx: &SourceContextGeneric<B::Scalar>,
+    ) {
+    }
+}
+
+/// 源项注册中心（静态分发）
+pub struct SourceRegistryGeneric<B: Backend, S: SourceTermGeneric<B>> {
     /// 注册的源项列表
-    sources: Vec<Box<dyn SourceTermGeneric<B>>>,
-    /// 工作缓冲区（用于批量计算）
-    contributions: Vec<SourceContributionGeneric<B::Scalar>>,
+    sources: Vec<S>,
     /// 后端标记
     _marker: PhantomData<B>,
 }
 
-impl<B: Backend> SourceRegistryGeneric<B> {
+impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistryGeneric<B, S> {
     /// 创建空的注册中心
     pub fn new() -> Self {
-        Self { sources: Vec::new(), contributions: Vec::new(), _marker: PhantomData }
+        Self { sources: Vec::new(), _marker: PhantomData }
     }
     
     /// 注册新的源项
-    pub fn register(&mut self, source: Box<dyn SourceTermGeneric<B>>) { self.sources.push(source); }
+    pub fn register(&mut self, source: S) { self.sources.push(source); }
     
     /// 获取已注册的源项数量
     pub fn len(&self) -> usize { self.sources.len() }
@@ -510,43 +559,25 @@ impl<B: Backend> SourceRegistryGeneric<B> {
     
     /// 获取所有源项的名称
     pub fn names(&self) -> Vec<&'static str> { self.sources.iter().map(|s| s.name()).collect() }
-    
-    /// 确保工作缓冲区容量
-    fn ensure_capacity(&mut self, n_cells: usize) {
-        if self.contributions.len() < n_cells {
-            self.contributions.resize(n_cells, SourceContributionGeneric::default());
-        }
-    }
-}
 
-impl<B: Backend> Default for SourceRegistryGeneric<B> {
-    fn default() -> Self { Self::new() }
-}
-
-/// CPU f64 后端的源项注册中心特化实现
-impl SourceRegistryGeneric<CpuBackend<f64>> {
     /// 累加所有源项到右端项缓冲区
     pub fn accumulate_all(
-        &mut self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        ctx: &SourceContextGeneric<f64>,
+        &self,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        let n_cells = state.n_cells();
-        self.ensure_capacity(n_cells);
         for source in &self.sources {
             if !source.is_enabled() { continue; }
-            for c in self.contributions[..n_cells].iter_mut() { *c = SourceContributionGeneric::default(); }
-            source.compute_batch(state, &mut self.contributions[..n_cells], ctx);
-            for (i, c) in self.contributions[..n_cells].iter().enumerate() {
-                rhs_h[i] += c.s_h;
-                rhs_hu[i] += c.s_hu;
-                rhs_hv[i] += c.s_hv;
-            }
+            source.accumulate(state, rhs_h, rhs_hu, rhs_hv, ctx);
         }
     }
+}
+
+impl<B: Backend, S: SourceTermGeneric<B>> Default for SourceRegistryGeneric<B, S> {
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]

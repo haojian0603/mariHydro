@@ -2,8 +2,7 @@
 //!
 //! 从2D深度平均状态恢复垂向速度剖面。
 
-use crate::core::{Backend, DeviceBuffer, CpuBackend};
-use mh_runtime::RuntimeScalar as Scalar;
+use crate::prelude::*;
 use crate::state::ShallowWaterState;
 use crate::vertical::sigma::SigmaCoordinate;
 
@@ -258,7 +257,7 @@ impl<B: Backend> ProfileRestorer<B> {
             let h_cell = h[cell];
             let z_bed = z[cell];
 
-            if h_cell < <B::Scalar as Scalar>::from_config(1e-6).unwrap_or(B::Scalar::ZERO) {
+            if h_cell < <B::Scalar as RuntimeScalar>::from_config(1e-6).unwrap_or(B::Scalar::ZERO) {
                 for k in 0..n_layers {
                     let idx = cell * n_layers + k;
                     u_out[idx] = B::Scalar::ZERO;
@@ -275,7 +274,7 @@ impl<B: Backend> ProfileRestorer<B> {
             for k in 0..n_layers {
                 let idx = cell * n_layers + k;
                 let sigma = sigma_levels[k];
-                let sigma_s = <B::Scalar as Scalar>::from_config(sigma).unwrap_or(B::Scalar::ZERO);
+                let sigma_s = <B::Scalar as RuntimeScalar>::from_config(sigma).unwrap_or(B::Scalar::ZERO);
                 let one = B::Scalar::ONE;
                 let z_layer = z_bed + h_cell * (one + sigma_s);
                 z_out[idx] = z_layer;
@@ -284,7 +283,7 @@ impl<B: Backend> ProfileRestorer<B> {
                     ProfileMethod::Uniform => one,
                     ProfileMethod::Parabolic => {
                         let sigma_sq = sigma_s * sigma_s;
-                        let c = <B::Scalar as Scalar>::from_config(1.5).unwrap_or(one + one / (one + one));
+                        let c = <B::Scalar as RuntimeScalar>::from_config(1.5).unwrap_or(one + one / (one + one));
                         c * (one - sigma_sq)
                     }
                     ProfileMethod::Logarithmic => {
@@ -294,7 +293,7 @@ impl<B: Backend> ProfileRestorer<B> {
                             let top = ratio.safe_ln();
                             let denom = h_cell.safe_div(z0, one).safe_ln();
                             let val = top.safe_div(denom, one);
-                            val.clamp_value(B::Scalar::ZERO, <B::Scalar as Scalar>::from_config(2.0).unwrap_or(one + one))
+                            val.clamp_value(B::Scalar::ZERO, <B::Scalar as RuntimeScalar>::from_config(2.0).unwrap_or(one + one))
                         } else {
                             B::Scalar::ZERO
                         }

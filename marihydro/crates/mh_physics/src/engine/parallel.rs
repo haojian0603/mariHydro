@@ -21,6 +21,7 @@
 
 use crate::adapter::{CellIndex, PhysicsMesh};
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
+use crate::prelude::*;
 use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver};
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::state::ShallowWaterState;
@@ -28,8 +29,6 @@ use crate::types::NumericalParams;
 
 use log::info;
 use mh_foundation::MhResult;
-use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, FaceIndex as RuntimeFaceIndex, RuntimeScalar};
-use num_traits::{Float, FromPrimitive};
 use rayon::prelude::*;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -125,7 +124,13 @@ pub struct ParallelFluxConfigBuilder<S: RuntimeScalar> {
 impl<S: RuntimeScalar> Default for ParallelFluxConfigBuilder<S> {
     fn default() -> Self {
         Self {
-            config: ParallelFluxConfig::default(),
+            config: ParallelFluxConfig {
+                params: NumericalParams::default(),
+                g: S::from_f64(9.81).unwrap_or(S::ZERO),
+                min_parallel_size: 1000,
+                strategy: ParallelStrategy::Auto,
+                use_hydrostatic_reconstruction: true,
+            },
         }
     }
 }
@@ -728,11 +733,11 @@ where
         let normal = mesh.face_normal_generic::<B>(face_idx)
             .expect("边界面法向量转换失败：坐标超出Backend标量范围");
         let length_f64 = mesh.face_length(face_idx);
-        let length = B::Scalar::from_f64(length_f64).unwrap_or(B::Scalar::ZERO);
+        let length = self._backend.scalar_from_f64(length_f64);
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
-        let z_l_face = B::Scalar::from_f64(mesh.face_z_left(face_idx)).unwrap_or(B::Scalar::ZERO);
-        let z_r_face = B::Scalar::from_f64(mesh.face_z_right(face_idx)).unwrap_or(B::Scalar::ZERO);
+        let z_l_face = self._backend.scalar_from_f64(mesh.face_z_left(face_idx));
+        let z_r_face = self._backend.scalar_from_f64(mesh.face_z_right(face_idx));
 
         let owner_idx = owner.get();
         let h_l = state.h[owner_idx];
@@ -751,7 +756,7 @@ where
             (h, B::vec2_new(u, v), z_r_face)
         } else {
             let vn = B::vec2_dot(&vel_l, &normal);
-            let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
+            let two = B::Scalar::TWO;
             let vel_r = B::vec2_sub(&vel_l, &B::vec2_scale(&normal, vn * two));
             (h_l, vel_r, z_r_face)
         };
@@ -759,7 +764,7 @@ where
         let recon_state = if self.config.use_hydrostatic_reconstruction {
             self.hydrostatic.reconstruct_face_simple(h_l, h_r, z_l, z_r, vel_l, vel_r)
         } else {
-            let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+            let half = B::Scalar::HALF;
             HydrostaticFaceState {
                 h_left: h_l,
                 h_right: h_r,

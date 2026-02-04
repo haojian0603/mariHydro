@@ -171,7 +171,7 @@ pub struct RunContext {
     completed_steps: RwLock<u64>,
     device: Option<DeviceSelection>,
     pub mesh: Arc<PhysicsMesh>,
-    pub solver: Arc<RwLock<ShallowWaterSolver<CpuBackend<f64>>>>,
+    pub solver: Arc<RwLock<ShallowWaterSolver<CpuBackend<f64>, WindStressRuntimeSource>>>,
     pub state: Arc<RwLock<ShallowWaterState<CpuBackend<f64>>>>,
     pub forcing_snapshot: Option<ForcingSnapshot>,
     wind_forcing: RwLock<Option<WindForcingRuntime>>,
@@ -224,7 +224,11 @@ impl RunContext {
             .map_err(|e| RunnerError::Initialization(format!("网格拓扑验证失败: {}", e)))?;
 
         let backend = CpuBackend::<f64>::new();
-        let mut solver = ShallowWaterSolver::<CpuBackend<f64>>::new(mesh.clone(), layer3_config, backend);
+        let mut solver = ShallowWaterSolver::<CpuBackend<f64>, WindStressRuntimeSource>::new(
+            mesh.clone(),
+            layer3_config,
+            backend,
+        );
         let wind_forcing = attach_forcing_sources(
             &mut solver,
             &job.config.project_path,
@@ -624,7 +628,7 @@ impl<S: Storage> JobRunner<S> {
         let state = context.state.read();
         let solver = context.solver.read();
 
-        let snapshot = mh_io::snapshot::StateSnapshot::from_state_data(
+        let snapshot = mh_io::snapshot::StateSnapshot::<CpuBackend<f64>>::from_state_data(
             state.h_slice().to_vec(),
             state.hu_slice().to_vec(),
             state.hv_slice().to_vec(),
@@ -999,7 +1003,7 @@ fn load_forcing_snapshot(
 }
 
 fn attach_forcing_sources(
-    solver: &mut ShallowWaterSolver<CpuBackend<f64>>,
+    solver: &mut ShallowWaterSolver<CpuBackend<f64>, WindStressRuntimeSource>,
     project_path: &Path,
     mesh: &PhysicsMesh,
     default_time: f64,
@@ -1302,7 +1306,7 @@ fn flatten_forcing_field(field: &ForcingField) -> Result<(Vec<(f64, f64)>, Vec<f
     Ok((positions, values))
 }
 
-fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>>) -> u64 {
+fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>, WindStressRuntimeSource>) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 

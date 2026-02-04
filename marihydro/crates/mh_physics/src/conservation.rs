@@ -111,7 +111,7 @@ impl ConservationSnapshot {
             .or_default()
             .insert(qty, value);
     }
-}
+    /// 带回调的守恒监测器（静态分发）
 
 // ============================================================================
 // 守恒性监测器
@@ -165,9 +165,7 @@ pub struct ConservationMonitor {
     previous: Option<ConservationSnapshot>,
     /// 当前快照
     current: Option<ConservationSnapshot>,
-    /// 累计边界通量
     cumulative_boundary_flux: HashMap<ConservationType, f64>,
-    /// 累计源汇项
     cumulative_sources: HashMap<ConservationType, f64>,
     /// 历史误差记录
     error_history: Vec<ConservationError>,
@@ -204,16 +202,16 @@ impl ConservationMonitor {
         self.previous = self.current.take();
         
         // 累积边界通量
-        for (_, fluxes) in &snapshot.boundary_fluxes {
-            for (&qty, &flux) in fluxes {
-                *self.cumulative_boundary_flux.entry(qty).or_insert(0.0) += flux * dt;
+        for fluxes in snapshot.boundary_fluxes.values() {
+            for (qty, flux) in fluxes {
+                *self.cumulative_boundary_flux.entry(*qty).or_insert(0.0) += flux * dt;
             }
         }
         
         // 累积源项
-        for (_, sources) in &snapshot.source_terms {
-            for (&qty, &value) in sources {
-                *self.cumulative_sources.entry(qty).or_insert(0.0) += value * dt;
+        for sources in snapshot.source_terms.values() {
+            for (qty, value) in sources {
+                *self.cumulative_sources.entry(*qty).or_insert(0.0) += value * dt;
             }
         }
         
@@ -222,13 +220,15 @@ impl ConservationMonitor {
         let mut result = ConservationResult::Ok;
 
         if self.config.lightweight_interval > 0
-            && self.step_count % self.config.lightweight_interval == 0
+            && self.step_count.is_multiple_of(self.config.lightweight_interval)
         {
             result = Self::merge_results(result, self.check_lightweight());
         }
 
         // 检查守恒性（完整）
-        if self.config.check_interval > 0 && self.step_count % self.config.check_interval == 0 {
+        if self.config.check_interval > 0
+            && self.step_count.is_multiple_of(self.config.check_interval)
+        {
             result = Self::merge_results(result, self.check_conservation());
         }
 
@@ -558,13 +558,13 @@ impl ConservationCallback for LoggingConservationCallback {
     }
 }
 
-/// 带回调的守恒监测器
-pub struct IntegratedConservationMonitor {
+/// 带回调的守恒监测器（静态分发）
+pub struct IntegratedConservationMonitor<C: ConservationCallback> {
     inner: ConservationMonitor,
-    callbacks: Vec<Box<dyn ConservationCallback>>,
+    callbacks: Vec<C>,
 }
 
-impl IntegratedConservationMonitor {
+impl<C: ConservationCallback> IntegratedConservationMonitor<C> {
     pub fn new(config: ConservationConfig) -> Self {
         Self {
             inner: ConservationMonitor::new(config),
@@ -572,7 +572,7 @@ impl IntegratedConservationMonitor {
         }
     }
 
-    pub fn add_callback(&mut self, callback: Box<dyn ConservationCallback>) {
+    pub fn add_callback(&mut self, callback: C) {
         self.callbacks.push(callback);
     }
 
@@ -623,9 +623,9 @@ fn pick_stronger_action(a: ConservationAction, b: ConservationAction) -> Conserv
 }
 
 /// 求解器集成 trait
-pub trait ConservationAwareSolver {
+pub trait ConservationAwareSolver<C: ConservationCallback> {
     /// 设置守恒监测器
-    fn set_conservation_monitor(&mut self, monitor: IntegratedConservationMonitor);
+    fn set_conservation_monitor(&mut self, monitor: IntegratedConservationMonitor<C>);
 
     /// 获取当前状态快照
     fn create_conservation_snapshot(&self, time: f64) -> ConservationSnapshot;

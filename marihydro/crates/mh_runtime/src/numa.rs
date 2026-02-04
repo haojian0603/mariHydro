@@ -415,7 +415,7 @@ pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
 
         // 多处理器组支持在当前 windows-sys 版本中不可用
         // TODO: 升级 windows-sys 以支持 SetThreadGroupAffinity
-        return Err(NumaError::UnsupportedPlatform);
+        Err(NumaError::UnsupportedPlatform)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -488,7 +488,7 @@ pub fn bind_thread_to_cores(cores: &[usize]) -> Result<(), NumaError> {
         if result == 0 {
             return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -525,7 +525,7 @@ pub fn unbind_thread() -> Result<(), NumaError> {
         if result == 0 {
             return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -585,6 +585,9 @@ pub trait NumaAllocator {
     fn alloc_on_node(&self, size: usize, node: usize) -> Result<*mut u8, NumaError>;
     
     /// 释放内存
+    ///
+    /// # Safety
+    /// 调用者必须确保 `ptr` 来源于 `alloc_on_node` 并且 `size` 与分配时一致。
     unsafe fn dealloc(&self, ptr: *mut u8, size: usize);
     
     /// 获取指针所在节点

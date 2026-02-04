@@ -6,6 +6,7 @@
 //! 支持f32/f64精度切换和GPU后端扩展。
 
 use mh_runtime::{Backend, RuntimeScalar};
+use crate::TracerError;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use super::state::{TracerField, TracerState};
@@ -61,23 +62,12 @@ pub struct TracerDiffusionConfig<S: RuntimeScalar> {
     pub use_smagorinsky: bool,
 }
 
-impl Default for TracerDiffusionConfig<f64> {
+impl<S: RuntimeScalar> Default for TracerDiffusionConfig<S> {
     fn default() -> Self {
         Self {
             enabled: true,
-            horizontal_diffusivity: 10.0,
-            smagorinsky_coefficient: 0.2,
-            use_smagorinsky: false,
-        }
-    }
-}
-
-impl Default for TracerDiffusionConfig<f32> {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            horizontal_diffusivity: 10.0,
-            smagorinsky_coefficient: 0.2,
+            horizontal_diffusivity: S::from_f64(10.0).unwrap_or(S::ZERO),
+            smagorinsky_coefficient: S::from_f64(0.2).unwrap_or(S::ZERO),
             use_smagorinsky: false,
         }
     }
@@ -149,27 +139,14 @@ pub struct TracerTransportConfig<S: RuntimeScalar> {
     pub c_max: Option<S>,
 }
 
-impl Default for TracerTransportConfig<f64> {
+impl<S: RuntimeScalar> Default for TracerTransportConfig<S> {
     fn default() -> Self {
         Self {
             advection_scheme: TracerAdvectionScheme::default(),
             diffusion: TracerDiffusionConfig::default(),
-            h_min: 1e-6,
+            h_min: S::from_f64(1e-6).unwrap_or(S::MIN_POSITIVE),
             enable_clipping: true,
-            c_min: 0.0,
-            c_max: None,
-        }
-    }
-}
-
-impl Default for TracerTransportConfig<f32> {
-    fn default() -> Self {
-        Self {
-            advection_scheme: TracerAdvectionScheme::default(),
-            diffusion: TracerDiffusionConfig::default(),
-            h_min: 1e-6,
-            enable_clipping: true,
-            c_min: 0.0,
+            c_min: S::ZERO,
             c_max: None,
         }
     }
@@ -382,7 +359,10 @@ impl<B: Backend> TracerTransportSolver<B> {
             self.face_fluxes.resize(flow_data.len(), TracerFaceFlux::default());
         }
 
-        let concentration = field.concentration_slice()?;
+        let n_cells = field.len();
+        let mut rhs_accum = vec![B::Scalar::ZERO; n_cells];
+        {
+            let concentration = field.concentration_slice()?;
         for (i, face) in flow_data.iter().enumerate() {
             if face.h_face <= self.config.h_min || !face.h_face.is_finite() {
                 self.face_fluxes[i] = TracerFaceFlux::default();
@@ -432,15 +412,20 @@ impl<B: Backend> TracerTransportSolver<B> {
             let flux = advective + diffusive;
             let vol_left = cell_volumes[face.left_cell];
             if vol_left > B::Scalar::ZERO {
-                field.add_rhs(face.left_cell, -flux / vol_left)?;
+                rhs_accum[face.left_cell] = rhs_accum[face.left_cell] - flux / vol_left;
             }
 
             if let Some(right_cell) = face.right_cell {
                 let vol_right = cell_volumes[right_cell];
                 if vol_right > B::Scalar::ZERO {
-                    field.add_rhs(right_cell, flux / vol_right)?;
+                    rhs_accum[right_cell] = rhs_accum[right_cell] + flux / vol_right;
                 }
             }
+        }
+        }
+        let rhs = field.rhs_slice_mut()?;
+        for i in 0..n_cells {
+            rhs[i] = rhs[i] + rhs_accum[i];
         }
         Ok(())
     }

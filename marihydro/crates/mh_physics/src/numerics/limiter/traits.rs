@@ -9,11 +9,12 @@
 //! 本模块使用泛型版本作为核心实现，并提供 f64 类型别名保持向后兼容。
 
 use std::fmt::Debug;
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, RuntimeScalar};
 
 // ============================================================================
 // 泛型版本 (核心实现)
 // ============================================================================
+
 
 /// 限制器计算所需的上下文信息
 ///
@@ -26,32 +27,32 @@ use mh_runtime::RuntimeScalar;
 ///
 /// 其中 r 是从单元中心到面中心的向量。
 #[derive(Debug, Clone, Copy)]
-pub struct LimiterContextGeneric<S: RuntimeScalar> {
+pub struct LimiterContext<B: Backend> {
     /// 当前单元的场值 q_i
-    pub cell_value: S,
+    pub cell_value: B::Scalar,
     
     /// 在最大距离方向的梯度投影 (∇q · r_max)
-    pub gradient: S,
+    pub gradient: B::Scalar,
     
     /// 相邻单元的最小值 q_min
-    pub min_neighbor: S,
+    pub min_neighbor: B::Scalar,
     
     /// 相邻单元的最大值 q_max
-    pub max_neighbor: S,
+    pub max_neighbor: B::Scalar,
     
     /// 到最远邻居面中心的距离
-    pub max_distance: S,
+    pub max_distance: B::Scalar,
 }
 
-impl<S: RuntimeScalar> LimiterContextGeneric<S> {
+impl<B: Backend> LimiterContext<B> {
     /// 创建新的限制器上下文
     #[inline]
     pub fn new(
-        cell_value: S,
-        gradient: S,
-        min_neighbor: S,
-        max_neighbor: S,
-        max_distance: S,
+        cell_value: B::Scalar,
+        gradient: B::Scalar,
+        min_neighbor: B::Scalar,
+        max_neighbor: B::Scalar,
+        max_distance: B::Scalar,
     ) -> Self {
         Self {
             cell_value,
@@ -66,7 +67,7 @@ impl<S: RuntimeScalar> LimiterContextGeneric<S> {
     ///
     /// Δ_max = q_max - q_i
     #[inline]
-    pub fn delta_max(&self) -> S {
+    pub fn delta_max(&self) -> B::Scalar {
         self.max_neighbor - self.cell_value
     }
     
@@ -74,25 +75,25 @@ impl<S: RuntimeScalar> LimiterContextGeneric<S> {
     ///
     /// Δ_min = q_min - q_i
     #[inline]
-    pub fn delta_min(&self) -> S {
+    pub fn delta_min(&self) -> B::Scalar {
         self.min_neighbor - self.cell_value
     }
     
     /// 梯度是否为零（或接近零）
     #[inline]
-    pub fn is_gradient_zero(&self, eps: S) -> bool {
+    pub fn is_gradient_zero(&self, eps: B::Scalar) -> bool {
         self.gradient.abs() < eps
     }
 }
 
-impl<S: RuntimeScalar> Default for LimiterContextGeneric<S> {
+impl<B: Backend> Default for LimiterContext<B> {
     fn default() -> Self {
         Self {
-            cell_value: S::ZERO,
-            gradient: S::ZERO,
-            min_neighbor: S::ZERO,
-            max_neighbor: S::ZERO,
-            max_distance: S::ONE,
+            cell_value: B::Scalar::ZERO,
+            gradient: B::Scalar::ZERO,
+            min_neighbor: B::Scalar::ZERO,
+            max_neighbor: B::Scalar::ZERO,
+            max_distance: B::Scalar::ONE,
         }
     }
 }
@@ -110,7 +111,7 @@ impl<S: RuntimeScalar> Default for LimiterContextGeneric<S> {
 /// ```
 ///
 /// 其中 q_face = q_i + α * gradient
-pub trait SlopeLimiterGeneric<S: RuntimeScalar>: Debug + Send + Sync {
+pub trait SlopeLimiter<B: Backend>: Debug + Send + Sync {
     /// 计算限制因子
     ///
     /// # Arguments
@@ -118,7 +119,7 @@ pub trait SlopeLimiterGeneric<S: RuntimeScalar>: Debug + Send + Sync {
     ///
     /// # Returns
     /// 限制因子 α ∈ [0, 1]
-    fn compute_limiter(&self, ctx: &LimiterContextGeneric<S>) -> S;
+    fn compute_limiter(&self, ctx: &LimiterContext<B>) -> B::Scalar;
     
     /// 返回限制器名称
     fn name(&self) -> &'static str;
@@ -126,7 +127,7 @@ pub trait SlopeLimiterGeneric<S: RuntimeScalar>: Debug + Send + Sync {
     /// 批量计算限制因子
     ///
     /// 默认实现简单迭代，子类可以提供向量化版本。
-    fn compute_limiters(&self, contexts: &[LimiterContextGeneric<S>]) -> Vec<S> {
+    fn compute_limiters(&self, contexts: &[LimiterContext<B>]) -> Vec<B::Scalar> {
         contexts.iter().map(|ctx| self.compute_limiter(ctx)).collect()
     }
 }
@@ -135,27 +136,27 @@ pub trait SlopeLimiterGeneric<S: RuntimeScalar>: Debug + Send + Sync {
 ///
 /// 始终返回 1.0，不限制梯度。
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoLimiterGeneric<S: RuntimeScalar>(std::marker::PhantomData<S>);
+pub struct NoLimiter<B: Backend>(std::marker::PhantomData<B>);
 
-impl<S: RuntimeScalar> NoLimiterGeneric<S> {
+impl<B: Backend> NoLimiter<B> {
     /// 创建新的无限制器
     pub fn new() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for NoLimiterGeneric<S> {
+impl<B: Backend> SlopeLimiter<B> for NoLimiter<B> {
     #[inline]
-    fn compute_limiter(&self, _ctx: &LimiterContextGeneric<S>) -> S {
-        S::ONE
+    fn compute_limiter(&self, _ctx: &LimiterContext<B>) -> B::Scalar {
+        B::Scalar::ONE
     }
     
     fn name(&self) -> &'static str {
         "NoLimiter"
     }
     
-    fn compute_limiters(&self, contexts: &[LimiterContextGeneric<S>]) -> Vec<S> {
-        vec![S::ONE; contexts.len()]
+    fn compute_limiters(&self, contexts: &[LimiterContext<B>]) -> Vec<B::Scalar> {
+        vec![B::Scalar::ONE; contexts.len()]
     }
 }
 
@@ -166,10 +167,11 @@ impl<S: RuntimeScalar> SlopeLimiterGeneric<S> for NoLimiterGeneric<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
     
     #[test]
     fn test_limiter_context_creation() {
-        let ctx = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        let ctx = LimiterContext::<CpuBackend<f64>>::new(1.0, 0.5, 0.5, 1.5, 0.1);
         assert_eq!(ctx.cell_value, 1.0);
         assert_eq!(ctx.gradient, 0.5);
         assert_eq!(ctx.min_neighbor, 0.5);
@@ -179,51 +181,51 @@ mod tests {
     
     #[test]
     fn test_limiter_context_deltas() {
-        let ctx = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.3, 1.8, 0.1);
+        let ctx = LimiterContext::<CpuBackend<f64>>::new(1.0, 0.5, 0.3, 1.8, 0.1);
         assert!((ctx.delta_max() - 0.8).abs() < 1e-10);
         assert!((ctx.delta_min() - (-0.7)).abs() < 1e-10);
     }
     
     #[test]
     fn test_limiter_context_zero_gradient() {
-        let ctx1 = LimiterContextGeneric::<f64>::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        let ctx1 = LimiterContext::<CpuBackend<f64>>::new(1.0, 0.0, 0.5, 1.5, 0.1);
         assert!(ctx1.is_gradient_zero(1e-10));
         
-        let ctx2 = LimiterContextGeneric::<f64>::new(1.0, 1e-15, 0.5, 1.5, 0.1);
+        let ctx2 = LimiterContext::<CpuBackend<f64>>::new(1.0, 1e-15, 0.5, 1.5, 0.1);
         assert!(ctx2.is_gradient_zero(1e-10));
         
-        let ctx3 = LimiterContextGeneric::<f64>::new(1.0, 0.1, 0.5, 1.5, 0.1);
+        let ctx3 = LimiterContext::<CpuBackend<f64>>::new(1.0, 0.1, 0.5, 1.5, 0.1);
         assert!(!ctx3.is_gradient_zero(1e-10));
     }
     
     #[test]
     fn test_no_limiter() {
-        let limiter = NoLimiterGeneric::<f64>::new();
+        let limiter = NoLimiter::<CpuBackend<f64>>::new();
         
         // 应始终返回 1.0
-        let ctx1 = LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        let ctx1 = LimiterContext::<CpuBackend<f64>>::new(1.0, 0.5, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx1), 1.0);
         
-        let ctx2 = LimiterContextGeneric::<f64>::new(1.0, -10.0, 0.5, 1.5, 0.1);
+        let ctx2 = LimiterContext::<CpuBackend<f64>>::new(1.0, -10.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx2), 1.0);
         
-        let ctx3 = LimiterContextGeneric::<f64>::new(1.0, 1000.0, 0.5, 1.5, 0.1);
+        let ctx3 = LimiterContext::<CpuBackend<f64>>::new(1.0, 1000.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx3), 1.0);
     }
     
     #[test]
     fn test_no_limiter_name() {
-        let limiter = NoLimiterGeneric::<f64>::new();
+        let limiter = NoLimiter::<CpuBackend<f64>>::new();
         assert_eq!(limiter.name(), "NoLimiter");
     }
     
     #[test]
     fn test_no_limiter_batch() {
-        let limiter = NoLimiterGeneric::<f64>::new();
+        let limiter = NoLimiter::<CpuBackend<f64>>::new();
         let contexts = vec![
-            LimiterContextGeneric::<f64>::new(1.0, 0.5, 0.5, 1.5, 0.1),
-            LimiterContextGeneric::<f64>::new(2.0, -0.5, 1.5, 2.5, 0.1),
-            LimiterContextGeneric::<f64>::new(0.5, 0.0, 0.0, 1.0, 0.1),
+            LimiterContext::<CpuBackend<f64>>::new(1.0, 0.5, 0.5, 1.5, 0.1),
+            LimiterContext::<CpuBackend<f64>>::new(2.0, -0.5, 1.5, 2.5, 0.1),
+            LimiterContext::<CpuBackend<f64>>::new(0.5, 0.0, 0.0, 1.0, 0.1),
         ];
         
         let results = limiter.compute_limiters(&contexts);
@@ -233,8 +235,8 @@ mod tests {
     
     #[test]
     fn test_generic_f32() {
-        let limiter: NoLimiterGeneric<f32> = NoLimiterGeneric::new();
-        let ctx = LimiterContextGeneric::<f32>::new(1.0, 0.5, 0.5, 1.5, 0.1);
+        let limiter: NoLimiter<CpuBackend<f32>> = NoLimiter::new();
+        let ctx = LimiterContext::<CpuBackend<f32>>::new(1.0, 0.5, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx), 1.0f32);
     }
 }

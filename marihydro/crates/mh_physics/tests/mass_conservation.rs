@@ -9,11 +9,12 @@ use std::sync::LazyLock;
 use mh_mesh::FrozenMesh;
 use mh_physics::adapter::PhysicsMesh;
 use mh_physics::engine::ShallowWaterSolver;
+use mh_physics::sources::NoSource;
 use mh_physics::NumericalScheme;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::{CpuBackend, CellIndex};
+use mh_runtime::{Backend, CpuBackend, CellIndex};
 
 /// 全局Backend实例，强制单例模式
 static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());
@@ -25,8 +26,8 @@ fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
 fn create_solver(
     mesh: Arc<PhysicsMesh>,
     config: Layer3Config<f64>,
-) -> ShallowWaterSolver<CpuBackend<f64>> {
-    ShallowWaterSolver::new(mesh, config, *BACKEND)
+) -> ShallowWaterSolver<CpuBackend<f64>, NoSource<CpuBackend<f64>>> {
+    ShallowWaterSolver::<CpuBackend<f64>, NoSource<CpuBackend<f64>>>::new(mesh, config, *BACKEND)
 }
 
 /// 创建2x2简单网格
@@ -240,47 +241,60 @@ fn create_rectangular_mesh(
     let face_delta_neighbor = vec![Point2D::ZERO; n_faces];
     let face_dist_o2n = vec![dx.min(dy); n_faces];
     let boundary_face_indices: Vec<u32> = (boundary_start..n_faces).map(|i| i as u32).collect();
+
+    let backend = *BACKEND;
+    let mut cell_area_buf = backend.alloc(cell_area.len());
+    cell_area_buf.copy_from_slice(&cell_area);
+    let mut cell_z_bed_buf = backend.alloc(cell_z_bed.len());
+    cell_z_bed_buf.copy_from_slice(&cell_z_bed);
+    let mut face_length_buf = backend.alloc(face_length.len());
+    face_length_buf.copy_from_slice(&face_length);
+    let mut face_z_left_buf = backend.alloc(face_z_left.len());
+    face_z_left_buf.copy_from_slice(&face_z_left);
+    let mut face_z_right_buf = backend.alloc(face_z_right.len());
+    face_z_right_buf.copy_from_slice(&face_z_right);
+    let mut face_dist_o2n_buf = backend.alloc(face_dist_o2n.len());
+    face_dist_o2n_buf.copy_from_slice(&face_dist_o2n);
     
-    let frozen = FrozenMesh {
-        n_nodes,
-        node_coords,
-        n_cells,
-        cell_center,
-        cell_area,
-        cell_z_bed,
-        cell_node_offsets,
-        cell_node_indices,
-        cell_face_offsets,
-        cell_face_indices,
-        cell_neighbor_offsets,
-        cell_neighbor_indices,
-        n_faces,
-        n_interior_faces: n_interior,
-        face_center,
-        face_normal,
-        face_length,
-        face_z_left,
-        face_z_right,
-        face_owner,
-        face_neighbor,
-        face_delta_owner,
-        face_delta_neighbor,
-        face_dist_o2n,
-        boundary_face_indices,
-        boundary_names: vec!["boundary".to_string()],
-        face_boundary_id: (0..n_faces)
-            .map(|i| if i >= n_interior { Some(0) } else { None })
-            .collect(),
-        min_cell_size: dx.min(dy),
-        max_cell_size: dx.max(dy),
-        cell_refinement_level: vec![0; n_cells],
-        cell_parent: (0..n_cells as u32).collect(),
-        ghost_capacity: 0,
-        cell_original_id: Vec::new(),
-        face_original_id: Vec::new(),
-        cell_permutation: Vec::new(),
-        cell_inv_permutation: Vec::new(),
-    };
+    let mut frozen = FrozenMesh::empty_with_backend(backend);
+    frozen.n_nodes = n_nodes;
+    frozen.node_coords = node_coords;
+    frozen.n_cells = n_cells;
+    frozen.cell_center = cell_center;
+    frozen.cell_area = cell_area_buf;
+    frozen.cell_z_bed = cell_z_bed_buf;
+    frozen.cell_node_offsets = cell_node_offsets;
+    frozen.cell_node_indices = cell_node_indices;
+    frozen.cell_face_offsets = cell_face_offsets;
+    frozen.cell_face_indices = cell_face_indices;
+    frozen.cell_neighbor_offsets = cell_neighbor_offsets;
+    frozen.cell_neighbor_indices = cell_neighbor_indices;
+    frozen.n_faces = n_faces;
+    frozen.n_interior_faces = n_interior;
+    frozen.face_center = face_center;
+    frozen.face_normal = face_normal;
+    frozen.face_length = face_length_buf;
+    frozen.face_z_left = face_z_left_buf;
+    frozen.face_z_right = face_z_right_buf;
+    frozen.face_owner = face_owner;
+    frozen.face_neighbor = face_neighbor;
+    frozen.face_delta_owner = face_delta_owner;
+    frozen.face_delta_neighbor = face_delta_neighbor;
+    frozen.face_dist_o2n = face_dist_o2n_buf;
+    frozen.boundary_face_indices = boundary_face_indices;
+    frozen.boundary_names = vec!["boundary".to_string()];
+    frozen.face_boundary_id = (0..n_faces)
+        .map(|i| if i >= n_interior { Some(0) } else { None })
+        .collect();
+    frozen.min_cell_size = dx.min(dy);
+    frozen.max_cell_size = dx.max(dy);
+    frozen.cell_refinement_level = vec![0; n_cells];
+    frozen.cell_parent = (0..n_cells as u32).collect();
+    frozen.ghost_capacity = 0;
+    frozen.cell_original_id = Vec::new();
+    frozen.face_original_id = Vec::new();
+    frozen.cell_permutation = Vec::new();
+    frozen.cell_inv_permutation = Vec::new();
     
     PhysicsMesh::from_frozen(&frozen)
 }
@@ -367,7 +381,7 @@ struct SimulationResult {
 
 /// 执行模拟并返回统计结果
 fn run_simulation(
-    solver: &mut ShallowWaterSolver<CpuBackend<f64>>,
+    solver: &mut ShallowWaterSolver<CpuBackend<f64>, NoSource<CpuBackend<f64>>>,
     state: &mut ShallowWaterState<CpuBackend<f64>>,
     mesh: &PhysicsMesh,
     dt: f64,

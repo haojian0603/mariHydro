@@ -7,10 +7,9 @@
 //! # 设计说明
 //!
 //! - **泛型化**: `SedimentPropertiesGeneric<S>` 支持任意精度标量
-//! - **Layer 4 别名**: `SedimentProperties = SedimentPropertiesGeneric<f64>`
 //! - **配置驱动**: 所有物理常数从 `PhysicalConstants` 获取
 
-use mh_runtime::{Backend, RuntimeScalar as Scalar};
+use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::types::PhysicalConstants;
@@ -56,10 +55,6 @@ impl SedimentType {
         }
     }
     
-    /// 根据粒径自动分类（f64 版本，保持兼容性）
-    pub fn from_diameter_f64(d50_mm: f64) -> Self {
-        Self::from_diameter(d50_mm)
-    }
 }
 
 /// 泥沙物理属性（泛型版本）
@@ -74,13 +69,15 @@ impl SedimentType {
 /// use mh_physics::sediment::SedimentPropertiesGeneric;
 ///
 /// // 使用 f64
-/// let props: SedimentPropertiesGeneric<f64> = SedimentPropertiesGeneric::from_d50_mm(0.5);
+/// let backend = mh_runtime::CpuBackend::<f64>::new();
+/// let props: SedimentPropertiesGeneric<f64> = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
 ///
 /// // 使用 f32
-/// let props_f32: SedimentPropertiesGeneric<f32> = SedimentPropertiesGeneric::from_d50_mm(0.5);
+/// let backend_f32 = mh_runtime::CpuBackend::<f32>::new();
+/// let props_f32: SedimentPropertiesGeneric<f32> = SedimentPropertiesGeneric::from_d50_mm(&backend_f32, 0.5);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SedimentPropertiesGeneric<S: Scalar> {
+pub struct SedimentPropertiesGeneric<S: RuntimeScalar> {
     /// 中值粒径 d50 [m]
     pub d50: S,
     /// 泥沙密度 [kg/m³]
@@ -101,17 +98,18 @@ pub struct SedimentPropertiesGeneric<S: Scalar> {
     pub dimensionless_diameter: S,
 }
 
-/// Layer 4 类型别名：f64 精度
-pub type SedimentProperties = SedimentPropertiesGeneric<f64>;
-
-impl<S: Scalar> SedimentPropertiesGeneric<S> {
+impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
     /// 从 d50 (mm) 创建，自动计算其他属性
-    pub fn from_d50_mm(d50_mm: f64) -> Self {
-        Self::from_d50_mm_with_physics(d50_mm, &PhysicalConstants::freshwater())
+    pub fn from_d50_mm<B: Backend<Scalar = S>>(backend: &B, d50_mm: f64) -> Self {
+        Self::from_d50_mm_with_physics(backend, d50_mm, &PhysicalConstants::freshwater())
     }
 
     /// 从 d50 (mm) 创建，使用指定物理常数
-    pub fn from_d50_mm_with_physics(d50_mm: f64, physics: &PhysicalConstants) -> Self {
+    pub fn from_d50_mm_with_physics<B: Backend<Scalar = S>>(
+        backend: &B,
+        d50_mm: f64,
+        physics: &PhysicalConstants,
+    ) -> Self {
         let d50 = d50_mm * 1e-3;  // mm -> m
         let rho_s = 2650.0;       // 典型石英密度
         let s = rho_s / physics.rho_water;
@@ -129,25 +127,30 @@ impl<S: Scalar> SedimentPropertiesGeneric<S> {
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50: S::from_f64(d50).unwrap_or(S::ZERO),
-            rho_s: S::from_f64(rho_s).unwrap_or(S::ZERO),
-            relative_density: S::from_f64(s).unwrap_or(S::ZERO),
-            settling_velocity: S::from_f64(ws).unwrap_or(S::ZERO),
-            critical_shear_stress: S::from_f64(tau_cr).unwrap_or(S::ZERO),
-            critical_shields: S::from_f64(theta_cr).unwrap_or(S::ZERO),
-            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
-            angle_of_repose: S::from_f64(32.0).unwrap_or(S::ZERO),
-            dimensionless_diameter: S::from_f64(d_star).unwrap_or(S::ZERO),
+            d50: backend.scalar_from_f64(d50),
+            rho_s: backend.scalar_from_f64(rho_s),
+            relative_density: backend.scalar_from_f64(s),
+            settling_velocity: backend.scalar_from_f64(ws),
+            critical_shear_stress: backend.scalar_from_f64(tau_cr),
+            critical_shields: backend.scalar_from_f64(theta_cr),
+            porosity: backend.scalar_from_f64(0.4),
+            angle_of_repose: backend.scalar_from_f64(32.0),
+            dimensionless_diameter: backend.scalar_from_f64(d_star),
         }
     }
 
     /// 自定义参数创建
-    pub fn custom(d50: f64, rho_s: f64) -> Self {
-        Self::custom_with_physics(d50, rho_s, &PhysicalConstants::freshwater())
+    pub fn custom<B: Backend<Scalar = S>>(backend: &B, d50: f64, rho_s: f64) -> Self {
+        Self::custom_with_physics(backend, d50, rho_s, &PhysicalConstants::freshwater())
     }
 
     /// 自定义参数创建，使用指定物理常数
-    pub fn custom_with_physics(d50: f64, rho_s: f64, physics: &PhysicalConstants) -> Self {
+    pub fn custom_with_physics<B: Backend<Scalar = S>>(
+        backend: &B,
+        d50: f64,
+        rho_s: f64,
+        physics: &PhysicalConstants,
+    ) -> Self {
         let s = rho_s / physics.rho_water;
         let d_star = Self::compute_dimensionless_diameter_f64(d50, s, physics);
         let ws = Self::compute_settling_velocity_f64(d50, s, d_star, physics);
@@ -155,15 +158,15 @@ impl<S: Scalar> SedimentPropertiesGeneric<S> {
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50: S::from_f64(d50).unwrap_or(S::ZERO),
-            rho_s: S::from_f64(rho_s).unwrap_or(S::ZERO),
-            relative_density: S::from_f64(s).unwrap_or(S::ZERO),
-            settling_velocity: S::from_f64(ws).unwrap_or(S::ZERO),
-            critical_shear_stress: S::from_f64(tau_cr).unwrap_or(S::ZERO),
-            critical_shields: S::from_f64(theta_cr).unwrap_or(S::ZERO),
-            porosity: S::from_f64(0.4).unwrap_or(S::ZERO),
-            angle_of_repose: S::from_f64(32.0).unwrap_or(S::ZERO),
-            dimensionless_diameter: S::from_f64(d_star).unwrap_or(S::ZERO),
+            d50: backend.scalar_from_f64(d50),
+            rho_s: backend.scalar_from_f64(rho_s),
+            relative_density: backend.scalar_from_f64(s),
+            settling_velocity: backend.scalar_from_f64(ws),
+            critical_shear_stress: backend.scalar_from_f64(tau_cr),
+            critical_shields: backend.scalar_from_f64(theta_cr),
+            porosity: backend.scalar_from_f64(0.4),
+            angle_of_repose: backend.scalar_from_f64(32.0),
+            dimensionless_diameter: backend.scalar_from_f64(d_star),
         }
     }
 
@@ -256,36 +259,33 @@ impl<S: Scalar> SedimentPropertiesGeneric<S> {
 ///
 /// - `S`: 标量类型，实现 `RuntimeScalar`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SedimentClassGeneric<S: Scalar> {
+pub struct SedimentClassGeneric<S: RuntimeScalar> {
     /// 粒径组（按升序）
     pub sizes: Vec<SedimentPropertiesGeneric<S>>,
     /// 各粒径组的体积分数（和为1）
     pub fractions: Vec<S>,
 }
 
-/// Layer 4 类型别名：f64 精度
-pub type SedimentClass = SedimentClassGeneric<f64>;
-
-impl<S: Scalar> SedimentClassGeneric<S> {
+impl<S: RuntimeScalar> SedimentClassGeneric<S> {
     /// 创建单粒径
-    pub fn uniform(d50_mm: f64) -> Self {
+    pub fn uniform<B: Backend<Scalar = S>>(backend: &B, d50_mm: f64) -> Self {
         Self {
-            sizes: vec![SedimentPropertiesGeneric::from_d50_mm(d50_mm)],
+            sizes: vec![SedimentPropertiesGeneric::from_d50_mm(backend, d50_mm)],
             fractions: vec![S::ONE],
         }
     }
 
     /// 创建多粒径级配
-    pub fn graded(sizes_mm: &[f64], fractions: &[f64]) -> Self {
+    pub fn graded<B: Backend<Scalar = S>>(backend: &B, sizes_mm: &[f64], fractions: &[f64]) -> Self {
         assert_eq!(sizes_mm.len(), fractions.len());
         let sum: f64 = fractions.iter().sum();
         
         Self {
             sizes: sizes_mm.iter()
-                .map(|&d| SedimentPropertiesGeneric::from_d50_mm(d))
+                .map(|&d| SedimentPropertiesGeneric::from_d50_mm(backend, d))
                 .collect(),
             fractions: fractions.iter()
-                .map(|&f| S::from_f64(f / sum).unwrap_or(S::ZERO))
+                .map(|&f| backend.scalar_from_f64(f / sum))
                 .collect(),
         }
     }
@@ -320,7 +320,8 @@ mod tests {
 
     #[test]
     fn test_sediment_properties_from_d50() {
-        let props = SedimentProperties::from_d50_mm(0.5);
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
         
         assert!((props.d50 - 0.0005).abs() < 1e-10);
         assert!((props.rho_s - 2650.0).abs() < 1e-10);
@@ -333,7 +334,7 @@ mod tests {
     #[test]
     fn test_shields_number() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
-        let props = SedimentProperties::from_d50_mm(0.5);
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
         let physics = PhysicalConstants::freshwater();
         let tau_b = 1.0; // Pa
         
@@ -344,7 +345,7 @@ mod tests {
     #[test]
     fn test_is_mobile() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
-        let props = SedimentProperties::from_d50_mm(0.5);
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
         let physics = PhysicalConstants::freshwater();
         
         // 低剪切应力不起动
@@ -357,7 +358,7 @@ mod tests {
     #[test]
     fn test_excess_shields() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
-        let props = SedimentProperties::from_d50_mm(0.5);
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.5);
         let physics = PhysicalConstants::freshwater();
         
         // 低于临界，返回接近0的值
@@ -370,7 +371,8 @@ mod tests {
 
     #[test]
     fn test_sediment_class_uniform() {
-        let class = SedimentClass::uniform(0.5);
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let class = SedimentClassGeneric::uniform(&backend, 0.5);
         
         assert_eq!(class.n_classes(), 1);
         assert!((class.fractions[0] - 1.0).abs() < 1e-10);
@@ -378,7 +380,9 @@ mod tests {
 
     #[test]
     fn test_sediment_class_graded() {
-        let class = SedimentClass::graded(
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let class = SedimentClassGeneric::graded(
+            &backend,
             &[0.1, 0.5, 1.0],
             &[0.3, 0.5, 0.2]
         );
@@ -391,7 +395,8 @@ mod tests {
 
     #[test]
     fn test_sediment_class_mean_d50() {
-        let class = SedimentClass::uniform(0.5);
+        let backend = mh_runtime::CpuBackend::<f64>::new();
+        let class = SedimentClassGeneric::uniform(&backend, 0.5);
         let mean = class.mean_d50();
         
         assert!((mean - 0.0005).abs() < 1e-10);

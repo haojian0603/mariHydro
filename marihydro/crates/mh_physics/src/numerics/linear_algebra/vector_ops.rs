@@ -24,13 +24,17 @@
 //! ```ignore
 //! use mh_physics::numerics::linear_algebra::vector_ops::{dot, norm2, axpy};
 //!
-//! let x = vec![1.0, 2.0, 3.0];
-//! let mut y = vec![4.0, 5.0, 6.0];
+//! use mh_runtime::CpuBackend;
+//! let backend = CpuBackend::<f64>::new();
+//! let mut x = backend.alloc(3);
+//! let mut y = backend.alloc(3);
+//! x.copy_from_slice(&[1.0, 2.0, 3.0]);
+//! y.copy_from_slice(&[4.0, 5.0, 6.0]);
 //!
-//! let d = dot(&x, &y)?;  // 1*4 + 2*5 + 3*6 = 32
-//! let n = norm2(&x);     // sqrt(1 + 4 + 9) ≈ 3.74
+//! let d = dot(&backend, &x, &y)?;  // 1*4 + 2*5 + 3*6 = 32
+//! let n = norm2(&backend, &x);     // sqrt(1 + 4 + 9) ≈ 3.74
 //!
-//! axpy(2.0, &x, &mut y)?;  // y = [6, 9, 12]
+//! axpy(&backend, 2.0, &x, &mut y)?;  // y = [6, 9, 12]
 //! ```
 //!
 //! # 性能优化
@@ -39,7 +43,7 @@
 //! - 内联提示 `#[inline(always)]` 关键路径
 //! - SIMD 加速路径（AVX2/AVX-512）
 
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, RuntimeScalar};
 
 // ============================================================================
 // 向量运算错误类型
@@ -99,14 +103,18 @@ impl std::error::Error for VectorOpError {}
 /// let result = dot(&x, &y)?;  // 32.0
 /// ```
 #[inline(always)]
-pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> Result<S, VectorOpError> {
+pub fn dot<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+) -> Result<B::Scalar, VectorOpError> {
     if x.len() != y.len() {
         return Err(VectorOpError::DimensionMismatch {
             x_len: x.len(),
             y_len: y.len(),
         });
     }
-    Ok(x.iter().zip(y).map(|(&xi, &yi)| xi * yi).sum())
+    Ok(backend.dot(x, y))
 }
 
 /// 点积（不检查版本，用于已验证的内部调用）
@@ -124,9 +132,13 @@ pub fn dot<S: RuntimeScalar>(x: &[S], y: &[S]) -> Result<S, VectorOpError> {
 /// 
 /// 点积结果
 #[inline(always)]
-pub fn dot_unchecked<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
+pub fn dot_unchecked<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+) -> B::Scalar {
     debug_assert_eq!(x.len(), y.len(), "向量维度不匹配（调试断言）");
-    x.iter().zip(y).map(|(&xi, &yi)| xi * yi).sum()
+    backend.dot(x, y)
 }
 
 /// 二范数 ||x||₂
@@ -139,8 +151,8 @@ pub fn dot_unchecked<S: RuntimeScalar>(x: &[S], y: &[S]) -> S {
 ///
 /// 二范数
 #[inline]
-pub fn norm2<S: RuntimeScalar>(x: &[S]) -> S {
-    dot_unchecked(x, x).sqrt()
+pub fn norm2<B: Backend>(backend: &B, x: &B::Buffer<B::Scalar>) -> B::Scalar {
+    backend.norm2(x)
 }
 
 /// 无穷范数 ||x||∞
@@ -153,8 +165,16 @@ pub fn norm2<S: RuntimeScalar>(x: &[S]) -> S {
 ///
 /// 无穷范数（最大绝对值）
 #[inline]
-pub fn norm_inf<S: RuntimeScalar>(x: &[S]) -> S {
-    x.iter().map(|&v| v.abs()).fold(S::ZERO, |a, b| a.max(b))
+pub fn norm_inf<B: Backend>(_backend: &B, x: &B::Buffer<B::Scalar>) -> B::Scalar {
+    let slice = x.as_slice();
+    let mut max_val = B::Scalar::ZERO;
+    for &v in slice {
+        let abs_v = v.abs();
+        if abs_v > max_val {
+            max_val = abs_v;
+        }
+    }
+    max_val
 }
 
 /// AXPY: y = α*x + y（返回 Result）
@@ -170,14 +190,19 @@ pub fn norm_inf<S: RuntimeScalar>(x: &[S]) -> S {
 /// - `Ok(())`: 操作成功
 /// - `Err(VectorOpError)`: 维度不匹配错误
 #[inline(always)]
-pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) -> Result<(), VectorOpError> {
+pub fn axpy<B: Backend>(
+    backend: &B,
+    alpha: B::Scalar,
+    x: &B::Buffer<B::Scalar>,
+    y: &mut B::Buffer<B::Scalar>,
+) -> Result<(), VectorOpError> {
     if x.len() != y.len() {
         return Err(VectorOpError::DimensionMismatch {
             x_len: x.len(),
             y_len: y.len(),
         });
     }
-    axpy_unchecked(alpha, x, y);
+    axpy_unchecked(backend, alpha, x, y);
     Ok(())
 }
 
@@ -187,24 +212,13 @@ pub fn axpy<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) -> Result<(), Vect
 /// 
 /// 调用者必须确保 `x.len() == y.len()`
 #[inline(always)]
-pub fn axpy_unchecked<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
-    // 使用 chunks_exact 提升向量化概率
-    const CHUNK_SIZE: usize = 4;
-    for (yi, xi) in y.chunks_exact_mut(CHUNK_SIZE)
-        .zip(x.chunks_exact(CHUNK_SIZE)) 
-    {
-        for i in 0..CHUNK_SIZE {
-            yi[i] += alpha * xi[i];
-        }
-    }
-    // 处理尾部元素
-    let rem = x.len() % CHUNK_SIZE;
-    if rem > 0 {
-        let start = x.len() - rem;
-        for i in start..x.len() {
-            y[i] += alpha * x[i];
-        }
-    }
+pub fn axpy_unchecked<B: Backend>(
+    backend: &B,
+    alpha: B::Scalar,
+    x: &B::Buffer<B::Scalar>,
+    y: &mut B::Buffer<B::Scalar>,
+) {
+    backend.axpy(alpha, x, y);
 }
 
 /// XPAY: y = x + α*y
@@ -218,10 +232,15 @@ pub fn axpy_unchecked<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn xpay<S: RuntimeScalar>(x: &[S], alpha: S, y: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn xpay<B: Backend>(
+    x: &B::Buffer<B::Scalar>,
+    alpha: B::Scalar,
+    y: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    for (yi, &xi) in y.iter_mut().zip(x.iter()) {
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice_mut();
+    for (yi, &xi) in y_slice.iter_mut().zip(x_slice.iter()) {
         *yi = xi + alpha * *yi;
     }
 }
@@ -233,10 +252,8 @@ pub fn xpay<S: RuntimeScalar>(x: &[S], alpha: S, y: &mut [S]) {
 /// - `alpha`: 标量 α
 /// - `x`: 向量（将被修改）
 #[inline(always)]
-pub fn scale<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
-    for xi in x.iter_mut() {
-        *xi *= alpha;
-    }
+pub fn scale<B: Backend>(backend: &B, alpha: B::Scalar, x: &mut B::Buffer<B::Scalar>) {
+    backend.scale(alpha, x);
 }
 
 /// 复制: y = x
@@ -249,31 +266,23 @@ pub fn scale<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn copy<S: RuntimeScalar>(x: &[S], y: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn copy<B: Backend>(backend: &B, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    y.copy_from_slice(x);
+    backend.copy(x, y);
 }
 
 /// **新增**: AXPY 原地版本（内存高效）
 ///
 /// 当 x 和 y 指向同一缓冲区时使用
 #[inline(always)]
-pub fn axpy_inplace<S: RuntimeScalar>(alpha: S, x: &mut [S], y: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn axpy_inplace<B: Backend>(
+    backend: &B,
+    alpha: B::Scalar,
+    x: &mut B::Buffer<B::Scalar>,
+    y: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    const UNROLL_FACTOR: usize = 4;
-    let mut i = 0;
-    while i + UNROLL_FACTOR <= x.len() {
-        y[i] += alpha * x[i];
-        y[i+1] += alpha * x[i+1];
-        y[i+2] += alpha * x[i+2];
-        y[i+3] += alpha * x[i+3];
-        i += UNROLL_FACTOR;
-    }
-    for j in i..x.len() {
-        y[j] += alpha * x[j];
-    }
+    backend.axpy(alpha, x, y);
 }
 
 /// **新增**: 带边界检查的复制
@@ -283,9 +292,15 @@ pub fn axpy_inplace<S: RuntimeScalar>(alpha: S, x: &mut [S], y: &mut [S]) {
 /// - `dst`: 目标向量
 /// - `bound`: 最大复制长度
 #[inline]
-pub fn copy_bounded<S: RuntimeScalar>(src: &[S], dst: &mut [S], bound: usize) {
+pub fn copy_bounded<B: Backend>(
+    src: &B::Buffer<B::Scalar>,
+    dst: &mut B::Buffer<B::Scalar>,
+    bound: usize,
+) {
     let n = src.len().min(dst.len()).min(bound);
-    dst[..n].copy_from_slice(&src[..n]);
+    let src_slice = src.as_slice();
+    let dst_slice = dst.as_slice_mut();
+    dst_slice[..n].copy_from_slice(&src_slice[..n]);
 }
 
 /// 填充: x[:] = α
@@ -295,7 +310,7 @@ pub fn copy_bounded<S: RuntimeScalar>(src: &[S], dst: &mut [S], bound: usize) {
 /// - `alpha`: 填充值
 /// - `x`: 向量（将被修改）
 #[inline(always)]
-pub fn fill<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
+pub fn fill<B: Backend>(alpha: B::Scalar, x: &mut B::Buffer<B::Scalar>) {
     x.fill(alpha);
 }
 
@@ -312,15 +327,19 @@ pub fn fill<S: RuntimeScalar>(alpha: S, x: &mut [S]) {
 /// # 错误处理
 /// 所有向量维度必须匹配，否则 panic
 #[inline(always)]
-pub fn linear_combination<S: RuntimeScalar>(
-    alpha: S, x: &[S], 
-    beta: S, y: &[S], 
-    z: &mut [S]
+pub fn linear_combination<B: Backend>(
+    alpha: B::Scalar,
+    x: &B::Buffer<B::Scalar>,
+    beta: B::Scalar,
+    y: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
 ) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice();
+    let z_slice = z.as_slice_mut();
+    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
         *zi = alpha * xi + beta * yi;
     }
 }
@@ -335,11 +354,13 @@ pub fn linear_combination<S: RuntimeScalar>(
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn sub<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn sub<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice();
+    let z_slice = z.as_slice_mut();
+    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
         *zi = xi - yi;
     }
 }
@@ -354,11 +375,13 @@ pub fn sub<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn add<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn add<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice();
+    let z_slice = z.as_slice_mut();
+    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
         *zi = xi + yi;
     }
 }
@@ -373,11 +396,13 @@ pub fn add<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn hadamard<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn hadamard<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice();
+    let z_slice = z.as_slice_mut();
+    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
         *zi = xi * yi;
     }
 }
@@ -390,12 +415,14 @@ pub fn hadamard<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn hadamard_div<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
-    // ✅ 修复：使用 assert_eq! 而非 debug_assert_eq!
+pub fn hadamard_div<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    for ((zi, &xi), &yi) in z.iter_mut().zip(x.iter()).zip(y.iter()) {
-        *zi = if yi.abs() > S::EPSILON { xi / yi } else { S::ZERO };
+    let x_slice = x.as_slice();
+    let y_slice = y.as_slice();
+    let z_slice = z.as_slice_mut();
+    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
+        *zi = if yi.abs() > B::Scalar::EPSILON { xi / yi } else { B::Scalar::ZERO };
     }
 }
 
@@ -410,10 +437,14 @@ pub fn hadamard_div<S: RuntimeScalar>(x: &[S], y: &[S], z: &mut [S]) {
 ///
 /// 相对残差 ||r|| / ||b||，若 ||b|| <= S::MIN_POSITIVE 则返回绝对残差 ||r||
 #[inline(always)]
-pub fn relative_residual<S: RuntimeScalar>(residual: &[S], b: &[S]) -> S {
-    let norm_r = norm2(residual);
-    let norm_b = norm2(b);
-    if norm_b <= S::MIN_POSITIVE {
+pub fn relative_residual<B: Backend>(
+    backend: &B,
+    residual: &B::Buffer<B::Scalar>,
+    b: &B::Buffer<B::Scalar>,
+) -> B::Scalar {
+    let norm_r = norm2(backend, residual);
+    let norm_b = norm2(backend, b);
+    if norm_b <= B::Scalar::MIN_POSITIVE {
         norm_r
     } else {
         norm_r / norm_b
@@ -422,9 +453,14 @@ pub fn relative_residual<S: RuntimeScalar>(residual: &[S], b: &[S]) -> S {
 
 /// 缩放加法别名: y = y + alpha * x
 #[inline(always)]
-pub fn add_scaled<S: RuntimeScalar>(alpha: S, x: &[S], y: &mut [S]) {
+pub fn add_scaled<B: Backend>(
+    backend: &B,
+    alpha: B::Scalar,
+    x: &B::Buffer<B::Scalar>,
+    y: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    axpy_unchecked(alpha, x, y);
+    axpy_unchecked(backend, alpha, x, y);
 }
 
 // ============================================================================
@@ -486,14 +522,16 @@ pub unsafe fn dot_avx2_f32(x: &[f32], y: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    type Scalar = f64;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_dot() {
-        let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        let y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
-        let result = dot(&x, &y).unwrap();
+        let backend = CpuBackend::<f64>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        y.copy_from_slice(&[4.0, 5.0, 6.0]);
+        let result = dot(&backend, &x, &y).unwrap();
         assert!((result - 32.0).abs() < 1e-14);
         
         // 测试SIMD路径（如果支持）
@@ -506,21 +544,28 @@ mod tests {
 
     #[test]
     fn test_norm2() {
-        let x: Vec<Scalar> = vec![3.0, 4.0];
-        assert!((norm2(&x) - 5.0).abs() < 1e-14);
+        let backend = CpuBackend::<f64>::new();
+        let mut x = backend.alloc(2);
+        x.copy_from_slice(&[3.0, 4.0]);
+        assert!((norm2(&backend, &x) - 5.0).abs() < 1e-14);
     }
 
     #[test]
     fn test_norm_inf() {
-        let x: Vec<Scalar> = vec![-5.0, 2.0, 3.0];
-        assert!((norm_inf(&x) - 5.0).abs() < 1e-14);
+        let backend = CpuBackend::<f64>::new();
+        let mut x = backend.alloc(3);
+        x.copy_from_slice(&[-5.0, 2.0, 3.0]);
+        assert!((norm_inf(&backend, &x) - 5.0).abs() < 1e-14);
     }
 
     #[test]
     fn test_axpy() {
-        let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        let mut y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
-        axpy(2.0, &x, &mut y).unwrap();
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        y.copy_from_slice(&[4.0, 5.0, 6.0]);
+        axpy(&backend, 2.0, &x, &mut y).unwrap();
         assert!((y[0] - 6.0).abs() < 1e-14);
         assert!((y[1] - 9.0).abs() < 1e-14);
         assert!((y[2] - 12.0).abs() < 1e-14);
@@ -528,9 +573,12 @@ mod tests {
 
     #[test]
     fn test_axpy_inplace() {
-        let mut x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        let mut y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
-        axpy_inplace(2.0, &mut x, &mut y);
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        y.copy_from_slice(&[4.0, 5.0, 6.0]);
+        axpy_inplace(&backend, 2.0, &mut x, &mut y);
         assert!((y[0] - 6.0).abs() < 1e-14);
         assert!((y[1] - 9.0).abs() < 1e-14);
         assert!((y[2] - 12.0).abs() < 1e-14);
@@ -538,16 +586,22 @@ mod tests {
 
     #[test]
     fn test_copy_bounded() {
-        let src: Vec<Scalar> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let mut dst: Vec<Scalar> = vec![0.0; 3];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut src = backend.alloc(5);
+        let mut dst = backend.alloc(3);
+        src.copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        dst.fill(0.0);
         copy_bounded(&src, &mut dst, 3);
-        assert_eq!(dst, vec![1.0, 2.0, 3.0]);
+        assert_eq!(dst.as_slice(), &[1.0, 2.0, 3.0]);
     }
 
     #[test]
     fn test_xpay() {
-        let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        let mut y: Vec<Scalar> = vec![4.0, 5.0, 6.0];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        y.copy_from_slice(&[4.0, 5.0, 6.0]);
         xpay(&x, 2.0, &mut y);
         // y = x + 2*y = [1+8, 2+10, 3+12] = [9, 12, 15]
         assert!((y[0] - 9.0).abs() < 1e-14);
@@ -557,8 +611,10 @@ mod tests {
 
     #[test]
     fn test_scale() {
-        let mut x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        scale(3.0, &mut x);
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        scale(&backend, 3.0, &mut x);
         assert!((x[0] - 3.0).abs() < 1e-14);
         assert!((x[1] - 6.0).abs() < 1e-14);
         assert!((x[2] - 9.0).abs() < 1e-14);
@@ -566,24 +622,33 @@ mod tests {
 
     #[test]
     fn test_copy() {
-        let x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        let mut y: Vec<Scalar> = vec![0.0; 3];
-        copy(&x, &mut y);
-        assert_eq!(y, x);
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
+        y.fill(0.0);
+        copy(&backend, &x, &mut y);
+        assert_eq!(y.as_slice(), x.as_slice());
     }
 
     #[test]
     fn test_fill() {
-        let mut x: Vec<Scalar> = vec![1.0, 2.0, 3.0];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0, 3.0]);
         fill(7.0, &mut x);
-        assert!(x.iter().all(|&v| (v - 7.0).abs() < 1e-14));
+        assert!(x.as_slice().iter().all(|&v| (v - 7.0).abs() < 1e-14));
     }
 
     #[test]
     fn test_linear_combination() {
-        let x: Vec<Scalar> = vec![1.0, 2.0];
-        let y: Vec<Scalar> = vec![3.0, 4.0];
-        let mut z: Vec<Scalar> = vec![0.0; 2];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(2);
+        let mut y = backend.alloc(2);
+        let mut z = backend.alloc(2);
+        x.copy_from_slice(&[1.0, 2.0]);
+        y.copy_from_slice(&[3.0, 4.0]);
+        z.fill(0.0);
         linear_combination(2.0, &x, 3.0, &y, &mut z);
         // z = 2*[1,2] + 3*[3,4] = [2,4] + [9,12] = [11, 16]
         assert!((z[0] - 11.0).abs() < 1e-14);
@@ -592,9 +657,13 @@ mod tests {
 
     #[test]
     fn test_sub_add() {
-        let x: Vec<Scalar> = vec![5.0, 6.0];
-        let y: Vec<Scalar> = vec![2.0, 3.0];
-        let mut z: Vec<Scalar> = vec![0.0; 2];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(2);
+        let mut y = backend.alloc(2);
+        let mut z = backend.alloc(2);
+        x.copy_from_slice(&[5.0, 6.0]);
+        y.copy_from_slice(&[2.0, 3.0]);
+        z.fill(0.0);
 
         sub(&x, &y, &mut z);
         assert!((z[0] - 3.0).abs() < 1e-14);
@@ -607,9 +676,13 @@ mod tests {
 
     #[test]
     fn test_hadamard() {
-        let x: Vec<Scalar> = vec![2.0, 3.0];
-        let y: Vec<Scalar> = vec![4.0, 5.0];
-        let mut z: Vec<Scalar> = vec![0.0; 2];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(2);
+        let mut y = backend.alloc(2);
+        let mut z = backend.alloc(2);
+        x.copy_from_slice(&[2.0, 3.0]);
+        y.copy_from_slice(&[4.0, 5.0]);
+        z.fill(0.0);
         hadamard(&x, &y, &mut z);
         assert!((z[0] - 8.0).abs() < 1e-14);
         assert!((z[1] - 15.0).abs() < 1e-14);
@@ -617,9 +690,13 @@ mod tests {
 
     #[test]
     fn test_hadamard_div() {
-        let x: Vec<Scalar> = vec![8.0, 15.0, 1.0];
-        let y: Vec<Scalar> = vec![2.0, 3.0, 0.0];
-        let mut z: Vec<Scalar> = vec![0.0; 3];
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(3);
+        let mut y = backend.alloc(3);
+        let mut z = backend.alloc(3);
+        x.copy_from_slice(&[8.0, 15.0, 1.0]);
+        y.copy_from_slice(&[2.0, 3.0, 0.0]);
+        z.fill(0.0);
         hadamard_div(&x, &y, &mut z);
         assert!((z[0] - 4.0).abs() < 1e-14);
         assert!((z[1] - 5.0).abs() < 1e-14);
@@ -628,9 +705,12 @@ mod tests {
 
     #[test]
     fn test_relative_residual() {
-        let r: Vec<Scalar> = vec![0.1, 0.1];
-        let b: Vec<Scalar> = vec![1.0, 1.0];
-        let rel = relative_residual(&r, &b);
+        let backend = CpuBackend::<Scalar>::new();
+        let mut r = backend.alloc(2);
+        let mut b = backend.alloc(2);
+        r.copy_from_slice(&[0.1, 0.1]);
+        b.copy_from_slice(&[1.0, 1.0]);
+        let rel = relative_residual(&backend, &r, &b);
         // ||r|| = sqrt(0.02) ≈ 0.1414
         // ||b|| = sqrt(2) ≈ 1.414
         // rel ≈ 0.1
@@ -639,8 +719,11 @@ mod tests {
 
     #[test]
     fn test_dot_dimension_mismatch() {
-        let x: Vec<Scalar> = vec![1.0, 2.0];
-        let y: Vec<Scalar> = vec![1.0, 2.0, 3.0];
-        assert!(dot(&x, &y).is_err());
+        let backend = CpuBackend::<Scalar>::new();
+        let mut x = backend.alloc(2);
+        let mut y = backend.alloc(3);
+        x.copy_from_slice(&[1.0, 2.0]);
+        y.copy_from_slice(&[1.0, 2.0, 3.0]);
+        assert!(dot(&backend, &x, &y).is_err());
     }
 }

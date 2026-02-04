@@ -21,7 +21,6 @@ use crate::traits::{StateAccess, StateAccessMut};
 use crate::types::{NumericalParams, SafeVelocity};
 use mh_runtime::{Backend, DeviceBuffer};
 use num_traits::{Float, Zero};
-use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
 
 // ============================================
@@ -535,8 +534,6 @@ where
 /// 右端项缓冲区 (用于时间积分)
 #[derive(Debug, Clone)]
 pub struct RhsBuffers<B: Backend> {
-    /// 后端实例
-    backend: B,
     /// 水深变化率 [m/s]
     pub dh_dt: B::Buffer<B::Scalar>,
     /// x 动量变化率 [m²/s²]
@@ -551,7 +548,6 @@ impl<B: Backend> RhsBuffers<B> {
     /// 创建新的 RHS 缓冲区
     pub fn new(backend: B, n_cells: usize) -> Self {
         Self {
-            backend: backend.clone(),
             dh_dt: backend.alloc(n_cells),
             dhu_dt: backend.alloc(n_cells),
             dhv_dt: backend.alloc(n_cells),
