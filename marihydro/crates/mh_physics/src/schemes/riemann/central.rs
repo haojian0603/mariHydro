@@ -11,6 +11,7 @@ use crate::types::NumericalParams;
 use super::{RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams};
 
 /// 中心差分求解器（Backend 泛型化）
+#[derive(Clone)]
 pub struct CentralSolver<B: Backend> {
     params: SolverParams<B::Scalar>,
 }

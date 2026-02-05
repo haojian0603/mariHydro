@@ -7,8 +7,7 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::io::{self, Write};
-use mh_runtime::Backend;
-use num_traits::ToPrimitive;
+use mh_runtime::RuntimeScalar;
 use serde_json;
 
 /// 二进制编码器
@@ -105,10 +104,10 @@ impl Default for BinaryEncoder {
 }
 
 /// 二进制 VTU 完整写入器
-pub fn write_vtu_binary<W: Write, B: Backend>(
+pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
     writer: &mut W,
-    mesh: &crate::snapshot::MeshSnapshot<B>,
-    state: &crate::snapshot::StateSnapshot<B>,
+    mesh: &crate::snapshot::MeshSnapshot<S>,
+    state: &crate::snapshot::StateSnapshot<S>,
     time: f64,
 ) -> io::Result<()> {
     writeln!(writer, r#"<?xml version="1.0"?>"#)?;
@@ -217,9 +216,9 @@ pub fn write_vtu_binary<W: Write, B: Backend>(
     writeln!(writer, r#"      </Cells>"#)?;
 
     writeln!(writer, r#"      <CellData Scalars="h">"#)?;
-    let h: Vec<f64> = state.h.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-    let hu: Vec<f64> = state.hu.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
-    let hv: Vec<f64> = state.hv.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
+    let h: Vec<f64> = state.h.iter().map(|v| v.to_f64_lossy()).collect();
+    let hu: Vec<f64> = state.hu.iter().map(|v| v.to_f64_lossy()).collect();
+    let hv: Vec<f64> = state.hv.iter().map(|v| v.to_f64_lossy()).collect();
     let h_offset = encoder.encode_f64(&h)?;
     writeln!(
         writer,
@@ -230,7 +229,7 @@ pub fn write_vtu_binary<W: Write, B: Backend>(
     let bed: Vec<f64> = mesh
         .bed_elevations
         .iter()
-        .map(|v| v.to_f64().unwrap_or(0.0))
+        .map(|v| v.to_f64_lossy())
         .collect();
     let eta: Vec<f64> = h.iter().zip(&bed).map(|(h, z)| h + z).collect();
     let eta_offset = encoder.encode_f64(&eta)?;
@@ -266,7 +265,7 @@ pub fn write_vtu_binary<W: Write, B: Backend>(
 
     if let (Some(scalars), Some(names)) = (&state.scalars, &state.scalar_names) {
         for (scalar, name) in scalars.iter().zip(names.iter()) {
-            let vals: Vec<f64> = scalar.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
+            let vals: Vec<f64> = scalar.iter().map(|v| v.to_f64_lossy()).collect();
             let offset = encoder.encode_f64(&vals)?;
             writeln!(
                 writer,
@@ -291,7 +290,6 @@ pub fn write_vtu_binary<W: Write, B: Backend>(
 mod tests {
     use super::*;
     use crate::snapshot::{MeshSnapshot, StateSnapshot};
-    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_binary_encoder_f64() {
@@ -317,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_binary_vtu_output() {
-        let mesh = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let mesh = MeshSnapshot::<f64>::from_mesh_data(
             4, 1,
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
             vec![vec![0, 1, 2, 3]],
@@ -325,7 +323,7 @@ mod tests {
             vec![0.0],
         );
 
-        let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let state = StateSnapshot::<f64>::from_state_data(
             vec![1.0],
             vec![0.1],
             vec![0.0],

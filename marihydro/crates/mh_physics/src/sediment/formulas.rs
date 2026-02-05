@@ -323,7 +323,7 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
 
         // 无量纲粒径 D* 保护：防止 D*^(-0.3) 溢出
         let min_d_star = backend.scalar_from_f64(0.1);
-        let d_star_raw = backend.scalar_from_f64(props.dimensionless_diameter);
+        let d_star_raw = props.dimensionless_diameter;
         let d_star = if d_star_raw > min_d_star { d_star_raw } else { min_d_star };
 
         // Φ = A × T^2.1 × D*^(-0.3)
@@ -653,7 +653,7 @@ mod tests {
     fn test_transport_vector() {
         let backend = mh_runtime::CpuBackend::<f64>::new();
         let formula = MeyerPeterMullerFormula::<f64>::new(&backend);
-        let props = make_sand();
+        let props = make_sand(&backend);
         let physics = PhysicalConstants::freshwater();
 
         let tau_bx = 3.0;
@@ -674,13 +674,14 @@ mod tests {
         let backend_f64 = mh_runtime::CpuBackend::<f64>::new();
         let formula_f32 = MeyerPeterMullerFormula::<f32>::new(&backend_f32);
         let formula_f64 = MeyerPeterMullerFormula::<f64>::new(&backend_f64);
-        let props = make_sand();
+        let props_f64 = make_sand(&backend_f64);
+        let props_f32 = SedimentPropertiesGeneric::from_d50_mm(&backend_f32, 0.5);
 
-        let theta = (props.critical_shields * 2.0) as f32;
-        let theta_f64 = props.critical_shields * 2.0;
+        let theta = props_f32.critical_shields * 2.0;
+        let theta_f64 = props_f64.critical_shields * 2.0;
 
-        let phi_f32 = formula_f32.compute_phi(&backend_f32, theta, props.critical_shields as f32, &props);
-        let phi_f64 = formula_f64.compute_phi(&backend_f64, theta_f64, props.critical_shields, &props);
+        let phi_f32 = formula_f32.compute_phi(&backend_f32, theta, props_f32.critical_shields, &props_f32);
+        let phi_f64 = formula_f64.compute_phi(&backend_f64, theta_f64, props_f64.critical_shields, &props_f64);
 
         // 结果应该接近
         assert!((phi_f32 as f64 - phi_f64).abs() < 1e-4);

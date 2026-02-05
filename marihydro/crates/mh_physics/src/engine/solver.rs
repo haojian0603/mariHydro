@@ -5,7 +5,8 @@
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
-use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, RiemannSolverAny, SolverParams};
+use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::riemann::RiemannSolverAny;
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::numerics::{MusclConfig, MusclReconstructor, WenoConfig, WenoReconstructor};
 use crate::numerics::reconstruction::ReconstructedState;
@@ -18,7 +19,7 @@ use crate::Layer3Config;
 
 use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, RuntimeScalar, Vector2D};
 use mh_config::solver_config::RiemannSolverType;
-use num_traits::{Float, ToPrimitive};
+use num_traits::Float;
 use rayon::prelude::*;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -120,11 +121,10 @@ impl<B: Backend> SolverStats<B> {
 
     /// 生成摘要字符串
     pub fn summary(&self) -> String {
-        use num_traits::ToPrimitive;
         format!(
             "dt={:.4}s, 波速={:.2}m/s, 干单元={}, 限制面={}, 状态={}, 回退={}, NaN={}",
-            self.dt.to_f64().unwrap_or(0.0),
-            self.max_wave_speed.to_f64().unwrap_or(0.0),
+            self.dt.to_f64_lossy(),
+            self.max_wave_speed.to_f64_lossy(),
             self.dry_cells,
             self.limited_faces,
             self.stability_status,
@@ -135,12 +135,11 @@ impl<B: Backend> SolverStats<B> {
     
     /// 转换为 f64 版本（用于日志输出和序列化）
     pub fn to_f64(&self) -> SolverStatsF64 {
-        use num_traits::ToPrimitive;
         SolverStatsF64 {
-            max_wave_speed: self.max_wave_speed.to_f64().unwrap_or(0.0),
+            max_wave_speed: self.max_wave_speed.to_f64_lossy(),
             dry_cells: self.dry_cells,
             limited_faces: self.limited_faces,
-            dt: self.dt.to_f64().unwrap_or(0.0),
+            dt: self.dt.to_f64_lossy(),
             fallback_count: self.fallback_count,
             current_scheme: self.current_scheme,
             stability_status: self.stability_status,
@@ -505,9 +504,9 @@ where
     hydrostatic: HydrostaticReconstruction<B>,
     timestep_ctrl: TimeStepController<B>,
     stats: SolverStats<B>,
-    recon_eta: ScalarReconstructor<B::Scalar>,
-    recon_u: ScalarReconstructor<B::Scalar>,
-    recon_v: ScalarReconstructor<B::Scalar>,
+    recon_eta: ScalarReconstructor<B>,
+    recon_u: ScalarReconstructor<B>,
+    recon_v: ScalarReconstructor<B>,
     sources: Vec<S>,
     boundary_provider: Option<Arc<dyn BoundaryDataProvider>>,
 }
@@ -732,7 +731,7 @@ where
         let vel_left = B::vec2_new(u_left, v_left);
 
         let z = state.z[owner.get()];
-        let z_f64 = z.to_f64().unwrap_or(0.0);
+        let z_f64 = z.to_f64_lossy();
         let h_right_f64 = (forcing.eta - z_f64).max(0.0);
         let h_right = self.backend.scalar_from_f64(h_right_f64);
         let vel_right = B::vec2_new(
@@ -1096,7 +1095,7 @@ where
     }
 
     pub fn max_wave_speed(&self) -> f64 {
-        self.stats.max_wave_speed.to_f64().unwrap_or(0.0)
+        self.stats.max_wave_speed.to_f64_lossy()
     }
 
     pub fn dry_cell_count(&self) -> usize {

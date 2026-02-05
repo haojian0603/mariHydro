@@ -46,7 +46,7 @@ pub use venkatakrishnan::Venkatakrishnan;
 pub use minmod::Minmod;
 
 /// 静态分发限制器封装
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum LimiterAny<B: Backend> {
     /// 无限制
     None(NoLimiter<B>),
@@ -56,6 +56,17 @@ pub enum LimiterAny<B: Backend> {
     Venkatakrishnan(Venkatakrishnan<B>),
     /// Minmod
     Minmod(Minmod<B>),
+}
+
+impl<B: Backend> std::fmt::Debug for LimiterAny<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None(_) => f.debug_tuple("LimiterAny::None").finish(),
+            Self::BarthJespersen(_) => f.debug_tuple("LimiterAny::BarthJespersen").finish(),
+            Self::Venkatakrishnan(_) => f.debug_tuple("LimiterAny::Venkatakrishnan").finish(),
+            Self::Minmod(_) => f.debug_tuple("LimiterAny::Minmod").finish(),
+        }
+    }
 }
 
 impl<B: Backend> SlopeLimiter<B> for LimiterAny<B> {

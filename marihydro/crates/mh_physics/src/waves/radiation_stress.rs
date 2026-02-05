@@ -113,6 +113,30 @@ pub struct WaveFieldGeneric<B: Backend> {
     backend: B,
 }
 
+/// 波场快照（序列化用）
+///
+/// 几何数据保持 f64 精度，物理场使用显式标量类型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
+pub struct WaveFieldSnapshot<S: RuntimeScalar> {
+    /// 单元数量
+    pub n_cells: usize,
+    /// 波高 [m]
+    pub height: Vec<S>,
+    /// 周期 [s]
+    pub period: Vec<S>,
+    /// 波向 [弧度]
+    pub direction: Vec<S>,
+    /// 波长 [m]
+    pub wavelength: Vec<S>,
+    /// 波数 k [1/m]
+    pub wavenumber: Vec<S>,
+    /// 群速度因子 n = Cg/C
+    pub group_factor: Vec<S>,
+    /// 能量密度 [J/m²]
+    pub energy: Vec<S>,
+}
+
 impl<B: Backend> WaveFieldGeneric<B> {
     /// 创建指定大小的波场
     pub fn new(backend: B, n_cells: usize) -> Self {
@@ -188,8 +212,11 @@ impl<B: Backend> WaveFieldGeneric<B> {
     }
 
     /// 根据水深更新波场参数（色散关系）
-    pub fn update_dispersion(&mut self, depth: &[B::Scalar]) -> Result<(), WaveFieldError> {
+    pub fn update_dispersion(&mut self, depth: &B::Buffer<B::Scalar>) -> Result<(), WaveFieldError> {
         let h_min = self.backend.scalar_from_f64(0.1);
+        let depth = depth.try_as_slice().ok_or_else(|| {
+            WaveFieldError::BackendAccess("depth buffer not accessible".to_string())
+        })?;
         let n = self.len().min(depth.len());
 
         let height = self.height.try_as_slice().ok_or_else(|| {
@@ -229,9 +256,74 @@ impl<B: Backend> WaveFieldGeneric<B> {
         Ok(())
     }
 
+    /// 转换为快照（用于序列化）
+    pub fn to_snapshot(&self) -> WaveFieldSnapshot<B::Scalar> {
+        WaveFieldSnapshot {
+            n_cells: self.len(),
+            height: self.height.copy_to_vec(),
+            period: self.period.copy_to_vec(),
+            direction: self.direction.copy_to_vec(),
+            wavelength: self.wavelength.copy_to_vec(),
+            wavenumber: self.wavenumber.copy_to_vec(),
+            group_factor: self.group_factor.copy_to_vec(),
+            energy: self.energy.copy_to_vec(),
+        }
+    }
+
     /// 获取后端引用
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+}
+
+impl<S: RuntimeScalar> WaveFieldSnapshot<S> {
+    /// 从快照重建后端波场
+    pub fn to_backend<B: Backend<Scalar = S>>(self, backend: B) -> Result<WaveFieldGeneric<B>, WaveFieldError> {
+        let n_cells = self.n_cells;
+        let lengths = [
+            self.height.len(),
+            self.period.len(),
+            self.direction.len(),
+            self.wavelength.len(),
+            self.wavenumber.len(),
+            self.group_factor.len(),
+            self.energy.len(),
+        ];
+        if lengths.iter().any(|&len| len != n_cells) {
+            return Err(WaveFieldError::SizeMismatch {
+                expected: n_cells,
+                actual: lengths.into_iter().min().unwrap_or(0),
+            });
+        }
+        let mut field = WaveFieldGeneric::new(backend, n_cells);
+        field.height.copy_from_slice(&self.height);
+        field.period.copy_from_slice(&self.period);
+        field.direction.copy_from_slice(&self.direction);
+        field.wavelength.copy_from_slice(&self.wavelength);
+        field.wavenumber.copy_from_slice(&self.wavenumber);
+        field.group_factor.copy_from_slice(&self.group_factor);
+        field.energy.copy_from_slice(&self.energy);
+        Ok(field)
+    }
+
+    /// 精度转换（显式）
+    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> WaveFieldSnapshot<T> {
+        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
+    }
+
+    /// 精度转换（自定义映射）
+    pub fn map_scalar_with<T: RuntimeScalar, F: Fn(S) -> T>(&self, map: F) -> WaveFieldSnapshot<T> {
+        let map_vec = |src: &[S]| -> Vec<T> { src.iter().copied().map(&map).collect() };
+        WaveFieldSnapshot {
+            n_cells: self.n_cells,
+            height: map_vec(&self.height),
+            period: map_vec(&self.period),
+            direction: map_vec(&self.direction),
+            wavelength: map_vec(&self.wavelength),
+            wavenumber: map_vec(&self.wavenumber),
+            group_factor: map_vec(&self.group_factor),
+            energy: map_vec(&self.energy),
+        }
     }
 }
 
@@ -395,7 +487,7 @@ impl<B: Backend> RadiationStressCalculatorGeneric<B> {
         ny: usize,
         dx: B::Scalar,
         dy: B::Scalar,
-        depth: &[B::Scalar],
+        depth: &B::Buffer<B::Scalar>,
     ) -> Result<(), WaveFieldError> {
         let inv_dx = B::Scalar::ONE / dx;
         let inv_dy = B::Scalar::ONE / dy;
@@ -415,6 +507,9 @@ impl<B: Backend> RadiationStressCalculatorGeneric<B> {
         })?;
         let force_y = self.force_y.try_as_slice_mut().ok_or_else(|| {
             WaveFieldError::BackendAccess("force_y buffer not accessible".to_string())
+        })?;
+        let depth = depth.try_as_slice().ok_or_else(|| {
+            WaveFieldError::BackendAccess("depth buffer not accessible".to_string())
         })?;
 
         for j in 0..ny {
@@ -505,7 +600,7 @@ impl<B: Backend> WaveSourceGeneric<B> {
     }
 
     /// 更新色散关系
-    pub fn update_dispersion(&mut self, depth: &[B::Scalar]) -> Result<(), WaveFieldError> {
+    pub fn update_dispersion(&mut self, depth: &B::Buffer<B::Scalar>) -> Result<(), WaveFieldError> {
         self.wave_field.update_dispersion(depth)
     }
 
@@ -516,7 +611,7 @@ impl<B: Backend> WaveSourceGeneric<B> {
         ny: usize,
         dx: B::Scalar,
         dy: B::Scalar,
-        depth: &[B::Scalar],
+        depth: &B::Buffer<B::Scalar>,
     ) -> Result<(), WaveFieldError> {
         if !self.enabled {
             return Ok(());
@@ -603,7 +698,8 @@ mod tests {
         let params = WaveParametersGeneric::<f64>::new(1.0, 8.0, 0.0);
         let mut field = WaveFieldGeneric::<CpuBackend<f64>>::from_uniform(backend, 10, &params);
         
-        let depth = vec![10.0; 10];
+        let mut depth = field.backend().alloc(10);
+        depth.copy_from_slice(&[10.0; 10]);
         field.update_dispersion(&depth).unwrap();
         
         // 波数应该增加（相比深水）
@@ -674,7 +770,8 @@ mod tests {
         let mut calc = RadiationStressCalculatorGeneric::<CpuBackend<f64>>::new(backend, 25);
         calc.compute_stress(&field).unwrap();
         
-        let depth = vec![10.0; 25];
+        let mut depth = field.backend().alloc(25);
+        depth.copy_from_slice(&[10.0; 25]);
         calc.compute_gradient_structured(5, 5, 10.0, 10.0, &depth).unwrap();
         
         let (fx, fy) = calc.wave_forces();
@@ -693,7 +790,8 @@ mod tests {
         let params = WaveParametersGeneric::<f64>::new(1.5, 8.0, 0.0);
         source.set_wave_parameters(&params);
         
-        let depth = vec![5.0; 25];
+        let mut depth = source.wave_field().backend().alloc(25);
+        depth.copy_from_slice(&[5.0; 25]);
         source.update_dispersion(&depth).unwrap();
         source.compute_forces(5, 5, 10.0, 10.0, &depth).unwrap();
         
@@ -708,7 +806,8 @@ mod tests {
         let mut source = WaveSourceGeneric::<CpuBackend<f64>>::new(backend, 10);
         source.set_enabled(false);
         
-        let depth = vec![5.0; 10];
+        let mut depth = source.wave_field().backend().alloc(10);
+        depth.copy_from_slice(&[5.0; 10]);
         source.compute_forces(10, 1, 10.0, 10.0, &depth).unwrap();
         
         // 禁用后力应为零

@@ -48,8 +48,7 @@
 //! ```
 
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::{Backend, RuntimeScalar};
-use num_traits::Float;
+use mh_runtime::prelude::*;
 
 // =========================================================================
 // MeshAccess - 网格只读访问接口

@@ -6,6 +6,7 @@ use crate::state::ShallowWaterState;
 use super::traits::{
     SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
 };
+use mh_runtime::DeviceBuffer;
 use std::cell::RefCell;
 use std::collections::HashMap;
 

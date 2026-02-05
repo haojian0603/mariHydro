@@ -26,7 +26,7 @@
 use crate::adapter::PhysicsMesh;
 use super::topology::CellFaceTopology;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 
 /// 水深校正器
 ///
@@ -45,7 +45,7 @@ pub struct DepthCorrector<B: Backend> {
 impl<B> DepthCorrector<B>
 where
     B: Backend,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建水深校正器
     pub fn new(n_cells: usize, backend: B) -> Self {
@@ -150,7 +150,7 @@ pub struct VelocityCorrector<B: Backend> {
 impl<B> VelocityCorrector<B>
 where
     B: Backend,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建速度校正器
     pub fn new(topo: &CellFaceTopology, backend: B) -> Self {

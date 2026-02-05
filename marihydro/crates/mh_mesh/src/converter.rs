@@ -16,15 +16,15 @@
 //! use mh_mesh::converter::SimpleMeshDataGeneric;
 //! use mh_mesh::FrozenMesh;
 //!
-//! let frozen_mesh = FrozenMesh::empty();
+//! let backend = mh_runtime::CpuBackend::<f64>::new();
+//! let frozen_mesh = FrozenMesh::empty_with_backend(backend);
 //! let simple_data = SimpleMeshDataGeneric::<f32>::from_frozen(&frozen_mesh);
 //!
 //! println!("GPU 数据大小: {} bytes", simple_data.memory_usage());
 //! ```
 
 use crate::frozen::FrozenMesh;
-use mh_runtime::{Backend, RuntimeScalar};
-use num_traits::ToPrimitive;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use serde::{Deserialize, Serialize};
 
 /// 简化网格数据（用于 GPU 传输）
@@ -91,7 +91,7 @@ impl SimpleMeshDataGeneric<f32> {
     /// 从 FrozenMesh 转换（输出 f32）
     pub fn from_frozen<B: Backend>(mesh: &FrozenMesh<B>) -> Self
     where
-        B::Scalar: RuntimeScalar + ToPrimitive,
+        B::Scalar: RuntimeScalar,
     {
         let node_coords: Vec<f32> = mesh
             .node_coords
@@ -109,7 +109,7 @@ impl SimpleMeshDataGeneric<f32> {
             .cell_area
             .as_slice()
             .iter()
-            .map(|&x| x.to_f64().unwrap_or(0.0) as f32)
+            .map(|&x| x.to_f64_lossy() as f32)
             .collect();
 
         let cell_nodes: Vec<u32> = mesh.cell_node_indices.clone();
@@ -128,7 +128,7 @@ impl SimpleMeshDataGeneric<f32> {
             .face_length
             .as_slice()
             .iter()
-            .map(|&x| x.to_f64().unwrap_or(0.0) as f32)
+            .map(|&x| x.to_f64_lossy() as f32)
             .collect();
 
         let face_centers: Vec<f32> = mesh
@@ -163,7 +163,7 @@ impl SimpleMeshDataGeneric<f64> {
     /// 从 FrozenMesh 转换（输出 f64）
     pub fn from_frozen<B: Backend>(mesh: &FrozenMesh<B>) -> Self
     where
-        B::Scalar: RuntimeScalar + ToPrimitive,
+        B::Scalar: RuntimeScalar,
     {
         let node_coords: Vec<f64> = mesh
             .node_coords
@@ -181,7 +181,7 @@ impl SimpleMeshDataGeneric<f64> {
             .cell_area
             .as_slice()
             .iter()
-            .map(|&x| x.to_f64().unwrap_or(0.0))
+            .map(|&x| x.to_f64_lossy())
             .collect();
 
         let cell_nodes: Vec<u32> = mesh.cell_node_indices.clone();
@@ -200,7 +200,7 @@ impl SimpleMeshDataGeneric<f64> {
             .face_length
             .as_slice()
             .iter()
-            .map(|&x| x.to_f64().unwrap_or(0.0))
+            .map(|&x| x.to_f64_lossy())
             .collect();
 
         let face_centers: Vec<f64> = mesh
@@ -524,7 +524,8 @@ mod tests {
     use mh_runtime::CpuBackend;
 
     fn create_test_mesh() -> FrozenMesh<CpuBackend<f64>> {
-        let mut mesh = FrozenMesh::empty_with_cells(2);
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMesh::empty_with_cells_backend(backend.clone(), 2);
 
         // 添加节点
         mesh.n_nodes = 4;
@@ -542,7 +543,9 @@ mod tests {
         ];
 
         // 单元面积
-        mesh.cell_area = vec![0.5, 0.5];
+        let mut cell_area = backend.alloc(2);
+        cell_area.copy_from_slice(&[0.5, 0.5]);
+        mesh.cell_area = cell_area;
 
         // 面数据
         mesh.n_faces = 5;
@@ -556,7 +559,9 @@ mod tests {
             mh_geo::Point3D::new(0.0, 1.0, 0.0),
             mh_geo::Point3D::new(1.0, 0.0, 0.0),
         ];
-        mesh.face_length = vec![1.0, 1.0, 1.414, 1.0, 1.0];
+        let mut face_length = backend.alloc(5);
+        face_length.copy_from_slice(&[1.0, 1.0, 1.414, 1.0, 1.0]);
+        mesh.face_length = face_length;
         mesh.face_center = vec![
             mh_geo::Point2D::new(0.5, 0.5),
             mh_geo::Point2D::new(0.5, 0.0),

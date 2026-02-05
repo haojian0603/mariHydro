@@ -9,7 +9,7 @@ use crate::state::{RhsBuffers, ShallowWaterState};
 use crate::Backend;
 use mh_foundation::{MhError, MhResult};
 use mh_runtime::RuntimeScalar;
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 
 /// RHS计算器trait（Backend泛型版本）
 pub trait RhsComputer<B: Backend> {
@@ -161,7 +161,7 @@ where
         dt: B::Scalar,
         rhs_computer: &mut R,
     ) -> MhResult<B::Scalar> {
-        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE);
+        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
@@ -257,11 +257,11 @@ where
         dt: B::Scalar,
         rhs_computer: &mut R,
     ) -> MhResult<B::Scalar> {
-        let coef_075 = B::Scalar::from_f64(0.75).unwrap_or(B::Scalar::ONE);
-        let coef_025 = B::Scalar::from_f64(0.25).unwrap_or(B::Scalar::ZERO);
-        let coef_one_third = B::Scalar::from_f64(1.0 / 3.0).unwrap_or(B::Scalar::ZERO);
-        let coef_two_thirds = B::Scalar::from_f64(2.0 / 3.0).unwrap_or(B::Scalar::ONE);
-        let coef_050 = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE);
+        let coef_075 = B::Scalar::from_config(0.75).unwrap_or(B::Scalar::ONE);
+        let coef_025 = B::Scalar::from_config(0.25).unwrap_or(B::Scalar::ZERO);
+        let coef_one_third = B::Scalar::from_config(1.0 / 3.0).unwrap_or(B::Scalar::ZERO);
+        let coef_two_thirds = B::Scalar::from_config(2.0 / 3.0).unwrap_or(B::Scalar::ONE);
+        let coef_050 = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
@@ -415,7 +415,7 @@ mod tests {
         ) -> MhResult<B::Scalar> {
             let n = state.n_cells();
             for i in 0..n {
-                output.dh_dt[i] = state.h[i] * B::Scalar::from_f64(-0.1).unwrap();
+                output.dh_dt[i] = state.h[i] * B::Scalar::from_config(-0.1).unwrap_or(B::Scalar::ZERO);
             }
             Ok(B::Scalar::ONE)
         }

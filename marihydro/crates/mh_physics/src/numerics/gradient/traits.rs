@@ -11,7 +11,7 @@
 //! 1. **单轨泛型**: 所有接口基于 `RuntimeScalar` 泛型，无 Legacy f64 别名
 //! 2. **Backend 无关**: 使用 `[S; 2]` 元组表示向量，不依赖 glam::DVec2
 
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use crate::prelude::*;
 
 // ============================================================
 // 泛型梯度存储

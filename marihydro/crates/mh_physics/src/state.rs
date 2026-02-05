@@ -212,6 +212,22 @@ where
         self.data.get_mut(idx)
     }
 
+    /// 按名称获取只读缓冲区
+    pub fn get_buffer_by_name(&self, name: &str) -> Option<&B::Buffer<B::Scalar>> {
+        self.names
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| self.get(i))
+    }
+
+    /// 按名称获取可变缓冲区
+    pub fn get_buffer_mut_by_name(&mut self, name: &str) -> Option<&mut B::Buffer<B::Scalar>> {
+        if let Some(pos) = self.names.iter().position(|n| n == name) {
+            return self.get_mut(pos);
+        }
+        None
+    }
+
     /// 按索引获取只读切片（仅 CPU 可用）
     #[inline]
     pub fn get_slice(&self, idx: usize) -> Option<&[B::Scalar]> {

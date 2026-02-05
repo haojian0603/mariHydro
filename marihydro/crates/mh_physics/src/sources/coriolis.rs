@@ -22,6 +22,7 @@
 
 use super::traits::{SourceContribution, SourceContext, SourceTerm};
 use crate::prelude::*;
+use std::f64::consts::PI;
 
 // 注意：CpuBackend 已在上方导入
 

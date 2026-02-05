@@ -196,6 +196,9 @@ pub trait RuntimeScalar:
         if self < other { self } else { other }
     }
 
+    /// 转换为 f64（允许损失精度，用于日志/序列化）
+    fn to_f64_lossy(self) -> f64;
+
     /// 安全平方根（负数返回 0）
     #[inline]
     fn safe_sqrt(self) -> Self {
@@ -338,6 +341,11 @@ impl RuntimeScalar for f32 {
     const MIN_POSITIVE: f32 = f32::MIN_POSITIVE;
     const MAX: f32 = f32::MAX;
     const MIN: f32 = f32::MIN;
+
+    #[inline]
+    fn to_f64_lossy(self) -> f64 {
+        self as f64
+    }
 }
 
 #[cfg(not(target_has_atomic = "32"))]
@@ -358,6 +366,11 @@ impl RuntimeScalar for f64 {
     const MIN_POSITIVE: f64 = f64::MIN_POSITIVE;
     const MAX: f64 = f64::MAX;
     const MIN: f64 = f64::MIN;
+
+    #[inline]
+    fn to_f64_lossy(self) -> f64 {
+        self
+    }
 }
 
 #[cfg(not(target_has_atomic = "64"))]

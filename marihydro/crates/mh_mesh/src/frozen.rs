@@ -197,14 +197,6 @@ impl<B: Backend> FrozenMesh<B> {
     // 构造函数
     // =========================================================================
 
-    /// 创建空的冻结网格
-    pub fn empty() -> Self
-    where
-        B: Default,
-    {
-        Self::empty_with_backend(B::default())
-    }
-
     /// 创建空的冻结网格（显式后端）
     pub fn empty_with_backend(backend: B) -> Self {
         Self {
@@ -246,16 +238,6 @@ impl<B: Backend> FrozenMesh<B> {
             cell_inv_permutation: Vec::new(),
             backend,
         }
-    }
-
-    /// 创建带有指定单元数量的空网格（用于测试）
-    ///
-    /// 创建的网格有指定数量的单元，但没有实际几何数据，所有面积和高程设为默认值。
-    pub fn empty_with_cells(n_cells: usize) -> Self
-    where
-        B: Default,
-    {
-        Self::empty_with_cells_backend(B::default(), n_cells)
     }
 
     /// 创建带有指定单元数量的空网格（显式后端）
@@ -827,10 +809,7 @@ impl<B: Backend> FrozenMesh<B> {
     }
 
     /// 计算网格几何中心（面积加权）
-    pub fn centroid(&self) -> Point2D
-    where
-        B::Scalar: Into<f64>,
-    {
+    pub fn centroid(&self) -> Point2D {
         if self.n_cells == 0 {
             return Point2D::new(0.0, 0.0);
         }
@@ -841,7 +820,7 @@ impl<B: Backend> FrozenMesh<B> {
 
         for cell in 0..self.n_cells {
             let center = self.cell_center(cell);
-            let area: f64 = self.cell_area(cell).into();
+            let area: f64 = self.cell_area(cell).to_f64_lossy();
             sum_x += center.x * area;
             sum_y += center.y * area;
             total_area += area;
@@ -1014,12 +993,12 @@ impl<B: Backend> MeshAccess<B> for FrozenMesh<B> {
         &self.cell_center
     }
 
-    /// 所有单元面积（运行时转换为 f64 的 Vec）
+    /// 所有单元面积（后端标量）
     fn all_cell_areas(&self) -> Vec<B::Scalar> {
         self.cell_area.copy_to_vec()
     }
 
-    /// 所有单元底床高程（运行时转换为 f64 的 Vec）
+    /// 所有单元底床高程（后端标量）
     fn all_cell_bed_elevations(&self) -> Vec<B::Scalar> {
         self.cell_z_bed.copy_to_vec()
     }
@@ -1234,7 +1213,8 @@ mod tests {
 
     #[test]
     fn test_empty_frozen_mesh() {
-        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty();
+        let backend = CpuBackend::<f64>::new();
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_backend(backend);
         assert_eq!(mesh.n_cells(), 0);
         assert_eq!(mesh.n_faces(), 0);
         assert_eq!(mesh.n_nodes(), 0);
@@ -1242,20 +1222,25 @@ mod tests {
 
     #[test]
     fn test_frozen_mesh_f32() {
-        let mesh: FrozenMesh<CpuBackend<f32>> = FrozenMesh::empty_with_cells(5);
+        let backend = CpuBackend::<f32>::new();
+        let mesh: FrozenMesh<CpuBackend<f32>> =
+            FrozenMesh::empty_with_cells_backend(backend, 5);
         assert_eq!(mesh.n_cells(), 5);
         assert_eq!(mesh.cell_area(0), f32::ONE);
     }
 
     #[test]
     fn test_validate_empty() {
-        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty();
+        let backend = CpuBackend::<f64>::new();
+        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_backend(backend);
         assert!(mesh.validate().is_ok());
     }
 
     #[test]
     fn test_mesh_access_trait() {
-        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_cells(5);
+        let backend = CpuBackend::<f64>::new();
+        let mesh: FrozenMesh<CpuBackend<f64>> =
+            FrozenMesh::empty_with_cells_backend(backend, 5);
 
         fn check_mesh<B: Backend, M: MeshAccess<B>>(m: &M) -> usize {
             m.n_cells()
@@ -1266,7 +1251,9 @@ mod tests {
 
     #[test]
     fn test_statistics_f32() {
-        let mesh: FrozenMesh<CpuBackend<f32>> = FrozenMesh::empty_with_cells(3);
+        let backend = CpuBackend::<f32>::new();
+        let mesh: FrozenMesh<CpuBackend<f32>> =
+            FrozenMesh::empty_with_cells_backend(backend, 3);
         let stats = mesh.statistics();
         assert_eq!(stats.n_cells, 3);
         assert_eq!(stats.total_area, 3.0_f32);
@@ -1274,7 +1261,9 @@ mod tests {
 
     #[test]
     fn test_centroid() {
-        let mesh: FrozenMesh<CpuBackend<f64>> = FrozenMesh::empty_with_cells(2);
+        let backend = CpuBackend::<f64>::new();
+        let mesh: FrozenMesh<CpuBackend<f64>> =
+            FrozenMesh::empty_with_cells_backend(backend, 2);
         let mesh = FrozenMesh {
             cell_center: vec![Point2D::new(0.0, 0.0), Point2D::new(2.0, 2.0)],
             cell_area: vec![1.0, 1.0],

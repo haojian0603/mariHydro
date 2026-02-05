@@ -86,7 +86,7 @@ pub use mh_runtime::{
 };
 
 // 重导出核心抽象
-pub use core::{DefaultBackend, D2, D3};
+pub use core::{D2, D3};
 
 // 重导出网格抽象
 pub use mesh::{MeshTopology, MeshKind, UnstructuredMeshAdapter};

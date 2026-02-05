@@ -22,9 +22,11 @@
 //!
 //! ```ignore
 //! use mh_physics::vertical::{SigmaCoordinate, LayeredState};
+//! use mh_runtime::CpuBackend;
 //!
 //! let sigma = SigmaCoordinate::uniform(10); // 10层均匀分布
-//! let layered = LayeredState::new(n_cells, &sigma);
+//! let backend = CpuBackend::<f64>::new();
+//! let layered = LayeredState::new_with_backend(backend, n_cells, &sigma);
 //! ```
 
 pub mod sigma;
@@ -36,7 +38,7 @@ pub mod profile;
 pub use sigma::{SigmaCoordinate, SigmaDistribution};
 pub use velocity::VerticalVelocity;
 pub use mixing::{VerticalMixing, VerticalMixingModel};
-pub use state::{LayeredScalar, LayeredState};
+pub use state::{LayeredScalar, LayeredState, LayeredStateError};
 pub use profile::{
 	ProfileRestorer, VerticalProfile, ProfileMethod,
 	ConcentrationProfile, ConcentrationProfileMethod,

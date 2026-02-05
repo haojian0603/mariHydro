@@ -3,8 +3,8 @@
 //! 提供结构化和非结构化网格的统一接口。
 
 use crate::core::Backend;
+use num_traits::Float;
 use mh_runtime::RuntimeScalar as Scalar;
-use num_traits::{Float, ToPrimitive};
 
 /// 网格验证错误
 #[derive(Debug, thiserror::Error)]
@@ -154,7 +154,7 @@ pub trait MeshTopology<B: Backend>: Send + Sync {
             if !area.is_finite() || area <= B::Scalar::ZERO {
                 return Err(MeshValidationError::InvalidCellArea {
                     cell,
-                    area: area.to_f64().unwrap_or(f64::NAN),
+                    area: area.to_f64_lossy(),
                 });
             }
 
@@ -174,7 +174,7 @@ pub trait MeshTopology<B: Backend>: Send + Sync {
             if !length.is_finite() || length <= B::Scalar::ZERO {
                 return Err(MeshValidationError::InvalidFaceLength {
                     face,
-                    length: length.to_f64().unwrap_or(f64::NAN),
+                    length: length.to_f64_lossy(),
                 });
             }
 
@@ -256,7 +256,7 @@ impl MeshGeometry {
         let length = (dx * dx + dy * dy).sqrt();
         
         // 工业级要求：禁止返回零向量
-        if length <= S::min_positive_value() {
+        if length <= S::MIN_POSITIVE {
             panic!("MeshGeometry::unit_normal: 零长度线段，无法计算法向量");
         }
         
@@ -274,7 +274,7 @@ impl MeshGeometry {
         let dy = p2[1] - p1[1];
         let length = (dx * dx + dy * dy).sqrt();
         
-        if length <= S::min_positive_value() {
+        if length <= S::MIN_POSITIVE {
             None
         } else {
             Some([-dy / length, dx / length])
@@ -290,7 +290,7 @@ impl MeshGeometry {
     /// 三角形面积（始终为正值）
     #[inline]
     pub fn triangle_area<S: Scalar>(p1: [S; 2], p2: [S; 2], p3: [S; 2]) -> S {
-        let half = S::from_f64(0.5).unwrap_or(S::ONE);
+        let half = S::from_config(0.5).unwrap_or(S::ONE);
         let cross = (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p2[1] - p1[1]) * (p3[0] - p1[0]);
         cross.abs() * half
     }
@@ -315,7 +315,7 @@ impl MeshGeometry {
             sum = sum - vertices[j][0] * vertices[i][1];
         }
         
-        let half = S::from_f64(0.5).unwrap_or(S::ONE);
+        let half = S::from_config(0.5).unwrap_or(S::ONE);
         sum.abs() * half
     }
     
@@ -345,11 +345,11 @@ impl MeshGeometry {
         }
         
         let area = area_sum.abs();
-        if area <= S::min_positive_value() {
+        if area <= S::MIN_POSITIVE {
             return None;
         }
         
-        let factor = S::ONE / (S::from_f64(3.0).unwrap_or(S::ONE) * area_sum);
+        let factor = S::ONE / (S::from_config(3.0).unwrap_or(S::ONE) * area_sum);
         Some([cx * factor, cy * factor])
     }
 }

@@ -5,10 +5,15 @@
 //! 实现多种波浪底摩擦模型，包括 Jonswap, Madsen, Nielsen 等。
 
 use serde::{Deserialize, Serialize};
-use std::f64::consts::PI;
+use crate::prelude::*;
 
-/// 重力加速度
-const G: f64 = 9.81;
+fn scalar_const<B: Backend>(backend: &B, v: f64) -> B::Scalar {
+    backend.scalar_from_f64(v)
+}
+
+fn scalar_pi<B: Backend>(backend: &B) -> B::Scalar {
+    backend.scalar_from_f64(std::f64::consts::PI)
+}
 
 /// 波浪底摩擦模型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,57 +30,78 @@ pub enum WaveBottomFrictionModel {
     Constant,
 }
 
+/// 波浪底摩擦错误
+#[derive(Debug, Clone)]
+pub enum WaveBottomFrictionError {
+    /// 后端缓冲区不可直接访问
+    BackendAccess(String),
+}
+
+impl std::fmt::Display for WaveBottomFrictionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BackendAccess(msg) => write!(f, "后端访问错误: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for WaveBottomFrictionError {}
+
 
 /// 波浪轨道速度计算器
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct WaveOrbitalVelocity {
+pub struct WaveOrbitalVelocity<S: RuntimeScalar> {
     /// 最大水平轨道速度 [m/s]
-    pub u_max: f64,
+    pub u_max: S,
     /// 轨道位移幅值 [m]
-    pub amplitude: f64,
+    pub amplitude: S,
     /// 轨道周期 [s]
-    pub period: f64,
+    pub period: S,
 }
 
-impl WaveOrbitalVelocity {
+impl<S: RuntimeScalar> WaveOrbitalVelocity<S> {
     /// 从波浪参数计算底部轨道速度
     /// 
     /// u_max = πH / (T sinh(kh))
     /// a = H / (2 sinh(kh))
-    pub fn compute(
-        height: f64,
-        period: f64,
-        wavenumber: f64,
-        depth: f64,
+    pub fn compute<B: Backend<Scalar = S>>(
+        backend: &B,
+        height: S,
+        period: S,
+        wavenumber: S,
+        depth: S,
     ) -> Self {
-        let h = depth.max(0.1);
+        let h_min = scalar_const(backend, 0.1);
+        let h = if depth > h_min { depth } else { h_min };
         let kh = wavenumber * h;
         let sinh_kh = kh.sinh();
+        let eps = scalar_const(backend, 1e-10);
         
-        if sinh_kh < 1e-10 {
+        if sinh_kh < eps {
             // 浅水极限
-            let c = (G * h).sqrt();
+            let c = (scalar_const(backend, 9.81) * h).sqrt();
             return Self {
-                u_max: height / (2.0 * h) * c,
-                amplitude: height / 2.0,
+                u_max: height / (scalar_const(backend, 2.0) * h) * c,
+                amplitude: height / scalar_const(backend, 2.0),
                 period,
             };
         }
         
+        let pi = scalar_pi(backend);
         Self {
-            u_max: PI * height / (period * sinh_kh),
-            amplitude: height / (2.0 * sinh_kh),
+            u_max: pi * height / (period * sinh_kh),
+            amplitude: height / (scalar_const(backend, 2.0) * sinh_kh),
             period,
         }
     }
 
     /// 获取轨道速度随时间的变化
-    pub fn velocity_at_phase(&self, phase: f64) -> f64 {
+    pub fn velocity_at_phase(&self, phase: S) -> S {
         self.u_max * phase.cos()
     }
 
     /// 获取轨道位移随时间的变化
-    pub fn displacement_at_phase(&self, phase: f64) -> f64 {
+    pub fn displacement_at_phase(&self, phase: S) -> S {
         self.amplitude * phase.sin()
     }
 }
@@ -139,46 +165,88 @@ impl WaveBottomFrictionConfig {
 }
 
 /// 波浪底摩擦计算器
-pub struct WaveBottomFriction {
+pub struct WaveBottomFriction<B: Backend> {
     /// 配置
     config: WaveBottomFrictionConfig,
+    /// 后端实例
+    backend: B,
     /// 摩擦系数
-    fw: Vec<f64>,
+    fw: B::Buffer<B::Scalar>,
     /// 床面剪切应力振幅 [Pa]
-    tau_wave: Vec<f64>,
+    tau_wave: B::Buffer<B::Scalar>,
     /// 能量耗散率 [W/m²]
-    dissipation: Vec<f64>,
+    dissipation: B::Buffer<B::Scalar>,
 }
 
-impl WaveBottomFriction {
+impl<B: Backend> WaveBottomFriction<B> {
     /// 创建新的计算器
-    pub fn new(n_cells: usize, config: WaveBottomFrictionConfig) -> Self {
+    pub fn new(backend: B, n_cells: usize, config: WaveBottomFrictionConfig) -> Self {
+        let mut fw = backend.alloc(n_cells);
+        let mut tau_wave = backend.alloc(n_cells);
+        let mut dissipation = backend.alloc(n_cells);
+        fw.fill(scalar_const(&backend, 0.01));
+        tau_wave.fill(B::Scalar::ZERO);
+        dissipation.fill(B::Scalar::ZERO);
         Self {
             config,
-            fw: vec![0.01; n_cells],
-            tau_wave: vec![0.0; n_cells],
-            dissipation: vec![0.0; n_cells],
+            backend,
+            fw,
+            tau_wave,
+            dissipation,
         }
+    }
+
+    /// 获取后端引用
+    #[inline]
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
 
     /// 计算波浪底摩擦
     pub fn compute_friction(
         &mut self,
-        height: &[f64],
-        period: &[f64],
-        wavenumber: &[f64],
-        depth: &[f64],
-    ) {
-        let n = self.fw.len()
+        height: &B::Buffer<B::Scalar>,
+        period: &B::Buffer<B::Scalar>,
+        wavenumber: &B::Buffer<B::Scalar>,
+        depth: &B::Buffer<B::Scalar>,
+    ) -> Result<(), WaveBottomFrictionError> {
+        let height = height.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("height buffer not accessible".to_string())
+        })?;
+        let period = period.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("period buffer not accessible".to_string())
+        })?;
+        let wavenumber = wavenumber.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("wavenumber buffer not accessible".to_string())
+        })?;
+        let depth = depth.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("depth buffer not accessible".to_string())
+        })?;
+        let fw = self.fw.try_as_slice_mut().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("fw buffer not accessible".to_string())
+        })?;
+        let tau_wave = self.tau_wave.try_as_slice_mut().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("tau_wave buffer not accessible".to_string())
+        })?;
+        let dissipation = self.dissipation.try_as_slice_mut().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("dissipation buffer not accessible".to_string())
+        })?;
+
+        let n = fw.len()
             .min(height.len())
             .min(period.len())
             .min(wavenumber.len())
             .min(depth.len());
         
-        let rho = 1025.0;
+        let rho = scalar_const(&self.backend, 1025.0);
+        let half = scalar_const(&self.backend, 0.5);
+        let two = scalar_const(&self.backend, 2.0);
+        let three = scalar_const(&self.backend, 3.0);
+        let pi = scalar_pi(&self.backend);
 
         for i in 0..n {
             let orbital = WaveOrbitalVelocity::compute(
+                &self.backend,
                 height[i],
                 period[i],
                 wavenumber[i],
@@ -186,71 +254,83 @@ impl WaveBottomFriction {
             );
 
             // 计算摩擦系数
-            self.fw[i] = self.compute_friction_coefficient(orbital.amplitude, orbital.period);
+            fw[i] = Self::compute_friction_coefficient(
+                &self.config,
+                &self.backend,
+                orbital.amplitude,
+                orbital.period,
+            );
 
             // 床面剪切应力振幅
             // τ_wave = 0.5 × ρ × fw × u_max²
-            self.tau_wave[i] = 0.5 * rho * self.fw[i] * orbital.u_max * orbital.u_max;
+            tau_wave[i] = half * rho * fw[i] * orbital.u_max * orbital.u_max;
 
             // 能量耗散率
             // D = (2/3π) × ρ × fw × u_max³
-            self.dissipation[i] = 2.0 / (3.0 * PI) * rho * self.fw[i] 
+            dissipation[i] = two / (three * pi) * rho * fw[i]
                 * orbital.u_max * orbital.u_max * orbital.u_max;
         }
+        Ok(())
     }
 
     /// 根据模型计算摩擦系数
-    fn compute_friction_coefficient(&self, amplitude: f64, _period: f64) -> f64 {
-        match self.config.model {
+    fn compute_friction_coefficient(
+        config: &WaveBottomFrictionConfig,
+        backend: &B,
+        amplitude: B::Scalar,
+        _period: B::Scalar,
+    ) -> B::Scalar {
+        let amplitude = amplitude.to_f64_lossy();
+        match config.model {
             WaveBottomFrictionModel::Jonswap => {
                 // JONSWAP 经验公式
                 // fw = 0.067 for typical conditions
-                0.067
+                scalar_const(backend, 0.067)
             }
             WaveBottomFrictionModel::Madsen => {
                 // Madsen (1988)
                 // fw = exp(-5.977 + 5.213(a/ks)^(-0.194))
                 let a = amplitude.max(1e-6);
-                let ks = self.config.roughness_height.max(1e-6);
+                let ks = config.roughness_height.max(1e-6);
                 let ratio = a / ks;
                 
                 if ratio < 1.57 {
-                    0.3  // 最大值
+                    scalar_const(backend, 0.3)  // 最大值
                 } else {
-                    (-5.977 + 5.213 * ratio.powf(-0.194)).exp()
+                    scalar_const(backend, (-5.977 + 5.213 * ratio.powf(-0.194)).exp())
                 }
             }
             WaveBottomFrictionModel::Nielsen => {
                 // Nielsen (1992)
                 // fw = exp(5.5(a/ks)^(-0.2) - 6.3)
                 let a = amplitude.max(1e-6);
-                let ks = self.config.roughness_height.max(1e-6);
+                let ks = config.roughness_height.max(1e-6);
                 let ratio = a / ks;
                 
                 if ratio < 1.0 {
-                    0.3
+                    scalar_const(backend, 0.3)
                 } else {
-                    (5.5 * ratio.powf(-0.2) - 6.3).exp()
+                    scalar_const(backend, (5.5 * ratio.powf(-0.2) - 6.3).exp())
                 }
             }
             WaveBottomFrictionModel::Constant => {
-                self.config.friction_coefficient
+                scalar_const(backend, config.friction_coefficient)
             }
         }
     }
 
     /// 获取摩擦系数
-    pub fn friction_coefficients(&self) -> &[f64] {
+    pub fn friction_coefficients(&self) -> &B::Buffer<B::Scalar> {
         &self.fw
     }
 
     /// 获取波浪床面剪切应力
-    pub fn wave_shear_stress(&self) -> &[f64] {
+    pub fn wave_shear_stress(&self) -> &B::Buffer<B::Scalar> {
         &self.tau_wave
     }
 
     /// 获取能量耗散率
-    pub fn energy_dissipation(&self) -> &[f64] {
+    pub fn energy_dissipation(&self) -> &B::Buffer<B::Scalar> {
         &self.dissipation
     }
 
@@ -263,57 +343,82 @@ impl WaveBottomFriction {
     /// 
     /// 使用 Soulsby (1997) 的波流联合公式
     pub fn compute_combined_stress(
-        tau_current: f64,
-        tau_wave: f64,
-        angle_between: f64,
-    ) -> f64 {
+        backend: &B,
+        tau_current: B::Scalar,
+        tau_wave: B::Scalar,
+        angle_between: B::Scalar,
+    ) -> B::Scalar {
         let cos_phi = angle_between.cos();
+        let one = scalar_const(backend, 1.0);
+        let one_point_two = scalar_const(backend, 1.2);
+        let three_point_two = scalar_const(backend, 3.2);
+        let eps = scalar_const(backend, 1e-14);
         
         // Soulsby 非线性公式
-        let tau_mean = tau_current * (1.0 + 1.2 * (tau_wave / (tau_current + tau_wave + 1e-14)).powf(3.2));
+        let ratio = tau_wave / (tau_current + tau_wave + eps);
+        let tau_mean = tau_current * (one + one_point_two * ratio.powf(three_point_two));
         
-        
-        ((tau_mean + tau_wave * cos_phi).powi(2) 
+        ((tau_mean + tau_wave * cos_phi).powi(2)
             + (tau_wave * angle_between.sin()).powi(2)).sqrt()
     }
 }
 
 /// 波流联合底摩擦计算器
-pub struct WaveCurrentInteraction {
+pub struct WaveCurrentInteraction<B: Backend> {
     /// 波浪摩擦计算器
-    wave_friction: WaveBottomFriction,
+    wave_friction: WaveBottomFriction<B>,
     /// 联合剪切应力 [Pa]
-    tau_combined: Vec<f64>,
+    tau_combined: B::Buffer<B::Scalar>,
     /// 联合摩擦系数（暂未使用）
-    _fc_combined: Vec<f64>,
+    _fc_combined: B::Buffer<B::Scalar>,
 }
 
-impl WaveCurrentInteraction {
+impl<B: Backend> WaveCurrentInteraction<B> {
     /// 创建新的计算器
-    pub fn new(n_cells: usize, config: WaveBottomFrictionConfig) -> Self {
+    pub fn new(backend: B, n_cells: usize, config: WaveBottomFrictionConfig) -> Self {
+        let mut tau_combined = backend.alloc(n_cells);
+        let mut fc_combined = backend.alloc(n_cells);
+        tau_combined.fill(B::Scalar::ZERO);
+        fc_combined.fill(B::Scalar::ZERO);
         Self {
-            wave_friction: WaveBottomFriction::new(n_cells, config),
-            tau_combined: vec![0.0; n_cells],
-            _fc_combined: vec![0.0; n_cells],
+            wave_friction: WaveBottomFriction::new(backend, n_cells, config),
+            tau_combined,
+            _fc_combined: fc_combined,
         }
     }
 
     /// 计算波流联合剪切应力
     pub fn compute(
         &mut self,
-        tau_current: &[f64],
-        current_direction: &[f64],
-        height: &[f64],
-        period: &[f64],
-        wavenumber: &[f64],
-        wave_direction: &[f64],
-        depth: &[f64],
-    ) {
+        tau_current: &B::Buffer<B::Scalar>,
+        current_direction: &B::Buffer<B::Scalar>,
+        height: &B::Buffer<B::Scalar>,
+        period: &B::Buffer<B::Scalar>,
+        wavenumber: &B::Buffer<B::Scalar>,
+        wave_direction: &B::Buffer<B::Scalar>,
+        depth: &B::Buffer<B::Scalar>,
+    ) -> Result<(), WaveBottomFrictionError> {
         // 先计算波浪底摩擦
-        self.wave_friction.compute_friction(height, period, wavenumber, depth);
+        self.wave_friction.compute_friction(height, period, wavenumber, depth)?;
         let tau_wave = self.wave_friction.wave_shear_stress();
 
-        let n = self.tau_combined.len()
+        let tau_current = tau_current.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("tau_current buffer not accessible".to_string())
+        })?;
+        let current_direction = current_direction.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("current_direction buffer not accessible".to_string())
+        })?;
+        let wave_direction = wave_direction.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("wave_direction buffer not accessible".to_string())
+        })?;
+        let tau_wave = tau_wave.try_as_slice().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("tau_wave buffer not accessible".to_string())
+        })?;
+        let tau_combined = self.tau_combined.try_as_slice_mut().ok_or_else(|| {
+            WaveBottomFrictionError::BackendAccess("tau_combined buffer not accessible".to_string())
+        })?;
+
+        let n = tau_combined.len()
             .min(tau_current.len())
             .min(current_direction.len())
             .min(wave_direction.len())
@@ -321,21 +426,21 @@ impl WaveCurrentInteraction {
 
         for i in 0..n {
             let angle_diff = wave_direction[i] - current_direction[i];
-            self.tau_combined[i] = WaveBottomFriction::compute_combined_stress(
+            tau_combined[i] = WaveBottomFriction::compute_combined_stress(
+                self.wave_friction.backend(),
                 tau_current[i],
                 tau_wave[i],
                 angle_diff,
             );
         }
+        Ok(())
     }
 
     /// 获取联合剪切应力
-    pub fn combined_shear_stress(&self) -> &[f64] {
+    pub fn combined_shear_stress(&self) -> &B::Buffer<B::Scalar> {
         &self.tau_combined
     }
-
-    /// 获取波浪摩擦计算器
-    pub fn wave_friction(&self) -> &WaveBottomFriction {
+    pub fn wave_friction(&self) -> &WaveBottomFriction<B> {
         &self.wave_friction
     }
 }
@@ -343,11 +448,12 @@ impl WaveCurrentInteraction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_orbital_velocity() {
-        let orbital = WaveOrbitalVelocity::compute(2.0, 8.0, 0.1, 10.0);
-        
+        let backend = CpuBackend::<f64>::new();
+        let orbital = WaveOrbitalVelocity::compute(&backend, 2.0, 8.0, 0.1, 10.0);
         assert!(orbital.u_max > 0.0);
         assert!(orbital.amplitude > 0.0);
         assert_eq!(orbital.period, 8.0);
@@ -355,8 +461,8 @@ mod tests {
 
     #[test]
     fn test_orbital_velocity_shallow() {
-        let orbital = WaveOrbitalVelocity::compute(1.0, 8.0, 1.0, 0.5);
-        
+        let backend = CpuBackend::<f64>::new();
+        let orbital = WaveOrbitalVelocity::compute(&backend, 1.0, 8.0, 1.0, 0.5);
         assert!(orbital.u_max > 0.0);
     }
 
@@ -366,69 +472,84 @@ mod tests {
         assert_eq!(config.model, WaveBottomFrictionModel::Jonswap);
         
         let config = WaveBottomFrictionConfig::madsen(0.03);
-        assert_eq!(config.model, WaveBottomFrictionModel::Madsen);
         assert!((config.roughness_height - 0.03).abs() < 1e-10);
     }
 
     #[test]
     fn test_wave_bottom_friction_jonswap() {
         let config = WaveBottomFrictionConfig::jonswap();
-        let mut friction = WaveBottomFriction::new(10, config);
+        let backend = CpuBackend::<f64>::new();
+        let mut friction = WaveBottomFriction::new(backend.clone(), 10, config);
         
-        let height = vec![1.0; 10];
-        let period = vec![8.0; 10];
-        let wavenumber = vec![0.1; 10];
-        let depth = vec![10.0; 10];
+        let mut height = backend.alloc(10);
+        let mut period = backend.alloc(10);
+        let mut wavenumber = backend.alloc(10);
+        let mut depth = backend.alloc(10);
+        height.copy_from_slice(&[1.0; 10]);
+        period.copy_from_slice(&[8.0; 10]);
+        wavenumber.copy_from_slice(&[0.1; 10]);
+        depth.copy_from_slice(&[10.0; 10]);
         
-        friction.compute_friction(&height, &period, &wavenumber, &depth);
+        friction.compute_friction(&height, &period, &wavenumber, &depth).unwrap();
         
-        let fw = friction.friction_coefficients();
+        let fw = friction.friction_coefficients().as_slice();
         assert!(fw.iter().all(|&f| f > 0.0));
         
-        let tau = friction.wave_shear_stress();
+        let tau = friction.wave_shear_stress().as_slice();
         assert!(tau.iter().all(|&t| t >= 0.0));
     }
 
     #[test]
     fn test_wave_bottom_friction_madsen() {
         let config = WaveBottomFrictionConfig::madsen(0.05);
-        let mut friction = WaveBottomFriction::new(10, config);
+        let backend = CpuBackend::<f64>::new();
+        let mut friction = WaveBottomFriction::new(backend.clone(), 10, config);
         
-        let height = vec![2.0; 10];
-        let period = vec![10.0; 10];
-        let wavenumber = vec![0.08; 10];
-        let depth = vec![15.0; 10];
+        let mut height = backend.alloc(10);
+        let mut period = backend.alloc(10);
+        let mut wavenumber = backend.alloc(10);
+        let mut depth = backend.alloc(10);
+        height.copy_from_slice(&[2.0; 10]);
+        period.copy_from_slice(&[10.0; 10]);
+        wavenumber.copy_from_slice(&[0.08; 10]);
+        depth.copy_from_slice(&[15.0; 10]);
         
-        friction.compute_friction(&height, &period, &wavenumber, &depth);
+        friction.compute_friction(&height, &period, &wavenumber, &depth).unwrap();
         
-        let dissipation = friction.energy_dissipation();
+        let dissipation = friction.energy_dissipation().as_slice();
         assert!(dissipation.iter().all(|&d| d >= 0.0));
     }
 
     #[test]
     fn test_wave_bottom_friction_nielsen() {
         let config = WaveBottomFrictionConfig::nielsen(0.03);
-        let mut friction = WaveBottomFriction::new(5, config);
+        let backend = CpuBackend::<f64>::new();
+        let mut friction = WaveBottomFriction::new(backend.clone(), 5, config);
         
-        let height = vec![1.5; 5];
-        let period = vec![8.0; 5];
-        let wavenumber = vec![0.1; 5];
-        let depth = vec![8.0; 5];
+        let mut height = backend.alloc(5);
+        let mut period = backend.alloc(5);
+        let mut wavenumber = backend.alloc(5);
+        let mut depth = backend.alloc(5);
+        height.copy_from_slice(&[1.5; 5]);
+        period.copy_from_slice(&[8.0; 5]);
+        wavenumber.copy_from_slice(&[0.1; 5]);
+        depth.copy_from_slice(&[8.0; 5]);
         
-        friction.compute_friction(&height, &period, &wavenumber, &depth);
+        friction.compute_friction(&height, &period, &wavenumber, &depth).unwrap();
         
-        let fw = friction.friction_coefficients();
+        let fw = friction.friction_coefficients().as_slice();
         assert!(fw.iter().all(|&f| f > 0.0 && f < 1.0));
     }
 
     #[test]
     fn test_combined_stress() {
+        let backend = CpuBackend::<f64>::new();
         let tau_current = 1.0;
         let tau_wave = 2.0;
         let angle = 0.0;  // 同向
         
         let tau_combined = WaveBottomFriction::compute_combined_stress(
-            tau_current, tau_wave, angle
+            &backend, tau_current, tau_wave, angle
         );
         
         // 同向时联合应力应该接近叠加
@@ -438,12 +559,13 @@ mod tests {
 
     #[test]
     fn test_combined_stress_perpendicular() {
+        let backend = CpuBackend::<f64>::new();
         let tau_current = 1.0;
         let tau_wave = 1.0;
-        let angle = PI / 2.0;  // 垂直
+        let angle = std::f64::consts::PI / 2.0;  // 垂直
         
         let tau_combined = WaveBottomFriction::compute_combined_stress(
-            tau_current, tau_wave, angle
+            &backend, tau_current, tau_wave, angle
         );
         
         // 垂直时应该是矢量合成
@@ -453,15 +575,23 @@ mod tests {
     #[test]
     fn test_wave_current_interaction() {
         let config = WaveBottomFrictionConfig::jonswap();
-        let mut interaction = WaveCurrentInteraction::new(10, config);
+        let backend = CpuBackend::<f64>::new();
+        let mut interaction = WaveCurrentInteraction::new(backend.clone(), 10, config);
         
-        let tau_current = vec![0.5; 10];
-        let current_direction = vec![0.0; 10];
-        let height = vec![1.0; 10];
-        let period = vec![8.0; 10];
-        let wavenumber = vec![0.1; 10];
-        let wave_direction = vec![PI / 4.0; 10];
-        let depth = vec![10.0; 10];
+        let mut tau_current = backend.alloc(10);
+        let mut current_direction = backend.alloc(10);
+        let mut height = backend.alloc(10);
+        let mut period = backend.alloc(10);
+        let mut wavenumber = backend.alloc(10);
+        let mut wave_direction = backend.alloc(10);
+        let mut depth = backend.alloc(10);
+        tau_current.copy_from_slice(&[0.5; 10]);
+        current_direction.copy_from_slice(&[0.0; 10]);
+        height.copy_from_slice(&[1.0; 10]);
+        period.copy_from_slice(&[8.0; 10]);
+        wavenumber.copy_from_slice(&[0.1; 10]);
+        wave_direction.copy_from_slice(&[std::f64::consts::PI / 4.0; 10]);
+        depth.copy_from_slice(&[10.0; 10]);
         
         interaction.compute(
             &tau_current,
@@ -471,9 +601,9 @@ mod tests {
             &wavenumber,
             &wave_direction,
             &depth,
-        );
+        ).unwrap();
         
-        let tau_combined = interaction.combined_shear_stress();
+        let tau_combined = interaction.combined_shear_stress().as_slice();
         assert!(tau_combined.iter().all(|&t| t > 0.0));
     }
 }

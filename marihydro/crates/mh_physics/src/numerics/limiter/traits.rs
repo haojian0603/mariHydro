@@ -6,10 +6,10 @@
 //!
 //! # 泛型设计
 //!
-//! 本模块使用泛型版本作为核心实现，并提供 f64 类型别名保持向后兼容。
+//! 本模块仅提供泛型版本作为核心实现，不保留任何类型别名。
 
 use std::fmt::Debug;
-use mh_runtime::{Backend, RuntimeScalar};
+use crate::prelude::*;
 
 // ============================================================================
 // 泛型版本 (核心实现)
@@ -135,8 +135,14 @@ pub trait SlopeLimiter<B: Backend>: Debug + Send + Sync {
 /// 无限制器（一阶精度）
 ///
 /// 始终返回 1.0，不限制梯度。
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct NoLimiter<B: Backend>(std::marker::PhantomData<B>);
+
+impl<B: Backend> std::fmt::Debug for NoLimiter<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoLimiter").finish()
+    }
+}
 
 impl<B: Backend> NoLimiter<B> {
     /// 创建新的无限制器

@@ -16,7 +16,7 @@ pub use bottom_friction::{
 };
 pub use radiation_stress::{
     compute_wavenumber_and_n, RadiationStressCalculatorGeneric,
-    RadiationStressTensorGeneric, WaveFieldGeneric,
+    RadiationStressTensorGeneric, WaveFieldGeneric, WaveFieldSnapshot,
     WaveParametersGeneric, WaveSourceGeneric,
 };
 pub use spectral::{SpectralConfig, SpectralWaveSolver, WaveSpectrum, WaveFieldParams};

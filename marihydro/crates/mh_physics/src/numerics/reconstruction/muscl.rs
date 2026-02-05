@@ -16,14 +16,15 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use mh_runtime::{Backend, Vector2D};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar, Vector2D};
+use num_traits::Float;
 
 use super::config::{GradientType, MusclConfig};
 use super::traits::{ReconstructedState, Reconstructor};
 use crate::adapter::PhysicsMesh;
 use crate::types::{CellIndex, FaceIndex};
-use crate::numerics::gradient::{GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage};
-use crate::numerics::limiter::{create_limiter, LimiterAny, LimiterContext};
+use crate::numerics::gradient::{GradientMethod, GreenGaussGradient, LeastSquaresGradient, ScalarGradientStorage};
+use crate::numerics::limiter::{create_limiter, LimiterAny, LimiterContext, SlopeLimiter};
 
 // ============================================================================
 // MUSCL 重构器 - 泛型版本
@@ -89,12 +90,13 @@ impl<B: Backend> MusclReconstructor<B> {
 
         let mut limiters = backend.alloc(n_cells);
         limiters.fill(B::Scalar::ONE);
-        
+        let gradients = ScalarGradientStorage::with_backend(&backend, n_cells);
+
         Self {
             config,
             mesh,
             backend,
-            gradients: ScalarGradientStorage::with_backend(&backend, n_cells),
+            gradients,
             limiters,
             gradient_computer,
             limiter,
@@ -162,16 +164,17 @@ impl<B: Backend> MusclReconstructor<B> {
     /// 计算限制因子
     fn compute_limiters(&mut self, values: &B::Buffer<B::Scalar>) {
         let n_cells = self.mesh.cell_count();
-        let dry_tol = self.backend.scalar_from_f64(self.config.dry_tolerance);
+        let dry_tol = B::Scalar::from_config(self.config.dry_tolerance)
+            .unwrap_or(B::Scalar::ZERO);
         let values_slice = values.as_slice();
-        let limiters_slice = self.limiters.as_slice_mut();
+        let mut temp_limiters = vec![B::Scalar::ONE; n_cells];
         
         for cell_id in 0..n_cells {
             let cell_value = values_slice[cell_id];
             
             // 检查干单元
             if cell_value < dry_tol {
-                limiters_slice[cell_id] = B::Scalar::ZERO;
+                temp_limiters[cell_id] = B::Scalar::ZERO;
                 continue;
             }
             
@@ -190,12 +193,17 @@ impl<B: Backend> MusclReconstructor<B> {
                 max_distance,
             );
             
-            limiters_slice[cell_id] = self.limiter.compute_limiter(&ctx);
+            temp_limiters[cell_id] = self.limiter.compute_limiter(&ctx);
             
             // 正定保持：确保重构后水深非负
             if self.config.positivity_preserving {
-                self.apply_positivity_constraint(cell_id, cell_value);
+                self.apply_positivity_constraint(cell_id, cell_value, &mut temp_limiters);
             }
+        }
+
+        let limiters_slice = self.limiters.as_slice_mut();
+        for (dst, src) in limiters_slice.iter_mut().zip(temp_limiters.iter()) {
+            *dst = *src;
         }
     }
     
@@ -255,9 +263,14 @@ impl<B: Backend> MusclReconstructor<B> {
     }
     
     /// 应用正定约束
-    fn apply_positivity_constraint(&mut self, cell_id: usize, cell_value: B::Scalar) {
+    fn apply_positivity_constraint(
+        &self,
+        cell_id: usize,
+        cell_value: B::Scalar,
+        limiters: &mut [B::Scalar],
+    ) {
         if cell_value <= B::Scalar::ZERO {
-            self.limiters[cell_id] = B::Scalar::ZERO;
+            limiters[cell_id] = B::Scalar::ZERO;
             return;
         }
         
@@ -284,18 +297,19 @@ impl<B: Backend> MusclReconstructor<B> {
             let dx = face_center.x() - cell_center_x;
             let dy = face_center.y() - cell_center_y;
             
-            let reconstructed = cell_value + self.limiters[cell_id] * (grad_x * dx + grad_y * dy);
+            let reconstructed = cell_value + limiters[cell_id] * (grad_x * dx + grad_y * dy);
             
             if reconstructed < B::Scalar::ZERO {
                 let denominator = grad_x * dx + grad_y * dy;
-                let eps = self.backend.scalar_from_f64(1e-12);
+                let eps = B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE);
                 if denominator.abs() > eps {
                     let alpha_safe = (-cell_value / denominator).abs();
                     let alpha_safe = if alpha_safe < B::Scalar::ONE { alpha_safe } else { B::Scalar::ONE };
-                    let new_limiter = self.limiters[cell_id] * self.backend.scalar_from_f64(0.9);
-                    self.limiters[cell_id] = if alpha_safe < new_limiter { alpha_safe } else { new_limiter };
+                    let shrink = B::Scalar::from_config(0.9).unwrap_or(B::Scalar::ONE);
+                    let new_limiter = limiters[cell_id] * shrink;
+                    limiters[cell_id] = if alpha_safe < new_limiter { alpha_safe } else { new_limiter };
                 } else {
-                    self.limiters[cell_id] = B::Scalar::ZERO;
+                    limiters[cell_id] = B::Scalar::ZERO;
                 }
             }
         }

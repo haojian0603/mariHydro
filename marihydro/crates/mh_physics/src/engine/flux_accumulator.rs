@@ -19,6 +19,7 @@ use mh_runtime::{AtomicScalar, Backend, RuntimeScalar};
 use crate::adapter::PhysicsMesh;
 use crate::schemes::RiemannFlux;
 use mh_runtime::FaceIndex;
+use mh_runtime::DeviceBuffer;
 use std::sync::atomic::Ordering;
 
 /// 单线程通量累加器
@@ -147,9 +148,10 @@ impl<B: Backend + Clone> FluxAccumulator<B> {
         h: &mut B::Buffer<B::Scalar>,
         hu: &mut B::Buffer<B::Scalar>,
         hv: &mut B::Buffer<B::Scalar>,
-        areas: &[B::Scalar],
+        areas: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
     ) {
+        let areas = areas.try_as_slice().unwrap_or(&[]);
         for i in 0..self.n_cells {
             let inv_area = B::Scalar::ONE / areas[i];
             let dt_inv = dt * inv_area;
@@ -279,15 +281,13 @@ where
 mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
-    use num_traits::FromPrimitive;
 
     /// f64精度容差（相对误差约1e-15）
     const EPSILON_F64: f64 = 1e-10;
 
     /// 从f64创建Backend标量（测试专用）
     fn scalar_from_f64<B: Backend>(v: f64) -> B::Scalar {
-        B::Scalar::from_f64(v)
-            .unwrap_or_else(|| B::Scalar::from_f64(0.0).unwrap())
+        B::Scalar::from_config(v).unwrap_or(B::Scalar::ZERO)
     }
 
     /// epsilon断言宏

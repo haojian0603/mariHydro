@@ -33,7 +33,7 @@ use mh_io::{
     exporters::vtu::{VtuExporter, SimpleState},
 };
 use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
-use mh_runtime::{CpuBackend, Vector2D};
+use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
@@ -41,7 +41,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use num_traits::ToPrimitive;
 
 /// 运行器错误类型
 #[derive(Debug, Error)]
@@ -595,7 +594,7 @@ impl<S: Storage> JobRunner<S> {
 
         solver.step_with_sources(&mut state, dt, context.current_sim_time());
 
-        let new_time = context.current_sim_time() + dt.to_f64().unwrap();
+        let new_time = context.current_sim_time() + dt.to_f64_lossy();
         context.set_current_sim_time(new_time);
         context.increment_steps(1);
 
@@ -628,7 +627,7 @@ impl<S: Storage> JobRunner<S> {
         let state = context.state.read();
         let solver = context.solver.read();
 
-        let snapshot = mh_io::snapshot::StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let snapshot = mh_io::snapshot::StateSnapshot::<f64>::from_state_data(
             state.h_slice().to_vec(),
             state.hu_slice().to_vec(),
             state.hv_slice().to_vec(),

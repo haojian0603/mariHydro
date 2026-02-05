@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 use serde_json;
 
 use crate::snapshot::{MeshSnapshot, StateSnapshot};
-use mh_runtime::CpuBackend;
 use crate::checkpoint::Checkpoint;
 use crate::vtu::binary::write_vtu_binary;
 
@@ -97,22 +96,22 @@ pub enum OutputRequest {
     /// 写入 VTU 文件（ASCII 格式）
     WriteVtuAscii {
         path: PathBuf,
-        mesh_data: MeshSnapshot<CpuBackend<f64>>,
-        state_data: StateSnapshot<CpuBackend<f64>>,
+        mesh_data: MeshSnapshot<f64>,
+        state_data: StateSnapshot<f64>,
         time: f64,
     },
     /// 写入 VTU 文件（二进制格式）
     WriteVtuBinary {
         path: PathBuf,
-        mesh_data: MeshSnapshot<CpuBackend<f64>>,
-        state_data: StateSnapshot<CpuBackend<f64>>,
+        mesh_data: MeshSnapshot<f64>,
+        state_data: StateSnapshot<f64>,
         time: f64,
     },
     /// 写入检查点
     WriteCheckpoint {
         path: PathBuf,
-        state_data: StateSnapshot<CpuBackend<f64>>,
-        mesh_snapshot: Option<MeshSnapshot<CpuBackend<f64>>>,
+        state_data: StateSnapshot<f64>,
+        mesh_snapshot: Option<MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     },
@@ -327,8 +326,8 @@ impl IoPipeline {
     pub fn write_vtu_ascii(
         &self,
         path: impl Into<PathBuf>,
-        mesh: MeshSnapshot<CpuBackend<f64>>,
-        state: StateSnapshot<CpuBackend<f64>>,
+        mesh: MeshSnapshot<f64>,
+        state: StateSnapshot<f64>,
         time: f64,
     ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuAscii {
@@ -343,8 +342,8 @@ impl IoPipeline {
     pub fn write_vtu_binary(
         &self,
         path: impl Into<PathBuf>,
-        mesh: MeshSnapshot<CpuBackend<f64>>,
-        state: StateSnapshot<CpuBackend<f64>>,
+        mesh: MeshSnapshot<f64>,
+        state: StateSnapshot<f64>,
         time: f64,
     ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WriteVtuBinary {
@@ -359,8 +358,8 @@ impl IoPipeline {
     pub fn write_checkpoint(
         &self,
         path: impl Into<PathBuf>,
-        state: StateSnapshot<CpuBackend<f64>>,
-        mesh: Option<MeshSnapshot<CpuBackend<f64>>>,
+        state: StateSnapshot<f64>,
+        mesh: Option<MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     ) -> crate::error::IoResult<()> {
@@ -555,8 +554,8 @@ impl IoPipeline {
     /// VTU ASCII 写入实现
     fn write_vtu_ascii_impl(
         path: &Path,
-        mesh: &MeshSnapshot<CpuBackend<f64>>,
-        state: &StateSnapshot<CpuBackend<f64>>,
+        mesh: &MeshSnapshot<f64>,
+        state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
@@ -753,8 +752,8 @@ impl IoPipeline {
     /// VTU 二进制写入实现
     fn write_vtu_binary_impl(
         path: &Path,
-        mesh: &MeshSnapshot<CpuBackend<f64>>,
-        state: &StateSnapshot<CpuBackend<f64>>,
+        mesh: &MeshSnapshot<f64>,
+        state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
         mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
@@ -781,8 +780,8 @@ impl IoPipeline {
     /// 检查点写入实现
     fn write_checkpoint_impl(
         path: &Path,
-        state: &StateSnapshot<CpuBackend<f64>>,
-        mesh: Option<&MeshSnapshot<CpuBackend<f64>>>,
+        state: &StateSnapshot<f64>,
+        mesh: Option<&MeshSnapshot<f64>>,
         time: f64,
         step: usize,
     ) -> PipelineResult<()> {
@@ -849,7 +848,6 @@ impl Drop for IoPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
     use crate::snapshot::{MeshSnapshot, StateSnapshot};
 
     #[test]
@@ -890,7 +888,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_binary.vtu");
 
-        let mesh = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let mesh = MeshSnapshot::<f64>::from_mesh_data(
             4, 1,
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
             vec![vec![0, 1, 2, 3]],
@@ -898,7 +896,7 @@ mod tests {
             vec![0.0],
         );
 
-        let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let state = StateSnapshot::<f64>::from_state_data(
             vec![1.0],
             vec![0.1],
             vec![0.0],
@@ -921,7 +919,7 @@ mod tests {
         };
         let pipeline = IoPipeline::with_config(config);
         
-        let mesh = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let mesh = MeshSnapshot::<f64>::from_mesh_data(
             10000, 5000,
             vec![(0.0, 0.0); 10000],
             vec![vec![0, 1, 2, 3]; 5000],
@@ -929,7 +927,7 @@ mod tests {
             vec![0.0; 5000],
         );
 
-        let state = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let state = StateSnapshot::<f64>::from_state_data(
             vec![1.0; 5000],
             vec![0.1; 5000],
             vec![0.0; 5000],

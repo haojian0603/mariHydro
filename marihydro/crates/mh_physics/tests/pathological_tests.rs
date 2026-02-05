@@ -33,6 +33,7 @@ use mh_physics::{
     types::NumericalParams,
     Layer3Config,
 };
+use mh_mesh::FrozenMesh;
 use std::sync::{Arc, LazyLock};
 use rand::prelude::*;
 use rand::SeedableRng;
@@ -58,6 +59,13 @@ fn test_backend() -> &'static CpuBackend<f64> {
 fn create_state(n_cells: usize) -> ShallowWaterState<CpuBackend<f64>> {
     assert!(n_cells > 0, "单元数量必须为正");
     ShallowWaterState::new_with_backend(test_backend().clone(), n_cells)
+}
+
+/// 统一网格创建入口（显式后端，禁止便捷构造）
+#[inline(always)]
+fn create_mesh(n_cells: usize) -> Arc<PhysicsMesh> {
+    let frozen = FrozenMesh::empty_with_cells_backend(test_backend().clone(), n_cells);
+    Arc::new(PhysicsMesh::from_frozen(&frozen))
 }
 
 /// 统一 solver 创建入口（强制 Backend 复用）
@@ -307,7 +315,7 @@ fn test_ill_conditioned_matrix_stability() {
 
 #[test]
 fn test_nan_propagation_blocking() {
-    let mesh = Arc::new(PhysicsMesh::empty(10));
+    let mesh = create_mesh(10);
     // 正确使用 create_state，复用 Backend 单例
     let mut state = create_state(10);
 
@@ -349,7 +357,7 @@ fn test_nan_propagation_blocking() {
 
 #[test]
 fn test_negative_depth_recovery() {
-    let mesh = Arc::new(PhysicsMesh::empty(5));
+    let mesh = create_mesh(5);
     // 使用 create_state
     let mut state = create_state(5);
 
@@ -386,7 +394,7 @@ fn test_negative_depth_recovery() {
 
 #[test]
 fn test_velocity_clamping_extreme() {
-    let mesh = Arc::new(PhysicsMesh::empty(1));
+    let mesh = create_mesh(1);
     // 使用 create_state
     let mut state = create_state(1);
 
@@ -445,7 +453,7 @@ fn test_near_zero_depth_velocity() {
 
 #[test]
 fn test_wet_dry_oscillation_stability() {
-    let mesh = Arc::new(PhysicsMesh::empty(100));
+    let mesh = create_mesh(100);
     // 使用 create_state
     let mut state = create_state(100);
 
@@ -621,7 +629,7 @@ fn test_catastrophic_cancellation_prevention() {
 
 #[test]
 fn test_boundary_extreme_values() {
-    let mesh = Arc::new(PhysicsMesh::empty(10));
+    let mesh = create_mesh(10);
     // 使用 create_state
     let mut state = create_state(10);
 
@@ -659,7 +667,7 @@ fn test_boundary_extreme_values() {
 #[test]
 #[ignore = "slow"]
 fn test_long_term_stability() {
-    let mesh = Arc::new(PhysicsMesh::empty(5));
+    let mesh = create_mesh(5);
     // 使用 create_state
     let mut state = create_state(5);
 
@@ -723,12 +731,16 @@ fn test_long_term_stability() {
 #[test]
 fn test_convergence_criteria_edge_cases() {
     // 测试b_norm≈0时的atol/rtol处理
-    let r = vec![1e-15; 10];
-    let b_tiny = vec![1e-16; 10];
-    let b_zero = vec![0.0; 10];
+    let backend = test_backend().clone();
+    let mut r = backend.alloc(10);
+    r.fill(backend.scalar_from_f64(1e-15));
+    let mut b_tiny = backend.alloc(10);
+    b_tiny.fill(backend.scalar_from_f64(1e-16));
+    let mut b_zero = backend.alloc(10);
+    b_zero.fill(backend.scalar_from_f64(0.0));
 
-    let rel_res_tiny: f64 = relative_residual(&r, &b_tiny);
-    let rel_res_zero: f64 = relative_residual(&r, &b_zero);
+    let rel_res_tiny: f64 = relative_residual(&backend, &r, &b_tiny);
+    let rel_res_zero: f64 = relative_residual(&backend, &r, &b_zero);
 
     // 当|b|≈0时，应使用绝对值
     assert!(rel_res_tiny.is_finite(), "极小b_norm应产生有限相对残差");
@@ -812,7 +824,7 @@ fn test_no_memory_leak_in_solver() {
 /// 验证求解器的NaN检测机制正确集成
 #[test]
 fn test_nan_detection_integration() {
-    let mesh = Arc::new(PhysicsMesh::empty(20));
+    let mesh = create_mesh(20);
     // 使用 create_state，复用 Backend
     let mut state = create_state(20);
     

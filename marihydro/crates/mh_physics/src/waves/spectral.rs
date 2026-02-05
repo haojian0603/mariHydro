@@ -6,6 +6,7 @@
 
 use std::f64::consts::PI;
 use crate::waves::radiation_stress::{compute_wavenumber_and_n, RadiationStressTensorGeneric};
+use crate::prelude::*;
 
 /// 波能谱
 #[derive(Debug, Clone)]
@@ -232,13 +233,21 @@ impl SpectralWaveSolver {
     }
 
     /// 计算辐射应力（基于深度）
-    pub fn compute_radiation_stress(&mut self, depth: &[f64]) {
+    pub fn compute_radiation_stress<B: Backend>(&mut self, backend: &B, depth: &B::Buffer<B::Scalar>) {
         let rho = 1025.0;
         let g = 9.81;
+        let depth = match depth.try_as_slice() {
+            Some(s) => s,
+            None => {
+                for v in &mut self.params.sxx { *v = 0.0; }
+                for v in &mut self.params.sxy { *v = 0.0; }
+                for v in &mut self.params.syy { *v = 0.0; }
+                return;
+            }
+        };
 
-        let backend = mh_runtime::CpuBackend::<f64>::new();
         for i in 0..self.params.hs.len().min(depth.len()) {
-            let h = depth[i].max(0.1);
+            let h = depth[i].to_f64_lossy().max(0.1);
             let hs_raw = self.params.hs[i];
             let tp = self.params.tp[i];
             if !hs_raw.is_finite() || !tp.is_finite() || tp <= 0.0 {
@@ -250,9 +259,11 @@ impl SpectralWaveSolver {
             let hs = hs_raw.min(self.config.breaking_gamma * h).max(0.0);
             let dir = self.params.dir[i];
             let omega = 2.0 * PI / tp.max(1e-6);
-            let (_k, n) = compute_wavenumber_and_n(&backend, omega, h);
+            let omega_s = backend.scalar_from_f64(omega);
+            let h_s = backend.scalar_from_f64(h);
+            let (_k, n) = compute_wavenumber_and_n(backend, omega_s, h_s);
             let energy = rho * g * hs * hs / 8.0;
-            let stress = RadiationStressTensorGeneric::<f64>::compute(energy, n, dir);
+            let stress = RadiationStressTensorGeneric::<f64>::compute(energy, n.to_f64_lossy(), dir);
             self.params.sxx[i] = stress.sxx;
             self.params.sxy[i] = stress.sxy;
             self.params.syy[i] = stress.syy;

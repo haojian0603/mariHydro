@@ -12,7 +12,7 @@ use std::ops::{Deref, DerefMut};
 use crate::buffer::DeviceBuffer;
 use crate::scalar::RuntimeScalar;
 use crate::error::{RuntimeError, RuntimeResult};
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::{Float, FromPrimitive, ToPrimitive};
 
 /// 密封模块，限制 Backend 只能在库内部实现
 mod private {
@@ -181,6 +181,114 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     
     /// 2-范数
     fn norm2(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar;
+
+    /// 无穷范数（最大绝对值）
+    fn norm_inf(&self, x: &Self::Buffer<Self::Scalar>) -> Self::Scalar {
+        let slice = x.as_slice();
+        let mut max_val = Self::Scalar::ZERO;
+        for &v in slice {
+            let abs_v = v.abs();
+            if abs_v > max_val {
+                max_val = abs_v;
+            }
+        }
+        max_val
+    }
+
+    /// y = x + alpha * y
+    fn xpay(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        alpha: Self::Scalar,
+        y: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        self.scale(alpha, y);
+        self.axpy(Self::Scalar::ONE, x, y);
+    }
+
+    /// z = alpha * x + beta * y
+    fn linear_combination(
+        &self,
+        alpha: Self::Scalar,
+        x: &Self::Buffer<Self::Scalar>,
+        beta: Self::Scalar,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        self.copy(x, z);
+        self.scale(alpha, z);
+        self.axpy(beta, y, z);
+    }
+
+    /// z = x + y
+    fn add(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        self.copy(x, z);
+        self.axpy(Self::Scalar::ONE, y, z);
+    }
+
+    /// z = x - y
+    fn sub(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        self.copy(x, z);
+        self.axpy(-Self::Scalar::ONE, y, z);
+    }
+
+    /// z = x .* y
+    fn hadamard(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "向量维度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "向量维度不匹配");
+        let x_slice = x.as_slice();
+        let y_slice = y.as_slice();
+        let z_slice = z.as_slice_mut();
+        for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
+            *zi = xi * yi;
+        }
+    }
+
+    /// z = x ./ y（除零保护）
+    fn hadamard_div(
+        &self,
+        x: &Self::Buffer<Self::Scalar>,
+        y: &Self::Buffer<Self::Scalar>,
+        z: &mut Self::Buffer<Self::Scalar>,
+    ) {
+        debug_assert_eq!(x.len(), y.len(), "向量维度不匹配");
+        debug_assert_eq!(x.len(), z.len(), "向量维度不匹配");
+        let eps = Self::Scalar::EPSILON;
+        let x_slice = x.as_slice();
+        let y_slice = y.as_slice();
+        let z_slice = z.as_slice_mut();
+        for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
+            *zi = if yi.abs() > eps { xi / yi } else { Self::Scalar::ZERO };
+        }
+    }
+
+    /// 带边界的复制
+    fn copy_bounded(
+        &self,
+        src: &Self::Buffer<Self::Scalar>,
+        dst: &mut Self::Buffer<Self::Scalar>,
+        bound: usize,
+    ) {
+        let n = src.len().min(dst.len()).min(bound);
+        let src_slice = src.as_slice();
+        let dst_slice = dst.as_slice_mut();
+        dst_slice[..n].copy_from_slice(&src_slice[..n]);
+    }
 
     /// 强制正性（水深等物理量）
     fn enforce_positivity(&self, x: &mut Self::Buffer<Self::Scalar>, min_val: Self::Scalar);

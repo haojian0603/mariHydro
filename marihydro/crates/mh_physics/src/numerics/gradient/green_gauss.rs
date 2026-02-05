@@ -14,7 +14,8 @@
 //! 2. **无 DVec2**: 所有几何操作使用元组 `(f64, f64)` 或 `(S, S)`
 //! 3. **几何数据 f64**: PhysicsMesh 几何数据保持 f64，在计算时转换为 S
 
-use mh_runtime::{Backend, Vector2D};
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
+use num_traits::Float;
 use rayon::prelude::*;
 use log::debug;
 
@@ -221,8 +222,8 @@ impl GreenGaussGradient {
                         let dy_other = face_center.y() - other_center.y();
                         let d_other = (dx_other * dx_other + dy_other * dy_other).sqrt();
 
-                        let eps = backend.scalar_from_f64(1e-14);
-                        Self::distance_weighted_interpolate(
+                        let eps = B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+                        Self::distance_weighted_interpolate::<B>(
                             phi_c,
                             field[other.get()],
                             d_self,
@@ -239,7 +240,7 @@ impl GreenGaussGradient {
             grad_y = grad_y + ds_y * phi_face;
         }
 
-        let area = backend.scalar_from_f64(area_f64);
+        let area = B::Scalar::from_config(area_f64).unwrap_or(B::Scalar::ZERO);
         (grad_x / area, grad_y / area)
     }
 
@@ -371,7 +372,8 @@ mod tests {
 
     /// 创建简单的 2x1 网格
     fn create_test_mesh() -> PhysicsMesh {
-        let mut frozen = FrozenMesh::empty_with_cells(2);
+        let backend = CpuBackend::<f64>::new();
+        let mut frozen = FrozenMesh::empty_with_cells_backend(backend.clone(), 2);
         frozen.n_nodes = 6;
         frozen.node_coords = vec![
             Point3D::new(0.0, 0.0, 0.0),
@@ -383,8 +385,12 @@ mod tests {
         ];
         frozen.n_cells = 2;
         frozen.cell_center = vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)];
-        frozen.cell_area = vec![1.0, 1.0];
-        frozen.cell_z_bed = vec![0.0, 0.0];
+        let mut cell_area = backend.alloc(2);
+        cell_area.copy_from_slice(&[1.0, 1.0]);
+        frozen.cell_area = cell_area;
+        let mut cell_z_bed = backend.alloc(2);
+        cell_z_bed.copy_from_slice(&[0.0, 0.0]);
+        frozen.cell_z_bed = cell_z_bed;
         frozen.cell_node_offsets = vec![0, 4, 8];
         frozen.cell_node_indices = vec![0, 1, 4, 3, 1, 2, 5, 4];
         frozen.cell_face_offsets = vec![0, 4, 8];
@@ -411,14 +417,22 @@ mod tests {
             Point3D::new(1.0, 0.0, 0.0),
             Point3D::new(0.0, 1.0, 0.0),
         ];
-        frozen.face_length = vec![1.0; 7];
-        frozen.face_z_left = vec![0.0; 7];
-        frozen.face_z_right = vec![0.0; 7];
+        let mut face_length = backend.alloc(7);
+        face_length.copy_from_slice(&[1.0; 7]);
+        frozen.face_length = face_length;
+        let mut face_z_left = backend.alloc(7);
+        face_z_left.copy_from_slice(&[0.0; 7]);
+        frozen.face_z_left = face_z_left;
+        let mut face_z_right = backend.alloc(7);
+        face_z_right.copy_from_slice(&[0.0; 7]);
+        frozen.face_z_right = face_z_right;
         frozen.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
         frozen.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
         frozen.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
         frozen.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
-        frozen.face_dist_o2n = vec![1.0; 7];
+        let mut face_dist_o2n = backend.alloc(7);
+        face_dist_o2n.copy_from_slice(&[1.0; 7]);
+        frozen.face_dist_o2n = face_dist_o2n;
         frozen.boundary_face_indices = (1..7).map(|i| i as u32).collect();
         frozen.boundary_names = vec!["boundary".to_string()];
         frozen.face_boundary_id = vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)];

@@ -26,7 +26,6 @@ use crate::state::ConservedState;
 use crate::types::{NumericalParams, SafeVelocity};
 use mh_runtime::RuntimeScalar;
 use num_traits::Float;
-use num_traits::FromPrimitive;
 
 // ============================================================
 // 注意：泛型 Generic 后缀类型别名已删除
@@ -43,7 +42,7 @@ use num_traits::FromPrimitive;
 /// 实现此 trait 的类型应保证线程安全（Send + Sync）。
 pub trait StateAccess: Send + Sync {
     /// 标量类型（运行时决定，如 f32 或 f64）
-    type Scalar: RuntimeScalar + Float + std::fmt::Debug;
+    type Scalar: RuntimeScalar + std::fmt::Debug;
 
     /// 单元数量
     fn n_cells(&self) -> usize;
@@ -189,7 +188,7 @@ pub struct StateView<'a, S> {
 
 impl<'a, S> StateView<'a, S>
 where
-    S: RuntimeScalar + Float,
+    S: RuntimeScalar,
 {
     /// 创建状态视图
     pub fn new(h: &'a [S], hu: &'a [S], hv: &'a [S], z: &'a [S]) -> Self {
@@ -226,7 +225,7 @@ pub struct StateViewMut<'a, S> {
 
 impl<'a, S> StateViewMut<'a, S>
 where
-    S: RuntimeScalar + Float,
+    S: RuntimeScalar,
 {
     /// 创建可变状态视图
     pub fn new(
@@ -308,13 +307,12 @@ pub trait StateAccessExt: StateAccess {
         for &h in slice {
             sum = sum + h;
         }
-        let n = Self::Scalar::from_usize(slice.len()).unwrap_or(Self::Scalar::ONE);
+        let n = Self::Scalar::from_config(slice.len() as f64).unwrap_or(Self::Scalar::ONE);
         sum / n
     }
 
     /// 检查是否包含 NaN 或 Inf
     fn has_invalid_values(&self) -> bool {
-        use num_traits::Float;
         self.h_slice().iter().any(|&v| !v.is_finite())
             || self.hu_slice().iter().any(|&v| !v.is_finite())
             || self.hv_slice().iter().any(|&v| !v.is_finite())
@@ -322,7 +320,6 @@ pub trait StateAccessExt: StateAccess {
 
     /// 获取无效值的单元索引列表
     fn invalid_cell_indices(&self) -> Vec<usize> {
-        use num_traits::Float;
         let mut indices = Vec::new();
         for i in 0..self.n_cells() {
             if !self.h(i).is_finite() || !self.hu(i).is_finite() || !self.hv(i).is_finite() {
@@ -334,7 +331,6 @@ pub trait StateAccessExt: StateAccess {
 
     /// 计算最大速度（用于 CFL 约束）
     fn max_velocity_magnitude(&self, params: &NumericalParams<Self::Scalar>) -> Self::Scalar {
-        use num_traits::Float;
         let mut max_v = Self::Scalar::ZERO;
         for i in 0..self.n_cells() {
             if self.h(i) > params.h_dry {
@@ -427,7 +423,7 @@ mod tests {
         let view = StateView::new(&h, &hu, &hv, &z);
         
         assert_eq!(view.n_cells(), 3);
-        assert!((view.eta(1) - 3.0).abs() < 1e-10); // h=2.0 + z=1.0
+        assert!((view.eta(1) - 3.0_f64).abs() < 1e-10_f64); // h=2.0 + z=1.0
     }
 
     #[test]

@@ -651,11 +651,14 @@ pub fn required_substeps<B: Backend + Clone>(mesh: &PhysicsMesh, backend: &B, nu
 mod tests {
     use super::*;
     use crate::adapter::PhysicsMesh;
+    use mh_mesh::FrozenMesh;
     use mh_runtime::CpuBackend;
 
     fn create_test_mesh(n_cells: usize) -> PhysicsMesh {
-        // 创建简单测试网格
-        PhysicsMesh::empty(n_cells)
+        // 创建简单测试网格（显式后端）
+        let backend = CpuBackend::<f64>::new();
+        let frozen = FrozenMesh::empty_with_cells_backend(backend, n_cells);
+        PhysicsMesh::from_frozen(&frozen)
     }
 
     #[test]

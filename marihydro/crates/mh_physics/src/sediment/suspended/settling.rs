@@ -54,15 +54,17 @@ impl<S: RuntimeScalar> SettlingVelocity<S> {
     ) -> Self {
         // 根据无量纲粒径选择公式
         let d_star = props.dimensionless_diameter;
+        let one = S::from_config(1.0).unwrap_or(S::ONE);
+        let hundred = S::from_config(100.0).unwrap_or(S::MAX);
         
-        if d_star < 1.0 {
+        if d_star < one {
             // 细颗粒使用 Stokes
             let formula = StokesSettling::<S>::new();
             Self {
                 ws: formula.compute(backend, props, physics),
                 formula: formula.name(),
             }
-        } else if d_star < 100.0 {
+        } else if d_star < hundred {
             // 中等粒径使用 Van Rijn
             let formula = VanRijnSettling::<S>::new();
             Self {

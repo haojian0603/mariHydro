@@ -19,7 +19,7 @@
 
 #![allow(unsafe_code)]
 
-use crate::adapter::{CellIndex, PhysicsMesh};
+use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::solver::{BedSlopeCorrection, HydrostaticFaceState, HydrostaticReconstruction};
 use crate::prelude::*;
 use crate::schemes::riemann::{HllcSolver, RiemannFlux, RiemannSolver};
@@ -302,13 +302,13 @@ where
         let mut cell_to_faces: HashMap<usize, Vec<usize>> = HashMap::new();
 
         for face_idx in 0..n_faces {
-            let owner = mesh.face_owner(RuntimeFaceIndex(face_idx));
+            let owner = mesh.face_owner(FaceIndex::new(face_idx));
             cell_to_faces
                 .entry(owner.get())
                 .or_default()
                 .push(face_idx);
 
-            if let Some(neigh) = mesh.face_neighbor(RuntimeFaceIndex(face_idx)) {
+            if let Some(neigh) = mesh.face_neighbor(FaceIndex::new(face_idx)) {
                 cell_to_faces.entry(neigh.get()).or_default().push(face_idx);
             }
         }
@@ -465,7 +465,7 @@ where
 
         for face_idx in 0..n_faces {
             let (flux, bed_src, length, owner, neighbor) =
-                self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+                self.compute_face(state, mesh, FaceIndex::new(face_idx));
 
             if flux.max_wave_speed > max_wave_speed {
                 max_wave_speed = flux.max_wave_speed;
@@ -521,7 +521,7 @@ where
             .into_par_iter()
             .for_each(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) =
-                    self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+                    self.compute_face(state, mesh, FaceIndex::new(face_idx));
 
                 max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
@@ -610,7 +610,7 @@ where
             for faces_in_color in color_faces {
                 faces_in_color.par_iter().for_each(|&face_idx| {
                     let (flux, bed_src, length, owner, neighbor) =
-                        self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+                        self.compute_face(state, mesh, FaceIndex::new(face_idx));
 
                     max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
@@ -680,7 +680,7 @@ where
         for faces_in_color in color_faces {
             faces_in_color.par_iter().for_each(|&face_idx| {
                 let (flux, bed_src, length, owner, neighbor) =
-                    self.compute_face(state, mesh, RuntimeFaceIndex(face_idx));
+                    self.compute_face(state, mesh, FaceIndex::new(face_idx));
 
                 max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
 
@@ -722,7 +722,7 @@ where
         &self,
         state: &ShallowWaterState<B>,
         mesh: &PhysicsMesh,
-        face_idx: RuntimeFaceIndex,
+        face_idx: FaceIndex,
     ) -> (
         RiemannFlux<B::Scalar>,
         BedSlopeCorrection<B>,
@@ -732,12 +732,17 @@ where
     ) {
         let normal = mesh.face_normal_generic::<B>(face_idx)
             .expect("边界面法向量转换失败：坐标超出Backend标量范围");
-        let length_f64 = mesh.face_length(face_idx);
-        let length = self._backend.scalar_from_f64(length_f64);
+        let length = mesh
+            .face_length_scalar(face_idx, &self._backend)
+            .expect("面长度转换失败：索引越界或标量范围错误");
         let owner = mesh.face_owner(face_idx);
         let neighbor = mesh.face_neighbor(face_idx);
-        let z_l_face = self._backend.scalar_from_f64(mesh.face_z_left(face_idx));
-        let z_r_face = self._backend.scalar_from_f64(mesh.face_z_right(face_idx));
+        let z_l_face = mesh
+            .face_z_left_scalar(face_idx, &self._backend)
+            .expect("面左侧高程转换失败：索引越界或标量范围错误");
+        let z_r_face = mesh
+            .face_z_right_scalar(face_idx, &self._backend)
+            .expect("面右侧高程转换失败：索引越界或标量范围错误");
 
         let owner_idx = owner.get();
         let h_l = state.h[owner_idx];

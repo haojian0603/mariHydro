@@ -554,7 +554,8 @@ mod tests {
     use mh_runtime::CpuBackend;
 
     fn create_test_mesh() -> FrozenMesh<CpuBackend<f64>> {
-        let mut mesh = FrozenMesh::empty_with_cells(1);
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMesh::empty_with_cells_backend(backend, 1);
 
         mesh.n_nodes = 3;
         mesh.node_coords = vec![

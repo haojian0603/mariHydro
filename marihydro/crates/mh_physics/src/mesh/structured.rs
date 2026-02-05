@@ -10,8 +10,6 @@
 
 use crate::core::Backend;
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
-use num_traits::FromPrimitive;
-use num_traits::{Float, ToPrimitive};
 use super::topology::{MeshKind, MeshTopology, MeshValidationError};
 
 /// 结构化网格
@@ -48,7 +46,7 @@ pub struct StructuredMesh<B: Backend> {
 impl<B> StructuredMesh<B>
 where
     B: Backend + Clone,
-    B::Scalar: num_traits::Float + num_traits::FromPrimitive + num_traits::Zero + num_traits::One,
+    B::Scalar: RuntimeScalar,
 {
     /// 使用 Backend 创建结构化网格
     ///
@@ -73,8 +71,8 @@ where
         backend: &B,
         nx: usize,
         ny: usize,
-        dx: B::Scalar,
-        dy: B::Scalar,
+        dx: f64,
+        dy: f64,
     ) -> Result<Self, MeshValidationError> {
         if nx == 0 || ny == 0 {
             return Err(MeshValidationError::InvalidCounts {
@@ -84,19 +82,22 @@ where
             });
         }
 
-        if !dx.is_finite() || dx <= B::Scalar::ZERO {
+        if !dx.is_finite() || dx <= 0.0 {
             return Err(MeshValidationError::InvalidSpacing {
                 axis: "dx",
-                value: dx.to_f64().unwrap_or(f64::NAN),
+                value: dx,
             });
         }
 
-        if !dy.is_finite() || dy <= B::Scalar::ZERO {
+        if !dy.is_finite() || dy <= 0.0 {
             return Err(MeshValidationError::InvalidSpacing {
                 axis: "dy",
-                value: dy.to_f64().unwrap_or(f64::NAN),
+                value: dy,
             });
         }
+
+        let dx = backend.scalar_from_f64(dx);
+        let dy = backend.scalar_from_f64(dy);
 
         let n_cells = nx * ny;
         let n_faces = Self::compute_n_faces(nx, ny);
@@ -284,9 +285,9 @@ where
     
     fn cell_center(&self, cell: usize) -> [B::Scalar; 2] {
         let (i, j) = self.cell_ij(cell);
-        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE);
-        let x = self.dx * B::Scalar::from_usize(i).unwrap_or(B::Scalar::ZERO) + self.dx * half;
-        let y = self.dy * B::Scalar::from_usize(j).unwrap_or(B::Scalar::ZERO) + self.dy * half;
+        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
+        let x = self.dx * B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + self.dx * half;
+        let y = self.dy * B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + self.dy * half;
         [x, y]
     }
     
@@ -325,40 +326,40 @@ where
         let n_h_interior = (self.nx - 1) * self.ny;
         let n_v_interior = self.nx * (self.ny - 1);
         let boundary_start = n_h_interior + n_v_interior;
-        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::HALF);
 
         if _face < n_h_interior {
             let i = _face % (self.nx - 1);
             let j = _face / (self.nx - 1);
-            let x = self.dx * B::Scalar::from_usize(i + 1).unwrap_or(B::Scalar::ZERO);
-            let y = self.dy * (B::Scalar::from_usize(j).unwrap_or(B::Scalar::ZERO) + half);
+            let x = self.dx * B::Scalar::from_config((i + 1) as f64).unwrap_or(B::Scalar::ZERO);
+            let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
             [x, y]
         } else if _face < boundary_start {
             let local = _face - n_h_interior;
             let i = local % self.nx;
             let j = local / self.nx;
-            let x = self.dx * (B::Scalar::from_usize(i).unwrap_or(B::Scalar::ZERO) + half);
-            let y = self.dy * B::Scalar::from_usize(j + 1).unwrap_or(B::Scalar::ZERO);
+            let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
+            let y = self.dy * B::Scalar::from_config((j + 1) as f64).unwrap_or(B::Scalar::ZERO);
             [x, y]
         } else {
             let boundary_idx = _face - boundary_start;
             if boundary_idx < self.nx {
                 let i = boundary_idx;
-                let x = self.dx * (B::Scalar::from_usize(i).unwrap_or(B::Scalar::ZERO) + half);
+                let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
                 [x, B::Scalar::ZERO]
             } else if boundary_idx < 2 * self.nx {
                 let i = boundary_idx - self.nx;
-                let x = self.dx * (B::Scalar::from_usize(i).unwrap_or(B::Scalar::ZERO) + half);
-                let y = self.dy * B::Scalar::from_usize(self.ny).unwrap_or(B::Scalar::ZERO);
+                let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
+                let y = self.dy * B::Scalar::from_config(self.ny as f64).unwrap_or(B::Scalar::ZERO);
                 [x, y]
             } else if boundary_idx < 2 * self.nx + self.ny {
                 let j = boundary_idx - 2 * self.nx;
-                let y = self.dy * (B::Scalar::from_usize(j).unwrap_or(B::Scalar::ZERO) + half);
+                let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
                 [B::Scalar::ZERO, y]
             } else {
                 let j = boundary_idx - 2 * self.nx - self.ny;
-                let x = self.dx * B::Scalar::from_usize(self.nx).unwrap_or(B::Scalar::ZERO);
-                let y = self.dy * (B::Scalar::from_usize(j).unwrap_or(B::Scalar::ZERO) + half);
+                let x = self.dx * B::Scalar::from_config(self.nx as f64).unwrap_or(B::Scalar::ZERO);
+                let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
                 [x, y]
             }
         }

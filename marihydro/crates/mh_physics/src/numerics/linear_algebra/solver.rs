@@ -24,7 +24,7 @@
 //! b.copy_from_slice(&[1.0, 2.0, 3.0]);
 //! let mut x = backend.alloc_init(3, 0.0);
 //!
-//! let precond = JacobiPreconditioner::from_matrix(&backend, &matrix).unwrap();
+//! let precond = JacobiPreconditioner::from_matrix(backend.clone(), &matrix).unwrap();
 //! let config = SolverConfig::new(1e-8, 100);
 //! let mut solver = PcgSolver::new(backend.clone(), config);
 //!
@@ -340,10 +340,10 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = self.backend.scalar_from_f64(self.config.rtol);
-        let atol = self.backend.scalar_from_f64(self.config.atol);
-        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
-        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
+        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
+        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
+        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
         spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
@@ -526,10 +526,10 @@ impl<B: Backend> PcgSolver<B> {
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         ws.resize(&self.backend, n);
-        let rtol = self.backend.scalar_from_f64(self.config.rtol);
-        let atol = self.backend.scalar_from_f64(self.config.atol);
-        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
-        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
+        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
+        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
+        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
         spmv_kernel(matrix, x.as_slice(), ws.r.as_slice_mut());
@@ -686,10 +686,10 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = self.backend.scalar_from_f64(self.config.rtol);
-        let atol = self.backend.scalar_from_f64(self.config.atol);
-        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
-        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
+        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
+        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
+        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
         spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
@@ -908,11 +908,11 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = self.backend.scalar_from_f64(self.config.rtol);
-        let atol = self.backend.scalar_from_f64(self.config.atol);
-        let breakdown_tol = self.backend.scalar_from_f64(1e-30);
-        let stag_tol = self.backend.scalar_from_f64(self.config.stagnation_tol);
-        let div_factor = self.backend.scalar_from_f64(1e6);
+        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
+        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
+        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
+        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
+        let div_factor = B::Scalar::from_config(1e6).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
         spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
@@ -1241,7 +1241,7 @@ mod tests {
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
+        assert!(result.relative_residual < 1e-8);
     }
 
     #[test]
@@ -1259,7 +1259,7 @@ mod tests {
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
+        assert!(result.relative_residual < 1e-8);
     }
 
     #[test]
@@ -1303,7 +1303,7 @@ mod tests {
         let result = solver.solve(&matrix, &b, &mut x, &precond);
 
         assert!(result.is_converged());
-        assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
+        assert!(result.relative_residual < 1e-8);
     }
 
     #[test]

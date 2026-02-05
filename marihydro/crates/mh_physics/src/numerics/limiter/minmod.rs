@@ -31,16 +31,24 @@
 //! - 干湿交界处
 //! - 需要无条件稳定的情况
 
-use mh_runtime::Backend;
+use mh_runtime::{Backend, RuntimeScalar};
 use super::traits::{LimiterContext, SlopeLimiter};
 
 /// 泛型 Minmod 限制器
 ///
 /// 最耗散的限制器，提供最大稳定性。
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Minmod<B: Backend> {
     /// 判断值为零的容差
     eps: B::Scalar,
+}
+
+impl<B: Backend> std::fmt::Debug for Minmod<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Minmod")
+            .field("eps", &self.eps)
+            .finish()
+    }
 }
 
 impl<B: Backend> Default for Minmod<B> {

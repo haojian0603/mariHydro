@@ -11,8 +11,7 @@
 use crate::adapter::PhysicsMesh;
 use crate::state::ShallowWaterState;
 use crate::types::NumericalParams;
-use mh_runtime::{Backend, CellIndex, RuntimeScalar};
-use num_traits::{Float, FromPrimitive, ToPrimitive};
+use mh_runtime::prelude::*;
 use rayon::prelude::*;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,7 +33,7 @@ where
 
 impl<B: Backend> CflCalculator<B>
 where
-    B::Scalar: RuntimeScalar + FromPrimitive + ToPrimitive,
+    B::Scalar: RuntimeScalar,
     B::Buffer<B::Scalar>: Send + Sync,
 {
     pub fn new(g: B::Scalar, params: &NumericalParams<B::Scalar>) -> Self {
@@ -97,7 +96,7 @@ where
         }
 
         let min_length = self.cached_dx_min.unwrap_or_else(|| {
-            B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE)
+            B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE)
         });
         if !min_length.is_finite() || min_length <= B::Scalar::ZERO {
             return self.dt_min;
@@ -144,14 +143,14 @@ where
             }
         });
 
-        B::Scalar::from_f64(f64::from_bits(max_speed.load(Ordering::Relaxed)))
+        B::Scalar::from_config(f64::from_bits(max_speed.load(Ordering::Relaxed)))
             .unwrap_or(B::Scalar::ZERO)
     }
 
     fn compute_min_char_length(&self, mesh: &PhysicsMesh) -> B::Scalar {
         let n = mesh.cell_count();
         if n == 0 {
-            return B::Scalar::from_f64(f64::MAX).unwrap_or(B::Scalar::MAX);
+            return B::Scalar::from_config(f64::MAX).unwrap_or(B::Scalar::MAX);
         }
 
         let min_dx = AtomicU64::new(f64::MAX.to_bits());
@@ -172,15 +171,15 @@ where
         });
 
         if !found.load(Ordering::Relaxed) {
-            return B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE);
+            return B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE);
         }
 
         let min_val = f64::from_bits(min_dx.load(Ordering::Relaxed));
         if !min_val.is_finite() || min_val <= 0.0 {
-            return B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE);
+            return B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE);
         }
 
-        B::Scalar::from_f64(min_val).unwrap_or(B::Scalar::ONE)
+        B::Scalar::from_config(min_val).unwrap_or(B::Scalar::ONE)
     }
 }
 
@@ -203,16 +202,16 @@ where
 
 impl<B: Backend> TimeStepController<B>
 where
-    B::Scalar: RuntimeScalar + FromPrimitive + ToPrimitive,
+    B::Scalar: RuntimeScalar,
     B::Buffer<B::Scalar>: Send + Sync,
 {
     pub fn new(g: B::Scalar, params: &NumericalParams<B::Scalar>) -> Self {
         Self {
             calculator: CflCalculator::new(g, params),
             current_dt: params.dt_max,
-            growth_factor: B::Scalar::from_f64(1.1).unwrap_or(B::Scalar::ONE),
-            shrink_factor: B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE),
-            max_growth_factor: B::Scalar::from_f64(1.5).unwrap_or(B::Scalar::ONE),
+            growth_factor: B::Scalar::from_config(1.1).unwrap_or(B::Scalar::ONE),
+            shrink_factor: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
+            max_growth_factor: B::Scalar::from_config(1.5).unwrap_or(B::Scalar::ONE),
             stable_steps: 0,
             stable_growth_threshold: 10,
             adaptive_growth: true,
@@ -252,7 +251,7 @@ where
             new_dt = self.calculator.dt_min;
         }
 
-        let threshold = B::Scalar::from_f64(0.95).unwrap_or(B::Scalar::ONE);
+        let threshold = B::Scalar::from_config(0.95).unwrap_or(B::Scalar::ONE);
         if new_dt >= self.current_dt * threshold {
             self.stable_steps += 1;
         } else {
@@ -282,7 +281,7 @@ where
             new_dt = self.calculator.dt_min;
         }
 
-        let threshold = B::Scalar::from_f64(0.95).unwrap_or(B::Scalar::ONE);
+        let threshold = B::Scalar::from_config(0.95).unwrap_or(B::Scalar::ONE);
         if new_dt >= self.current_dt * threshold {
             self.stable_steps += 1;
         } else {
@@ -300,7 +299,7 @@ where
             self.growth_factor
         } else {
             let one = B::Scalar::ONE;
-            let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ZERO);
+            let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ZERO);
             one + (self.growth_factor - one) * half
         }
     }
@@ -364,20 +363,20 @@ where
     }
 
     pub fn adapt_from_iterations(&mut self, iterations: usize, target_iterations: usize) -> B::Scalar {
-        let ratio = B::Scalar::from_usize(iterations).unwrap_or(B::Scalar::ZERO)
-            / B::Scalar::from_usize(target_iterations.max(1)).unwrap_or(B::Scalar::ONE);
+        let ratio = B::Scalar::from_config(iterations as f64).unwrap_or(B::Scalar::ZERO)
+            / B::Scalar::from_config(target_iterations.max(1) as f64).unwrap_or(B::Scalar::ONE);
 
         let one = B::Scalar::ONE;
-        let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE);
+        let two = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE);
 
         if ratio < one / two {
-            let growth = (one + (one - ratio * two) * B::Scalar::from_f64(0.2).unwrap_or(B::Scalar::ZERO))
+            let growth = (one + (one - ratio * two) * B::Scalar::from_config(0.2).unwrap_or(B::Scalar::ZERO))
                 .min(self.max_growth_factor);
             self.current_dt = self.current_dt * growth;
             self.stable_steps += 1;
         } else if ratio > one + one / two {
-            let shrink = (one - (ratio - one - one / two) * B::Scalar::from_f64(0.3).unwrap_or(B::Scalar::ZERO))
-                .max(B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ZERO));
+            let shrink = (one - (ratio - one - one / two) * B::Scalar::from_config(0.3).unwrap_or(B::Scalar::ZERO))
+                .max(B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ZERO));
             self.current_dt = self.current_dt * shrink;
             self.stable_steps = 0;
         } else if ratio > one {
@@ -399,7 +398,7 @@ where
             }
         }
 
-        let threshold = B::Scalar::from_f64(0.9).unwrap_or(B::Scalar::ONE);
+        let threshold = B::Scalar::from_config(0.9).unwrap_or(B::Scalar::ONE);
         if min_dt < self.current_dt * threshold {
             self.stable_steps = 0;
         }
@@ -411,19 +410,19 @@ where
     }
 
     pub fn coriolis_stability_limit(&self, f: B::Scalar) -> Option<B::Scalar> {
-        if f.abs() < B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
+        if f.abs() < B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
             None
         } else {
-            let pi = B::Scalar::from_f64(std::f64::consts::PI).unwrap_or(B::Scalar::ONE);
+            let pi = B::Scalar::from_config(std::f64::consts::PI).unwrap_or(B::Scalar::ONE);
             Some(pi / f.abs())
         }
     }
 
     pub fn friction_stability_limit(&self, max_cf: B::Scalar) -> Option<B::Scalar> {
-        if max_cf < B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
+        if max_cf < B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
             None
         } else {
-            Some(B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE) / max_cf)
+            Some(B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE) / max_cf)
         }
     }
 
@@ -476,16 +475,16 @@ pub struct TimeStepControllerBuilder<B: Backend> {
 
 impl<B: Backend> TimeStepControllerBuilder<B>
 where
-    B::Scalar: RuntimeScalar + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     pub fn new(g: B::Scalar) -> Self {
         Self {
             g,
-            cfl: B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE),
-            dt_min: B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO),
-            dt_max: B::Scalar::from_f64(1.0).unwrap_or(B::Scalar::ONE),
-            growth_factor: B::Scalar::from_f64(1.1).unwrap_or(B::Scalar::ONE),
-            shrink_factor: B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::ONE),
+            cfl: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
+            dt_min: B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::ZERO),
+            dt_max: B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE),
+            growth_factor: B::Scalar::from_config(1.1).unwrap_or(B::Scalar::ONE),
+            shrink_factor: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
             adaptive_growth: true,
             marker: PhantomData,
         }

@@ -33,7 +33,7 @@ use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::core::Backend;
 use crate::state::ShallowWaterState;
 use mh_runtime::{DeviceBuffer, RuntimeScalar, Vector2D};
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
 /// 河床演变配置
@@ -149,7 +149,7 @@ pub struct MorphodynamicsSolver<B: Backend> {
 impl<B> MorphodynamicsSolver<B>
 where
     B: Backend + Clone,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建新的河床演变求解器
     ///
@@ -165,14 +165,6 @@ where
             stats: MorphologyStats::default(),
             backend,
         }
-    }
-
-    /// 便捷构造（使用默认后端）
-    pub fn new(n_cells: usize, config: MorphologyConfig) -> Self
-    where
-        B: Default,
-    {
-        Self::new_with_backend(B::default(), n_cells, config)
     }
 
     /// 获取配置引用
@@ -270,7 +262,7 @@ where
             for i in 0..state.n_cells() {
                 // Picard: z^{n+1} = z^n - dt * div(q^{k})
                 let mut dz = -self.flux_divergence[i] * dt * factor;
-                dz = dz.clamp(-max_dz, max_dz);
+                dz = dz.max(-max_dz).min(max_dz);
 
                 let z_new = z_old[i] + dz;
 
@@ -425,7 +417,7 @@ where
             let mut dz = self.dz_dt[i] * dt;
 
             // 限制变化率
-            dz = dz.clamp(-max_dz, max_dz);
+            dz = dz.max(-max_dz).min(max_dz);
 
             let eps = self.backend.scalar_from_f64(1e-14);
             if dz.abs() < eps {

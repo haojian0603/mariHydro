@@ -21,8 +21,7 @@
 use crate::adapter::PhysicsMesh;
 use crate::core::Backend;
 use super::topology::{MeshKind, MeshTopology, MeshValidationError};
-use mh_runtime::{CellIndex, FaceIndex, RuntimeScalar, Vector2D};
-use num_traits::FromPrimitive;
+use mh_runtime::prelude::{CellIndex, FaceIndex, RuntimeScalar, Vector2D};
 use std::sync::Arc;
 
 /// 非结构化网格适配器
@@ -73,8 +72,7 @@ where
             if !area.is_finite() || area <= 0.0 {
                 return Err(MeshValidationError::InvalidCellArea { cell: i, area });
             }
-            let scalar = B::Scalar::from_f64(area)
-                .ok_or(MeshValidationError::InvalidCellArea { cell: i, area })?;
+            let scalar = backend.scalar_from_f64(area);
             cell_areas_vec.push(scalar);
         }
         let cell_areas = {
@@ -90,8 +88,7 @@ where
             if !length.is_finite() || length <= 0.0 {
                 return Err(MeshValidationError::InvalidFaceLength { face: i, length });
             }
-            let scalar = B::Scalar::from_f64(length)
-                .ok_or(MeshValidationError::InvalidFaceLength { face: i, length })?;
+            let scalar = backend.scalar_from_f64(length);
             face_lengths_vec.push(scalar);
         }
         let face_lengths = {

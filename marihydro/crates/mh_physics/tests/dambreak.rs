@@ -12,7 +12,7 @@ use mh_physics::sources::NoSource;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_physics::types::NumericalParams;
-use mh_runtime::{CpuBackend, CellIndex, Vector2D};
+use mh_runtime::prelude::*;
 
 /// 全局Backend实例
 static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());

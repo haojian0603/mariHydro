@@ -30,7 +30,8 @@
 //! Barth, T.J. and Jespersen, D.C. (1989). "The design and application 
 //! of upwind schemes on unstructured meshes". AIAA Paper 89-0366.
 
-use mh_runtime::Backend;
+use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::Float;
 use std::marker::PhantomData;
 
 use super::traits::{LimiterContext, SlopeLimiter};
@@ -42,13 +43,22 @@ use super::traits::{LimiterContext, SlopeLimiter};
 /// Barth-Jespersen 限制器
 ///
 /// 严格 TVD 限制器，确保重构值不超过相邻单元的极值。
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct BarthJespersen<B: Backend> {
     /// 判断梯度为零的容差
     eps: B::Scalar,
     /// 干单元水深阈值（可选）
     h_dry: Option<B::Scalar>,
     _marker: PhantomData<B>,
+}
+
+impl<B: Backend> std::fmt::Debug for BarthJespersen<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BarthJespersen")
+            .field("eps", &self.eps)
+            .field("h_dry", &self.h_dry)
+            .finish()
+    }
 }
 
 impl<B: Backend> Default for BarthJespersen<B> {
@@ -101,7 +111,7 @@ impl<B: Backend> BarthJespersen<B> {
         if let Some(h_dry) = self.h_dry {
             if depth < h_dry {
                 // 干单元：更激进地限制梯度
-                let ratio = (depth / h_dry).clamp_value(B::Scalar::ZERO, B::Scalar::ONE);
+                let ratio = (depth / h_dry).max(B::Scalar::ZERO).min(B::Scalar::ONE);
                 return alpha * ratio;
             }
         }

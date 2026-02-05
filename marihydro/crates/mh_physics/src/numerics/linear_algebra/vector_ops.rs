@@ -166,15 +166,7 @@ pub fn norm2<B: Backend>(backend: &B, x: &B::Buffer<B::Scalar>) -> B::Scalar {
 /// 无穷范数（最大绝对值）
 #[inline]
 pub fn norm_inf<B: Backend>(_backend: &B, x: &B::Buffer<B::Scalar>) -> B::Scalar {
-    let slice = x.as_slice();
-    let mut max_val = B::Scalar::ZERO;
-    for &v in slice {
-        let abs_v = v.abs();
-        if abs_v > max_val {
-            max_val = abs_v;
-        }
-    }
-    max_val
+    _backend.norm_inf(x)
 }
 
 /// AXPY: y = α*x + y（返回 Result）
@@ -233,16 +225,13 @@ pub fn axpy_unchecked<B: Backend>(
 /// 维度不匹配立即 panic
 #[inline(always)]
 pub fn xpay<B: Backend>(
+    backend: &B,
     x: &B::Buffer<B::Scalar>,
     alpha: B::Scalar,
     y: &mut B::Buffer<B::Scalar>,
 ) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice_mut();
-    for (yi, &xi) in y_slice.iter_mut().zip(x_slice.iter()) {
-        *yi = xi + alpha * *yi;
-    }
+    backend.xpay(x, alpha, y);
 }
 
 /// 缩放: x = α*x
@@ -293,14 +282,12 @@ pub fn axpy_inplace<B: Backend>(
 /// - `bound`: 最大复制长度
 #[inline]
 pub fn copy_bounded<B: Backend>(
+    backend: &B,
     src: &B::Buffer<B::Scalar>,
     dst: &mut B::Buffer<B::Scalar>,
     bound: usize,
 ) {
-    let n = src.len().min(dst.len()).min(bound);
-    let src_slice = src.as_slice();
-    let dst_slice = dst.as_slice_mut();
-    dst_slice[..n].copy_from_slice(&src_slice[..n]);
+    backend.copy_bounded(src, dst, bound);
 }
 
 /// 填充: x[:] = α
@@ -328,6 +315,7 @@ pub fn fill<B: Backend>(alpha: B::Scalar, x: &mut B::Buffer<B::Scalar>) {
 /// 所有向量维度必须匹配，否则 panic
 #[inline(always)]
 pub fn linear_combination<B: Backend>(
+    backend: &B,
     alpha: B::Scalar,
     x: &B::Buffer<B::Scalar>,
     beta: B::Scalar,
@@ -336,12 +324,7 @@ pub fn linear_combination<B: Backend>(
 ) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice();
-    let z_slice = z.as_slice_mut();
-    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
-        *zi = alpha * xi + beta * yi;
-    }
+    backend.linear_combination(alpha, x, beta, y, z);
 }
 
 /// 向量差: z = x - y
@@ -354,15 +337,15 @@ pub fn linear_combination<B: Backend>(
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn sub<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
+pub fn sub<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice();
-    let z_slice = z.as_slice_mut();
-    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
-        *zi = xi - yi;
-    }
+    backend.sub(x, y, z);
 }
 
 /// 向量和: z = x + y
@@ -375,15 +358,15 @@ pub fn sub<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &m
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn add<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
+pub fn add<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice();
-    let z_slice = z.as_slice_mut();
-    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
-        *zi = xi + yi;
-    }
+    backend.add(x, y, z);
 }
 
 /// 逐元素乘法: z = x .* y
@@ -396,15 +379,15 @@ pub fn add<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &m
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn hadamard<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
+pub fn hadamard<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice();
-    let z_slice = z.as_slice_mut();
-    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
-        *zi = xi * yi;
-    }
+    backend.hadamard(x, y, z);
 }
 
 /// 逐元素除法: z = x ./ y
@@ -415,15 +398,15 @@ pub fn hadamard<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, 
 /// # 错误处理
 /// 维度不匹配立即 panic
 #[inline(always)]
-pub fn hadamard_div<B: Backend>(x: &B::Buffer<B::Scalar>, y: &B::Buffer<B::Scalar>, z: &mut B::Buffer<B::Scalar>) {
+pub fn hadamard_div<B: Backend>(
+    backend: &B,
+    x: &B::Buffer<B::Scalar>,
+    y: &B::Buffer<B::Scalar>,
+    z: &mut B::Buffer<B::Scalar>,
+) {
     assert_eq!(x.len(), y.len(), "向量化操作时维度不匹配");
     assert_eq!(x.len(), z.len(), "向量化操作时维度不匹配");
-    let x_slice = x.as_slice();
-    let y_slice = y.as_slice();
-    let z_slice = z.as_slice_mut();
-    for ((zi, &xi), &yi) in z_slice.iter_mut().zip(x_slice.iter()).zip(y_slice.iter()) {
-        *zi = if yi.abs() > B::Scalar::EPSILON { xi / yi } else { B::Scalar::ZERO };
-    }
+    backend.hadamard_div(x, y, z);
 }
 
 /// 计算残差范数的相对误差
@@ -524,6 +507,8 @@ mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
 
+    type Scalar = f64;
+
     #[test]
     fn test_dot() {
         let backend = CpuBackend::<f64>::new();
@@ -591,7 +576,7 @@ mod tests {
         let mut dst = backend.alloc(3);
         src.copy_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]);
         dst.fill(0.0);
-        copy_bounded(&src, &mut dst, 3);
+        copy_bounded(&backend, &src, &mut dst, 3);
         assert_eq!(dst.as_slice(), &[1.0, 2.0, 3.0]);
     }
 
@@ -602,7 +587,7 @@ mod tests {
         let mut y = backend.alloc(3);
         x.copy_from_slice(&[1.0, 2.0, 3.0]);
         y.copy_from_slice(&[4.0, 5.0, 6.0]);
-        xpay(&x, 2.0, &mut y);
+        xpay(&backend, &x, 2.0, &mut y);
         // y = x + 2*y = [1+8, 2+10, 3+12] = [9, 12, 15]
         assert!((y[0] - 9.0).abs() < 1e-14);
         assert!((y[1] - 12.0).abs() < 1e-14);
@@ -636,8 +621,8 @@ mod tests {
         let backend = CpuBackend::<Scalar>::new();
         let mut x = backend.alloc(3);
         x.copy_from_slice(&[1.0, 2.0, 3.0]);
-        fill(7.0, &mut x);
-        assert!(x.as_slice().iter().all(|&v| (v - 7.0).abs() < 1e-14));
+        fill::<CpuBackend<Scalar>>(7.0, &mut x);
+        assert!(x.as_slice().iter().all(|&v| (v - 7.0_f64).abs() < 1e-14_f64));
     }
 
     #[test]
@@ -649,7 +634,7 @@ mod tests {
         x.copy_from_slice(&[1.0, 2.0]);
         y.copy_from_slice(&[3.0, 4.0]);
         z.fill(0.0);
-        linear_combination(2.0, &x, 3.0, &y, &mut z);
+        linear_combination(&backend, 2.0, &x, 3.0, &y, &mut z);
         // z = 2*[1,2] + 3*[3,4] = [2,4] + [9,12] = [11, 16]
         assert!((z[0] - 11.0).abs() < 1e-14);
         assert!((z[1] - 16.0).abs() < 1e-14);
@@ -665,11 +650,11 @@ mod tests {
         y.copy_from_slice(&[2.0, 3.0]);
         z.fill(0.0);
 
-        sub(&x, &y, &mut z);
+        sub(&backend, &x, &y, &mut z);
         assert!((z[0] - 3.0).abs() < 1e-14);
         assert!((z[1] - 3.0).abs() < 1e-14);
 
-        add(&x, &y, &mut z);
+        add(&backend, &x, &y, &mut z);
         assert!((z[0] - 7.0).abs() < 1e-14);
         assert!((z[1] - 9.0).abs() < 1e-14);
     }
@@ -683,7 +668,7 @@ mod tests {
         x.copy_from_slice(&[2.0, 3.0]);
         y.copy_from_slice(&[4.0, 5.0]);
         z.fill(0.0);
-        hadamard(&x, &y, &mut z);
+        hadamard(&backend, &x, &y, &mut z);
         assert!((z[0] - 8.0).abs() < 1e-14);
         assert!((z[1] - 15.0).abs() < 1e-14);
     }
@@ -697,7 +682,7 @@ mod tests {
         x.copy_from_slice(&[8.0, 15.0, 1.0]);
         y.copy_from_slice(&[2.0, 3.0, 0.0]);
         z.fill(0.0);
-        hadamard_div(&x, &y, &mut z);
+        hadamard_div(&backend, &x, &y, &mut z);
         assert!((z[0] - 4.0).abs() < 1e-14);
         assert!((z[1] - 5.0).abs() < 1e-14);
         assert!(z[2].abs() < 1e-14); // 除零保护

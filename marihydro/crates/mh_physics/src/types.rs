@@ -26,8 +26,6 @@
 //! // fn app_level<S: RuntimeScalar>(config: Config) { ... }
 //! ```
 
-use num_traits::FromPrimitive;
-
 // 从 mh_runtime 重新导出索引类型（公开）
 pub use mh_runtime::{
     BoundaryIndex, CellIndex, EdgeIndex, FaceIndex, HalfEdgeIndex, LayerIndex, NodeIndex,
@@ -232,7 +230,7 @@ impl<S: RuntimeScalar> SafeVelocity<S> {
     pub fn clamp_speed(self, max_speed: S) -> Self {
         let speed = self.speed();
         // 使用类型安全的阈值：EPSILON * 1000 提供足够的安全边际
-        let threshold = S::EPSILON * S::from_f64(1000.0).unwrap();
+        let threshold = S::EPSILON * S::from_config(1000.0).unwrap_or(S::ONE);
         if speed > max_speed && speed > threshold {
             let factor = max_speed / speed;
             Self {
@@ -253,7 +251,7 @@ impl<S: RuntimeScalar> SafeVelocity<S> {
     /// 动能（单位质量）
     #[inline]
     pub fn kinetic_energy_per_mass(&self) -> S {
-        S::from_f64(0.5).unwrap() * self.speed_squared()
+        S::from_config(0.5).unwrap_or(S::HALF) * self.speed_squared()
     }
 }
 
@@ -366,30 +364,30 @@ where
 
 impl<S> Default for NumericalParams<S>
 where
-    S: RuntimeScalar + PartialOrd + FromPrimitive,
+    S: RuntimeScalar + PartialOrd,
 {
     /// 使用标准物理默认值初始化
     fn default() -> Self {
         Self {
-            h_min: S::from_f64(1e-9).unwrap(),
-            h_dry: S::from_f64(1e-6).unwrap(),
-            h_friction: S::from_f64(1e-4).unwrap(),
-            h_wet: S::from_f64(1e-3).unwrap(),
-            flux_eps: S::from_f64(1e-14).unwrap(),
-            entropy_ratio: S::from_f64(0.1).unwrap(),
-            min_wave_speed: S::from_f64(1e-6).unwrap(),
-            det_min: S::from_f64(1e-14).unwrap(),
-            limiter_k: S::from_f64(5.0).unwrap(),
-            vel_min: S::from_f64(1e-8).unwrap(),
-            vel_max: S::from_f64(100.0).unwrap(),
-            nu_min: S::from_f64(1e-6).unwrap(),
-            nu_max: S::from_f64(1e3).unwrap(),
-            cfl: S::from_f64(0.5).unwrap(),
-            dt_min: S::from_f64(1e-8).unwrap(),
-            dt_max: S::from_f64(3600.0).unwrap(),
-            eta_tolerance: S::from_f64(1e-6).unwrap(),
-            flux_tolerance: S::from_f64(1e-10).unwrap(),
-            conservation_tolerance: S::from_f64(1e-8).unwrap(),
+            h_min: S::from_config(1e-9).unwrap_or(S::ZERO),
+            h_dry: S::from_config(1e-6).unwrap_or(S::ZERO),
+            h_friction: S::from_config(1e-4).unwrap_or(S::ZERO),
+            h_wet: S::from_config(1e-3).unwrap_or(S::ZERO),
+            flux_eps: S::from_config(1e-14).unwrap_or(S::ZERO),
+            entropy_ratio: S::from_config(0.1).unwrap_or(S::ZERO),
+            min_wave_speed: S::from_config(1e-6).unwrap_or(S::ZERO),
+            det_min: S::from_config(1e-14).unwrap_or(S::ZERO),
+            limiter_k: S::from_config(5.0).unwrap_or(S::ZERO),
+            vel_min: S::from_config(1e-8).unwrap_or(S::ZERO),
+            vel_max: S::from_config(100.0).unwrap_or(S::ZERO),
+            nu_min: S::from_config(1e-6).unwrap_or(S::ZERO),
+            nu_max: S::from_config(1e3).unwrap_or(S::ZERO),
+            cfl: S::from_config(0.5).unwrap_or(S::ZERO),
+            dt_min: S::from_config(1e-8).unwrap_or(S::ZERO),
+            dt_max: S::from_config(3600.0).unwrap_or(S::ZERO),
+            eta_tolerance: S::from_config(1e-6).unwrap_or(S::ZERO),
+            flux_tolerance: S::from_config(1e-10).unwrap_or(S::ZERO),
+            conservation_tolerance: S::from_config(1e-8).unwrap_or(S::ZERO),
         }
     }
 }
@@ -403,7 +401,7 @@ pub enum ConfigError {
 
 impl<S> NumericalParams<S>
 where
-    S: RuntimeScalar + PartialOrd + FromPrimitive,
+    S: RuntimeScalar + PartialOrd,
 {
     /// 从 NumericalParams<f64> 转换到泛型参数
     ///
@@ -415,43 +413,43 @@ where
     /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
     pub fn from_f64_params(params_f64: &NumericalParams<f64>) -> Result<Self, ConfigError> {
         Ok(Self {
-            h_min: S::from_f64(params_f64.h_min)
+            h_min: S::from_config(params_f64.h_min)
                 .ok_or(ConfigError::Conversion("h_min"))?,
-            h_dry: S::from_f64(params_f64.h_dry)
+            h_dry: S::from_config(params_f64.h_dry)
                 .ok_or(ConfigError::Conversion("h_dry"))?,
-            h_friction: S::from_f64(params_f64.h_friction)
+            h_friction: S::from_config(params_f64.h_friction)
                 .ok_or(ConfigError::Conversion("h_friction"))?,
-            h_wet: S::from_f64(params_f64.h_wet)
+            h_wet: S::from_config(params_f64.h_wet)
                 .ok_or(ConfigError::Conversion("h_wet"))?,
-            flux_eps: S::from_f64(params_f64.flux_eps)
+            flux_eps: S::from_config(params_f64.flux_eps)
                 .ok_or(ConfigError::Conversion("flux_eps"))?,
-            entropy_ratio: S::from_f64(params_f64.entropy_ratio)
+            entropy_ratio: S::from_config(params_f64.entropy_ratio)
                 .ok_or(ConfigError::Conversion("entropy_ratio"))?,
-            min_wave_speed: S::from_f64(params_f64.min_wave_speed)
+            min_wave_speed: S::from_config(params_f64.min_wave_speed)
                 .ok_or(ConfigError::Conversion("min_wave_speed"))?,
-            det_min: S::from_f64(params_f64.det_min)
+            det_min: S::from_config(params_f64.det_min)
                 .ok_or(ConfigError::Conversion("det_min"))?,
-            limiter_k: S::from_f64(params_f64.limiter_k)
+            limiter_k: S::from_config(params_f64.limiter_k)
                 .ok_or(ConfigError::Conversion("limiter_k"))?,
-            vel_min: S::from_f64(params_f64.vel_min)
+            vel_min: S::from_config(params_f64.vel_min)
                 .ok_or(ConfigError::Conversion("vel_min"))?,
-            vel_max: S::from_f64(params_f64.vel_max)
+            vel_max: S::from_config(params_f64.vel_max)
                 .ok_or(ConfigError::Conversion("vel_max"))?,
-            nu_min: S::from_f64(params_f64.nu_min)
+            nu_min: S::from_config(params_f64.nu_min)
                 .ok_or(ConfigError::Conversion("nu_min"))?,
-            nu_max: S::from_f64(params_f64.nu_max)
+            nu_max: S::from_config(params_f64.nu_max)
                 .ok_or(ConfigError::Conversion("nu_max"))?,
-            cfl: S::from_f64(params_f64.cfl)
+            cfl: S::from_config(params_f64.cfl)
                 .ok_or(ConfigError::Conversion("cfl"))?,
-            dt_min: S::from_f64(params_f64.dt_min)
+            dt_min: S::from_config(params_f64.dt_min)
                 .ok_or(ConfigError::Conversion("dt_min"))?,
-            dt_max: S::from_f64(params_f64.dt_max)
+            dt_max: S::from_config(params_f64.dt_max)
                 .ok_or(ConfigError::Conversion("dt_max"))?,
-            eta_tolerance: S::from_f64(params_f64.eta_tolerance)
+            eta_tolerance: S::from_config(params_f64.eta_tolerance)
                 .ok_or(ConfigError::Conversion("eta_tolerance"))?,
-            flux_tolerance: S::from_f64(params_f64.flux_tolerance)
+            flux_tolerance: S::from_config(params_f64.flux_tolerance)
                 .ok_or(ConfigError::Conversion("flux_tolerance"))?,
-            conservation_tolerance: S::from_f64(params_f64.conservation_tolerance)
+            conservation_tolerance: S::from_config(params_f64.conservation_tolerance)
                 .ok_or(ConfigError::Conversion("conservation_tolerance"))?,
         })
     }
@@ -525,7 +523,10 @@ where
     #[inline]
     pub fn wet_fraction_smooth(&self, h: S) -> S {
         let t = self.wet_fraction(h);
-        t * t * (S::from_f64(3.0).unwrap() - S::from_f64(2.0).unwrap() * t)
+        t * t * (
+            S::from_config(3.0).unwrap_or(S::ONE)
+                - S::from_config(2.0).unwrap_or(S::ONE) * t
+        )
     }
 
     /// 创建安全水深
@@ -602,7 +603,7 @@ where
             
             // 限制最大速度
             let speed = (u * u + v * v).sqrt();
-            let threshold = S::EPSILON * S::from_f64(1000.0).unwrap();
+            let threshold = S::EPSILON * S::from_config(1000.0).unwrap_or(S::ONE);
             if speed > self.vel_max && speed > threshold {
                 let factor = self.vel_max / speed;
                 (u * factor, v * factor)

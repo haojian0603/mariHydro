@@ -30,7 +30,7 @@ pub trait ErosionFormula<S: RuntimeScalar>: Send + Sync {
     /// - `physics`: 物理常数
     fn erosion_rate<B: Backend<Scalar = S>>(
         &self,
-        backend: &B,
+        _backend: &B,
         tau_b: S,
         tau_cr: S,
         props: &SedimentPropertiesGeneric<S>,
@@ -104,7 +104,7 @@ impl<S: RuntimeScalar> ErosionFormula<S> for SmithMcLean<S> {
     
     fn erosion_rate<B: Backend<Scalar = S>>(
         &self,
-        backend: &B,
+        _backend: &B,
         tau_b: S,
         tau_cr: S,
         props: &SedimentPropertiesGeneric<S>,
@@ -209,7 +209,6 @@ pub struct ResuspensionSourceGeneric<B: Backend, F: ErosionFormula<B::Scalar>> {
     settling_velocity: B::Scalar,
     /// 后端
     backend: B,
-    /// 类型标记
 }
 
 impl<B: Backend> ResuspensionSourceGeneric<B, SmithMcLean<B::Scalar>> {
@@ -332,9 +331,9 @@ mod tests {
     
     #[test]
     fn test_resuspension_source() {
+        let backend = crate::core::CpuBackend::<f64>::new();
         let props = make_props(&backend);
         let physics = make_physics();
-        let backend = crate::core::CpuBackend::<f64>::new();
         
         let source = ResuspensionSourceGeneric::<crate::core::CpuBackend<f64>, SmithMcLean<f64>>::new(
             backend,
@@ -353,11 +352,11 @@ mod tests {
 
     #[test]
     fn test_f32_precision() {
+        let backend_f32 = crate::core::CpuBackend::<f32>::new();
+        let backend_f64 = crate::core::CpuBackend::<f64>::new();
         let props_f64 = make_props(&backend_f64);
         let props_f32 = SedimentPropertiesGeneric::from_d50_mm(&backend_f32, 0.2);
         let physics = make_physics();
-        let backend_f32 = crate::core::CpuBackend::<f32>::new();
-        let backend_f64 = crate::core::CpuBackend::<f64>::new();
         
         let source_f32 = ResuspensionSourceGeneric::<crate::core::CpuBackend<f32>, SmithMcLean<f32>>::new(
             backend_f32,

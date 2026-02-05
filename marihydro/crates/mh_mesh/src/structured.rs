@@ -47,6 +47,7 @@
 use mh_geo::{Point2D, Point3D};
 use crate::error::{MeshError, MeshResult};
 use crate::FrozenMesh;
+use mh_runtime::CpuBackend;
 
 /// 结构化网格配置
 #[derive(Debug, Clone, Copy)]
@@ -678,7 +679,8 @@ impl StructuredMesh {
             .map(|i| to_u32(i, "单元索引"))
             .collect::<MeshResult<Vec<u32>>>()?;
 
-        let mut mesh = FrozenMesh::empty_with_cells(n_cells);
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMesh::empty_with_cells_backend(backend, n_cells);
         mesh.n_nodes = n_nodes;
         mesh.node_coords = node_coords;
         mesh.n_cells = n_cells;

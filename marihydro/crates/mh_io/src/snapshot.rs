@@ -15,21 +15,20 @@
 //!
 //! ```rust,ignore
 //! use mh_io::snapshot::{MeshSnapshot, StateSnapshot};
-//! use mh_runtime::CpuBackend;
 //!
 //! // 从网格创建快照
-//! let mesh_snap = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+//! let mesh_snap = MeshSnapshot::<f64>::from_mesh_data(
 //!     n_nodes, n_cells, positions, cell_nodes, areas, elevations
 //! );
 //!
 //! // 从状态创建快照
-//! let state_snap = StateSnapshot::<CpuBackend<f64>>::from_state_data(h, hu, hv);
+//! let state_snap = StateSnapshot::<f64>::from_state_data(h, hu, hv);
 //! ```
 
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use mh_runtime::{Backend, RuntimeScalar};
-use num_traits::ToPrimitive;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use mh_mesh::FrozenMeshGeneric;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 
@@ -44,8 +43,8 @@ use std::collections::hash_map::DefaultHasher;
 /// - 检查点保存
 /// - 可视化预览
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "B::Scalar: Serialize", deserialize = "B::Scalar: DeserializeOwned"))]
-pub struct MeshSnapshot<B: Backend> {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
+pub struct MeshSnapshot<S: RuntimeScalar> {
     /// 节点数
     pub n_nodes: usize,
     /// 单元数
@@ -55,9 +54,9 @@ pub struct MeshSnapshot<B: Backend> {
     /// 单元节点索引
     pub cell_nodes: Vec<Vec<usize>>,
     /// 单元面积
-    pub cell_areas: Vec<B::Scalar>,
+    pub cell_areas: Vec<S>,
     /// 床面高程
-    pub bed_elevations: Vec<B::Scalar>,
+    pub bed_elevations: Vec<S>,
     /// 边界面索引（可选）
     pub boundary_faces: Option<Vec<u32>>,
     /// 边界标识（可选，与边界面对应）
@@ -81,7 +80,7 @@ pub struct SnapshotMeta {
     pub description: Option<String>,
 }
 
-impl<B: Backend> MeshSnapshot<B> {
+impl<S: RuntimeScalar> MeshSnapshot<S> {
     /// 创建空快照
     pub fn empty() -> Self {
         Self {
@@ -113,8 +112,8 @@ impl<B: Backend> MeshSnapshot<B> {
         n_cells: usize,
         node_positions: Vec<(f64, f64)>,
         cell_nodes: Vec<Vec<usize>>,
-        cell_areas: Vec<B::Scalar>,
-        bed_elevations: Vec<B::Scalar>,
+        cell_areas: Vec<S>,
+        bed_elevations: Vec<S>,
     ) -> Self {
         Self {
             n_nodes,
@@ -126,6 +125,68 @@ impl<B: Backend> MeshSnapshot<B> {
             boundary_faces: None,
             boundary_ids: None,
             boundary_names: None,
+            meta: None,
+        }
+    }
+
+    /// 从冻结网格创建快照（标量类型一致）
+    ///
+    /// 仅用于 `B::Scalar == S` 的场景，避免隐式精度转换。
+    pub fn from_frozen<B: Backend<Scalar = S>>(mesh: &FrozenMeshGeneric<B>) -> Self {
+        let node_positions = mesh
+            .node_coords
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect::<Vec<_>>();
+
+        let mut cell_nodes = Vec::with_capacity(mesh.n_cells);
+        for cell in 0..mesh.n_cells {
+            let start = mesh.cell_node_offsets[cell];
+            let end = mesh.cell_node_offsets[cell + 1];
+            let nodes = mesh.cell_node_indices[start..end]
+                .iter()
+                .map(|&idx| idx as usize)
+                .collect::<Vec<_>>();
+            cell_nodes.push(nodes);
+        }
+
+        let cell_areas = mesh.cell_area.copy_to_vec();
+        let bed_elevations = mesh.cell_z_bed.copy_to_vec();
+
+        let boundary_faces = if mesh.boundary_face_indices.is_empty() {
+            None
+        } else {
+            Some(mesh.boundary_face_indices.clone())
+        };
+
+        let boundary_ids = boundary_faces.as_ref().map(|faces| {
+            faces
+                .iter()
+                .map(|&f| {
+                    mesh.face_boundary_id
+                        .get(f as usize)
+                        .and_then(|opt| *opt)
+                        .unwrap_or(u32::MAX)
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let boundary_names = if mesh.boundary_names.is_empty() {
+            None
+        } else {
+            Some(mesh.boundary_names.clone())
+        };
+
+        Self {
+            n_nodes: mesh.n_nodes,
+            n_cells: mesh.n_cells,
+            node_positions,
+            cell_nodes,
+            cell_areas,
+            bed_elevations,
+            boundary_faces,
+            boundary_ids,
+            boundary_names,
             meta: None,
         }
     }
@@ -153,10 +214,10 @@ impl<B: Backend> MeshSnapshot<B> {
     ///
     /// # 示例
     /// ```ignore
-    /// let snapshot = MeshSnapshot::<mh_runtime::CpuBackend<f64>>::empty()
+    /// let snapshot = MeshSnapshot::<f64>::empty()
     ///     .with_bed_elevations(vec![0.0; n_cells]);
     /// ```
-    pub fn with_bed_elevations(mut self, elevations: Vec<B::Scalar>) -> Self {
+    pub fn with_bed_elevations(mut self, elevations: Vec<S>) -> Self {
         self.bed_elevations = elevations;
         self
     }
@@ -190,11 +251,11 @@ impl<B: Backend> MeshSnapshot<B> {
             }
         }
         for &a in &self.cell_areas {
-            let v: f64 = a.to_f64().unwrap_or(0.0);
+            let v: f64 = a.to_f64_lossy();
             v.to_bits().hash(&mut hasher);
         }
         for &z in &self.bed_elevations {
-            let v: f64 = z.to_f64().unwrap_or(0.0);
+            let v: f64 = z.to_f64_lossy();
             v.to_bits().hash(&mut hasher);
         }
         if let Some(faces) = &self.boundary_faces {
@@ -249,10 +310,7 @@ impl<B: Backend> MeshSnapshot<B> {
     }
 
     /// 验证数据一致性
-    pub fn validate(&self) -> Result<(), String>
-    where
-        S: Into<f64>,
-    {
+    pub fn validate(&self) -> Result<(), String> {
         if self.node_positions.len() != self.n_nodes {
             return Err(format!(
                 "节点数不匹配: 期望 {}, 实际 {}",
@@ -347,9 +405,30 @@ impl<B: Backend> MeshSnapshot<B> {
         }
         Ok(())
     }
+
+    /// 精度/标量类型转换
+    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> MeshSnapshot<T> {
+        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
+    }
+
+    /// 精度/标量类型转换（自定义映射）
+    pub fn map_scalar_with<T: RuntimeScalar, F: Fn(S) -> T>(&self, map: F) -> MeshSnapshot<T> {
+        MeshSnapshot {
+            n_nodes: self.n_nodes,
+            n_cells: self.n_cells,
+            node_positions: self.node_positions.clone(),
+            cell_nodes: self.cell_nodes.clone(),
+            cell_areas: self.cell_areas.iter().copied().map(&map).collect(),
+            bed_elevations: self.bed_elevations.iter().copied().map(&map).collect(),
+            boundary_faces: self.boundary_faces.clone(),
+            boundary_ids: self.boundary_ids.clone(),
+            boundary_names: self.boundary_names.clone(),
+            meta: self.meta.clone(),
+        }
+    }
 }
 
-impl<B: Backend> Default for MeshSnapshot<B> {
+impl<S: RuntimeScalar> Default for MeshSnapshot<S> {
     fn default() -> Self {
         Self::empty()
     }
@@ -363,18 +442,18 @@ impl<B: Backend> Default for MeshSnapshot<B> {
 ///
 /// 包含浅水方程守恒变量的只读副本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "B::Scalar: Serialize", deserialize = "B::Scalar: DeserializeOwned"))]
-pub struct StateSnapshot<B: Backend> {
+#[serde(bound(serialize = "S: Serialize", deserialize = "S: DeserializeOwned"))]
+pub struct StateSnapshot<S: RuntimeScalar> {
     /// 水深 [m]
-    pub h: Vec<B::Scalar>,
+    pub h: Vec<S>,
     /// x 动量 [m²/s]
-    pub hu: Vec<B::Scalar>,
+    pub hu: Vec<S>,
     /// y 动量 [m²/s]
-    pub hv: Vec<B::Scalar>,
+    pub hv: Vec<S>,
     /// 底床高程（可选，用于完整状态恢复）
-    pub z: Option<Vec<B::Scalar>>,
+    pub z: Option<Vec<S>>,
     /// 标量场（可选，如示踪剂浓度）
-    pub scalars: Option<Vec<Vec<B::Scalar>>>,
+    pub scalars: Option<Vec<Vec<S>>>,
     /// 标量场名称（可选）
     pub scalar_names: Option<Vec<String>>,
     /// 元数据
@@ -394,7 +473,7 @@ pub struct StateSnapshotMeta {
     pub hash: Option<u64>,
 }
 
-impl<B: Backend> StateSnapshot<B> {
+impl<S: RuntimeScalar> StateSnapshot<S> {
     /// 创建空快照
     pub fn empty() -> Self {
         Self {
@@ -409,7 +488,7 @@ impl<B: Backend> StateSnapshot<B> {
     }
 
     /// 从状态数据创建快照
-    pub fn from_state_data(h: Vec<B::Scalar>, hu: Vec<B::Scalar>, hv: Vec<B::Scalar>) -> Self {
+    pub fn from_state_data(h: Vec<S>, hu: Vec<S>, hv: Vec<S>) -> Self {
         Self {
             h,
             hu,
@@ -422,13 +501,13 @@ impl<B: Backend> StateSnapshot<B> {
     }
 
     /// 包含底床高程
-    pub fn with_bed(mut self, z: Vec<B::Scalar>) -> Self {
+    pub fn with_bed(mut self, z: Vec<S>) -> Self {
         self.z = Some(z);
         self
     }
 
     /// 添加标量场
-    pub fn with_scalar(mut self, name: &str, values: Vec<B::Scalar>) -> Result<Self, String> {
+    pub fn with_scalar(mut self, name: &str, values: Vec<S>) -> Result<Self, String> {
         if values.len() != self.n_cells() {
             return Err(format!(
                 "标量场长度不匹配: name={}, 期望 {}, 实际 {}",
@@ -465,20 +544,20 @@ impl<B: Backend> StateSnapshot<B> {
         let mut hasher = DefaultHasher::new();
         self.h.len().hash(&mut hasher);
         for &v in &self.h {
-            let fv: f64 = v.to_f64().unwrap_or(0.0);
+            let fv: f64 = v.to_f64_lossy();
             fv.to_bits().hash(&mut hasher);
         }
         for &v in &self.hu {
-            let fv: f64 = v.to_f64().unwrap_or(0.0);
+            let fv: f64 = v.to_f64_lossy();
             fv.to_bits().hash(&mut hasher);
         }
         for &v in &self.hv {
-            let fv: f64 = v.to_f64().unwrap_or(0.0);
+            let fv: f64 = v.to_f64_lossy();
             fv.to_bits().hash(&mut hasher);
         }
         if let Some(z) = &self.z {
             for &v in z {
-                let fv: f64 = v.to_f64().unwrap_or(0.0);
+                let fv: f64 = v.to_f64_lossy();
                 fv.to_bits().hash(&mut hasher);
             }
         }
@@ -488,7 +567,7 @@ impl<B: Backend> StateSnapshot<B> {
             }
             for scalar in vals {
                 for &v in scalar {
-                    let fv: f64 = v.to_f64().unwrap_or(0.0);
+                    let fv: f64 = v.to_f64_lossy();
                     fv.to_bits().hash(&mut hasher);
                 }
             }
@@ -511,7 +590,7 @@ impl<B: Backend> StateSnapshot<B> {
 
     /// 内存占用估计（字节）
     pub fn memory_usage(&self) -> usize {
-        let elem_size = std::mem::size_of::<B::Scalar>();
+        let elem_size = std::mem::size_of::<S>();
         let base = (self.h.len() + self.hu.len() + self.hv.len()) * elem_size;
         let z_mem = self.z.as_ref().map_or(0, |v| v.len() * elem_size);
         let scalars_mem = self
@@ -572,7 +651,7 @@ impl<B: Backend> StateSnapshot<B> {
             if !val.is_finite() {
                 return Err(format!("h[{}] = {} 非有限值", i, val));
             }
-            if val < B::Scalar::ZERO {
+            if val < S::ZERO {
                 return Err(format!("h[{}] = {} 为负值", i, val));
             }
         }
@@ -615,16 +694,16 @@ impl<B: Backend> StateSnapshot<B> {
             return StateStatistics::default();
         }
 
-        let h_sum: f64 = self.h.iter().map(|&v| v.to_f64().unwrap_or(0.0)).sum();
+        let h_sum: f64 = self.h.iter().map(|&v| v.to_f64_lossy()).sum();
         let h_min = self
             .h
             .iter()
-            .map(|&v| v.to_f64().unwrap_or(0.0))
+            .map(|&v| v.to_f64_lossy())
             .fold(f64::INFINITY, f64::min);
         let h_max = self
             .h
             .iter()
-            .map(|&v| v.to_f64().unwrap_or(0.0))
+            .map(|&v| v.to_f64_lossy())
             .fold(f64::NEG_INFINITY, f64::max);
 
         StateStatistics {
@@ -638,13 +717,13 @@ impl<B: Backend> StateSnapshot<B> {
     /// 精度/标量类型转换
     ///
     /// 用于在不同运行时精度之间显式转换快照，避免隐式截断。
-    pub fn map_scalar<B2: Backend>(&self, backend: &B2) -> StateSnapshot<B2> {
-        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64().unwrap_or(0.0)))
+    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> StateSnapshot<T> {
+        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
     }
 
     /// 精度/标量类型转换（自定义映射）
-    pub fn map_scalar_with<B2: Backend, F: Fn(B::Scalar) -> B2::Scalar>(&self, map: F) -> StateSnapshot<B2> {
-        let map_vec = |src: &[B::Scalar]| -> Vec<B2::Scalar> { src.iter().map(|&v| map(v)).collect() };
+    pub fn map_scalar_with<T: RuntimeScalar, F: Fn(S) -> T>(&self, map: F) -> StateSnapshot<T> {
+        let map_vec = |src: &[S]| -> Vec<T> { src.iter().map(|&v| map(v)).collect() };
 
         let z = self.z.as_ref().map(|v| map_vec(v));
         let scalars = self
@@ -669,7 +748,7 @@ impl<B: Backend> StateSnapshot<B> {
     }
 }
 
-impl<B: Backend> Default for StateSnapshot<B> {
+impl<S: RuntimeScalar> Default for StateSnapshot<S> {
     fn default() -> Self {
         Self::empty()
     }
@@ -695,11 +774,10 @@ pub struct StateStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_mesh_snapshot_creation() {
-        let snapshot = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let snapshot = MeshSnapshot::<f64>::from_mesh_data(
             4,
             1,
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
@@ -715,7 +793,7 @@ mod tests {
 
     #[test]
     fn test_mesh_snapshot_validation_error() {
-        let mut snapshot = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let mut snapshot = MeshSnapshot::<f64>::from_mesh_data(
             4,
             1,
             vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
@@ -733,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_state_snapshot_creation() {
-        let snapshot = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let snapshot = StateSnapshot::<f64>::from_state_data(
             vec![1.0, 2.0, 3.0],
             vec![0.1, 0.2, 0.3],
             vec![0.0, 0.0, 0.0],
@@ -745,7 +823,7 @@ mod tests {
 
     #[test]
     fn test_state_snapshot_with_scalar() {
-        let snapshot = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let snapshot = StateSnapshot::<f64>::from_state_data(
             vec![1.0, 2.0],
             vec![0.0, 0.0],
             vec![0.0, 0.0],
@@ -763,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_state_statistics() {
-        let snapshot = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let snapshot = StateSnapshot::<f64>::from_state_data(
             vec![1.0, 2.0, 3.0, 4.0],
             vec![0.0; 4],
             vec![0.0; 4],
@@ -778,7 +856,7 @@ mod tests {
 
     #[test]
     fn test_memory_usage() {
-        let mesh_snap = MeshSnapshot::<CpuBackend<f64>>::from_mesh_data(
+        let mesh_snap = MeshSnapshot::<f64>::from_mesh_data(
             100,
             50,
             vec![(0.0, 0.0); 100],
@@ -790,7 +868,7 @@ mod tests {
         // 内存估计应该大于 0
         assert!(mesh_snap.memory_usage() > 0);
 
-        let state_snap = StateSnapshot::<CpuBackend<f64>>::from_state_data(
+        let state_snap = StateSnapshot::<f64>::from_state_data(
             vec![1.0; 50],
             vec![0.0; 50],
             vec![0.0; 50],

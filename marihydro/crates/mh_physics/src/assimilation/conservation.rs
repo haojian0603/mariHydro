@@ -2,9 +2,9 @@
 
 use super::PhysicsAssimilable;
 use crate::tracer::TracerType;
-use mh_runtime::{Backend, RuntimeScalar};
-use num_traits::{Float, FromPrimitive, ToPrimitive};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
+use num_traits::Float;
 
 /// 守恒量快照（Backend 泛型）
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct ConservedQuantities<B: Backend> {
 
 impl<B: Backend> ConservedQuantities<B>
 where
-    B::Scalar: Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
     B::Vector2D: Pod,
 {
     /// 从可同化状态计算守恒量
@@ -31,20 +31,26 @@ where
         let n = state.n_cells();
 
         // 复制数据以避免借用冲突
-        let areas: Vec<B::Scalar> = state.cell_areas().to_vec();
-        let h_vec: Vec<B::Scalar> = state.get_depth_mut().to_vec();
-        let (hu_slice, hv_slice) = state.get_momentum_mut();
-        let hu_vec: Vec<B::Scalar> = hu_slice.to_vec();
-        let hv_vec: Vec<B::Scalar> = hv_slice.to_vec();
+        let areas: Vec<B::Scalar> = state.cell_areas().copy_to_vec();
+        let h_vec: Vec<B::Scalar> = {
+            let depth = state.get_depth_mut();
+            depth.copy_to_vec()
+        };
+        let (hu_vec, hv_vec): (Vec<B::Scalar>, Vec<B::Scalar>) = {
+            let (hu_buf, hv_buf) = state.get_momentum_mut();
+            (hu_buf.copy_to_vec(), hv_buf.copy_to_vec())
+        };
+
+        let backend = state.backend();
 
         let mut total_mass = B::Scalar::ZERO;
         let mut total_energy = B::Scalar::ZERO;
         let mut momentum_x = B::Scalar::ZERO;
         let mut momentum_y = B::Scalar::ZERO;
 
-        let rho = B::Scalar::from_f64(1000.0).unwrap_or(B::Scalar::ONE);
-        let g = B::Scalar::from_f64(9.81).unwrap_or(B::Scalar::ONE);
-        let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+        let rho = backend.scalar_from_f64(1000.0);
+        let g = backend.scalar_from_f64(9.81);
+        let half = backend.scalar_from_f64(0.5);
 
         for i in 0..n {
             let area = areas.get(i).copied().unwrap_or(B::Scalar::ONE);
@@ -74,7 +80,8 @@ where
             .get_tracer_mut(TracerType::Sediment)
             .map(|c| {
                 let mut sum = B::Scalar::ZERO;
-                for (i, &conc) in c.iter().enumerate() {
+                let c_vec = c.copy_to_vec();
+                for (i, &conc) in c_vec.iter().enumerate() {
                     let area = areas.get(i).copied().unwrap_or(B::Scalar::ONE);
                     let depth = h_vec.get(i).copied().unwrap_or(B::Scalar::ZERO);
                     sum = sum + conc * depth * area;
@@ -92,8 +99,8 @@ where
     }
 
     /// 计算与参考值的相对误差
-    pub fn relative_error(&self, reference: &Self) -> ConservationError<B> {
-        let eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE);
+    pub fn relative_error(&self, backend: &B, reference: &Self) -> ConservationError<B> {
+        let eps = backend.scalar_from_f64(1e-10);
         ConservationError {
             mass_error: (self.total_mass - reference.total_mass) / reference.total_mass.max(eps),
             momentum_x_error: (self.total_momentum_x - reference.total_momentum_x)
@@ -101,7 +108,7 @@ where
             momentum_y_error: (self.total_momentum_y - reference.total_momentum_y)
                 / reference.total_momentum_y.max(eps),
             sediment_error: match (&self.total_sediment, &reference.total_sediment) {
-                (Some(s1), Some(s2)) => Some((*s1 - *s2) / s2.max(eps)),
+                (Some(s1), Some(s2)) => Some((*s1 - *s2) / (*s2).max(eps)),
                 _ => None,
             },
             energy_error: (self.total_energy - reference.total_energy) / reference.total_energy.max(eps),
@@ -121,7 +128,7 @@ pub struct ConservationError<B: Backend> {
 
 impl<B: Backend> ConservationError<B>
 where
-    B::Scalar: Float,
+    B::Scalar: RuntimeScalar,
 {
     /// 检查是否在容差范围内
     pub fn within_tolerance(&self, tol: B::Scalar) -> bool {
@@ -145,7 +152,7 @@ pub struct ConservationChecker<B: Backend> {
 
 impl<B: Backend> ConservationChecker<B>
 where
-    B::Scalar: Float,
+    B::Scalar: RuntimeScalar,
     B::Vector2D: Pod,
 {
     pub fn new(initial: ConservedQuantities<B>, tolerance: B::Scalar) -> Self {
@@ -159,7 +166,8 @@ where
     /// 检查当前状态的守恒性
     pub fn check(&mut self, state: &mut dyn PhysicsAssimilable<B>, time: B::Scalar) -> ConservationError<B> {
         let current = ConservedQuantities::compute(state);
-        let error = current.relative_error(&self.initial);
+        let backend = state.backend();
+        let error = current.relative_error(backend, &self.initial);
         self.history.push((time, error.clone()));
         error
     }
@@ -204,7 +212,7 @@ pub enum EnergyCheckResult<S> {
     },
 }
 
-impl<S: Float> EnergyCheckResult<S> {
+impl<S: RuntimeScalar> EnergyCheckResult<S> {
     /// 检查是否为物理合理状态
     #[allow(dead_code)]
     pub fn is_physical(&self) -> bool {
@@ -241,15 +249,15 @@ pub fn check_energy_conservation<B: Backend>(
     after: &ConservedQuantities<B>,
     tolerance: B::Scalar,
 ) -> EnergyCheckResult<B::Scalar>
-where
-    B::Scalar: Float,
 {
     let energy_before = before.total_energy;
     let energy_after = after.total_energy;
     let change = energy_after - energy_before;
     
     // 避免除零
-    let reference_energy = energy_before.abs().max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
+    let reference_energy = energy_before
+        .abs()
+        .max(B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
     let relative_change = change / reference_energy;
     
     if relative_change.abs() < tolerance {
@@ -291,15 +299,15 @@ pub fn verify_energy_conservation<B: Backend>(
     tolerance: B::Scalar,
 ) -> crate::error::PhysicsResult<()>
 where
-    B::Scalar: RuntimeScalar + ToPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     match check_energy_conservation(before, after, tolerance) {
         EnergyCheckResult::Conserved { .. } | EnergyCheckResult::Dissipated { .. } => Ok(()),
         EnergyCheckResult::Increased { increase: _, relative_rate } => {
             Err(crate::error::PhysicsError::EnergyIncreased {
-                before: num_traits::ToPrimitive::to_f64(&before.total_energy).unwrap_or(0.0),
-                after: num_traits::ToPrimitive::to_f64(&after.total_energy).unwrap_or(0.0),
-                relative_increase: num_traits::ToPrimitive::to_f64(&relative_rate).unwrap_or(0.0),
+                before: before.total_energy.to_f64_lossy(),
+                after: after.total_energy.to_f64_lossy(),
+                relative_increase: relative_rate.to_f64_lossy(),
             })
         }
     }

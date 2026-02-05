@@ -11,7 +11,6 @@
 
 use serde::{Deserialize, Serialize};
 use mh_runtime::RuntimeScalar;
-use num_traits::FromPrimitive;
 
 use crate::types::NumericalParams;
 
@@ -27,16 +26,13 @@ use crate::types::NumericalParams;
 pub enum BoundaryKind {
     /// 固壁边界（无穿透）
     ///
-    /// 法向速度反射，切向速度保持。适用于不可渗透的边界。
     #[default]
     Wall = 0,
 
-    /// 开海边界（Flather 辐射边界条件）
+    /// 开放海边界
     ///
     /// 使用特征关系结合外部强迫数据，允许波动自由传出。
     OpenSea = 1,
-
-    /// 河流入流
     ///
     /// 给定流量或水位的入流边界条件。
     RiverInflow = 2,
@@ -380,14 +376,11 @@ impl<S: RuntimeScalar> GenericExternalForcing<S> {
         Self { discharge: Some(discharge), ..Self::ZERO }
     }
 
-    pub fn from_f64_forcing(forcing: &ExternalForcing) -> Self
-    where
-        S: FromPrimitive,
-    {
+    pub fn from_f64_forcing(forcing: &ExternalForcing) -> Self {
         Self {
-            eta: S::from_f64(forcing.eta).unwrap_or(S::ZERO),
-            u: S::from_f64(forcing.velocity.0).unwrap_or(S::ZERO),
-            v: S::from_f64(forcing.velocity.1).unwrap_or(S::ZERO),
+            eta: S::from_config(forcing.eta).unwrap_or(S::ZERO),
+            u: S::from_config(forcing.velocity.0).unwrap_or(S::ZERO),
+            v: S::from_config(forcing.velocity.1).unwrap_or(S::ZERO),
             discharge: None,
             tracer: None,
         }

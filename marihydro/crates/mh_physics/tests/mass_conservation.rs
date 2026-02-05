@@ -14,7 +14,7 @@ use mh_physics::NumericalScheme;
 use mh_physics::Layer3Config;
 use mh_physics::state::ShallowWaterState;
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::{Backend, CpuBackend, CellIndex};
+use mh_runtime::prelude::*;
 
 /// 全局Backend实例，强制单例模式
 static BACKEND: LazyLock<CpuBackend<f64>> = LazyLock::new(|| CpuBackend::<f64>::new());

@@ -13,11 +13,11 @@
 
 use std::collections::HashMap;
 use thiserror::Error;
-use num_traits::{Float, FromPrimitive, ToPrimitive};
 
 use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForcing, GenericExternalForcing};
 use crate::state::ConservedState;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
+use num_traits::Float;
 
 // ============================================================
 // 边界面信息（Backend泛型化）
@@ -224,7 +224,7 @@ pub struct BoundaryManager<'a, B: Backend> {
 impl<'a, B> BoundaryManager<'a, B>
 where
     B: Backend,
-    B::Scalar: RuntimeScalar + ToPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建新的边界管理器
     pub fn new_with_backend(backend: &'a B, params: BoundaryParams) -> Self {
@@ -249,8 +249,8 @@ where
         gravity: B::Scalar,
     ) -> Self {
         // 转换参数到 f64（因为 ExternalForcing 使用 f64）
-        let gravity_f64 = gravity.to_f64().unwrap_or(9.81);
-        let h_min = params.h_min.to_f64().unwrap_or(1e-6);
+        let gravity_f64 = gravity.to_f64_lossy();
+        let h_min = params.h_min.to_f64_lossy();
         Self::new_with_backend(backend, BoundaryParams::new(gravity_f64, h_min))
     }
 
@@ -262,7 +262,7 @@ where
         provider: &dyn BoundaryDataProvider,
     ) -> GenericExternalForcing<B::Scalar>
     where
-        B::Scalar: RuntimeScalar + FromPrimitive,
+        B::Scalar: RuntimeScalar,
     {
         match provider.get_forcing(face_id, time) {
             Some(f) => GenericExternalForcing::from_f64_forcing(&f),
@@ -329,7 +329,7 @@ where
         let mass_flux = B::Scalar::ZERO;
 
         // 动量通量仅有压力项
-        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
         let pressure = B::Scalar::HALF * g * h_interior * h_interior;
         let momentum_flux = B::vec2_scale(&normal, pressure);
 
@@ -344,8 +344,8 @@ where
         external: &ExternalForcing,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
-        let h = interior.h.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
 
         // 内部速度
         let u = interior.hu / h;
@@ -354,12 +354,12 @@ where
 
         // 法向速度 (dot product)
         let un_int = B::vec2_dot(&vel_int, &normal);
-        let un_ext = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO) * normal.x()
-            + B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO) * normal.y();
+        let un_ext = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO) * normal.x()
+            + B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO) * normal.y();
 
         // 内部水位
         let eta_int = h + z_interior;
-        let eta_ext = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO);
+        let eta_ext = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO);
 
         // Flather 条件: un* = un_ext + (c/h)(eta_int - eta_ext)
         let c = (g * h).sqrt();
@@ -380,8 +380,8 @@ where
         interior: ConservedState<B::Scalar>,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
-        let h = interior.h.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let h = interior.h.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
         let u = interior.hu / h;
         let v = interior.hv / h;
         let vel = B::vec2_new(u, v);
@@ -404,13 +404,13 @@ where
         face_length: B::Scalar,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
         
         // 入流流量（负号因为入流方向与法向相反）
-        let qn = -discharge / face_length.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::ZERO));
+        let qn = -discharge / face_length.max(B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::ZERO));
 
         let pressure = B::Scalar::HALF * g * h_interior * h_interior;
-        let u_in = qn / h_interior.max(B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let u_in = qn / h_interior.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
         let momentum_dot = qn * u_in + pressure;
         let momentum_flux = B::vec2_scale(&normal, momentum_dot);
 
@@ -491,11 +491,11 @@ where
             // 检查法向量是否单位化
             let mag_sq = B::vec2_dot(&face.normal, &face.normal);
             let one = B::Scalar::ONE;
-            let eps = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::ZERO);
+            let eps = B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::ZERO);
             if (mag_sq - one).abs() > eps {
                 return Err(BoundaryError::InvalidNormal {
                     face_id: face.face_id,
-                    magnitude: mag_sq.to_f64().unwrap_or(0.0),
+                    magnitude: mag_sq.to_f64_lossy(),
                 });
             }
 

@@ -15,7 +15,8 @@
 //! 2. **无 DVec2**: 所有几何操作使用 `Vector2D` 接口
 //! 3. **泛型标量**: 几何与梯度计算在 `S` 上完成
 
-use mh_runtime::{Backend, Vector2D};
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
+use num_traits::Float;
 use rayon::prelude::*;
 
 use super::traits::{GradientMethod, ScalarGradientStorage, VectorGradientStorage};
@@ -143,7 +144,7 @@ impl LeastSquaresGradient {
     /// 计算单个单元的梯度 - 泛型版本
     fn compute_cell_gradient<B: Backend>(
         &self,
-        backend: &B,
+        _backend: &B,
         cell: usize,
         field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
@@ -187,19 +188,18 @@ impl LeastSquaresGradient {
                 let dphi = field[other.get()] - phi_c;
 
                 let dist_sq = dx * dx + dy * dy;
-                if dist_sq < 1e-20 {
+                let dist_sq_min = B::Scalar::from_config(1e-20).unwrap_or(B::Scalar::MIN_POSITIVE);
+                if dist_sq < dist_sq_min {
                     continue;
                 }
 
-                let w = backend.scalar_from_f64(1.0 / dist_sq);
-                let dx_s = backend.scalar_from_f64(dx);
-                let dy_s = backend.scalar_from_f64(dy);
+                let w = B::Scalar::ONE / dist_sq;
 
-                a11 = a11 + w * dx_s * dx_s;
-                a12 = a12 + w * dx_s * dy_s;
-                a22 = a22 + w * dy_s * dy_s;
-                b1 = b1 + w * dx_s * dphi;
-                b2 = b2 + w * dy_s * dphi;
+                a11 = a11 + w * dx * dx;
+                a12 = a12 + w * dx * dy;
+                a22 = a22 + w * dy * dy;
+                b1 = b1 + w * dx * dphi;
+                b2 = b2 + w * dy * dphi;
                 neighbor_count += 1;
             } else if self.config.use_boundary_contributions {
                 // 边界面：使用镜像点策略
@@ -215,7 +215,8 @@ impl LeastSquaresGradient {
                 let to_face_y = face_center.y() - cell_center_y;
                 let dist_to_face = to_face_x * normal.x() + to_face_y * normal.y();
 
-                if dist_to_face.abs() < 1e-14 {
+                let dist_to_face_min = B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+                if dist_to_face.abs() < dist_to_face_min {
                     continue;
                 }
 
@@ -226,18 +227,17 @@ impl LeastSquaresGradient {
                 let dx = ghost_x - cell_center_x;
                 let dy = ghost_y - cell_center_y;
                 let dist_sq = dx * dx + dy * dy;
+                let dist_sq_min = B::Scalar::from_config(1e-20).unwrap_or(B::Scalar::MIN_POSITIVE);
 
-                if dist_sq < 1e-20 {
+                if dist_sq < dist_sq_min {
                     continue;
                 }
 
-                let w = backend.scalar_from_f64(1.0 / dist_sq);
-                let dx_s = backend.scalar_from_f64(dx);
-                let dy_s = backend.scalar_from_f64(dy);
+                let w = B::Scalar::ONE / dist_sq;
 
-                a11 = a11 + w * dx_s * dx_s;
-                a12 = a12 + w * dx_s * dy_s;
-                a22 = a22 + w * dy_s * dy_s;
+                a11 = a11 + w * dx * dx;
+                a12 = a12 + w * dx * dy;
+                a22 = a22 + w * dy * dy;
                 // b1, b2 不变（dphi = 0 对于零梯度边界条件）
                 neighbor_count += 1;
             }
@@ -248,7 +248,7 @@ impl LeastSquaresGradient {
             return Some((B::Scalar::ZERO, B::Scalar::ZERO));
         }
 
-        let det_min = backend.scalar_from_f64(self.config.det_min);
+        let det_min = B::Scalar::from_config(self.config.det_min).unwrap_or(B::Scalar::MIN_POSITIVE);
         Self::solve_2x2::<B>(a11, a12, a22, b1, b2, det_min)
     }
 }
@@ -350,7 +350,8 @@ mod tests {
     use mh_runtime::CpuBackend;
 
     fn create_test_mesh() -> PhysicsMesh {
-        let mut frozen = FrozenMesh::empty_with_cells(2);
+        let backend = CpuBackend::<f64>::new();
+        let mut frozen = FrozenMesh::empty_with_cells_backend(backend.clone(), 2);
         frozen.n_nodes = 6;
         frozen.node_coords = vec![
             Point3D::new(0.0, 0.0, 0.0),
@@ -362,8 +363,12 @@ mod tests {
         ];
         frozen.n_cells = 2;
         frozen.cell_center = vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)];
-        frozen.cell_area = vec![1.0, 1.0];
-        frozen.cell_z_bed = vec![0.0, 0.0];
+        let mut cell_area = backend.alloc(2);
+        cell_area.copy_from_slice(&[1.0, 1.0]);
+        frozen.cell_area = cell_area;
+        let mut cell_z_bed = backend.alloc(2);
+        cell_z_bed.copy_from_slice(&[0.0, 0.0]);
+        frozen.cell_z_bed = cell_z_bed;
         frozen.cell_node_offsets = vec![0, 4, 8];
         frozen.cell_node_indices = vec![0, 1, 4, 3, 1, 2, 5, 4];
         frozen.cell_face_offsets = vec![0, 4, 8];
@@ -390,14 +395,22 @@ mod tests {
             Point3D::new(1.0, 0.0, 0.0),
             Point3D::new(0.0, 1.0, 0.0),
         ];
-        frozen.face_length = vec![1.0; 7];
-        frozen.face_z_left = vec![0.0; 7];
-        frozen.face_z_right = vec![0.0; 7];
+        let mut face_length = backend.alloc(7);
+        face_length.copy_from_slice(&[1.0; 7]);
+        frozen.face_length = face_length;
+        let mut face_z_left = backend.alloc(7);
+        face_z_left.copy_from_slice(&[0.0; 7]);
+        frozen.face_z_left = face_z_left;
+        let mut face_z_right = backend.alloc(7);
+        face_z_right.copy_from_slice(&[0.0; 7]);
+        frozen.face_z_right = face_z_right;
         frozen.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
         frozen.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
         frozen.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
         frozen.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
-        frozen.face_dist_o2n = vec![1.0; 7];
+        let mut face_dist_o2n = backend.alloc(7);
+        face_dist_o2n.copy_from_slice(&[1.0; 7]);
+        frozen.face_dist_o2n = face_dist_o2n;
         frozen.boundary_face_indices = (1..7).map(|i| i as u32).collect();
         frozen.boundary_names = vec!["boundary".to_string()];
         frozen.face_boundary_id = vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)];

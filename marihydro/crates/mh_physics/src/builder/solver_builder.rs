@@ -273,7 +273,7 @@ impl SolverHandle {
 ///
 /// 这是一个简化的求解器实现，展示了泛型精度系统的工作方式。
 /// 实际的 ShallowWaterSolver 会更复杂，包含完整的数值格式。
-struct SimpleSolver<S: RuntimeScalar> {
+pub struct SimpleSolver<S: RuntimeScalar> {
     config: SolverConfig,
     n_cells: usize,
     h: Vec<S>,

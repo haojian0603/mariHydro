@@ -11,7 +11,7 @@ pub use bridge::{AssimilableBridge, StateSnapshot};
 pub use conservation::{ConservationChecker, ConservationError, ConservedQuantities};
 
 use crate::tracer::TracerType;
-use mh_runtime::{Backend, RuntimeScalar};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
 
 /// 可同化状态接口（Backend-first）
@@ -21,26 +21,31 @@ pub trait PhysicsAssimilable<B: Backend>
 where
     B::Vector2D: Pod,
 {
+    /// 获取后端引用
+    fn backend(&self) -> &B;
+
     /// 获取示踪剂可变引用
-    fn get_tracer_mut(&mut self, tracer_type: TracerType) -> Option<&mut [B::Scalar]>;
+    fn get_tracer_mut(&mut self, tracer_type: TracerType) -> Option<&mut B::Buffer<B::Scalar>>;
 
     /// 获取动量场可变引用 (hu, hv)
-    fn get_momentum_mut(&mut self) -> (&mut [B::Scalar], &mut [B::Scalar]);
+    fn get_momentum_mut(
+        &mut self,
+    ) -> (&mut B::Buffer<B::Scalar>, &mut B::Buffer<B::Scalar>);
 
     /// 获取水深可变引用
-    fn get_depth_mut(&mut self) -> &mut [B::Scalar];
+    fn get_depth_mut(&mut self) -> &mut B::Buffer<B::Scalar>;
 
     /// 获取床面高程可变引用
-    fn get_bed_elevation_mut(&mut self) -> &mut [B::Scalar];
+    fn get_bed_elevation_mut(&mut self) -> &mut B::Buffer<B::Scalar>;
 
     /// 单元数量
     fn n_cells(&self) -> usize;
 
     /// 单元面积
-    fn cell_areas(&self) -> &[B::Scalar];
+    fn cell_areas(&self) -> &B::Buffer<B::Scalar>;
 
     /// 单元中心坐标
-    fn cell_centers(&self) -> &[B::Vector2D];
+    fn cell_centers(&self) -> &B::Buffer<B::Vector2D>;
 
     /// 创建状态快照（用于 AI/同化管线）
     fn create_snapshot(&self) -> StateSnapshot<B>;
@@ -100,11 +105,14 @@ where
     B::Scalar: RuntimeScalar,
 {
     pub fn new(
-        h: &'a [B::Scalar],
-        hu: &'a [B::Scalar],
-        hv: &'a [B::Scalar],
+        h: &'a B::Buffer<B::Scalar>,
+        hu: &'a B::Buffer<B::Scalar>,
+        hv: &'a B::Buffer<B::Scalar>,
         min_depth: B::Scalar,
     ) -> Self {
+        let h = h.try_as_slice().unwrap_or(&[]);
+        let hu = hu.try_as_slice().unwrap_or(&[]);
+        let hv = hv.try_as_slice().unwrap_or(&[]);
         Self { h, hu, hv, min_depth }
     }
 

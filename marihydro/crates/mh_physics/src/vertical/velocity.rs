@@ -8,29 +8,35 @@
 
 use super::sigma::SigmaCoordinate;
 use crate::state::ShallowWaterState;
-use mh_foundation::AlignedVec;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, RuntimeScalar};
 
 /// 垂向速度计算器
-pub struct VerticalVelocity {
+pub struct VerticalVelocity<B: Backend> {
     /// σ坐标
     sigma: SigmaCoordinate,
     /// 单元数量
     n_cells: usize,
     /// 垂向速度场 [m/s]（n_cells × n_layers+1）
     /// w[cell][k] = 层界面 k 的垂向速度
-    w: Vec<AlignedVec<f64>>,
+    w: Vec<B::Buffer<B::Scalar>>,
+    /// 后端实例
+    backend: B,
 }
 
-impl VerticalVelocity {
+impl<B: Backend> VerticalVelocity<B> {
     /// 创建新的垂向速度计算器
-    pub fn new(n_cells: usize, sigma: SigmaCoordinate) -> Self {
+    pub fn new_with_backend(backend: B, n_cells: usize, sigma: SigmaCoordinate) -> Self {
         let n_interfaces = sigma.n_layers() + 1;
         let w = (0..n_interfaces)
-            .map(|_| AlignedVec::zeros(n_cells))
+            .map(|_| backend.alloc(n_cells))
             .collect();
         
-        Self { sigma, n_cells, w }
+        Self {
+            sigma,
+            n_cells,
+            w,
+            backend,
+        }
     }
 
     /// 从水平散度场计算垂向速度
@@ -43,28 +49,34 @@ impl VerticalVelocity {
     /// 从底部积分：w(σ=0) = 0, w(k) = w(k+1) - ∫ h×∇·u dσ
     pub fn compute_from_divergence(
         &mut self,
-        div_hu: &[f64],
-        state: &ShallowWaterState<CpuBackend<f64>>,
+        div_hu: &B::Buffer<B::Scalar>,
+        state: &ShallowWaterState<B>,
     ) {
         let n_layers = self.sigma.n_layers();
+        let eps = <B::Scalar as RuntimeScalar>::from_config(1e-6)
+            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
+        let zero = <B::Scalar as RuntimeScalar>::ZERO;
 
         for cell in 0..self.n_cells.min(div_hu.len()) {
             let h = state.h[cell];
-            if h < 1e-6 {
+            if h < eps {
                 // 干单元：w = 0
                 for k in 0..=n_layers {
-                    self.w[k][cell] = 0.0;
+                    self.w[k][cell] = zero;
                 }
                 continue;
             }
 
             // 底部边界条件：w = 0 (无穿透)
-            self.w[n_layers][cell] = 0.0;
+            self.w[n_layers][cell] = zero;
 
             // 从底部向上积分
             // w(k) = w(k+1) - div_hu * Δσ
             for k in (0..n_layers).rev() {
-                let d_sigma = self.sigma.layer_thickness_sigma(k);
+                let d_sigma = <B::Scalar as RuntimeScalar>::from_config(
+                    self.sigma.layer_thickness_sigma(k),
+                )
+                .unwrap_or(zero);
                 self.w[k][cell] = self.w[k + 1][cell] - div_hu[cell] * d_sigma;
             }
 
@@ -78,36 +90,42 @@ impl VerticalVelocity {
     /// 更精确的版本，使用每层的实际速度
     pub fn compute_from_layered_velocity(
         &mut self,
-        u_layers: &[&[f64]],
-        v_layers: &[&[f64]],
-        du_dx: &[&[f64]],
-        dv_dy: &[&[f64]],
-        state: &ShallowWaterState<CpuBackend<f64>>,
+        u_layers: &[&B::Buffer<B::Scalar>],
+        v_layers: &[&B::Buffer<B::Scalar>],
+        du_dx: &[&B::Buffer<B::Scalar>],
+        dv_dy: &[&B::Buffer<B::Scalar>],
+        state: &ShallowWaterState<B>,
     ) {
         let n_layers = self.sigma.n_layers();
+        let eps = <B::Scalar as RuntimeScalar>::from_config(1e-6)
+            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
+        let zero = <B::Scalar as RuntimeScalar>::ZERO;
 
         for cell in 0..self.n_cells {
             let h = state.h[cell];
-            if h < 1e-6 {
+            if h < eps {
                 for k in 0..=n_layers {
-                    self.w[k][cell] = 0.0;
+                    self.w[k][cell] = zero;
                 }
                 continue;
             }
 
             // 底部边界：w = 0
-            self.w[n_layers][cell] = 0.0;
+            self.w[n_layers][cell] = zero;
 
             // 逐层积分
             for k in (0..n_layers).rev() {
-                let d_sigma = self.sigma.layer_thickness_sigma(k);
+                let d_sigma = <B::Scalar as RuntimeScalar>::from_config(
+                    self.sigma.layer_thickness_sigma(k),
+                )
+                .unwrap_or(zero);
                 let layer_h = d_sigma * h;
 
                 // 水平散度（若提供）
                 let div_uv = if k < du_dx.len() && k < dv_dy.len() {
                     du_dx[k][cell] + dv_dy[k][cell]
                 } else {
-                    0.0
+                    zero
                 };
 
                 // 连续方程：∂w/∂z = -∇·u → w(z_top) = w(z_bot) - ∇·u × Δz
@@ -120,12 +138,12 @@ impl VerticalVelocity {
     }
 
     /// 获取特定层界面的垂向速度
-    pub fn w_at_interface(&self, k: usize) -> &[f64] {
+    pub fn w_at_interface(&self, k: usize) -> &B::Buffer<B::Scalar> {
         &self.w[k]
     }
 
     /// 获取特定单元、层界面的垂向速度
-    pub fn get(&self, cell: usize, k: usize) -> f64 {
+    pub fn get(&self, cell: usize, k: usize) -> B::Scalar {
         self.w[k][cell]
     }
 
@@ -143,18 +161,27 @@ impl VerticalVelocity {
     pub fn sigma(&self) -> &SigmaCoordinate {
         &self.sigma
     }
+
+    /// 获取后端引用
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ShallowWaterState;
+    use mh_runtime::{Backend, CpuBackend, DeviceBuffer};
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
+    fn create_test_state(
+        backend: CpuBackend<f64>,
+        n_cells: usize,
+        h: f64,
+    ) -> ShallowWaterState<CpuBackend<f64>> {
+        let mut state = ShallowWaterState::new_with_backend(backend.clone(), n_cells);
+        let h_val = backend.scalar_from_f64(h);
         for i in 0..n_cells {
-            state.h[i] = h;
+            state.h[i] = h_val;
         }
         state
     }
@@ -162,7 +189,8 @@ mod tests {
     #[test]
     fn test_vertical_velocity_creation() {
         let sigma = SigmaCoordinate::uniform(5);
-        let vv = VerticalVelocity::new(10, sigma);
+        let backend = CpuBackend::<f64>::new();
+        let vv = VerticalVelocity::new_with_backend(backend, 10, sigma);
 
         assert_eq!(vv.n_cells(), 10);
         assert_eq!(vv.n_layers(), 5);
@@ -171,9 +199,11 @@ mod tests {
     #[test]
     fn test_zero_divergence() {
         let sigma = SigmaCoordinate::uniform(5);
-        let mut vv = VerticalVelocity::new(10, sigma);
-        let state = create_test_state(10, 2.0);
-        let div_hu = vec![0.0; 10];
+        let backend = CpuBackend::<f64>::new();
+        let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
+        let state = create_test_state(backend.clone(), 10, 2.0);
+        let mut div_hu = backend.alloc(10);
+        div_hu.fill(backend.scalar_from_f64(0.0));
 
         vv.compute_from_divergence(&div_hu, &state);
 
@@ -188,9 +218,11 @@ mod tests {
     #[test]
     fn test_constant_divergence() {
         let sigma = SigmaCoordinate::uniform(5);
-        let mut vv = VerticalVelocity::new(10, sigma);
-        let state = create_test_state(10, 2.0);
-        let div_hu = vec![0.1; 10]; // 正散度
+        let backend = CpuBackend::<f64>::new();
+        let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
+        let state = create_test_state(backend.clone(), 10, 2.0);
+        let mut div_hu = backend.alloc(10);
+        div_hu.fill(backend.scalar_from_f64(0.1));
 
         vv.compute_from_divergence(&div_hu, &state);
 
@@ -208,9 +240,11 @@ mod tests {
     #[test]
     fn test_dry_cell() {
         let sigma = SigmaCoordinate::uniform(5);
-        let mut vv = VerticalVelocity::new(10, sigma);
-        let state = create_test_state(10, 1e-8); // 干单元
-        let div_hu = vec![1.0; 10];
+        let backend = CpuBackend::<f64>::new();
+        let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
+        let state = create_test_state(backend.clone(), 10, 1e-8); // 干单元
+        let mut div_hu = backend.alloc(10);
+        div_hu.fill(backend.scalar_from_f64(1.0));
 
         vv.compute_from_divergence(&div_hu, &state);
 

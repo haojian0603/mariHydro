@@ -21,15 +21,26 @@
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and convergence to steady state solutions".
 //! AIAA Paper 93-0880.
 
-use mh_runtime::Backend;
+use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::Float;
 use super::traits::{LimiterContext, SlopeLimiter};
 
 /// Venkatakrishnan 限制器
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Venkatakrishnan<B: Backend> {
     k: B::Scalar,
     eps_squared: B::Scalar,
     tol: B::Scalar,
+}
+
+impl<B: Backend> std::fmt::Debug for Venkatakrishnan<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Venkatakrishnan")
+            .field("k", &self.k)
+            .field("eps_squared", &self.eps_squared)
+            .field("tol", &self.tol)
+            .finish()
+    }
 }
 
 impl<B: Backend> Venkatakrishnan<B> {
@@ -72,6 +83,30 @@ impl<B: Backend> Venkatakrishnan<B> {
             tol,
         }
     }
+
+        /// 预设：激波/强间断
+        pub fn for_shock_capturing(mesh_scale: B::Scalar) -> Self {
+            let k = B::Scalar::from_config(0.1).unwrap_or(B::Scalar::ONE);
+            Self::new(k, mesh_scale)
+        }
+
+        /// 预设：干湿交界
+        pub fn for_wetting_drying(mesh_scale: B::Scalar) -> Self {
+            let k = B::Scalar::from_config(0.3).unwrap_or(B::Scalar::ONE);
+            Self::new(k, mesh_scale)
+        }
+
+        /// 预设：光滑流动
+        pub fn for_smooth_flow(mesh_scale: B::Scalar) -> Self {
+            let k = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE);
+            Self::new(k, mesh_scale)
+        }
+
+        /// 预设：最小限制
+        pub fn minimal_limiting(mesh_scale: B::Scalar) -> Self {
+            let k = B::Scalar::from_config(5.0).unwrap_or(B::Scalar::ONE);
+            Self::new(k, mesh_scale)
+        }
 
     /// 获取 K 参数
     #[inline]
@@ -178,23 +213,23 @@ mod tests {
 
     #[test]
     fn test_presets() {
-        let shock = Venkatakrishnan::for_shock_capturing(1.0);
+        let shock = Venkatakrishnan::<BackendF64>::for_shock_capturing(1.0);
         assert_eq!(shock.k(), 0.1);
 
-        let wet_dry = Venkatakrishnan::for_wetting_drying(1.0);
+        let wet_dry = Venkatakrishnan::<BackendF64>::for_wetting_drying(1.0);
         assert_eq!(wet_dry.k(), 0.3);
 
-        let smooth = Venkatakrishnan::for_smooth_flow(1.0);
+        let smooth = Venkatakrishnan::<BackendF64>::for_smooth_flow(1.0);
         assert_eq!(smooth.k(), 2.0);
 
-        let minimal = Venkatakrishnan::minimal_limiting(1.0);
+        let minimal = Venkatakrishnan::<BackendF64>::minimal_limiting(1.0);
         assert_eq!(minimal.k(), 5.0);
     }
 
     #[test]
     fn test_zero_gradient() {
-        let limiter = Venkatakrishnan::new(5.0, 0.1);
-        let ctx = LimiterContext::new(1.0, 0.0, 0.5, 1.5, 0.1);
+        let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
+        let ctx = LimiterContext::<BackendF64>::new(1.0, 0.0, 0.5, 1.5, 0.1);
         assert_eq!(limiter.compute_limiter(&ctx), 1.0);
     }
 

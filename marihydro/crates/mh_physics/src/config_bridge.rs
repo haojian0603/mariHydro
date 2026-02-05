@@ -15,7 +15,6 @@ use crate::types::NumericalParams;
 use crate::engine::solver::{NumericalScheme, FallbackStrategy, TimeIntegrator, StabilityOptions};
 use crate::engine::time_integrator::TimeIntegratorKind;
 use mh_runtime::RuntimeScalar;
-use num_traits::FromPrimitive;
 
 /// 配置转换错误
 #[derive(Debug, Clone, thiserror::Error)]
@@ -63,23 +62,23 @@ pub struct Layer3Config<S: RuntimeScalar> {
 
 impl<S> Default for Layer3Config<S>
 where
-    S: RuntimeScalar + FromPrimitive,
+    S: RuntimeScalar,
 {
     /// 创建默认配置，用于测试和简单场景
     fn default() -> Self {
         Self {
             params: NumericalParams::<S>::default(),
-            gravity: S::from_f64(9.81).unwrap_or_else(|| S::ZERO),
+            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
             implicit_friction: true,
-            default_manning_n: S::from_f64(0.03).unwrap_or_else(|| S::ZERO),
+            default_manning_n: S::from_config(0.03).unwrap_or(S::ZERO),
             riemann_solver: RiemannSolverType::Hllc,
             scheme: NumericalScheme::SecondOrderMuscl,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),
             max_fallback_attempts: 3,
-            timestep_reduction_factor: S::from_f64(0.5).unwrap_or_else(|| S::ZERO),
+            timestep_reduction_factor: S::from_config(0.5).unwrap_or(S::ZERO),
             integrator: TimeIntegrator::Explicit,
             time_integrator_kind: TimeIntegratorKind::SspRk3,
         }
@@ -95,7 +94,7 @@ pub struct Layer3ConfigBuilder<S: RuntimeScalar> {
 
 impl<S> Layer3ConfigBuilder<S>
 where
-    S: RuntimeScalar + FromPrimitive,
+    S: RuntimeScalar,
 {
     /// 创建新的构建器
     pub fn new() -> Self {
@@ -122,7 +121,7 @@ where
 
     /// 设置 CFL 数
     pub fn cfl(mut self, cfl: f64) -> Self {
-        if let Some(cfl_s) = S::from_f64(cfl) {
+        if let Some(cfl_s) = S::from_config(cfl) {
             self.config.params.cfl = cfl_s;
         }
         self
@@ -130,7 +129,7 @@ where
 
     /// 设置重力加速度
     pub fn gravity(mut self, g: f64) -> Self {
-        if let Some(g_s) = S::from_f64(g) {
+        if let Some(g_s) = S::from_config(g) {
             self.config.gravity = g_s;
         }
         self
@@ -193,7 +192,7 @@ where
 
 impl<S> Default for Layer3ConfigBuilder<S>
 where
-    S: RuntimeScalar + FromPrimitive,
+    S: RuntimeScalar,
 {
     fn default() -> Self {
         Self::new()
@@ -202,7 +201,7 @@ where
 
 impl<S> Layer3Config<S>
 where
-    S: RuntimeScalar + FromPrimitive,
+    S: RuntimeScalar,
 {
     /// 创建配置构建器
     pub fn builder() -> Layer3ConfigBuilder<S> {
@@ -327,7 +326,7 @@ impl From<TimeIntegrationMethod> for TimeIntegratorKind {
 mod tests {
     use super::*;
     use mh_config::SolverConfig;
-    use num_traits::ToPrimitive;
+    use mh_runtime::RuntimeScalar;
 
     /// f64精度容差（相对误差约1e-15）
     const EPSILON_F64: f64 = 1e-10;
@@ -338,8 +337,8 @@ mod tests {
         let layer3: Layer3Config<f64> = Layer3Config::from_layer4(&layer4).unwrap();
         
         // 使用epsilon比较，容忍f64-f64转换的微小误差
-        assert!((layer3.gravity.to_f64().unwrap() - layer4.physics.gravity).abs() < EPSILON_F64);
-        assert!((layer3.params.cfl.to_f64().unwrap() - layer4.physics.cfl).abs() < EPSILON_F64);
+        assert!((layer3.gravity.to_f64_lossy() - layer4.physics.gravity).abs() < EPSILON_F64);
+        assert!((layer3.params.cfl.to_f64_lossy() - layer4.physics.cfl).abs() < EPSILON_F64);
     }
 
     #[test]
@@ -348,11 +347,11 @@ mod tests {
         let layer3: Layer3Config<f32> = Layer3Config::from_layer4(&layer4).unwrap();
         
         // f32转换后应有合理精度误差，不能期望完全相等
-        let expected_gravity = f32::from_f64(layer4.physics.gravity).unwrap();
-        assert!((layer3.gravity.to_f64().unwrap() - expected_gravity.to_f64().unwrap()).abs() < EPSILON_F64);
+        let expected_gravity = layer4.physics.gravity as f32;
+        assert!((layer3.gravity.to_f64_lossy() - expected_gravity.to_f64_lossy()).abs() < EPSILON_F64);
         
-        let expected_cfl = f32::from_f64(layer4.physics.cfl).unwrap();
-        assert!((layer3.params.cfl.to_f64().unwrap() - expected_cfl.to_f64().unwrap()).abs() < EPSILON_F64);
+        let expected_cfl = layer4.physics.cfl as f32;
+        assert!((layer3.params.cfl.to_f64_lossy() - expected_cfl.to_f64_lossy()).abs() < EPSILON_F64);
     }
 
     #[test]

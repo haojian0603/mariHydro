@@ -17,7 +17,7 @@
 
 use crate::numerics::linear_algebra::csr::CsrMatrix;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
-use num_traits::{Zero, One};
+use num_traits::Float;
 use std::sync::Arc;
 
 // ============================================================================
@@ -93,11 +93,20 @@ pub trait Preconditioner<B: Backend>: Send + Sync {
 /// # 类型参数
 /// 
 /// - `B`: 计算后端类型
+#[derive(Clone)]
 pub struct IdentityPreconditioner<B: Backend> {
     /// 计算后端实例
     backend: B,
     /// 向量维度（用于验证）
     n: usize,
+}
+
+impl<B: Backend> std::fmt::Debug for IdentityPreconditioner<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityPreconditioner")
+            .field("n", &self.n)
+            .finish()
+    }
 }
 
 impl<B: Backend> IdentityPreconditioner<B> {
@@ -159,11 +168,21 @@ impl<B: Backend> Preconditioner<B> for IdentityPreconditioner<B> {
 /// Jacobi 预条件器（Backend 感知）
 ///
 /// 存储逆对角线，内存通过 Backend 分配。
+#[derive(Clone)]
 pub struct JacobiPreconditioner<B: Backend> {
     /// 逆对角线元素（对齐存储）
     inv_diag: B::Buffer<B::Scalar>,
     /// 性能统计
     stats: PreconditionerStats,
+}
+
+impl<B: Backend> std::fmt::Debug for JacobiPreconditioner<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JacobiPreconditioner")
+            .field("inv_diag_len", &self.inv_diag.len())
+            .field("stats", &self.stats)
+            .finish()
+    }
 }
 
 impl<B: Backend> JacobiPreconditioner<B> {
@@ -190,12 +209,12 @@ impl<B: Backend> JacobiPreconditioner<B> {
             PreconditionerError::BackendAccess("inv_diag buffer not accessible".to_string())
         })?;
         for (i, &d) in diag_slice.iter().enumerate() {
-            if d.is_zero() {
+            if d.abs() <= B::Scalar::MIN_POSITIVE {
                 return Err(PreconditionerError::NumericalError(
                     format!("对角线元素 {} 为零", i)
                 ));
             }
-            inv_slice[i] = B::Scalar::one() / d;
+            inv_slice[i] = B::Scalar::ONE / d;
         }
 
         Ok(Self {
@@ -220,12 +239,12 @@ impl<B: Backend> JacobiPreconditioner<B> {
         })?;
         for i in 0..n {
             let d = matrix.get(i, i);
-            if d.is_zero() {
+            if d.abs() <= B::Scalar::MIN_POSITIVE {
                 return Err(PreconditionerError::NumericalError(
                     format!("对角线元素 {} 为零", i)
                 ));
             }
-            inv_slice[i] = B::Scalar::one() / d;
+            inv_slice[i] = B::Scalar::ONE / d;
         }
 
         Ok(Self {
@@ -268,13 +287,14 @@ impl<B: Backend> Preconditioner<B> for JacobiPreconditioner<B> {
         let inv_slice = self.inv_diag.try_as_slice_mut().ok_or_else(|| {
             PreconditionerError::BackendAccess("inv_diag buffer not accessible".to_string())
         })?;
+        let one = B::Scalar::ONE;
         for i in 0..n {
             let d = matrix.get(i, i);
-            if d.is_zero() {
-                inv_slice[i] = B::Scalar::one();
+            if d.abs() <= B::Scalar::MIN_POSITIVE {
+                inv_slice[i] = one;
                 self.stats.singular_entries += 1;
             } else {
-                inv_slice[i] = B::Scalar::one() / d;
+                inv_slice[i] = one / d;
             }
         }
 
@@ -318,6 +338,7 @@ impl Default for SsorParams {
 }
 
 /// SSOR 预条件器（Backend 感知）
+#[derive(Clone)]
 pub struct SsorPreconditioner<B: Backend> {
     /// 矩阵的 Arc 引用（线程安全）
     matrix: Arc<CsrMatrix<B::Scalar>>,
@@ -330,6 +351,15 @@ pub struct SsorPreconditioner<B: Backend> {
     stats: PreconditionerStats,
 }
 
+impl<B: Backend> std::fmt::Debug for SsorPreconditioner<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SsorPreconditioner")
+            .field("omega", &self.omega)
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
 impl<B: Backend> SsorPreconditioner<B> {
     /// 从矩阵创建 SSOR 预条件器
     pub fn from_matrix(
@@ -339,7 +369,7 @@ impl<B: Backend> SsorPreconditioner<B> {
     ) -> Result<Self, PreconditionerError> {
         let n = matrix.n_rows();
         let mut temp = backend.alloc(n);
-        temp.fill(B::Scalar::zero());
+        temp.fill(B::Scalar::ZERO);
 
         let omega = backend.scalar_from_f64(params.omega);
 
@@ -371,8 +401,8 @@ impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
                 sum -= val * y[col];
             }
             // D 部分（对角线）
-            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::one());
-            let diag_inv = B::Scalar::one() / diag_val;
+            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::ONE);
+            let diag_inv = B::Scalar::ONE / diag_val;
             y[i] = sum * diag_inv * self.omega;
         }
 
@@ -383,8 +413,8 @@ impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
             for (col, val) in matrix.row(i).iter().filter(|(c, _)| *c > i) {
                 sum -= val * y[col];
             }
-            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::one());
-            let diag_inv = B::Scalar::one() / diag_val;
+            let diag_val = matrix.diagonal_value(i).unwrap_or(B::Scalar::ONE);
+            let diag_inv = B::Scalar::ONE / diag_val;
             y[i] = sum * diag_inv * self.omega;
         }
         Ok(())
@@ -412,6 +442,7 @@ impl<B: Backend> Preconditioner<B> for SsorPreconditioner<B> {
 /// ILU(0) 预条件器
 ///
 /// 使用 CSR 矩阵的就地分解，不额外存储 LU 结构。
+#[derive(Clone)]
 pub struct Ilu0Preconditioner<B: Backend> {
     /// 稀疏结构（与矩阵一致）
     pattern: crate::numerics::linear_algebra::csr::CsrPattern,
@@ -422,6 +453,15 @@ pub struct Ilu0Preconditioner<B: Backend> {
     diag_idxs: Vec<Option<usize>>,
     /// 性能统计
     stats: PreconditionerStats,
+}
+
+impl<B: Backend> std::fmt::Debug for Ilu0Preconditioner<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ilu0Preconditioner")
+            .field("nnz", &self.lu_values.len())
+            .field("stats", &self.stats)
+            .finish()
+    }
 }
 
 impl<B: Backend> Ilu0Preconditioner<B> {
@@ -481,7 +521,7 @@ impl<B: Backend> Ilu0Preconditioner<B> {
                         PreconditionerError::NumericalError(format!("第 {} 行缺失对角线", j))
                     })?;
                     let diag_val = self.lu_values[diag_idx];
-                    if diag_val.is_zero() {
+                    if diag_val.abs() <= B::Scalar::MIN_POSITIVE {
                         return Err(PreconditionerError::NumericalError(format!(
                             "对角线元素 {} 为零", j
                         )));
@@ -503,7 +543,7 @@ impl<B: Backend> Ilu0Preconditioner<B> {
             }
 
             if let Some(diag_idx) = self.diag_idxs[i] {
-                if self.lu_values[diag_idx].is_zero() {
+                if self.lu_values[diag_idx].abs() <= B::Scalar::MIN_POSITIVE {
                     return Err(PreconditionerError::NumericalError(format!(
                         "对角线元素 {} 为零", i
                     )));
@@ -567,7 +607,7 @@ impl<B: Backend> Preconditioner<B> for Ilu0Preconditioner<B> {
                     sum -= lu_vals[idx] * y[col];
                 }
             }
-            let diag_val = diag.unwrap_or(B::Scalar::one());
+            let diag_val = diag.unwrap_or(B::Scalar::ONE);
             y[i] = sum / diag_val;
         }
         Ok(())

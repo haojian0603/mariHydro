@@ -29,8 +29,7 @@
 
 use mh_mesh::FrozenMesh;
 use mh_mesh::structured::StructuredMesh as StructuredMesh2D;
-use num_traits::FromPrimitive;
-use mh_runtime::Backend;
+use mh_runtime::{Backend, RuntimeScalar};
 use std::sync::Arc;
 use mh_foundation::MhError;
 
@@ -72,14 +71,6 @@ impl PhysicsMesh {
     pub fn from_frozen(frozen: &FrozenMesh) -> Self {
         Self {
             inner: Arc::new(frozen.clone()),
-        }
-    }
-
-    /// 创建指定单元数的空网格（测试用）
-    #[inline]
-    pub fn empty(n_cells: usize) -> Self {
-        Self {
-            inner: Arc::new(FrozenMesh::empty_with_cells(n_cells)),
         }
     }
 
@@ -162,9 +153,9 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Cell", idx, self.cell_count()));
         }
         let p = self.inner.cell_center[idx];
-        let x = B::Scalar::from_f64(p.x as f64)
+        let x = B::Scalar::from_config(p.x as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
-        let y = B::Scalar::from_f64(p.y as f64)
+        let y = B::Scalar::from_config(p.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
         Ok(B::vec2_new(x, y))
     }
@@ -256,9 +247,9 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let p = self.inner.face_center[idx];
-        let x = B::Scalar::from_f64(p.x as f64)
+        let x = B::Scalar::from_config(p.x as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
-        let y = B::Scalar::from_f64(p.y as f64)
+        let y = B::Scalar::from_config(p.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
         Ok(B::vec2_new(x, y))
     }
@@ -271,9 +262,9 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let n = self.inner.face_normal[idx];
-        let x = B::Scalar::from_f64(n.x as f64)
+        let x = B::Scalar::from_config(n.x as f64)
             .ok_or_else(|| MhError::invalid_input(format!("法向量x={}转换失败：超出目标类型范围", n.x)))?;
-        let y = B::Scalar::from_f64(n.y as f64)
+        let y = B::Scalar::from_config(n.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("法向量y={}转换失败：超出目标类型范围", n.y)))?;
         Ok(B::vec2_new(x, y))
     }
@@ -282,6 +273,18 @@ impl PhysicsMesh {
     #[inline]
     pub fn face_length(&self, face: FaceIndex) -> f64 {
         self.inner.face_length[face.get()]
+    }
+
+    /// 获取面长度（Backend 标量）
+    #[inline]
+    pub fn face_length_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+        let idx = face.get();
+        if idx >= self.face_count() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
+        }
+        backend
+            .try_scalar_from_f64(self.inner.face_length[idx])
+            .map_err(|err| MhError::invalid_input(format!("面长度转换失败: {err}")))
     }
 
     /// 获取面owner单元索引
@@ -345,10 +348,34 @@ impl PhysicsMesh {
         self.inner.face_z_left[face.get()]
     }
 
+    /// 获取面左侧床面高程（Backend 标量）
+    #[inline]
+    pub fn face_z_left_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+        let idx = face.get();
+        if idx >= self.face_count() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
+        }
+        backend
+            .try_scalar_from_f64(self.inner.face_z_left[idx])
+            .map_err(|err| MhError::invalid_input(format!("面左侧高程转换失败: {err}")))
+    }
+
     /// 获取面右侧床面高程 [m]
     #[inline]
     pub fn face_z_right(&self, face: FaceIndex) -> f64 {
         self.inner.face_z_right[face.get()]
+    }
+
+    /// 获取面右侧床面高程（Backend 标量）
+    #[inline]
+    pub fn face_z_right_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+        let idx = face.get();
+        if idx >= self.face_count() {
+            return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
+        }
+        backend
+            .try_scalar_from_f64(self.inner.face_z_right[idx])
+            .map_err(|err| MhError::invalid_input(format!("面右侧高程转换失败: {err}")))
     }
 
     /// 判断是否为边界面
@@ -374,9 +401,9 @@ impl PhysicsMesh {
     #[inline]
     pub fn node_xy_generic<B: Backend>(&self, node: NodeIndex) -> Result<B::Vector2D, MhError> {
         let p = self.inner.node_coords[node.get()];
-        let x = B::Scalar::from_f64(p.x as f64)
+        let x = B::Scalar::from_config(p.x as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败", p.x)))?;
-        let y = B::Scalar::from_f64(p.y as f64)
+        let y = B::Scalar::from_config(p.y as f64)
             .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败", p.y)))?;
         Ok(B::vec2_new(x, y))
     }
@@ -443,7 +470,8 @@ mod tests {
 
     #[test]
     fn test_physics_mesh_from_empty() {
-        let frozen = FrozenMesh::empty();
+        let backend = CpuBackend::<f64>::new();
+        let frozen = FrozenMesh::empty_with_backend(backend);
         let mesh = PhysicsMesh::from_frozen(&frozen);
 
         assert_eq!(mesh.cell_count(), 0);
@@ -541,8 +569,8 @@ mod tests {
     // 创建测试用的FrozenMesh
     fn create_test_mesh() -> FrozenMesh {
         use mh_geo::{Point2D, Point3D};
-
-        let mut mesh = FrozenMesh::empty_with_cells(2);
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMesh::empty_with_cells_backend(backend.clone(), 2);
         mesh.n_nodes = 6;
         mesh.node_coords = vec![
             Point3D::new(0.0, 0.0, 0.0),
@@ -554,8 +582,12 @@ mod tests {
         ];
         mesh.n_cells = 2;
         mesh.cell_center = vec![Point2D::new(0.5, 0.5), Point2D::new(1.5, 0.5)];
-        mesh.cell_area = vec![1.0, 1.0];
-        mesh.cell_z_bed = vec![0.0, 0.0];
+        let mut cell_area = backend.alloc(2);
+        cell_area.copy_from_slice(&[1.0, 1.0]);
+        mesh.cell_area = cell_area;
+        let mut cell_z_bed = backend.alloc(2);
+        cell_z_bed.copy_from_slice(&[0.0, 0.0]);
+        mesh.cell_z_bed = cell_z_bed;
         mesh.cell_node_offsets = vec![0, 4, 8];
         mesh.cell_node_indices = vec![0, 1, 4, 3, 1, 2, 5, 4];
         mesh.cell_face_offsets = vec![0, 4, 8];
@@ -582,14 +614,22 @@ mod tests {
             Point3D::new(1.0, 0.0, 0.0),
             Point3D::new(0.0, 1.0, 0.0),
         ];
-        mesh.face_length = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-        mesh.face_z_left = vec![0.0; 7];
-        mesh.face_z_right = vec![0.0; 7];
+        let mut face_length = backend.alloc(7);
+        face_length.copy_from_slice(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        mesh.face_length = face_length;
+        let mut face_z_left = backend.alloc(7);
+        face_z_left.copy_from_slice(&[0.0; 7]);
+        mesh.face_z_left = face_z_left;
+        let mut face_z_right = backend.alloc(7);
+        face_z_right.copy_from_slice(&[0.0; 7]);
+        mesh.face_z_right = face_z_right;
         mesh.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
         mesh.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
         mesh.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
         mesh.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
-        mesh.face_dist_o2n = vec![1.0; 7];
+        let mut face_dist_o2n = backend.alloc(7);
+        face_dist_o2n.copy_from_slice(&[1.0; 7]);
+        mesh.face_dist_o2n = face_dist_o2n;
         mesh.boundary_face_indices = vec![1, 2, 3, 4, 5, 6];
         mesh.boundary_names = vec!["boundary".to_string()];
         mesh.face_boundary_id = vec![None, Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)];

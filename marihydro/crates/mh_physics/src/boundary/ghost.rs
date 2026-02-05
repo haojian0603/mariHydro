@@ -10,10 +10,8 @@
 use super::types::{BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
 use crate::types::NumericalParams;
-use mh_runtime::Backend;
-use num_traits::{FromPrimitive, Float, Zero};
-use mh_runtime::Vector2D;
-use mh_runtime::RuntimeScalar;
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
+use num_traits::Float;
 
 // ============================================================
 // 动量镜像模式
@@ -112,7 +110,7 @@ impl GhostStateCalculator {
         z_bed: B::Scalar,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float,
+        B::Scalar: RuntimeScalar,
     {
         match kind {
             BoundaryKind::Wall => self.compute_wall_ghost::<B>(interior, normal),
@@ -138,9 +136,9 @@ impl GhostStateCalculator {
         normal: B::Vector2D,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float + Zero + FromPrimitive,
+        B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
         let h = interior.h.max(h_min);
 
         let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
@@ -169,7 +167,7 @@ impl GhostStateCalculator {
         normal: B::Vector2D,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float,
+        B::Scalar: RuntimeScalar,
     {
         self.compute_wall_ghost::<B>(interior, normal)
     }
@@ -183,10 +181,10 @@ impl GhostStateCalculator {
         z_bed: B::Scalar,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float + Zero + FromPrimitive,
+        B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
-        let g = B::Scalar::from_f64(self.params.gravity).unwrap_or(B::Scalar::ONE);
+        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ONE);
 
         let h_int = interior.h.max(h_min);
         if h_int <= h_min {
@@ -199,11 +197,11 @@ impl GhostStateCalculator {
         let ny = normal.y();
         let un_int = u_int * nx + v_int * ny;
 
-        let u_ext = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO);
-        let v_ext = B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        let u_ext = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO);
+        let v_ext = B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO);
         let un_ext = u_ext * nx + v_ext * ny;
 
-        let eta_ext = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO);
+        let eta_ext = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO);
         let h_ext = (eta_ext - z_bed).max(h_min);
         let c_int = (g * h_int).sqrt();
         let _c_ext = (g * h_ext).sqrt();
@@ -248,12 +246,12 @@ impl GhostStateCalculator {
         external: &ExternalForcing,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float + Zero + FromPrimitive,
+        B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
-        let h = B::Scalar::from_f64(external.eta).unwrap_or(B::Scalar::ZERO).max(h_min);
-        let u = B::Scalar::from_f64(external.velocity.0).unwrap_or(B::Scalar::ZERO);
-        let v = B::Scalar::from_f64(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO).max(h_min);
+        let u = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO);
+        let v = B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO);
         ConservedState { h, hu: h * u, hv: h * v }
     }
 
@@ -265,9 +263,9 @@ impl GhostStateCalculator {
         mode: GhostMomentumMode,
     ) -> ConservedState<B::Scalar>
     where
-        B::Scalar: Float + Zero + FromPrimitive,
+        B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_f64(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
         let h = interior.h.max(h_min);
         let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
         let v = if h > B::Scalar::ZERO { interior.hv / h } else { B::Scalar::ZERO };
@@ -281,7 +279,7 @@ impl GhostStateCalculator {
         let (ghost_u, ghost_v) = match mode {
             GhostMomentumMode::FullReflect => (ut_x - nx * un, ut_y - ny * un),
             GhostMomentumMode::FreeSlip => {
-                let half = B::Scalar::from_f64(0.5).unwrap_or(B::Scalar::HALF);
+                let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::HALF);
                 (ut_x - nx * (un * half), ut_y - ny * (un * half))
             }
             GhostMomentumMode::NoReflect => (u, v),
@@ -311,7 +309,7 @@ impl GhostStateCalculator {
         z_beds: &[B::Scalar],
         output: &mut [ConservedState<B::Scalar>],
     ) where
-        B::Scalar: Float,
+        B::Scalar: RuntimeScalar,
     {
         debug_assert_eq!(interiors.len(), kinds.len());
         debug_assert_eq!(interiors.len(), normals.len());
@@ -355,11 +353,11 @@ impl Default for GhostStateCalculator {
 #[inline]
 pub fn reflect_velocity<B: Backend>(velocity: (B::Scalar, B::Scalar), normal: B::Vector2D) -> (B::Scalar, B::Scalar)
 where
-    B::Scalar: Float + Zero + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     let nx = normal.x();
     let ny = normal.y();
-    let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
+    let two = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
     let un = velocity.0 * nx + velocity.1 * ny;
     (velocity.0 - two * un * nx, velocity.1 - two * un * ny)
 }
@@ -375,7 +373,7 @@ where
 #[inline]
 pub fn decompose_velocity<B: Backend>(velocity: (B::Scalar, B::Scalar), normal: B::Vector2D) -> (B::Scalar, (B::Scalar, B::Scalar))
 where
-    B::Scalar: Float,
+    B::Scalar: RuntimeScalar,
 {
     let nx = normal.x();
     let ny = normal.y();

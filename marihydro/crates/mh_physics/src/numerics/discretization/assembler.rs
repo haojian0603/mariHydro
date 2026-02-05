@@ -31,8 +31,7 @@ use super::topology::CellFaceTopology;
 use crate::adapter::PhysicsMesh;
 use crate::numerics::linear_algebra::{CsrBuilder, CsrMatrix, CsrPattern};
 use crate::state::ShallowWaterState;
-use mh_runtime::{Backend, CellIndex, DeviceBuffer, RuntimeScalar};
-use num_traits::{Float, FromPrimitive};
+use mh_runtime::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// 组装器配置
@@ -81,7 +80,7 @@ pub struct PressureMatrixAssembler<B: Backend> {
 impl<B> PressureMatrixAssembler<B>
 where
     B: Backend,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建压力矩阵组装器
     pub fn new(topo: &CellFaceTopology, backend: B) -> Self {
@@ -356,7 +355,7 @@ pub struct ImplicitMomentumAssembler<B: Backend> {
 impl<B> ImplicitMomentumAssembler<B>
 where
     B: Backend,
-    B::Scalar: RuntimeScalar + Float + FromPrimitive,
+    B::Scalar: RuntimeScalar,
 {
     /// 创建动量组装器
     pub fn new(topo: &CellFaceTopology, backend: B) -> Self {

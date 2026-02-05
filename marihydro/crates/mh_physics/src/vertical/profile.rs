@@ -62,13 +62,6 @@ impl<B: Backend> VerticalProfile<B> {
     }
 }
 
-/// CPU f64 后端的便捷方法
-impl VerticalProfile<CpuBackend<f64>> {
-    /// 使用默认后端创建
-    pub fn new(n_cells: usize, n_layers: usize) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, n_layers)
-    }
-}
 
 /// 剖面恢复方法
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,9 +300,3 @@ impl<B: Backend> ProfileRestorer<B> {
     }
 }
 
-impl ProfileRestorer<CpuBackend<f64>> {
-    /// 使用默认后端创建
-    pub fn new(n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
-        Self::new_with_backend(CpuBackend::<f64>::new(), n_cells, n_layers, method)
-    }
-}

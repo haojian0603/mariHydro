@@ -29,7 +29,7 @@ use std::path::Path;
 use std::fs::File;
 use crate::{FrozenMesh, FrozenMeshGeneric};  // FIX: Import from crate root
 use mh_geo::{Point2D, Point3D};
-use mh_runtime::{Backend, RuntimeScalar};
+use mh_runtime::{Backend, RuntimeScalar, CpuBackend};
 use serde_json;
 
 /// MHB 文件魔数
@@ -524,7 +524,8 @@ pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
 
     let ghost_capacity_value = ghost_capacity.iter().copied().max().unwrap_or(0) as usize;
 
-    let mut mesh = FrozenMesh::empty_with_cells(n_cells);
+    let backend = CpuBackend::<f64>::new();
+    let mut mesh = FrozenMesh::empty_with_cells_backend(backend, n_cells);
     mesh.n_nodes = n_nodes;
     mesh.node_coords = node_coords;
     mesh.n_cells = n_cells;
