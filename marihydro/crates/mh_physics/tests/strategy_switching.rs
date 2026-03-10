@@ -1,7 +1,7 @@
-// crates/mh_physics/tests/strategy_switching.rs
+﻿// crates/mh_physics/tests/strategy_switching.rs
 
-//! 策略切换测试
-//! 验证显式/半隐式策略的切换和状态连续性
+//! 绛栫暐鍒囨崲娴嬭瘯
+//! 楠岃瘉鏄惧紡/鍗婇殣寮忕瓥鐣ョ殑鍒囨崲鍜岀姸鎬佽繛缁€?
 
 use mh_physics::engine::strategy::{
     TimeIntegrationStrategy, ExplicitStrategy, SemiImplicitStrategyGeneric,
@@ -9,43 +9,52 @@ use mh_physics::engine::strategy::{
 };
 use mh_physics::core::CpuBackend;
 
-/// 测试策略可以被创建
+/// 娴嬭瘯绛栫暐鍙互琚垱寤?
 #[test]
-#[allow(deprecated)]
 fn test_strategy_creation() {
-    let _explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
-    let _semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let _explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new_with_backend(
+        CpuBackend::<f64>::new(),
+        ExplicitConfig::default(),
+    );
+    let _semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
 }
 
-/// 测试策略名称
+/// 娴嬭瘯绛栫暐鍚嶇О
 #[test]
-#[allow(deprecated)]
 fn test_strategy_names() {
-    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
+    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new_with_backend(
+        CpuBackend::<f64>::new(),
+        ExplicitConfig::default(),
+    );
     assert!(!explicit.name().is_empty());
     
-    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
     assert!(!semi_implicit.name().is_empty());
 }
 
-/// 测试策略CFL支持
+/// 娴嬭瘯绛栫暐CFL鏀寔
 #[test]
-#[allow(deprecated)]
 fn test_cfl_support() {
-    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new(ExplicitConfig::default());
+    let explicit: ExplicitStrategy<CpuBackend<f64>> = ExplicitStrategy::new_with_backend(
+        CpuBackend::<f64>::new(),
+        ExplicitConfig::default(),
+    );
     assert!(!explicit.supports_large_cfl());
     
-    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new(
+    let semi_implicit = SemiImplicitStrategyGeneric::<CpuBackend<f64>>::new_with_backend(
+        CpuBackend::<f64>::new(),
         100, // n_cells
-        SemiImplicitConfig::default()
+        SemiImplicitConfig::default(),
     );
     assert!(semi_implicit.supports_large_cfl());
 }
 
-// 更多策略切换测试需要完整的Solver设置...
+// 鏇村绛栫暐鍒囨崲娴嬭瘯闇€瑕佸畬鏁寸殑Solver璁剧疆...

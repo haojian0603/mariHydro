@@ -1,25 +1,25 @@
-// crates/mh_physics/src/boundary/manager.rs
+﻿// crates/mh_physics/src/boundary/manager.rs
 
-//! 边界条件管理器
+//! 杈圭晫鏉′欢绠＄悊鍣?
 //!
-//! 本模块提供边界条件的管理和边界通量计算功能：
-//! - BoundaryManager: 边界条件管理器
-//! - BoundaryFaceInfo: 边界面信息
-//! - BoundaryDataProvider: 边界数据提供者接口
+//! 鏈ā鍧楁彁渚涜竟鐣屾潯浠剁殑绠＄悊鍜岃竟鐣岄€氶噺璁＄畻鍔熻兘锛?
+//! - BoundaryManager: 杈圭晫鏉′欢绠＄悊鍣?
+//! - BoundaryFaceInfo: 杈圭晫闈俊鎭?
+//! - BoundaryDataProvider: 杈圭晫鏁版嵁鎻愪緵鑰呮帴鍙?
 //!
-//! # 设计思路
+//! # 璁捐鎬濊矾
 //!
-//! 1. 边界条件与边界面分离：条件是定义，面是几何实体
-//! 2. 通过名称关联条件和面
-//! 3. 按边界类型分类存储面信息，便于批量处理
-//! 4. 支持与外部强迫数据源集成
+//! 1. 杈圭晫鏉′欢涓庤竟鐣岄潰鍒嗙锛氭潯浠舵槸瀹氫箟锛岄潰鏄嚑浣曞疄浣?
+//! 2. 閫氳繃鍚嶇О鍏宠仈鏉′欢鍜岄潰
+//! 3. 鎸夎竟鐣岀被鍨嬪垎绫诲瓨鍌ㄩ潰淇℃伅锛屼究浜庢壒閲忓鐞?
+//! 4. 鏀寔涓庡閮ㄥ己杩暟鎹簮闆嗘垚
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/domain/boundary/manager.rs 迁移，适配新架构：
-//! - 使用 usize 索引（与 MeshAccess trait 一致）
-//! - 使用 glam::DVec2 表示法向量
-//! - 使用 thiserror 定义错误类型
+//! 浠?history_src/domain/boundary/manager.rs 杩佺Щ锛岄€傞厤鏂版灦鏋勶細
+//! - 浣跨敤 usize 绱㈠紩锛堜笌 MeshAccess trait 涓€鑷达級
+//! - 浣跨敤 glam::DVec2 琛ㄧず娉曞悜閲?
+//! - 浣跨敤 thiserror 瀹氫箟閿欒绫诲瀷
 
 use std::collections::HashMap;
 
@@ -30,32 +30,32 @@ use super::types::{BoundaryCondition, BoundaryKind, BoundaryParams, ExternalForc
 use crate::state::ConservedState;
 
 // ============================================================
-// 边界面信息
+// 杈圭晫闈俊鎭?
 // ============================================================
 
-/// 边界面信息
+/// 杈圭晫闈俊鎭?
 ///
-/// 描述单个边界面的几何和拓扑信息。
+/// 鎻忚堪鍗曚釜杈圭晫闈㈢殑鍑犱綍鍜屾嫇鎵戜俊鎭€?
 #[derive(Debug, Clone, Copy)]
 pub struct BoundaryFaceInfo {
-    /// 面索引（在网格中的索引）
+    /// 闈㈢储寮曪紙鍦ㄧ綉鏍间腑鐨勭储寮曪級
     pub face_id: usize,
 
-    /// 所属单元索引
+    /// 鎵€灞炲崟鍏冪储寮?
     pub cell_id: usize,
 
-    /// 面外法向量（单位向量）
+    /// 闈㈠娉曞悜閲忥紙鍗曚綅鍚戦噺锛?
     pub normal: DVec2,
 
-    /// 面长度 [m]
+    /// 闈㈤暱搴?[m]
     pub length: f64,
 
-    /// 所属边界条件的索引
+    /// 鎵€灞炶竟鐣屾潯浠剁殑绱㈠紩
     pub boundary_idx: usize,
 }
 
 impl BoundaryFaceInfo {
-    /// 创建新的边界面信息
+    /// 鍒涘缓鏂扮殑杈圭晫闈俊鎭?
     pub fn new(
         face_id: usize,
         cell_id: usize,
@@ -74,26 +74,26 @@ impl BoundaryFaceInfo {
 }
 
 // ============================================================
-// 边界数据提供者接口
+// 杈圭晫鏁版嵁鎻愪緵鑰呮帴鍙?
 // ============================================================
 
-/// 边界数据提供者接口
+/// 杈圭晫鏁版嵁鎻愪緵鑰呮帴鍙?
 ///
-/// 用于从外部数据源获取边界强迫数据（水位、流速等）。
+/// 鐢ㄤ簬浠庡閮ㄦ暟鎹簮鑾峰彇杈圭晫寮鸿揩鏁版嵁锛堟按浣嶃€佹祦閫熺瓑锛夈€?
 pub trait BoundaryDataProvider: Send + Sync {
-    /// 获取指定面在给定时间的强迫数据
+    /// 鑾峰彇鎸囧畾闈㈠湪缁欏畾鏃堕棿鐨勫己杩暟鎹?
     ///
-    /// # 参数
-    /// - `face_id`: 边界面索引
-    /// - `time`: 模拟时间 [s]
+    /// # 鍙傛暟
+    /// - `face_id`: 杈圭晫闈㈢储寮?
+    /// - `time`: 妯℃嫙鏃堕棿 [s]
     ///
-    /// # 返回
-    /// 强迫数据，若无数据返回 None
+    /// # 杩斿洖
+    /// 寮鸿揩鏁版嵁锛岃嫢鏃犳暟鎹繑鍥?None
     fn get_forcing(&self, face_id: usize, time: f64) -> Option<ExternalForcing>;
 
-    /// 批量获取强迫数据
+    /// 鎵归噺鑾峰彇寮鸿揩鏁版嵁
     ///
-    /// 默认实现逐个调用 `get_forcing`，可重写以优化性能。
+    /// 榛樿瀹炵幇閫愪釜璋冪敤 `get_forcing`锛屽彲閲嶅啓浠ヤ紭鍖栨€ц兘銆?
     fn get_forcings_batch(
         &self,
         face_ids: &[usize],
@@ -107,20 +107,20 @@ pub trait BoundaryDataProvider: Send + Sync {
     }
 }
 
-/// 恒定强迫数据提供者
+/// 鎭掑畾寮鸿揩鏁版嵁鎻愪緵鑰?
 ///
-/// 用于测试和简单场景，返回恒定的强迫数据。
+/// 鐢ㄤ簬娴嬭瘯鍜岀畝鍗曞満鏅紝杩斿洖鎭掑畾鐨勫己杩暟鎹€?
 pub struct ConstantForcingProvider {
     forcing: ExternalForcing,
 }
 
 impl ConstantForcingProvider {
-    /// 创建恒定强迫提供者
+    /// 鍒涘缓鎭掑畾寮鸿揩鎻愪緵鑰?
     pub fn new(forcing: ExternalForcing) -> Self {
         Self { forcing }
     }
 
-    /// 创建仅水位的恒定提供者
+    /// 鍒涘缓浠呮按浣嶇殑鎭掑畾鎻愪緵鑰?
     pub fn with_eta(eta: f64) -> Self {
         Self::new(ExternalForcing::with_eta(eta))
     }
@@ -142,24 +142,24 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 }
 
 // ============================================================
-// 边界条件管理器
+// 杈圭晫鏉′欢绠＄悊鍣?
 // ============================================================
 
-/// 边界条件管理器
+/// 杈圭晫鏉′欢绠＄悊鍣?
 ///
-/// 负责：
-/// 1. 管理边界条件定义
-/// 2. 注册边界面与条件的映射
-/// 3. 提供边界通量计算方法
+/// 璐熻矗锛?
+/// 1. 绠＄悊杈圭晫鏉′欢瀹氫箟
+/// 2. 娉ㄥ唽杈圭晫闈笌鏉′欢鐨勬槧灏?
+/// 3. 鎻愪緵杈圭晫閫氶噺璁＄畻鏂规硶
 ///
-/// # 使用流程
+/// # 浣跨敤娴佺▼
 ///
-/// 1. 创建管理器
-/// 2. 添加边界条件定义 (add_condition)
-/// 3. 注册边界面 (register_face)
-/// 4. 计算边界通量 (compute_*_flux)
+/// 1. 鍒涘缓绠＄悊鍣?
+/// 2. 娣诲姞杈圭晫鏉′欢瀹氫箟 (add_condition)
+/// 3. 娉ㄥ唽杈圭晫闈?(register_face)
+/// 4. 璁＄畻杈圭晫閫氶噺 (compute_*_flux)
 ///
-/// # 示例
+/// # 绀轰緥
 ///
 /// ```ignore
 /// use mh_physics::boundary::{BoundaryManager, BoundaryCondition, BoundaryParams};
@@ -167,45 +167,45 @@ impl BoundaryDataProvider for ConstantForcingProvider {
 ///
 /// let mut manager = BoundaryManager::new(BoundaryParams::default());
 ///
-/// // 添加边界条件
+/// // 娣诲姞杈圭晫鏉′欢
 /// manager.add_condition(BoundaryCondition::wall("north"));
 /// manager.add_condition(BoundaryCondition::open_sea("south"));
 ///
-/// // 注册边界面
+/// // 娉ㄥ唽杈圭晫闈?
 /// manager.register_face(0, 0, DVec2::new(0.0, 1.0), 1.0, "north").unwrap();
 /// manager.register_face(1, 1, DVec2::new(0.0, -1.0), 1.0, "south").unwrap();
 /// ```
 pub struct BoundaryManager {
-    /// 边界条件定义（按名称索引）
+    /// 杈圭晫鏉′欢瀹氫箟锛堟寜鍚嶇О绱㈠紩锛?
     conditions: HashMap<String, BoundaryCondition>,
 
-    /// 条件名称到索引的映射
+    /// 鏉′欢鍚嶇О鍒扮储寮曠殑鏄犲皠
     condition_indices: HashMap<String, usize>,
 
-    /// 条件列表（用于索引访问）
+    /// 鏉′欢鍒楄〃锛堢敤浜庣储寮曡闂級
     condition_list: Vec<BoundaryCondition>,
 
-    /// 固壁边界面
+    /// 鍥哄杈圭晫闈?
     wall_faces: Vec<BoundaryFaceInfo>,
 
-    /// 开边界面（Flather）
+    /// 寮€杈圭晫闈紙Flather锛?
     open_faces: Vec<BoundaryFaceInfo>,
 
-    /// 入流边界面
+    /// 鍏ユ祦杈圭晫闈?
     inflow_faces: Vec<BoundaryFaceInfo>,
 
-    /// 出流边界面
+    /// 鍑烘祦杈圭晫闈?
     outflow_faces: Vec<BoundaryFaceInfo>,
 
-    /// 周期边界面
+    /// 鍛ㄦ湡杈圭晫闈?
     periodic_faces: Vec<BoundaryFaceInfo>,
 
-    /// 计算参数
+    /// 璁＄畻鍙傛暟
     params: BoundaryParams,
 }
 
 impl BoundaryManager {
-    /// 创建新的边界管理器
+    /// 鍒涘缓鏂扮殑杈圭晫绠＄悊鍣?
     pub fn new(params: BoundaryParams) -> Self {
         Self {
             conditions: HashMap::new(),
@@ -220,18 +220,18 @@ impl BoundaryManager {
         }
     }
 
-    /// 从数值参数创建
+    /// 浠庢暟鍊煎弬鏁板垱寤?
     pub fn from_numerical_params(params: &crate::types::NumericalParams) -> Self {
         Self::new(BoundaryParams::from_numerical_params(params))
     }
 
-    /// 添加边界条件定义
+    /// 娣诲姞杈圭晫鏉′欢瀹氫箟
     ///
-    /// # 参数
-    /// - `condition`: 边界条件配置
+    /// # 鍙傛暟
+    /// - `condition`: 杈圭晫鏉′欢閰嶇疆
     ///
-    /// # 返回
-    /// 条件在列表中的索引
+    /// # 杩斿洖
+    /// 鏉′欢鍦ㄥ垪琛ㄤ腑鐨勭储寮?
     pub fn add_condition(&mut self, condition: BoundaryCondition) -> usize {
         let idx = self.condition_list.len();
         self.condition_indices.insert(condition.name.clone(), idx);
@@ -241,27 +241,27 @@ impl BoundaryManager {
         idx
     }
 
-    /// 获取边界条件
+    /// 鑾峰彇杈圭晫鏉′欢
     pub fn get_condition(&self, name: &str) -> Option<&BoundaryCondition> {
         self.conditions.get(name)
     }
 
-    /// 获取边界条件（按索引）
+    /// 鑾峰彇杈圭晫鏉′欢锛堟寜绱㈠紩锛?
     pub fn get_condition_by_index(&self, idx: usize) -> Option<&BoundaryCondition> {
         self.condition_list.get(idx)
     }
 
-    /// 注册边界面
+    /// 娉ㄥ唽杈圭晫闈?
     ///
-    /// # 参数
-    /// - `face_id`: 面索引
-    /// - `cell_id`: 所属单元索引
-    /// - `normal`: 面外法向量（应为单位向量）
-    /// - `length`: 面长度 [m]
-    /// - `boundary_name`: 边界条件名称
+    /// # 鍙傛暟
+    /// - `face_id`: 闈㈢储寮?
+    /// - `cell_id`: 鎵€灞炲崟鍏冪储寮?
+    /// - `normal`: 闈㈠娉曞悜閲忥紙搴斾负鍗曚綅鍚戦噺锛?
+    /// - `length`: 闈㈤暱搴?[m]
+    /// - `boundary_name`: 杈圭晫鏉′欢鍚嶇О
     ///
-    /// # 错误
-    /// - 边界条件未找到
+    /// # 閿欒
+    /// - 杈圭晫鏉′欢鏈壘鍒?
     pub fn register_face(
         &mut self,
         face_id: usize,
@@ -289,42 +289,42 @@ impl BoundaryManager {
         Ok(())
     }
 
-    // ========== 通量计算方法 ==========
+    // ========== 閫氶噺璁＄畻鏂规硶 ==========
 
-    /// 计算固壁边界通量
+    /// 璁＄畻鍥哄杈圭晫閫氶噺
     ///
-    /// 固壁边界：无穿透，只有压力作用
+    /// 鍥哄杈圭晫锛氭棤绌块€忥紝鍙湁鍘嬪姏浣滅敤
     ///
-    /// # 参数
-    /// - `h_interior`: 内部单元水深 [m]
-    /// - `normal`: 面外法向量
+    /// # 鍙傛暟
+    /// - `h_interior`: 鍐呴儴鍗曞厓姘存繁 [m]
+    /// - `normal`: 闈㈠娉曞悜閲?
     ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// # 杩斿洖
+    /// (璐ㄩ噺閫氶噺, 鍔ㄩ噺閫氶噺鍚戦噺)
     pub fn compute_wall_flux(&self, h_interior: f64, normal: DVec2) -> (f64, DVec2) {
-        // 质量通量为零（无穿透）
+        // 璐ㄩ噺閫氶噺涓洪浂锛堟棤绌块€忥級
         let mass_flux = 0.0;
 
-        // 动量通量仅有压力项
+        // 鍔ㄩ噺閫氶噺浠呮湁鍘嬪姏椤?
         let p = self.params.hydrostatic_pressure(h_interior);
         let momentum_flux = normal * p;
 
         (mass_flux, momentum_flux)
     }
 
-    /// 计算 Flather 辐射边界通量
+    /// 璁＄畻 Flather 杈愬皠杈圭晫閫氶噺
     ///
-    /// Flather 边界条件使用特征关系结合外部强迫。
-    /// 适用于开海边界，允许波动自由传出。
+    /// Flather 杈圭晫鏉′欢浣跨敤鐗瑰緛鍏崇郴缁撳悎澶栭儴寮鸿揩銆?
+    /// 閫傜敤浜庡紑娴疯竟鐣岋紝鍏佽娉㈠姩鑷敱浼犲嚭銆?
     ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `z_interior`: 内部单元底高程 [m]
-    /// - `external`: 外部强迫数据
-    /// - `normal`: 面外法向量
+    /// # 鍙傛暟
+    /// - `interior`: 鍐呴儴鍗曞厓鐘舵€?
+    /// - `z_interior`: 鍐呴儴鍗曞厓搴曢珮绋?[m]
+    /// - `external`: 澶栭儴寮鸿揩鏁版嵁
+    /// - `normal`: 闈㈠娉曞悜閲?
     ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// # 杩斿洖
+    /// (璐ㄩ噺閫氶噺, 鍔ㄩ噺閫氶噺鍚戦噺)
     pub fn compute_flather_flux(
         &self,
         interior: ConservedState,
@@ -335,22 +335,22 @@ impl BoundaryManager {
         let h = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h);
 
-        // 内部速度
+        // 鍐呴儴閫熷害
         let u = interior.hu / h;
         let v = interior.hv / h;
         let velocity = DVec2::new(u, v);
 
-        // 法向速度
+        // 娉曞悜閫熷害
         let un_int = velocity.dot(normal);
         let un_ext = external.velocity.dot(normal);
 
-        // 内部水位
+        // 鍐呴儴姘翠綅
         let eta_int = h + z_interior;
 
-        // Flather 条件: un* = un_ext + (c/h)(eta_int - eta_ext)
+        // Flather 鏉′欢: un* = un_ext + (c/h)(eta_int - eta_ext)
         let un_star = un_ext + (c / h) * (eta_int - external.eta);
 
-        // 通量计算
+        // 閫氶噺璁＄畻
         let mass_flux = h * un_star;
         let p = self.params.hydrostatic_pressure(h);
         let momentum_flux = normal * (mass_flux * un_int + p);
@@ -358,16 +358,16 @@ impl BoundaryManager {
         (mass_flux, momentum_flux)
     }
 
-    /// 计算自由出流通量
+    /// 璁＄畻鑷敱鍑烘祦閫氶噺
     ///
-    /// 零梯度外推，直接使用内部状态计算通量。
+    /// 闆舵搴﹀鎺紝鐩存帴浣跨敤鍐呴儴鐘舵€佽绠楅€氶噺銆?
     ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量
+    /// # 鍙傛暟
+    /// - `interior`: 鍐呴儴鍗曞厓鐘舵€?
+    /// - `normal`: 闈㈠娉曞悜閲?
     ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// # 杩斿洖
+    /// (璐ㄩ噺閫氶噺, 鍔ㄩ噺閫氶噺鍚戦噺)
     pub fn compute_outflow_flux(&self, interior: ConservedState, normal: DVec2) -> (f64, DVec2) {
         let h = interior.h.max(self.params.h_min);
         let u = interior.hu / h;
@@ -382,18 +382,18 @@ impl BoundaryManager {
         (mass_flux, momentum_flux)
     }
 
-    /// 计算入流边界通量
+    /// 璁＄畻鍏ユ祦杈圭晫閫氶噺
     ///
-    /// 根据给定的流量或速度计算通量。
+    /// 鏍规嵁缁欏畾鐨勬祦閲忔垨閫熷害璁＄畻閫氶噺銆?
     ///
-    /// # 参数
-    /// - `h_interior`: 内部单元水深 [m]
-    /// - `discharge`: 入流流量 [m³/s]
-    /// - `face_length`: 面长度 [m]
-    /// - `normal`: 面外法向量
+    /// # 鍙傛暟
+    /// - `h_interior`: 鍐呴儴鍗曞厓姘存繁 [m]
+    /// - `discharge`: 鍏ユ祦娴侀噺 [m鲁/s]
+    /// - `face_length`: 闈㈤暱搴?[m]
+    /// - `normal`: 闈㈠娉曞悜閲?
     ///
-    /// # 返回
-    /// (质量通量, 动量通量向量)
+    /// # 杩斿洖
+    /// (璐ㄩ噺閫氶噺, 鍔ㄩ噺閫氶噺鍚戦噺)
     pub fn compute_inflow_flux(
         &self,
         h_interior: f64,
@@ -401,7 +401,7 @@ impl BoundaryManager {
         face_length: f64,
         normal: DVec2,
     ) -> (f64, DVec2) {
-        // 入流流量（负号因为入流方向与法向相反）
+        // 鍏ユ祦娴侀噺锛堣礋鍙峰洜涓哄叆娴佹柟鍚戜笌娉曞悜鐩稿弽锛?
         let qn = -discharge / face_length.max(1e-10);
 
         let p = self.params.hydrostatic_pressure(h_interior);
@@ -411,34 +411,34 @@ impl BoundaryManager {
         (qn, momentum_flux)
     }
 
-    // ========== 访问方法 ==========
+    // ========== 璁块棶鏂规硶 ==========
 
-    /// 获取固壁边界面列表
+    /// 鑾峰彇鍥哄杈圭晫闈㈠垪琛?
     pub fn wall_faces(&self) -> &[BoundaryFaceInfo] {
         &self.wall_faces
     }
 
-    /// 获取开边界面列表
+    /// 鑾峰彇寮€杈圭晫闈㈠垪琛?
     pub fn open_faces(&self) -> &[BoundaryFaceInfo] {
         &self.open_faces
     }
 
-    /// 获取入流边界面列表
+    /// 鑾峰彇鍏ユ祦杈圭晫闈㈠垪琛?
     pub fn inflow_faces(&self) -> &[BoundaryFaceInfo] {
         &self.inflow_faces
     }
 
-    /// 获取出流边界面列表
+    /// 鑾峰彇鍑烘祦杈圭晫闈㈠垪琛?
     pub fn outflow_faces(&self) -> &[BoundaryFaceInfo] {
         &self.outflow_faces
     }
 
-    /// 获取周期边界面列表
+    /// 鑾峰彇鍛ㄦ湡杈圭晫闈㈠垪琛?
     pub fn periodic_faces(&self) -> &[BoundaryFaceInfo] {
         &self.periodic_faces
     }
 
-    /// 获取所有边界面的迭代器
+    /// 鑾峰彇鎵€鏈夎竟鐣岄潰鐨勮凯浠ｅ櫒
     pub fn all_faces(&self) -> impl Iterator<Item = &BoundaryFaceInfo> {
         self.wall_faces
             .iter()
@@ -448,7 +448,7 @@ impl BoundaryManager {
             .chain(&self.periodic_faces)
     }
 
-    /// 获取边界面总数
+    /// 鑾峰彇杈圭晫闈㈡€绘暟
     pub fn total_boundary_faces(&self) -> usize {
         self.wall_faces.len()
             + self.open_faces.len()
@@ -457,17 +457,17 @@ impl BoundaryManager {
             + self.periodic_faces.len()
     }
 
-    /// 获取边界条件数量
+    /// 鑾峰彇杈圭晫鏉′欢鏁伴噺
     pub fn condition_count(&self) -> usize {
         self.condition_list.len()
     }
 
-    /// 获取计算参数
+    /// 鑾峰彇璁＄畻鍙傛暟
     pub fn params(&self) -> &BoundaryParams {
         &self.params
     }
 
-    /// 清空所有注册的边界面
+    /// 娓呯┖鎵€鏈夋敞鍐岀殑杈圭晫闈?
     pub fn clear_faces(&mut self) {
         self.wall_faces.clear();
         self.open_faces.clear();
@@ -476,17 +476,17 @@ impl BoundaryManager {
         self.periodic_faces.clear();
     }
 
-    /// 验证边界条件设置
+    /// 楠岃瘉杈圭晫鏉′欢璁剧疆
     ///
-    /// 检查：
-    /// 1. 法向量是否单位化
-    /// 2. 是否有重复的边界面
+    /// 妫€鏌ワ細
+    /// 1. 娉曞悜閲忔槸鍚﹀崟浣嶅寲
+    /// 2. 鏄惁鏈夐噸澶嶇殑杈圭晫闈?
     pub fn validate(&self) -> Result<(), BoundaryError> {
         use std::collections::HashSet;
         let mut seen_faces = HashSet::new();
 
         for face in self.all_faces() {
-            // 检查法向量是否单位化
+            // 妫€鏌ユ硶鍚戦噺鏄惁鍗曚綅鍖?
             let mag_sq = face.normal.length_squared();
             if (mag_sq - 1.0).abs() > 1e-6 {
                 return Err(BoundaryError::InvalidNormal {
@@ -495,7 +495,7 @@ impl BoundaryManager {
                 });
             }
 
-            // 检查是否重复
+            // 妫€鏌ユ槸鍚﹂噸澶?
             if !seen_faces.insert(face.face_id) {
                 return Err(BoundaryError::DuplicateFace(face.face_id));
             }
@@ -512,7 +512,7 @@ impl Default for BoundaryManager {
 }
 
 // ============================================================
-// 错误类型
+// 閿欒绫诲瀷
 // ============================================================
 
 /// 边界模块错误类型
@@ -536,7 +536,7 @@ pub enum BoundaryError {
 }
 
 // ============================================================
-// 测试
+// 娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -603,7 +603,7 @@ mod tests {
         let (mass, momentum) = manager.compute_wall_flux(1.0, DVec2::new(1.0, 0.0));
 
         assert_eq!(mass, 0.0);
-        assert!(momentum.x > 0.0); // 压力向外
+        assert!(momentum.x > 0.0); // 鍘嬪姏鍚戝
         assert!((momentum.y).abs() < 1e-10);
     }
 
@@ -621,13 +621,13 @@ mod tests {
         let mut manager = BoundaryManager::default();
         manager.add_condition(BoundaryCondition::wall("test"));
 
-        // 单位向量应该通过
+        // 鍗曚綅鍚戦噺搴旇閫氳繃
         manager
             .register_face(0, 0, DVec2::new(1.0, 0.0), 1.0, "test")
             .unwrap();
         assert!(manager.validate().is_ok());
 
-        // 清空并添加非单位向量
+        // 娓呯┖骞舵坊鍔犻潪鍗曚綅鍚戦噺
         manager.clear_faces();
         manager
             .register_face(1, 0, DVec2::new(2.0, 0.0), 1.0, "test")

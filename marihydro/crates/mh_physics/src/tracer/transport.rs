@@ -1,73 +1,73 @@
-// crates/mh_physics/src/tracer/transport.rs
+﻿// crates/mh_physics/src/tracer/transport.rs
 
-//! 示踪剂输运求解器
+//! 绀鸿釜鍓傝緭杩愭眰瑙ｅ櫒
 //!
-//! 本模块提供示踪剂对流-扩散方程的求解功能：
-//! - TracerTransportSolver: 主求解器
-//! - TracerAdvectionScheme: 对流格式
-//! - TracerDiffusionConfig: 扩散配置
+//! 鏈ā鍧楁彁渚涚ず韪墏瀵规祦-鎵╂暎鏂圭▼鐨勬眰瑙ｅ姛鑳斤細
+//! - TracerTransportSolver: 涓绘眰瑙ｅ櫒
+//! - TracerAdvectionScheme: 瀵规祦鏍煎紡
+//! - TracerDiffusionConfig: 鎵╂暎閰嶇疆
 //!
-//! # 基本方程
+//! # 鍩烘湰鏂圭▼
 //!
-//! 示踪剂输运方程（二维深度平均）：
+//! 绀鸿釜鍓傝緭杩愭柟绋嬶紙浜岀淮娣卞害骞冲潎锛夛細
 //!
 //! $$\frac{\partial (hC)}{\partial t} + \nabla \cdot (hC\vec{u}) = \nabla \cdot (hK\nabla C) + S$$
 //!
-//! 其中：
-//! - $C$: 示踪剂浓度
-//! - $h$: 水深
-//! - $\vec{u}$: 深度平均流速
-//! - $K$: 扩散系数张量
-//! - $S$: 源汇项
+//! 鍏朵腑锛?
+//! - $C$: 绀鸿釜鍓傛祿搴?
+//! - $h$: 姘存繁
+//! - $\vec{u}$: 娣卞害骞冲潎娴侀€?
+//! - $K$: 鎵╂暎绯绘暟寮犻噺
+//! - $S$: 婧愭眹椤?
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/tracer/tracer_transport.rs 迁移，改进：
-//! - 使用 trait 抽象网格访问
-//! - 支持多种对流格式
-//! - 与新架构的时间积分器集成
+//! 浠?history_src/tracer/tracer_transport.rs 杩佺Щ锛屾敼杩涳細
+//! - 浣跨敤 trait 鎶借薄缃戞牸璁块棶
+//! - 鏀寔澶氱瀵规祦鏍煎紡
+//! - 涓庢柊鏋舵瀯鐨勬椂闂寸Н鍒嗗櫒闆嗘垚
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
 use super::state::{TracerField, TracerState};
 
 // ============================================================
-// 对流格式
+// 瀵规祦鏍煎紡
 // ============================================================
 
-/// 对流格式类型
+/// 瀵规祦鏍煎紡绫诲瀷
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TracerAdvectionScheme {
-    /// 一阶迎风格式
+    /// 涓€闃惰繋椋庢牸寮?
     ///
-    /// 简单稳定，但数值扩散较大。
+    /// 绠€鍗曠ǔ瀹氾紝浣嗘暟鍊兼墿鏁ｈ緝澶с€?
     #[default]
     FirstOrderUpwind,
 
-    /// 二阶 Lax-Wendroff 格式
+    /// 浜岄樁 Lax-Wendroff 鏍煎紡
     ///
-    /// 精度更高，但可能产生振荡。
+    /// 绮惧害鏇撮珮锛屼絾鍙兘浜х敓鎸崱銆?
     LaxWendroff,
 
-    /// 二阶 TVD 格式（MinMod 限制器）
+    /// 浜岄樁 TVD 鏍煎紡锛圡inMod 闄愬埗鍣級
     ///
-    /// 平衡精度和稳定性。
+    /// 骞宠　绮惧害鍜岀ǔ瀹氭€с€?
     TvdMinmod,
 
-    /// 二阶 TVD 格式（Superbee 限制器）
+    /// 浜岄樁 TVD 鏍煎紡锛圫uperbee 闄愬埗鍣級
     ///
-    /// 更尖锐的间断，但可能过度压缩。
+    /// 鏇村皷閿愮殑闂存柇锛屼絾鍙兘杩囧害鍘嬬缉銆?
     TvdSuperbee,
 
-    /// 二阶 TVD 格式（Van Leer 限制器）
+    /// 浜岄樁 TVD 鏍煎紡锛圴an Leer 闄愬埗鍣級
     ///
-    /// 平滑的限制，适用于一般情况。
+    /// 骞虫粦鐨勯檺鍒讹紝閫傜敤浜庝竴鑸儏鍐点€?
     TvdVanLeer,
 }
 
 impl TracerAdvectionScheme {
-    /// 获取格式名称
+    /// 鑾峰彇鏍煎紡鍚嶇О
     pub fn name(&self) -> &'static str {
         match self {
             Self::FirstOrderUpwind => "First-Order Upwind",
@@ -78,7 +78,7 @@ impl TracerAdvectionScheme {
         }
     }
 
-    /// 是否需要梯度信息
+    /// 鏄惁闇€瑕佹搴︿俊鎭?
     pub fn requires_gradient(&self) -> bool {
         matches!(
             self,
@@ -88,26 +88,26 @@ impl TracerAdvectionScheme {
 }
 
 // ============================================================
-// 扩散配置
+// 鎵╂暎閰嶇疆
 // ============================================================
 
-/// 扩散计算配置
+/// 鎵╂暎璁＄畻閰嶇疆
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracerDiffusionConfig {
-    /// 是否启用扩散
+    /// 鏄惁鍚敤鎵╂暎
     pub enabled: bool,
 
-    /// 水平扩散系数 [m²/s]
+    /// 姘村钩鎵╂暎绯绘暟 [m虏/s]
     ///
-    /// 可以是常数或基于网格尺度的 Smagorinsky 公式。
+    /// 鍙互鏄父鏁版垨鍩轰簬缃戞牸灏哄害鐨?Smagorinsky 鍏紡銆?
     pub horizontal_diffusivity: f64,
 
-    /// Smagorinsky 系数（用于自适应扩散）
+    /// Smagorinsky 绯绘暟锛堢敤浜庤嚜閫傚簲鎵╂暎锛?
     ///
-    /// K = C_s * dx² * |S|，其中 |S| 是应变率。
+    /// K = C_s * dx虏 * |S|锛屽叾涓?|S| 鏄簲鍙樼巼銆?
     pub smagorinsky_coefficient: f64,
 
-    /// 是否使用 Smagorinsky 模型
+    /// 鏄惁浣跨敤 Smagorinsky 妯″瀷
     pub use_smagorinsky: bool,
 }
 
@@ -115,7 +115,7 @@ impl Default for TracerDiffusionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            horizontal_diffusivity: 10.0, // 典型值 1-100 m²/s
+            horizontal_diffusivity: 10.0, // 鍏稿瀷鍊?1-100 m虏/s
             smagorinsky_coefficient: 0.2,
             use_smagorinsky: false,
         }
@@ -123,7 +123,7 @@ impl Default for TracerDiffusionConfig {
 }
 
 impl TracerDiffusionConfig {
-    /// 仅使用常数扩散
+    /// 浠呬娇鐢ㄥ父鏁版墿鏁?
     pub fn constant(diffusivity: f64) -> Self {
         Self {
             enabled: true,
@@ -133,7 +133,7 @@ impl TracerDiffusionConfig {
         }
     }
 
-    /// 使用 Smagorinsky 模型
+    /// 浣跨敤 Smagorinsky 妯″瀷
     pub fn smagorinsky(coefficient: f64) -> Self {
         Self {
             enabled: true,
@@ -143,7 +143,7 @@ impl TracerDiffusionConfig {
         }
     }
 
-    /// 禁用扩散
+    /// 绂佺敤鎵╂暎
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -153,32 +153,32 @@ impl TracerDiffusionConfig {
 }
 
 // ============================================================
-// 求解器配置
+// 姹傝В鍣ㄩ厤缃?
 // ============================================================
 
-/// 示踪剂输运求解器配置
+/// 绀鸿釜鍓傝緭杩愭眰瑙ｅ櫒閰嶇疆
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracerTransportConfig {
-    /// 对流格式
+    /// 瀵规祦鏍煎紡
     pub advection_scheme: TracerAdvectionScheme,
 
-    /// 扩散配置
+    /// 鎵╂暎閰嶇疆
     pub diffusion: TracerDiffusionConfig,
 
-    /// 最小水深阈值 [m]
+    /// 鏈€灏忔按娣遍槇鍊?[m]
     ///
-    /// 水深小于此值的单元不计算示踪剂。
+    /// 姘存繁灏忎簬姝ゅ€肩殑鍗曞厓涓嶈绠楃ず韪墏銆?
     pub h_min: f64,
 
-    /// 浓度限制器
+    /// 娴撳害闄愬埗鍣?
     ///
-    /// 防止产生负浓度或超过物理范围的浓度。
+    /// 闃叉浜х敓璐熸祿搴︽垨瓒呰繃鐗╃悊鑼冨洿鐨勬祿搴︺€?
     pub enable_clipping: bool,
 
-    /// 最小浓度
+    /// 鏈€灏忔祿搴?
     pub c_min: f64,
 
-    /// 最大浓度（可选）
+    /// 鏈€澶ф祿搴︼紙鍙€夛級
     pub c_max: Option<f64>,
 }
 
@@ -196,61 +196,61 @@ impl Default for TracerTransportConfig {
 }
 
 // ============================================================
-// 面通量数据
+// 闈㈤€氶噺鏁版嵁
 // ============================================================
 
-/// 面的流动数据（用于计算示踪剂通量）
+/// 闈㈢殑娴佸姩鏁版嵁锛堢敤浜庤绠楃ず韪墏閫氶噺锛?
 #[derive(Debug, Clone, Copy)]
 pub struct FaceFlowData {
-    /// 面索引
+    /// 闈㈢储寮?
     pub face_id: usize,
-    /// 左侧单元索引
+    /// 宸︿晶鍗曞厓绱㈠紩
     pub left_cell: usize,
-    /// 右侧单元索引（边界面为 None）
+    /// 鍙充晶鍗曞厓绱㈠紩锛堣竟鐣岄潰涓?None锛?
     pub right_cell: Option<usize>,
-    /// 面法向量（从左到右）
+    /// 闈㈡硶鍚戦噺锛堜粠宸﹀埌鍙筹級
     pub normal: DVec2,
-    /// 面长度 [m]
+    /// 闈㈤暱搴?[m]
     pub length: f64,
-    /// 面上的法向流速 [m/s]
+    /// 闈笂鐨勬硶鍚戞祦閫?[m/s]
     pub un: f64,
-    /// 面上的水深 [m]
+    /// 闈笂鐨勬按娣?[m]
     pub h_face: f64,
 }
 
-/// 示踪剂面通量
+/// 绀鸿釜鍓傞潰閫氶噺
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TracerFaceFlux {
-    /// 对流通量 [单位/s]
+    /// 瀵规祦閫氶噺 [鍗曚綅/s]
     pub advective: f64,
-    /// 扩散通量 [单位/s]
+    /// 鎵╂暎閫氶噺 [鍗曚綅/s]
     pub diffusive: f64,
 }
 
 impl TracerFaceFlux {
-    /// 总通量
+    /// 鎬婚€氶噺
     pub fn total(&self) -> f64 {
         self.advective + self.diffusive
     }
 }
 
 // ============================================================
-// 示踪剂输运求解器
+// 绀鸿釜鍓傝緭杩愭眰瑙ｅ櫒
 // ============================================================
 
-/// 示踪剂输运求解器
+/// 绀鸿釜鍓傝緭杩愭眰瑙ｅ櫒
 ///
-/// 负责计算示踪剂的对流和扩散通量，并更新浓度场。
+/// 璐熻矗璁＄畻绀鸿釜鍓傜殑瀵规祦鍜屾墿鏁ｉ€氶噺锛屽苟鏇存柊娴撳害鍦恒€?
 ///
-/// # 使用流程
+/// # 浣跨敤娴佺▼
 ///
-/// 1. 创建求解器实例
-/// 2. 准备面流动数据（从水动力求解器获取）
-/// 3. 计算通量并更新 RHS
-/// 4. 使用时间积分器更新守恒量
-/// 5. 从守恒量反算浓度
+/// 1. 鍒涘缓姹傝В鍣ㄥ疄渚?
+/// 2. 鍑嗗闈㈡祦鍔ㄦ暟鎹紙浠庢按鍔ㄥ姏姹傝В鍣ㄨ幏鍙栵級
+/// 3. 璁＄畻閫氶噺骞舵洿鏂?RHS
+/// 4. 浣跨敤鏃堕棿绉垎鍣ㄦ洿鏂板畧鎭掗噺
+/// 5. 浠庡畧鎭掗噺鍙嶇畻娴撳害
 ///
-/// # 示例
+/// # 绀轰緥
 ///
 /// ```ignore
 /// use mh_physics::tracer::{TracerTransportSolver, TracerTransportConfig};
@@ -260,12 +260,12 @@ impl TracerFaceFlux {
 pub struct TracerTransportSolver {
     config: TracerTransportConfig,
     
-    /// 临时工作数组：面通量
+    /// 涓存椂宸ヤ綔鏁扮粍锛氶潰閫氶噺
     face_fluxes: Vec<TracerFaceFlux>,
 }
 
 impl TracerTransportSolver {
-    /// 创建新的求解器
+    /// 鍒涘缓鏂扮殑姹傝В鍣?
     pub fn new(config: TracerTransportConfig) -> Self {
         Self {
             config,
@@ -273,27 +273,27 @@ impl TracerTransportSolver {
         }
     }
 
-    /// 获取配置引用
+    /// 鑾峰彇閰嶇疆寮曠敤
     pub fn config(&self) -> &TracerTransportConfig {
         &self.config
     }
 
-    /// 设置配置
+    /// 璁剧疆閰嶇疆
     pub fn set_config(&mut self, config: TracerTransportConfig) {
         self.config = config;
     }
 
-    /// 计算单个面的对流通量（一阶迎风）
+    /// 璁＄畻鍗曚釜闈㈢殑瀵规祦閫氶噺锛堜竴闃惰繋椋庯級
     ///
-    /// # 参数
-    /// - `c_left`: 左侧单元浓度
-    /// - `c_right`: 右侧单元浓度
-    /// - `h_face`: 面上水深
-    /// - `un`: 面法向速度（正值从左到右）
-    /// - `face_length`: 面长度
+    /// # 鍙傛暟
+    /// - `c_left`: 宸︿晶鍗曞厓娴撳害
+    /// - `c_right`: 鍙充晶鍗曞厓娴撳害
+    /// - `h_face`: 闈笂姘存繁
+    /// - `un`: 闈㈡硶鍚戦€熷害锛堟鍊间粠宸﹀埌鍙筹級
+    /// - `face_length`: 闈㈤暱搴?
     ///
-    /// # 返回
-    /// 对流通量（正值表示从左到右输送）
+    /// # 杩斿洖
+    /// 瀵规祦閫氶噺锛堟鍊艰〃绀轰粠宸﹀埌鍙宠緭閫侊級
     pub fn compute_advective_flux_upwind(
         &self,
         c_left: f64,
@@ -302,23 +302,23 @@ impl TracerTransportSolver {
         un: f64,
         face_length: f64,
     ) -> f64 {
-        // 迎风选择
+        // 杩庨閫夋嫨
         let c_upwind = if un >= 0.0 { c_left } else { c_right };
         h_face * un * c_upwind * face_length
     }
 
-    /// 计算单个面的扩散通量
+    /// 璁＄畻鍗曚釜闈㈢殑鎵╂暎閫氶噺
     ///
-    /// # 参数
-    /// - `c_left`: 左侧单元浓度
-    /// - `c_right`: 右侧单元浓度
-    /// - `h_face`: 面上水深
-    /// - `distance`: 单元中心间距
-    /// - `face_length`: 面长度
-    /// - `diffusivity`: 扩散系数 [m²/s]
+    /// # 鍙傛暟
+    /// - `c_left`: 宸︿晶鍗曞厓娴撳害
+    /// - `c_right`: 鍙充晶鍗曞厓娴撳害
+    /// - `h_face`: 闈笂姘存繁
+    /// - `distance`: 鍗曞厓涓績闂磋窛
+    /// - `face_length`: 闈㈤暱搴?
+    /// - `diffusivity`: 鎵╂暎绯绘暟 [m虏/s]
     ///
-    /// # 返回
-    /// 扩散通量（正值表示从左到右输送）
+    /// # 杩斿洖
+    /// 鎵╂暎閫氶噺锛堟鍊艰〃绀轰粠宸﹀埌鍙宠緭閫侊級
     pub fn compute_diffusive_flux(
         &self,
         c_left: f64,
@@ -332,18 +332,18 @@ impl TracerTransportSolver {
             return 0.0;
         }
 
-        // 扩散通量: F = -h * K * dC/dx
+        // 鎵╂暎閫氶噺: F = -h * K * dC/dx
         let dc_dx = (c_right - c_left) / distance.max(1e-10);
         -h_face * diffusivity * dc_dx * face_length
     }
 
-    /// 计算所有面的通量并累加到 RHS
+    /// 璁＄畻鎵€鏈夐潰鐨勯€氶噺骞剁疮鍔犲埌 RHS
     ///
-    /// # 参数
-    /// - `field`: 示踪剂场
-    /// - `flow_data`: 面流动数据
-    /// - `cell_volumes`: 单元体积
-    /// - `face_distances`: 面对应的单元中心间距
+    /// # 鍙傛暟
+    /// - `field`: 绀鸿釜鍓傚満
+    /// - `flow_data`: 闈㈡祦鍔ㄦ暟鎹?
+    /// - `cell_volumes`: 鍗曞厓浣撶Н
+    /// - `face_distances`: 闈㈠搴旂殑鍗曞厓涓績闂磋窛
     pub fn compute_rhs(
         &mut self,
         field: &mut TracerField,
@@ -354,25 +354,25 @@ impl TracerTransportSolver {
         field.clear_rhs();
 
         let diffusivity = if self.config.diffusion.use_smagorinsky {
-            // TODO: 计算 Smagorinsky 扩散系数
+            // TODO: 璁＄畻 Smagorinsky 鎵╂暎绯绘暟
             self.config.diffusion.horizontal_diffusivity
         } else {
             self.config.diffusion.horizontal_diffusivity
         };
 
-        // 确保工作数组大小足够
+        // 纭繚宸ヤ綔鏁扮粍澶у皬瓒冲
         if self.face_fluxes.len() < flow_data.len() {
             self.face_fluxes.resize(flow_data.len(), TracerFaceFlux::default());
         }
 
-        // 计算所有面的通量
+        // 璁＄畻鎵€鏈夐潰鐨勯€氶噺
         for (i, face) in flow_data.iter().enumerate() {
             let c_left = field.concentration(face.left_cell);
             let c_right = face.right_cell
                 .map(|idx| field.concentration(idx))
-                .unwrap_or(c_left); // 边界面使用左侧值
+                .unwrap_or(c_left); // 杈圭晫闈娇鐢ㄥ乏渚у€?
 
-            // 对流通量
+            // 瀵规祦閫氶噺
             let advective = self.compute_advective_flux_upwind(
                 c_left,
                 c_right,
@@ -381,7 +381,7 @@ impl TracerTransportSolver {
                 face.length,
             );
 
-            // 扩散通量
+            // 鎵╂暎閫氶噺
             let diffusive = if face.right_cell.is_some() {
                 self.compute_diffusive_flux(
                     c_left,
@@ -392,21 +392,21 @@ impl TracerTransportSolver {
                     diffusivity,
                 )
             } else {
-                0.0 // 边界面无扩散
+                0.0 // 杈圭晫闈㈡棤鎵╂暎
             };
 
             self.face_fluxes[i] = TracerFaceFlux { advective, diffusive };
 
-            // 累加到单元 RHS
+            // 绱姞鍒板崟鍏?RHS
             let flux = advective + diffusive;
 
-            // 左侧单元：通量流出为负
+            // 宸︿晶鍗曞厓锛氶€氶噺娴佸嚭涓鸿礋
             let vol_left = cell_volumes[face.left_cell];
             if vol_left > 0.0 {
                 field.add_rhs(face.left_cell, -flux / vol_left);
             }
 
-            // 右侧单元（如果存在）：通量流入为正
+            // 鍙充晶鍗曞厓锛堝鏋滃瓨鍦級锛氶€氶噺娴佸叆涓烘
             if let Some(right_cell) = face.right_cell {
                 let vol_right = cell_volumes[right_cell];
                 if vol_right > 0.0 {
@@ -416,33 +416,33 @@ impl TracerTransportSolver {
         }
     }
 
-    /// 时间步进更新
+    /// 鏃堕棿姝ヨ繘鏇存柊
     ///
-    /// 使用显式欧拉格式更新守恒量。
+    /// 浣跨敤鏄惧紡娆ф媺鏍煎紡鏇存柊瀹堟亽閲忋€?
     ///
-    /// # 参数
-    /// - `field`: 示踪剂场
-    /// - `dt`: 时间步长 [s]
+    /// # 鍙傛暟
+    /// - `field`: 绀鸿釜鍓傚満
+    /// - `dt`: 鏃堕棿姝ラ暱 [s]
     pub fn update_forward_euler(&self, field: &mut TracerField, dt: f64) {
         field.apply_euler_update(dt);
     }
 
-    /// 应用浓度限制
+    /// 搴旂敤娴撳害闄愬埗
     pub fn apply_clipping(&self, field: &mut TracerField) {
         if self.config.enable_clipping {
             field.clamp_concentration(self.config.c_min, self.config.c_max);
         }
     }
 
-    /// 完整的单步更新流程
+    /// 瀹屾暣鐨勫崟姝ユ洿鏂版祦绋?
     ///
-    /// # 参数
-    /// - `field`: 示踪剂场
-    /// - `flow_data`: 面流动数据
-    /// - `cell_volumes`: 单元体积
-    /// - `face_distances`: 面对应的单元中心间距
-    /// - `water_depths`: 水深数组（用于更新浓度）
-    /// - `dt`: 时间步长
+    /// # 鍙傛暟
+    /// - `field`: 绀鸿釜鍓傚満
+    /// - `flow_data`: 闈㈡祦鍔ㄦ暟鎹?
+    /// - `cell_volumes`: 鍗曞厓浣撶Н
+    /// - `face_distances`: 闈㈠搴旂殑鍗曞厓涓績闂磋窛
+    /// - `water_depths`: 姘存繁鏁扮粍锛堢敤浜庢洿鏂版祿搴︼級
+    /// - `dt`: 鏃堕棿姝ラ暱
     pub fn step(
         &mut self,
         field: &mut TracerField,
@@ -452,28 +452,28 @@ impl TracerTransportSolver {
         water_depths: &[f64],
         dt: f64,
     ) {
-        // 1. 计算 RHS
+        // 1. 璁＄畻 RHS
         self.compute_rhs(field, flow_data, cell_volumes, face_distances);
 
-        // 2. 时间步进
+        // 2. 鏃堕棿姝ヨ繘
         self.update_forward_euler(field, dt);
 
-        // 3. 从守恒量更新浓度
+        // 3. 浠庡畧鎭掗噺鏇存柊娴撳害
         field.update_concentration_from_conserved(water_depths, self.config.h_min);
 
-        // 4. 应用限制
+        // 4. 搴旂敤闄愬埗
         self.apply_clipping(field);
     }
 
-    /// 计算示踪剂的 CFL 限制时间步
+    /// 璁＄畻绀鸿釜鍓傜殑 CFL 闄愬埗鏃堕棿姝?
     ///
-    /// # 参数
-    /// - `max_velocity`: 最大流速 [m/s]
-    /// - `min_cell_size`: 最小单元尺寸 [m]
-    /// - `cfl_number`: CFL 数（默认 0.5）
+    /// # 鍙傛暟
+    /// - `max_velocity`: 鏈€澶ф祦閫?[m/s]
+    /// - `min_cell_size`: 鏈€灏忓崟鍏冨昂瀵?[m]
+    /// - `cfl_number`: CFL 鏁帮紙榛樿 0.5锛?
     ///
-    /// # 返回
-    /// 建议的最大时间步长 [s]
+    /// # 杩斿洖
+    /// 寤鸿鐨勬渶澶ф椂闂存闀?[s]
     pub fn compute_dt_limit(
         &self,
         max_velocity: f64,
@@ -482,14 +482,14 @@ impl TracerTransportSolver {
     ) -> f64 {
         let dx = min_cell_size.max(1e-10);
 
-        // 对流限制
+        // 瀵规祦闄愬埗
         let dt_advection = if max_velocity > 1e-10 {
             cfl_number * dx / max_velocity
         } else {
             f64::MAX
         };
 
-        // 扩散限制（如果启用）
+        // 鎵╂暎闄愬埗锛堝鏋滃惎鐢級
         let dt_diffusion = if self.config.diffusion.enabled {
             let k = self.config.diffusion.horizontal_diffusivity;
             if k > 1e-10 {
@@ -512,26 +512,26 @@ impl Default for TracerTransportSolver {
 }
 
 // ============================================================
-// 多示踪剂求解器
+// 澶氱ず韪墏姹傝В鍣?
 // ============================================================
 
-/// 多示踪剂输运求解器
+/// 澶氱ず韪墏杈撹繍姹傝В鍣?
 ///
-/// 包装 TracerTransportSolver，支持同时处理多个示踪剂。
+/// 鍖呰 TracerTransportSolver锛屾敮鎸佸悓鏃跺鐞嗗涓ず韪墏銆?
 pub struct MultiTracerSolver {
-    /// 单示踪剂求解器
+    /// 鍗曠ず韪墏姹傝В鍣?
     solver: TracerTransportSolver,
 }
 
 impl MultiTracerSolver {
-    /// 创建新的多示踪剂求解器
+    /// 鍒涘缓鏂扮殑澶氱ず韪墏姹傝В鍣?
     pub fn new(config: TracerTransportConfig) -> Self {
         Self {
             solver: TracerTransportSolver::new(config),
         }
     }
 
-    /// 更新所有示踪剂
+    /// 鏇存柊鎵€鏈夌ず韪墏
     pub fn step_all(
         &mut self,
         state: &mut TracerState,
@@ -546,19 +546,19 @@ impl MultiTracerSolver {
         }
     }
 
-    /// 获取内部求解器
+    /// 鑾峰彇鍐呴儴姹傝В鍣?
     pub fn solver(&self) -> &TracerTransportSolver {
         &self.solver
     }
 
-    /// 获取内部求解器（可变）
+    /// 鑾峰彇鍐呴儴姹傝В鍣紙鍙彉锛?
     pub fn solver_mut(&mut self) -> &mut TracerTransportSolver {
         &mut self.solver
     }
 }
 
 // ============================================================
-// 测试
+// 娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -595,13 +595,13 @@ mod tests {
     fn test_upwind_flux() {
         let solver = TracerTransportSolver::default();
 
-        // 从左到右流动
+        // 浠庡乏鍒板彸娴佸姩
         let flux = solver.compute_advective_flux_upwind(10.0, 20.0, 1.0, 1.0, 1.0);
-        assert!(approx_eq(flux, 10.0)); // 使用左侧浓度
+        assert!(approx_eq(flux, 10.0)); // 浣跨敤宸︿晶娴撳害
 
-        // 从右到左流动
+        // 浠庡彸鍒板乏娴佸姩
         let flux = solver.compute_advective_flux_upwind(10.0, 20.0, 1.0, -1.0, 1.0);
-        assert!(approx_eq(flux, -20.0)); // 使用右侧浓度
+        assert!(approx_eq(flux, -20.0)); // 浣跨敤鍙充晶娴撳害
     }
 
     #[test]
@@ -611,7 +611,7 @@ mod tests {
             ..Default::default()
         });
 
-        // 浓度梯度：从左(10)到右(20)，扩散应该从高到低
+        // 娴撳害姊害锛氫粠宸?10)鍒板彸(20)锛屾墿鏁ｅ簲璇ヤ粠楂樺埌浣?
         let flux = solver.compute_diffusive_flux(10.0, 20.0, 1.0, 1.0, 1.0, 10.0);
         // F = -h * K * dC/dx = -1 * 10 * (20-10)/1 = -100
         assert!(approx_eq(flux, -100.0));
@@ -625,8 +625,8 @@ mod tests {
         });
 
         let dt = solver.compute_dt_limit(1.0, 10.0, 0.5);
-        // 对流限制: 0.5 * 10 / 1 = 5
-        // 扩散限制: 0.5 * 0.5 * 100 / 10 = 2.5
+        // 瀵规祦闄愬埗: 0.5 * 10 / 1 = 5
+        // 鎵╂暎闄愬埗: 0.5 * 0.5 * 100 / 10 = 2.5
         assert!(approx_eq(dt, 2.5));
     }
 
@@ -636,14 +636,14 @@ mod tests {
         let props = TracerProperties::salinity().with_background(0.0);
         let mut field = TracerField::from_concentration(
             props,
-            vec![10.0, 5.0, 0.0], // 浓度梯度
+            vec![10.0, 5.0, 0.0], // 娴撳害姊害
         );
 
-        // 初始化守恒量
+        // 鍒濆鍖栧畧鎭掗噺
         let depths = vec![1.0, 1.0, 1.0];
         field.update_conserved_from_depth(&depths);
 
-        // 简单的两面流动数据
+        // 绠€鍗曠殑涓ら潰娴佸姩鏁版嵁
         let flow_data = vec![
             FaceFlowData {
                 face_id: 0,
@@ -651,7 +651,7 @@ mod tests {
                 right_cell: Some(1),
                 normal: DVec2::new(1.0, 0.0),
                 length: 1.0,
-                un: 1.0,  // 从左到右
+                un: 1.0,  // 浠庡乏鍒板彸
                 h_face: 1.0,
             },
             FaceFlowData {
@@ -668,12 +668,12 @@ mod tests {
         let volumes = vec![1.0, 1.0, 1.0];
         let distances = vec![1.0, 1.0];
 
-        // 执行一步
+        // 鎵ц涓€姝?
         solver.step(&mut field, &flow_data, &volumes, &distances, &depths, 0.1);
 
-        // 浓度应该变化了
-        // 由于迎风格式，浓度会向右传输
-        assert!(field.concentration(1) > 5.0); // 从单元0获得质量
+        // 娴撳害搴旇鍙樺寲浜?
+        // 鐢变簬杩庨鏍煎紡锛屾祿搴︿細鍚戝彸浼犺緭
+        assert!(field.concentration(1) > 5.0); // 浠庡崟鍏?鑾峰緱璐ㄩ噺
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
 
         let _solver = MultiTracerSolver::new(TracerTransportConfig::default());
 
-        // 确保可以访问两个示踪剂
+        // 纭繚鍙互璁块棶涓や釜绀鸿釜鍓?
         assert!(state.get(TracerType::Salinity).is_some());
         assert!(state.get(TracerType::Temperature).is_some());
     }

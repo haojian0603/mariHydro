@@ -1,26 +1,26 @@
-// crates/mh_physics/src/engine/timestep.rs
+﻿// crates/mh_physics/src/engine/timestep.rs
 
-//! 时间步长控制模块
+//! 鏃堕棿姝ラ暱鎺у埗妯″潡
 //!
-//! 提供基于 CFL 条件的自适应时间步长控制。
+//! 鎻愪緵鍩轰簬 CFL 鏉′欢鐨勮嚜閫傚簲鏃堕棿姝ラ暱鎺у埗銆?
 //!
-//! ## CFL 条件
+//! ## CFL 鏉′欢
 //!
-//! 时间步长需满足 CFL 条件：
+//! 鏃堕棿姝ラ暱闇€婊¤冻 CFL 鏉′欢锛?
 //!
 //! $$ \Delta t \leq C \cdot \min_i \frac{\Delta x_i}{|u_i| + \sqrt{gh_i}} $$
 //!
-//! 其中 $C$ 通常取 0.4-0.8（取决于空间格式阶数）。
+//! 鍏朵腑 $C$ 閫氬父鍙?0.4-0.8锛堝彇鍐充簬绌洪棿鏍煎紡闃舵暟锛夈€?
 //!
-//! ## 特性
+//! ## 鐗规€?
 //!
-//! - 预计算 dx_min，避免每步重复计算
-//! - 并行波速计算使用原子操作
-//! - 可选的自适应时间步长增长
+//! - 棰勮绠?dx_min锛岄伩鍏嶆瘡姝ラ噸澶嶈绠?
+//! - 骞惰娉㈤€熻绠椾娇鐢ㄥ師瀛愭搷浣?
+//! - 鍙€夌殑鑷€傚簲鏃堕棿姝ラ暱澧為暱
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/physics/engine/timestep.rs 迁移。
+//! 浠?history_src/physics/engine/timestep.rs 杩佺Щ銆?
 
 use crate::adapter::PhysicsMesh;
 use crate::state::ShallowWaterState;
@@ -28,27 +28,27 @@ use crate::types::NumericalParams;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// CFL 时间步计算器
+/// CFL 鏃堕棿姝ヨ绠楀櫒
 ///
-/// 主要优化：预计算网格最小特征长度
+/// 涓昏浼樺寲锛氶璁＄畻缃戞牸鏈€灏忕壒寰侀暱搴?
 #[derive(Clone, Debug)]
 pub struct CflCalculator {
-    /// 重力加速度
+    /// 閲嶅姏鍔犻€熷害
     g: f64,
-    /// CFL 数
+    /// CFL 鏁?
     cfl: f64,
-    /// 最小时间步长
+    /// 鏈€灏忔椂闂存闀?
     dt_min: f64,
-    /// 最大时间步长
+    /// 鏈€澶ф椂闂存闀?
     dt_max: f64,
-    /// 预计算的最小特征长度
+    /// 棰勮绠楃殑鏈€灏忕壒寰侀暱搴?
     cached_dx_min: Option<f64>,
-    /// 最小波速阈值（低于此值视为静止）
+    /// 鏈€灏忔尝閫熼槇鍊硷紙浣庝簬姝ゅ€艰涓洪潤姝級
     min_wave_speed: f64,
 }
 
 impl CflCalculator {
-    /// 创建计算器
+    /// 鍒涘缓璁＄畻鍣?
     pub fn new(g: f64, params: &NumericalParams) -> Self {
         Self {
             g,
@@ -60,19 +60,19 @@ impl CflCalculator {
         }
     }
 
-    /// 预计算网格最小特征长度
+    /// 棰勮绠楃綉鏍兼渶灏忕壒寰侀暱搴?
     ///
-    /// 应在网格加载后调用一次
+    /// 搴斿湪缃戞牸鍔犺浇鍚庤皟鐢ㄤ竴娆?
     pub fn precompute_dx_min(&mut self, mesh: &PhysicsMesh) {
         self.cached_dx_min = Some(self.compute_min_char_length(mesh));
     }
 
-    /// 获取缓存的 dx_min
+    /// 鑾峰彇缂撳瓨鐨?dx_min
     pub fn dx_min(&self) -> Option<f64> {
         self.cached_dx_min
     }
 
-    /// 计算时间步长
+    /// 璁＄畻鏃堕棿姝ラ暱
     pub fn compute_dt(
         &self,
         state: &ShallowWaterState,
@@ -84,12 +84,12 @@ impl CflCalculator {
             return self.dt_max;
         }
 
-        // 使用预计算的 dx_min 或现场计算
+        // 浣跨敤棰勮绠楃殑 dx_min 鎴栫幇鍦鸿绠?
         let min_length = self
             .cached_dx_min
             .unwrap_or_else(|| self.compute_min_char_length(mesh));
 
-        // 并行计算最大波速
+        // 骞惰璁＄畻鏈€澶ф尝閫?
         let max_speed = self.compute_max_wave_speed_parallel(state, params);
 
         if max_speed < self.min_wave_speed {
@@ -100,9 +100,9 @@ impl CflCalculator {
         dt.clamp(self.dt_min, self.dt_max)
     }
 
-    /// 从已知最大波速计算时间步长
+    /// 浠庡凡鐭ユ渶澶ф尝閫熻绠楁椂闂存闀?
     ///
-    /// 当通量计算已得到最大波速时使用此方法，避免重复计算
+    /// 褰撻€氶噺璁＄畻宸插緱鍒版渶澶ф尝閫熸椂浣跨敤姝ゆ柟娉曪紝閬垮厤閲嶅璁＄畻
     pub fn compute_from_max_speed(&self, max_speed: f64) -> f64 {
         let min_length = self.cached_dx_min.unwrap_or(1.0);
 
@@ -114,7 +114,7 @@ impl CflCalculator {
         dt.clamp(self.dt_min, self.dt_max)
     }
 
-    /// 并行计算最大波速（使用原子操作）
+    /// 骞惰璁＄畻鏈€澶ф尝閫燂紙浣跨敤鍘熷瓙鎿嶄綔锛?
     fn compute_max_wave_speed_parallel(
         &self,
         state: &ShallowWaterState,
@@ -125,7 +125,7 @@ impl CflCalculator {
             return 0.0;
         }
 
-        // 使用原子操作收集最大值
+        // 浣跨敤鍘熷瓙鎿嶄綔鏀堕泦鏈€澶у€?
         let max_speed = AtomicU64::new(0u64);
 
         (0..n).into_par_iter().for_each(|i| {
@@ -139,7 +139,7 @@ impl CflCalculator {
             let c = (self.g * h).sqrt();
             let wave_speed = speed + c;
 
-            // 原子更新最大值
+            // 鍘熷瓙鏇存柊鏈€澶у€?
             let bits = wave_speed.to_bits();
             max_speed.fetch_max(bits, Ordering::Relaxed);
         });
@@ -147,14 +147,14 @@ impl CflCalculator {
         f64::from_bits(max_speed.load(Ordering::Relaxed))
     }
 
-    /// 计算最小特征长度
+    /// 璁＄畻鏈€灏忕壒寰侀暱搴?
     fn compute_min_char_length(&self, mesh: &PhysicsMesh) -> f64 {
         let n = mesh.n_cells();
         if n == 0 {
             return f64::MAX;
         }
 
-        // 使用原子操作收集最小值
+        // 浣跨敤鍘熷瓙鎿嶄綔鏀堕泦鏈€灏忓€?
         let min_dx = AtomicU64::new(f64::MAX.to_bits());
 
         (0..n).into_par_iter().for_each(|i| {
@@ -165,10 +165,10 @@ impl CflCalculator {
                 return;
             }
 
-            // 水力直径近似
+            // 姘村姏鐩村緞杩戜技
             let dx = 2.0 * area / perimeter;
 
-            // 原子更新最小值
+            // 鍘熷瓙鏇存柊鏈€灏忓€?
             let bits = dx.to_bits();
             min_dx.fetch_min(bits, Ordering::Relaxed);
         });
@@ -177,32 +177,32 @@ impl CflCalculator {
     }
 }
 
-/// 时间步长控制器
+/// 鏃堕棿姝ラ暱鎺у埗鍣?
 ///
-/// 提供自适应时间步长控制，支持：
-/// - 预计算 dx_min
-/// - 自适应增长/收缩因子
-/// - 时间步长历史追踪
+/// 鎻愪緵鑷€傚簲鏃堕棿姝ラ暱鎺у埗锛屾敮鎸侊細
+/// - 棰勮绠?dx_min
+/// - 鑷€傚簲澧為暱/鏀剁缉鍥犲瓙
+/// - 鏃堕棿姝ラ暱鍘嗗彶杩借釜
 pub struct TimeStepController {
     calculator: CflCalculator,
-    /// 当前时间步长
+    /// 褰撳墠鏃堕棿姝ラ暱
     current_dt: f64,
-    /// 增长因子
+    /// 澧為暱鍥犲瓙
     growth_factor: f64,
-    /// 收缩因子
+    /// 鏀剁缉鍥犲瓙
     shrink_factor: f64,
-    /// 最大允许增长因子
+    /// 鏈€澶у厑璁稿闀垮洜瀛?
     max_growth_factor: f64,
-    /// 连续稳定步数
+    /// 杩炵画绋冲畾姝ユ暟
     stable_steps: usize,
-    /// 稳定增长阈值
+    /// 绋冲畾澧為暱闃堝€?
     stable_growth_threshold: usize,
-    /// 是否启用自适应增长
+    /// 鏄惁鍚敤鑷€傚簲澧為暱
     adaptive_growth: bool,
 }
 
 impl TimeStepController {
-    /// 创建控制器
+    /// 鍒涘缓鎺у埗鍣?
     pub fn new(g: f64, params: &NumericalParams) -> Self {
         Self {
             calculator: CflCalculator::new(g, params),
@@ -216,17 +216,17 @@ impl TimeStepController {
         }
     }
 
-    /// 预计算网格特征
+    /// 棰勮绠楃綉鏍肩壒寰?
     pub fn precompute_mesh_characteristics(&mut self, mesh: &PhysicsMesh) {
         self.calculator.precompute_dx_min(mesh);
     }
 
-    /// 获取预计算的 dx_min
+    /// 鑾峰彇棰勮绠楃殑 dx_min
     pub fn dx_min(&self) -> Option<f64> {
         self.calculator.dx_min()
     }
 
-    /// 更新时间步长
+    /// 鏇存柊鏃堕棿姝ラ暱
     pub fn update(
         &mut self,
         state: &ShallowWaterState,
@@ -235,7 +235,7 @@ impl TimeStepController {
     ) -> f64 {
         let suggested = self.calculator.compute_dt(state, mesh, params);
 
-        // 计算增长因子
+        // 璁＄畻澧為暱鍥犲瓙
         let growth = if self.adaptive_growth {
             self.compute_adaptive_growth()
         } else {
@@ -245,7 +245,7 @@ impl TimeStepController {
         let grown = self.current_dt * growth;
         let new_dt = suggested.min(grown);
 
-        // 更新稳定步数
+        // 鏇存柊绋冲畾姝ユ暟
         if new_dt >= self.current_dt * 0.95 {
             self.stable_steps += 1;
         } else {
@@ -256,7 +256,7 @@ impl TimeStepController {
         self.current_dt
     }
 
-    /// 从已知最大波速更新时间步长
+    /// 浠庡凡鐭ユ渶澶ф尝閫熸洿鏂版椂闂存闀?
     pub fn update_from_max_speed(&mut self, max_speed: f64) -> f64 {
         let suggested = self.calculator.compute_from_max_speed(max_speed);
 
@@ -279,61 +279,61 @@ impl TimeStepController {
         self.current_dt
     }
 
-    /// 计算自适应增长因子
+    /// 璁＄畻鑷€傚簲澧為暱鍥犲瓙
     fn compute_adaptive_growth(&self) -> f64 {
         if self.stable_steps >= self.stable_growth_threshold {
-            // 长期稳定，允许更大增长
+            // 闀挎湡绋冲畾锛屽厑璁告洿澶у闀?
             self.growth_factor.min(self.max_growth_factor)
         } else if self.stable_steps >= self.stable_growth_threshold / 2 {
-            // 中等稳定
+            // 涓瓑绋冲畾
             self.growth_factor
         } else {
-            // 不稳定，保守增长
+            // 涓嶇ǔ瀹氾紝淇濆畧澧為暱
             1.0 + (self.growth_factor - 1.0) * 0.5
         }
     }
 
-    /// 收缩时间步长（遇到问题时调用）
+    /// 鏀剁缉鏃堕棿姝ラ暱锛堥亣鍒伴棶棰樻椂璋冪敤锛?
     pub fn shrink(&mut self) {
         self.current_dt *= self.shrink_factor;
         self.current_dt = self.current_dt.max(self.calculator.dt_min);
         self.stable_steps = 0;
     }
 
-    /// 强制收缩（严重问题时）
+    /// 寮哄埗鏀剁缉锛堜弗閲嶉棶棰樻椂锛?
     pub fn force_shrink(&mut self, factor: f64) {
         self.current_dt *= factor;
         self.current_dt = self.current_dt.max(self.calculator.dt_min);
         self.stable_steps = 0;
     }
 
-    /// 获取当前时间步长
+    /// 鑾峰彇褰撳墠鏃堕棿姝ラ暱
     pub fn current_dt(&self) -> f64 {
         self.current_dt
     }
 
-    /// 设置时间步长（手动覆盖）
+    /// 璁剧疆鏃堕棿姝ラ暱锛堟墜鍔ㄨ鐩栵級
     pub fn set_dt(&mut self, dt: f64) {
         self.current_dt = dt.clamp(self.calculator.dt_min, self.calculator.dt_max);
         self.stable_steps = 0;
     }
 
-    /// 设置增长因子
+    /// 璁剧疆澧為暱鍥犲瓙
     pub fn set_growth_factor(&mut self, factor: f64) {
         self.growth_factor = factor.max(1.0);
     }
 
-    /// 设置收缩因子
+    /// 璁剧疆鏀剁缉鍥犲瓙
     pub fn set_shrink_factor(&mut self, factor: f64) {
         self.shrink_factor = factor.clamp(0.1, 0.9);
     }
 
-    /// 启用/禁用自适应增长
+    /// 鍚敤/绂佺敤鑷€傚簲澧為暱
     pub fn set_adaptive_growth(&mut self, enabled: bool) {
         self.adaptive_growth = enabled;
     }
 
-    /// 获取统计信息
+    /// 鑾峰彇缁熻淇℃伅
     pub fn stats(&self) -> TimeStepStats {
         TimeStepStats {
             current_dt: self.current_dt,
@@ -343,14 +343,14 @@ impl TimeStepController {
         }
     }
 
-    /// 半隐式方法迭代次数自适应
+    /// 鍗婇殣寮忔柟娉曡凯浠ｆ鏁拌嚜閫傚簲
     ///
-    /// 根据压力求解器迭代次数调整时间步长。
+    /// 鏍规嵁鍘嬪姏姹傝В鍣ㄨ凯浠ｆ鏁拌皟鏁存椂闂存闀裤€?
     ///
-    /// # 参数
+    /// # 鍙傛暟
     ///
-    /// - `iterations`: 实际迭代次数
-    /// - `target_iterations`: 目标迭代次数（通常为求解器最大迭代的 50%）
+    /// - `iterations`: 瀹為檯杩唬娆℃暟
+    /// - `target_iterations`: 鐩爣杩唬娆℃暟锛堥€氬父涓烘眰瑙ｅ櫒鏈€澶ц凯浠ｇ殑 50%锛?
     pub fn adapt_from_iterations(
         &mut self,
         iterations: usize,
@@ -359,17 +359,17 @@ impl TimeStepController {
         let ratio = iterations as f64 / target_iterations.max(1) as f64;
 
         if ratio < 0.5 {
-            // 收敛太快，可以增大时间步长
+            // 鏀舵暃澶揩锛屽彲浠ュ澶ф椂闂存闀?
             let growth = (1.0 + (1.0 - ratio * 2.0) * 0.2).min(self.max_growth_factor);
             self.current_dt *= growth;
             self.stable_steps += 1;
         } else if ratio > 1.5 {
-            // 收敛太慢，减小时间步长
+            // 鏀舵暃澶參锛屽噺灏忔椂闂存闀?
             let shrink = (1.0 - (ratio - 1.5) * 0.3).max(0.5);
             self.current_dt *= shrink;
             self.stable_steps = 0;
         } else if ratio > 1.0 {
-            // 接近边界，保守增长
+            // 鎺ヨ繎杈圭晫锛屼繚瀹堝闀?
             self.stable_steps = self.stable_steps.saturating_sub(1);
         }
 
@@ -377,13 +377,13 @@ impl TimeStepController {
         self.current_dt
     }
 
-    /// 应用源项稳定性限制
+    /// 搴旂敤婧愰」绋冲畾鎬ч檺鍒?
     ///
-    /// 将所有源项的稳定性限制应用于时间步长。
+    /// 灏嗘墍鏈夋簮椤圭殑绋冲畾鎬ч檺鍒跺簲鐢ㄤ簬鏃堕棿姝ラ暱銆?
     ///
-    /// # 参数
+    /// # 鍙傛暟
     ///
-    /// - `limits`: 各源项返回的稳定性限制时间步长
+    /// - `limits`: 鍚勬簮椤硅繑鍥炵殑绋冲畾鎬ч檺鍒舵椂闂存闀?
     pub fn apply_source_limits(&mut self, limits: &[Option<f64>]) -> f64 {
         let mut min_dt = self.current_dt;
 
@@ -401,9 +401,9 @@ impl TimeStepController {
         self.current_dt
     }
 
-    /// 计算科氏力稳定性限制
+    /// 璁＄畻绉戞皬鍔涚ǔ瀹氭€ч檺鍒?
     ///
-    /// 返回 dt < 2π / |f| 以保证惯性振荡稳定
+    /// 杩斿洖 dt < 2蟺 / |f| 浠ヤ繚璇佹儻鎬ф尟鑽＄ǔ瀹?
     pub fn coriolis_stability_limit(&self, f: f64) -> Option<f64> {
         if f.abs() < 1e-14 {
             None
@@ -412,43 +412,43 @@ impl TimeStepController {
         }
     }
 
-    /// 计算摩擦稳定性限制
+    /// 璁＄畻鎽╂摝绋冲畾鎬ч檺鍒?
     ///
-    /// 对于曼宁公式的隐式摩擦
+    /// 瀵逛簬鏇煎畞鍏紡鐨勯殣寮忔懇鎿?
     pub fn friction_stability_limit(&self, max_cf: f64) -> Option<f64> {
         if max_cf < 1e-14 {
             None
         } else {
-            // 显式稳定性限制
+            // 鏄惧紡绋冲畾鎬ч檺鍒?
             Some(2.0 / max_cf)
         }
     }
 
-    /// 获取 CFL 数
+    /// 鑾峰彇 CFL 鏁?
     pub fn cfl(&self) -> f64 {
         self.calculator.cfl
     }
 
-    /// 设置 CFL 数
+    /// 璁剧疆 CFL 鏁?
     pub fn set_cfl(&mut self, cfl: f64) {
         self.calculator.cfl = cfl.clamp(0.1, 1.0);
     }
 }
 
-/// 时间步长统计
+/// 鏃堕棿姝ラ暱缁熻
 #[derive(Clone, Debug)]
 pub struct TimeStepStats {
-    /// 当前时间步长
+    /// 褰撳墠鏃堕棿姝ラ暱
     pub current_dt: f64,
-    /// 最小特征长度
+    /// 鏈€灏忕壒寰侀暱搴?
     pub dx_min: Option<f64>,
-    /// 连续稳定步数
+    /// 杩炵画绋冲畾姝ユ暟
     pub stable_steps: usize,
-    /// 是否启用自适应增长
+    /// 鏄惁鍚敤鑷€傚簲澧為暱
     pub adaptive_growth_enabled: bool,
 }
 
-/// 时间步长控制器构建器
+/// 鏃堕棿姝ラ暱鎺у埗鍣ㄦ瀯寤哄櫒
 pub struct TimeStepControllerBuilder {
     g: f64,
     cfl: f64,
@@ -460,7 +460,7 @@ pub struct TimeStepControllerBuilder {
 }
 
 impl TimeStepControllerBuilder {
-    /// 创建构建器
+    /// 鍒涘缓鏋勫缓鍣?
     pub fn new(g: f64) -> Self {
         Self {
             g,
@@ -473,38 +473,38 @@ impl TimeStepControllerBuilder {
         }
     }
 
-    /// 设置 CFL 数
+    /// 璁剧疆 CFL 鏁?
     pub fn with_cfl(mut self, cfl: f64) -> Self {
         self.cfl = cfl;
         self
     }
 
-    /// 设置时间步限制
+    /// 璁剧疆鏃堕棿姝ラ檺鍒?
     pub fn with_dt_limits(mut self, dt_min: f64, dt_max: f64) -> Self {
         self.dt_min = dt_min;
         self.dt_max = dt_max;
         self
     }
 
-    /// 设置增长因子
+    /// 璁剧疆澧為暱鍥犲瓙
     pub fn with_growth_factor(mut self, factor: f64) -> Self {
         self.growth_factor = factor;
         self
     }
 
-    /// 设置收缩因子
+    /// 璁剧疆鏀剁缉鍥犲瓙
     pub fn with_shrink_factor(mut self, factor: f64) -> Self {
         self.shrink_factor = factor;
         self
     }
 
-    /// 设置自适应增长
+    /// 璁剧疆鑷€傚簲澧為暱
     pub fn with_adaptive_growth(mut self, enabled: bool) -> Self {
         self.adaptive_growth = enabled;
         self
     }
 
-    /// 构建控制器
+    /// 鏋勫缓鎺у埗鍣?
     pub fn build(self) -> TimeStepController {
         let params = NumericalParams::builder()
             .cfl(self.cfl)
@@ -550,7 +550,7 @@ mod tests {
         let params = NumericalParams::default();
         let calc = CflCalculator::new(9.81, &params);
 
-        // 静水时，max_speed < min_wave_speed，返回dt_max
+        // 闈欐按鏃讹紝max_speed < min_wave_speed锛岃繑鍥瀌t_max
         let dt = calc.compute_from_max_speed(1e-10);
         assert!((dt - params.dt_max).abs() < 1e-10);
     }
@@ -568,7 +568,7 @@ mod tests {
         let params = NumericalParams::default();
         let mut controller = TimeStepController::new(9.81, &params);
 
-        // 模拟稳定步
+        // 妯℃嫙绋冲畾姝?
         for _ in 0..15 {
             controller.stable_steps += 1;
         }

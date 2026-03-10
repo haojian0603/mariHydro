@@ -1,4 +1,4 @@
-// crates/mh_physics/src/sources/registry.rs
+﻿// crates/mh_physics/src/sources/registry.rs
 
 use crate::core::{Backend, DeviceBuffer};
 use crate::engine::strategy::workspace::SolverWorkspaceGeneric;
@@ -9,18 +9,15 @@ use super::traits::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// 源项注册中心
+/// 婧愰」娉ㄥ唽涓績
 pub struct SourceRegistry<B: Backend> {
-    /// 已注册的源项
+    /// 宸叉敞鍐岀殑婧愰」
     sources: Vec<Box<dyn SourceTermGeneric<B>>>,
-    /// 名称到索引的映射
+    /// 鍚嶇О鍒扮储寮曠殑鏄犲皠
     name_index: HashMap<String, usize>,
-    /// 启用状态
+    /// 鍚敤鐘舵€?
     enabled: Vec<bool>,
-    /// 并行计算阈值
-    #[allow(dead_code)]
-    parallel_threshold: usize,
-    /// 贡献缓存
+    /// 璐＄尞缂撳瓨
     contributions: RefCell<Vec<SourceContributionGeneric<B::Scalar>>>,
 }
 
@@ -30,12 +27,11 @@ impl<B: Backend> SourceRegistry<B> {
             sources: Vec::new(),
             name_index: HashMap::new(),
             enabled: Vec::new(),
-            parallel_threshold: 512,
             contributions: RefCell::new(Vec::new()),
         }
     }
     
-    /// 注册源项
+    /// 娉ㄥ唽婧愰」
     pub fn register<S: SourceTermGeneric<B> + 'static>(&mut self, source: S) -> usize {
         let name = source.name().to_string();
         let idx = self.sources.len();
@@ -45,7 +41,7 @@ impl<B: Backend> SourceRegistry<B> {
         idx
     }
     
-    /// 按名称获取源项
+    /// 鎸夊悕绉拌幏鍙栨簮椤?
     pub fn get(&self, name: &str) -> Option<&dyn SourceTermGeneric<B>> {
         self.name_index
             .get(name)
@@ -53,13 +49,13 @@ impl<B: Backend> SourceRegistry<B> {
             .map(|s| s.as_ref())
     }
     
-    /// 按名称获取可变源项
+    /// 鎸夊悕绉拌幏鍙栧彲鍙樻簮椤?
     pub fn get_mut(&mut self, name: &str) -> Option<&mut dyn SourceTermGeneric<B>> {
         let idx = *self.name_index.get(name)?;
         Some(self.sources.get_mut(idx)?.as_mut())
     }
     
-    /// 启用/禁用源项
+    /// 鍚敤/绂佺敤婧愰」
     pub fn set_enabled(&mut self, name: &str, enabled: bool) -> bool {
         if let Some(&idx) = self.name_index.get(name) {
             if let Some(flag) = self.enabled.get_mut(idx) {
@@ -70,12 +66,12 @@ impl<B: Backend> SourceRegistry<B> {
         false
     }
     
-    /// 移除源项
+    /// 绉婚櫎婧愰」
     pub fn unregister(&mut self, name: &str) -> bool {
         if let Some(idx) = self.name_index.remove(name) {
             self.sources.swap_remove(idx);
             self.enabled.swap_remove(idx);
-            // 重建索引
+            // 閲嶅缓绱㈠紩
             self.name_index.clear();
             for (i, s) in self.sources.iter().enumerate() {
                 self.name_index.insert(s.name().to_string(), i);
@@ -85,12 +81,12 @@ impl<B: Backend> SourceRegistry<B> {
         false
     }
     
-    /// 获取所有已注册的源项名称
+    /// 鑾峰彇鎵€鏈夊凡娉ㄥ唽鐨勬簮椤瑰悕绉?
     pub fn list_sources(&self) -> Vec<&str> {
         self.sources.iter().map(|s| s.name()).collect()
     }
     
-    /// 累加所有源项贡献到工作区
+    /// 绱姞鎵€鏈夋簮椤硅础鐚埌宸ヤ綔鍖?
     pub fn accumulate_all(
         &self,
         state: &ShallowWaterStateGeneric<B>,
@@ -100,7 +96,7 @@ impl<B: Backend> SourceRegistry<B> {
         self.accumulate_with_filter(state, workspace, ctx, None);
     }
     
-    /// 仅累加显式源项
+    /// 浠呯疮鍔犳樉寮忔簮椤?
     pub fn accumulate_explicit(
         &self,
         state: &ShallowWaterStateGeneric<B>,
@@ -110,7 +106,7 @@ impl<B: Backend> SourceRegistry<B> {
         self.accumulate_with_filter(state, workspace, ctx, Some(SourceStiffness::Explicit));
     }
     
-    /// 仅累加局部隐式源项
+    /// 浠呯疮鍔犲眬閮ㄩ殣寮忔簮椤?
     pub fn accumulate_locally_implicit(
         &self,
         state: &ShallowWaterStateGeneric<B>,
@@ -125,23 +121,8 @@ impl<B: Backend> SourceRegistry<B> {
         );
     }
     
-    /// 批量计算（并行优化）
-    #[allow(dead_code)]
-    fn accumulate_parallel(
-        &self,
-        state: &ShallowWaterStateGeneric<B>,
-        contributions: &mut [SourceContributionGeneric<B::Scalar>],
-        ctx: &SourceContextGeneric<B::Scalar>,
-    ) {
-        for source in &self.sources {
-            if !self.is_enabled(source.name()) {
-                continue;
-            }
-            source.compute_batch(state, contributions, ctx);
-        }
-    }
     
-    /// 获取指定刚性类型的源项
+    /// 鑾峰彇鎸囧畾鍒氭€х被鍨嬬殑婧愰」
     pub fn filter_by_stiffness(
         &self,
         stiffness: SourceStiffness,
@@ -195,7 +176,7 @@ impl<B: Backend> SourceRegistry<B> {
 
             source.compute_batch(state, &mut scratch[..n], ctx);
 
-            // 直接累加到 workspace 的缓冲区
+            // 鐩存帴绱姞鍒?workspace 鐨勭紦鍐插尯
             if let (Some(h_dst), Some(hu_dst), Some(hv_dst)) = (
                 workspace.flux_h.as_slice_mut(),
                 workspace.source_hu.as_slice_mut(),
@@ -207,7 +188,7 @@ impl<B: Backend> SourceRegistry<B> {
                     hv_dst[i] += scratch[i].s_hv;
                 }
             } else {
-                // 回退路径：使用 copy_to_vec/copy_from_slice
+                // 鍥為€€璺緞锛氫娇鐢?copy_to_vec/copy_from_slice
                 let mut h_host = workspace.flux_h.copy_to_vec();
                 let mut hu_host = workspace.source_hu.copy_to_vec();
                 let mut hv_host = workspace.source_hv.copy_to_vec();

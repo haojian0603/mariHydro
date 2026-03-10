@@ -1,29 +1,29 @@
-// crates/mh_physics/src/boundary/ghost.rs
+﻿// crates/mh_physics/src/boundary/ghost.rs
 
-//! 幽灵状态计算器
+//! 骞界伒鐘舵€佽绠楀櫒
 //!
-//! 本模块提供基于边界条件计算幽灵单元状态的功能：
-//! - GhostStateCalculator: 幽灵状态计算器
-//! - GhostMomentumMode: 动量镜像模式
+//! 鏈ā鍧楁彁渚涘熀浜庤竟鐣屾潯浠惰绠楀菇鐏靛崟鍏冪姸鎬佺殑鍔熻兘锛?
+//! - GhostStateCalculator: 骞界伒鐘舵€佽绠楀櫒
+//! - GhostMomentumMode: 鍔ㄩ噺闀滃儚妯″紡
 //!
-//! # 概念说明
+//! # 姒傚康璇存槑
 //!
-//! 幽灵单元是一种边界处理技术：
-//! 1. 在边界外虚拟一个单元（幽灵单元）
-//! 2. 根据边界条件设置幽灵单元的状态
-//! 3. 使用内部单元和幽灵单元进行通量计算
+//! 骞界伒鍗曞厓鏄竴绉嶈竟鐣屽鐞嗘妧鏈細
+//! 1. 鍦ㄨ竟鐣屽铏氭嫙涓€涓崟鍏冿紙骞界伒鍗曞厓锛?
+//! 2. 鏍规嵁杈圭晫鏉′欢璁剧疆骞界伒鍗曞厓鐨勭姸鎬?
+//! 3. 浣跨敤鍐呴儴鍗曞厓鍜屽菇鐏靛崟鍏冭繘琛岄€氶噺璁＄畻
 //!
-//! 这种方法的优点：
-//! - 统一内部和边界的数值格式
-//! - 可复用相同的通量计算函数
-//! - 实现简单，易于并行化
+//! 杩欑鏂规硶鐨勪紭鐐癸細
+//! - 缁熶竴鍐呴儴鍜岃竟鐣岀殑鏁板€兼牸寮?
+//! - 鍙鐢ㄧ浉鍚岀殑閫氶噺璁＄畻鍑芥暟
+//! - 瀹炵幇绠€鍗曪紝鏄撲簬骞惰鍖?
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/domain/boundary/ghost.rs 迁移，改进：
-//! - 使用枚举替代布尔参数
-//! - 支持更多边界类型
-//! - 与 BoundaryManager 集成
+//! 浠?history_src/domain/boundary/ghost.rs 杩佺Щ锛屾敼杩涳細
+//! - 浣跨敤鏋氫妇鏇夸唬甯冨皵鍙傛暟
+//! - 鏀寔鏇村杈圭晫绫诲瀷
+//! - 涓?BoundaryManager 闆嗘垚
 
 use glam::DVec2;
 
@@ -31,38 +31,38 @@ use super::types::{BoundaryKind, BoundaryParams, ExternalForcing};
 use crate::state::ConservedState;
 
 // ============================================================
-// 动量镜像模式
+// 鍔ㄩ噺闀滃儚妯″紡
 // ============================================================
 
-/// 动量镜像模式
+/// 鍔ㄩ噺闀滃儚妯″紡
 ///
-/// 控制速度分量如何镜像到幽灵单元。
+/// 鎺у埗閫熷害鍒嗛噺濡備綍闀滃儚鍒板菇鐏靛崟鍏冦€?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GhostMomentumMode {
-    /// 完全反射：切向保持，法向反向
+    /// 瀹屽叏鍙嶅皠锛氬垏鍚戜繚鎸侊紝娉曞悜鍙嶅悜
     ///
-    /// 用于无滑移固壁边界。
+    /// 鐢ㄤ簬鏃犳粦绉诲浐澹佽竟鐣屻€?
     #[default]
     FullReflect,
 
-    /// 自由滑移：切向保持，法向反向但动量减半
+    /// 鑷敱婊戠Щ锛氬垏鍚戜繚鎸侊紝娉曞悜鍙嶅悜浣嗗姩閲忓噺鍗?
     ///
-    /// 用于自由滑移边界。
+    /// 鐢ㄤ簬鑷敱婊戠Щ杈圭晫銆?
     FreeSlip,
 
-    /// 无反射：直接复制
+    /// 鏃犲弽灏勶細鐩存帴澶嶅埗
     ///
-    /// 用于对称边界。
+    /// 鐢ㄤ簬瀵圭О杈圭晫銆?
     NoReflect,
 
-    /// 完全抵消：切向和法向都反向
+    /// 瀹屽叏鎶垫秷锛氬垏鍚戝拰娉曞悜閮藉弽鍚?
     ///
-    /// 用于无滑移边界（黏性效果）。
+    /// 鐢ㄤ簬鏃犳粦绉昏竟鐣岋紙榛忔€ф晥鏋滐級銆?
     FullCancel,
 }
 
 impl GhostMomentumMode {
-    /// 从边界类型推断动量模式
+    /// 浠庤竟鐣岀被鍨嬫帹鏂姩閲忔ā寮?
     pub fn from_boundary_kind(kind: BoundaryKind) -> Self {
         match kind {
             BoundaryKind::Wall => Self::FullReflect,
@@ -75,14 +75,14 @@ impl GhostMomentumMode {
 }
 
 // ============================================================
-// 幽灵状态计算器
+// 骞界伒鐘舵€佽绠楀櫒
 // ============================================================
 
-/// 幽灵状态计算器
+/// 骞界伒鐘舵€佽绠楀櫒
 ///
-/// 负责根据边界条件计算幽灵单元的状态。
+/// 璐熻矗鏍规嵁杈圭晫鏉′欢璁＄畻骞界伒鍗曞厓鐨勭姸鎬併€?
 ///
-/// # 使用方式
+/// # 浣跨敤鏂瑰紡
 ///
 /// ```ignore
 /// use mh_physics::boundary::{GhostStateCalculator, BoundaryKind, BoundaryParams};
@@ -92,7 +92,7 @@ impl GhostMomentumMode {
 /// let calculator = GhostStateCalculator::new(BoundaryParams::default());
 /// let interior = ConservedState::from_primitive(1.0, 0.5, 0.0);
 /// let normal = DVec2::new(1.0, 0.0);
-/// let z_bed = 0.0; // 底床高程
+/// let z_bed = 0.0; // 搴曞簥楂樼▼
 ///
 /// let ghost = calculator.compute_ghost(
 ///     interior,
@@ -107,27 +107,27 @@ pub struct GhostStateCalculator {
 }
 
 impl GhostStateCalculator {
-    /// 创建幽灵状态计算器
+    /// 鍒涘缓骞界伒鐘舵€佽绠楀櫒
     pub fn new(params: BoundaryParams) -> Self {
         Self { params }
     }
 
-    /// 从数值参数创建
+    /// 浠庢暟鍊煎弬鏁板垱寤?
     pub fn from_numerical_params(params: &crate::types::NumericalParams) -> Self {
         Self::new(BoundaryParams::from_numerical_params(params))
     }
 
-    /// 计算幽灵单元状态
+    /// 璁＄畻骞界伒鍗曞厓鐘舵€?
     ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `kind`: 边界类型
-    /// - `normal`: 面外法向量（单位向量）
-    /// - `external`: 外部强迫数据（用于开边界）
-    /// - `z_bed`: 内部单元底床高程（用于计算水位）
+    /// # 鍙傛暟
+    /// - `interior`: 鍐呴儴鍗曞厓鐘舵€?
+    /// - `kind`: 杈圭晫绫诲瀷
+    /// - `normal`: 闈㈠娉曞悜閲忥紙鍗曚綅鍚戦噺锛?
+    /// - `external`: 澶栭儴寮鸿揩鏁版嵁锛堢敤浜庡紑杈圭晫锛?
+    /// - `z_bed`: 鍐呴儴鍗曞厓搴曞簥楂樼▼锛堢敤浜庤绠楁按浣嶏級
     ///
-    /// # 返回
-    /// 幽灵单元的守恒量状态
+    /// # 杩斿洖
+    /// 骞界伒鍗曞厓鐨勫畧鎭掗噺鐘舵€?
     pub fn compute_ghost(
         &self,
         interior: ConservedState,
@@ -147,29 +147,29 @@ impl GhostStateCalculator {
                 self.compute_inflow_ghost(interior, external.unwrap_or(&ExternalForcing::ZERO))
             }
             BoundaryKind::Periodic => {
-                // 周期边界需要特殊处理，这里返回内部状态作为占位
-                // 实际周期边界在网格连接阶段处理
+                // 鍛ㄦ湡杈圭晫闇€瑕佺壒娈婂鐞嗭紝杩欓噷杩斿洖鍐呴儴鐘舵€佷綔涓哄崰浣?
+                // 瀹為檯鍛ㄦ湡杈圭晫鍦ㄧ綉鏍艰繛鎺ラ樁娈靛鐞?
                 interior
             }
         }
     }
 
-    /// 计算固壁边界的幽灵状态
+    /// 璁＄畻鍥哄杈圭晫鐨勫菇鐏电姸鎬?
     ///
-    /// 实现无穿透条件：法向速度反向。
+    /// 瀹炵幇鏃犵┛閫忔潯浠讹細娉曞悜閫熷害鍙嶅悜銆?
     fn compute_wall_ghost(&self, interior: ConservedState, normal: DVec2) -> ConservedState {
         let h = interior.h.max(self.params.h_min);
 
-        // 计算速度
+        // 璁＄畻閫熷害
         let u = interior.hu / h;
         let v = interior.hv / h;
         let velocity = DVec2::new(u, v);
 
-        // 分解为法向和切向分量
+        // 鍒嗚В涓烘硶鍚戝拰鍒囧悜鍒嗛噺
         let un = velocity.dot(normal);
         let ut = velocity - normal * un;
 
-        // 幽灵速度：法向反转，切向保持
+        // 骞界伒閫熷害锛氭硶鍚戝弽杞紝鍒囧悜淇濇寔
         let ghost_velocity = ut - normal * un;
 
         ConservedState {
@@ -179,21 +179,21 @@ impl GhostStateCalculator {
         }
     }
 
-    /// 计算对称边界的幽灵状态
+    /// 璁＄畻瀵圭О杈圭晫鐨勫菇鐏电姸鎬?
     ///
-    /// 与固壁类似，但可能有不同的动量处理。
+    /// 涓庡浐澹佺被浼硷紝浣嗗彲鑳芥湁涓嶅悓鐨勫姩閲忓鐞嗐€?
     fn compute_symmetry_ghost(&self, interior: ConservedState, normal: DVec2) -> ConservedState {
-        // 对称边界与固壁类似，法向速度反向
+        // 瀵圭О杈圭晫涓庡浐澹佺被浼硷紝娉曞悜閫熷害鍙嶅悜
         self.compute_wall_ghost(interior, normal)
     }
 
-    /// 计算开海边界的幽灵状态
+    /// 璁＄畻寮€娴疯竟鐣岀殑骞界伒鐘舵€?
     ///
-    /// 使用 Flather 辐射条件。
+    /// 浣跨敤 Flather 杈愬皠鏉′欢銆?
     /// 
-    /// Flather 条件基于特征分解：
-    /// un* = un_ext + (c/h)(η_int - η_ext)
-    /// 其中 η = h + z_bed 是水位
+    /// Flather 鏉′欢鍩轰簬鐗瑰緛鍒嗚В锛?
+    /// un* = un_ext + (c/h)(畏_int - 畏_ext)
+    /// 鍏朵腑 畏 = h + z_bed 鏄按浣?
     fn compute_open_sea_ghost(
         &self,
         interior: ConservedState,
@@ -204,27 +204,27 @@ impl GhostStateCalculator {
         let h_int = interior.h.max(self.params.h_min);
         let c = self.params.wave_speed(h_int);
 
-        // 内部速度
+        // 鍐呴儴閫熷害
         let u_int = interior.hu / h_int;
         let v_int = interior.hv / h_int;
         let velocity_int = DVec2::new(u_int, v_int);
 
-        // 法向速度
+        // 娉曞悜閫熷害
         let un_int = velocity_int.dot(normal);
         let un_ext = external.velocity.dot(normal);
 
-        // Flather 条件修正法向速度
-        // 正确使用水位 η = h + z_bed
+        // Flather 鏉′欢淇娉曞悜閫熷害
+        // 姝ｇ‘浣跨敤姘翠綅 畏 = h + z_bed
         let eta_int = h_int + z_bed;
         let eta_ext = external.eta.max(self.params.h_min);
         let eta_diff = eta_int - eta_ext;
         let un_ghost = un_ext - (c / h_int) * eta_diff;
 
-        // 切向速度保持
+        // 鍒囧悜閫熷害淇濇寔
         let ut = velocity_int - normal * un_int;
         let ghost_velocity = ut + normal * un_ghost;
 
-        // 幽灵水深：从外部水位减去底床高程
+        // 骞界伒姘存繁锛氫粠澶栭儴姘翠綅鍑忓幓搴曞簥楂樼▼
         // h_ghost = max(0, eta_ext - z_bed)
         let h_ghost = (external.eta - z_bed).max(self.params.h_min);
 
@@ -235,16 +235,16 @@ impl GhostStateCalculator {
         }
     }
 
-    /// 计算出流边界的幽灵状态
+    /// 璁＄畻鍑烘祦杈圭晫鐨勫菇鐏电姸鎬?
     ///
-    /// 零梯度外推：直接复制内部状态。
+    /// 闆舵搴﹀鎺細鐩存帴澶嶅埗鍐呴儴鐘舵€併€?
     fn compute_outflow_ghost(&self, interior: ConservedState) -> ConservedState {
         interior
     }
 
-    /// 计算入流边界的幽灵状态
+    /// 璁＄畻鍏ユ祦杈圭晫鐨勫菇鐏电姸鎬?
     ///
-    /// 使用外部强迫的速度和水深。
+    /// 浣跨敤澶栭儴寮鸿揩鐨勯€熷害鍜屾按娣便€?
     fn compute_inflow_ghost(
         &self,
         _interior: ConservedState,
@@ -258,17 +258,17 @@ impl GhostStateCalculator {
         }
     }
 
-    /// 使用指定的动量模式计算幽灵状态
+    /// 浣跨敤鎸囧畾鐨勫姩閲忔ā寮忚绠楀菇鐏电姸鎬?
     ///
-    /// 更灵活的接口，允许自定义动量处理方式。
+    /// 鏇寸伒娲荤殑鎺ュ彛锛屽厑璁歌嚜瀹氫箟鍔ㄩ噺澶勭悊鏂瑰紡銆?
     ///
-    /// # 参数
-    /// - `interior`: 内部单元状态
-    /// - `normal`: 面外法向量
-    /// - `mode`: 动量镜像模式
+    /// # 鍙傛暟
+    /// - `interior`: 鍐呴儴鍗曞厓鐘舵€?
+    /// - `normal`: 闈㈠娉曞悜閲?
+    /// - `mode`: 鍔ㄩ噺闀滃儚妯″紡
     ///
-    /// # 返回
-    /// 幽灵单元状态
+    /// # 杩斿洖
+    /// 骞界伒鍗曞厓鐘舵€?
     pub fn compute_ghost_with_mode(
         &self,
         interior: ConservedState,
@@ -297,17 +297,17 @@ impl GhostStateCalculator {
         }
     }
 
-    /// 批量计算幽灵状态
+    /// 鎵归噺璁＄畻骞界伒鐘舵€?
     ///
-    /// 对性能敏感的场景，批量处理更高效。
+    /// 瀵规€ц兘鏁忔劅鐨勫満鏅紝鎵归噺澶勭悊鏇撮珮鏁堛€?
     ///
-    /// # 参数
-    /// - `interiors`: 内部单元状态数组
-    /// - `kinds`: 边界类型数组
-    /// - `normals`: 法向量数组
-    /// - `externals`: 外部强迫数组（可选）
-    /// - `z_beds`: 底床高程数组
-    /// - `output`: 输出数组
+    /// # 鍙傛暟
+    /// - `interiors`: 鍐呴儴鍗曞厓鐘舵€佹暟缁?
+    /// - `kinds`: 杈圭晫绫诲瀷鏁扮粍
+    /// - `normals`: 娉曞悜閲忔暟缁?
+    /// - `externals`: 澶栭儴寮鸿揩鏁扮粍锛堝彲閫夛級
+    /// - `z_beds`: 搴曞簥楂樼▼鏁扮粍
+    /// - `output`: 杈撳嚭鏁扮粍
     pub fn compute_ghost_batch(
         &self,
         interiors: &[ConservedState],
@@ -330,7 +330,7 @@ impl GhostStateCalculator {
         }
     }
 
-    /// 获取参数引用
+    /// 鑾峰彇鍙傛暟寮曠敤
     pub fn params(&self) -> &BoundaryParams {
         &self.params
     }
@@ -343,33 +343,33 @@ impl Default for GhostStateCalculator {
 }
 
 // ============================================================
-// 辅助函数
+// 杈呭姪鍑芥暟
 // ============================================================
 
-/// 反射速度向量
+/// 鍙嶅皠閫熷害鍚戦噺
 ///
-/// 将速度向量关于法向量反射。
+/// 灏嗛€熷害鍚戦噺鍏充簬娉曞悜閲忓弽灏勩€?
 ///
-/// # 参数
-/// - `velocity`: 原始速度
-/// - `normal`: 反射面法向量（单位向量）
+/// # 鍙傛暟
+/// - `velocity`: 鍘熷閫熷害
+/// - `normal`: 鍙嶅皠闈㈡硶鍚戦噺锛堝崟浣嶅悜閲忥級
 ///
-/// # 返回
-/// 反射后的速度
+/// # 杩斿洖
+/// 鍙嶅皠鍚庣殑閫熷害
 #[inline]
 pub fn reflect_velocity(velocity: DVec2, normal: DVec2) -> DVec2 {
     let un = velocity.dot(normal);
     velocity - 2.0 * un * normal
 }
 
-/// 分解速度为法向和切向分量
+/// 鍒嗚В閫熷害涓烘硶鍚戝拰鍒囧悜鍒嗛噺
 ///
-/// # 参数
-/// - `velocity`: 速度向量
-/// - `normal`: 法向量（单位向量）
+/// # 鍙傛暟
+/// - `velocity`: 閫熷害鍚戦噺
+/// - `normal`: 娉曞悜閲忥紙鍗曚綅鍚戦噺锛?
 ///
-/// # 返回
-/// (法向分量标量, 切向分量向量)
+/// # 杩斿洖
+/// (娉曞悜鍒嗛噺鏍囬噺, 鍒囧悜鍒嗛噺鍚戦噺)
 #[inline]
 pub fn decompose_velocity(velocity: DVec2, normal: DVec2) -> (f64, DVec2) {
     let un = velocity.dot(normal);
@@ -378,7 +378,7 @@ pub fn decompose_velocity(velocity: DVec2, normal: DVec2) -> (f64, DVec2) {
 }
 
 // ============================================================
-// 测试
+// 娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -397,11 +397,11 @@ mod tests {
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
-        // 水深保持
+        // 姘存繁淇濇寔
         assert!(approx_eq(ghost.h, 1.0));
-        // 法向动量反向
+        // 娉曞悜鍔ㄩ噺鍙嶅悜
         assert!(approx_eq(ghost.hu, -1.0));
-        // 切向动量保持
+        // 鍒囧悜鍔ㄩ噺淇濇寔
         assert!(approx_eq(ghost.hv, 0.0));
     }
 
@@ -413,7 +413,7 @@ mod tests {
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Wall, normal, None, 0.0);
 
-        // 法向反转，切向保持
+        // 娉曞悜鍙嶈浆锛屽垏鍚戜繚鎸?
         assert!(approx_eq(ghost.hu, -1.0));
         assert!(approx_eq(ghost.hv, 1.0));
     }
@@ -426,7 +426,7 @@ mod tests {
 
         let ghost = calculator.compute_ghost(interior, BoundaryKind::Outflow, normal, None, 0.0);
 
-        // 出流：完全复制
+        // 鍑烘祦锛氬畬鍏ㄥ鍒?
         assert!(approx_eq(ghost.h, 1.5));
         assert!(approx_eq(ghost.hu, 0.75)); // 1.5 * 0.5
         assert!(approx_eq(ghost.hv, 0.45)); // 1.5 * 0.3
@@ -447,7 +447,7 @@ mod tests {
             0.0,
         );
 
-        // 使用外部强迫
+        // 浣跨敤澶栭儴寮鸿揩
         assert!(approx_eq(ghost.h, 2.0));
         assert!(approx_eq(ghost.hu, 2.0)); // h * u = 2.0 * 1.0
         assert!(approx_eq(ghost.hv, 0.0));
@@ -455,15 +455,15 @@ mod tests {
 
     #[test]
     fn test_flather_open_sea_with_z_bed() {
-        // 测试 Flather 边界条件正确使用水位 η = h + z_bed
+        // 娴嬭瘯 Flather 杈圭晫鏉′欢姝ｇ‘浣跨敤姘翠綅 畏 = h + z_bed
         let calculator = GhostStateCalculator::default();
         
-        // 内部单元: h=1.0, z_bed=0.5, 所以 η_int = 1.5
+        // 鍐呴儴鍗曞厓: h=1.0, z_bed=0.5, 鎵€浠?畏_int = 1.5
         let interior = ConservedState::from_primitive(1.0, 0.0, 0.0);
         let normal = DVec2::new(1.0, 0.0);
         let z_bed = 0.5;
         
-        // 外部强迫: η_ext = 1.5 (与内部相同)
+        // 澶栭儴寮鸿揩: 畏_ext = 1.5 (涓庡唴閮ㄧ浉鍚?
         let external = ExternalForcing::new(1.5, 0.0, 0.0);
         
         let ghost = calculator.compute_ghost(
@@ -474,10 +474,10 @@ mod tests {
             z_bed,
         );
         
-        // 当 η_int = η_ext 时，Flather 条件应该给出 un_ghost = un_ext = 0
-        // 幽灵水深 h_ghost = η_ext - z_bed = 1.5 - 0.5 = 1.0
+        // 褰?畏_int = 畏_ext 鏃讹紝Flather 鏉′欢搴旇缁欏嚭 un_ghost = un_ext = 0
+        // 骞界伒姘存繁 h_ghost = 畏_ext - z_bed = 1.5 - 0.5 = 1.0
         assert!(approx_eq(ghost.h, 1.0));
-        assert!(ghost.hu.abs() < 1e-9); // 速度接近零
+        assert!(ghost.hu.abs() < 1e-9); // 閫熷害鎺ヨ繎闆?
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
         assert!(approx_eq(reflected.x, -1.0));
         assert!(approx_eq(reflected.y, 0.0));
 
-        // 斜向入射
+        // 鏂滃悜鍏ュ皠
         let v = DVec2::new(1.0, 1.0);
         let n = DVec2::new(1.0, 0.0);
         let reflected = reflect_velocity(v, n);
@@ -541,9 +541,9 @@ mod tests {
         let mut output = vec![ConservedState::default(); 2];
         calculator.compute_ghost_batch(&interiors, &kinds, &normals, None, &z_beds, &mut output);
 
-        // 固壁：法向反转
+        // 鍥哄锛氭硶鍚戝弽杞?
         assert!(approx_eq(output[0].hu, -1.0));
-        // 出流：直接复制
+        // 鍑烘祦锛氱洿鎺ュ鍒?
         assert!(approx_eq(output[1].hv, 2.0)); // h * v = 2.0 * 1.0
     }
 

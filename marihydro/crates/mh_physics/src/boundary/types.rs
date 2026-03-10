@@ -1,19 +1,19 @@
-// crates/mh_physics/src/boundary/types.rs
+﻿// crates/mh_physics/src/boundary/types.rs
 
-//! 边界条件类型定义
+//! 杈圭晫鏉′欢绫诲瀷瀹氫箟
 //!
-//! 本模块定义浅水方程求解所需的边界条件类型，包括：
-//! - BoundaryKind: 边界类型枚举
-//! - BoundaryCondition: 边界条件配置
-//! - ExternalForcing: 外部强迫数据
-//! - BoundaryParams: 边界计算参数
+//! 鏈ā鍧楀畾涔夋祬姘存柟绋嬫眰瑙ｆ墍闇€鐨勮竟鐣屾潯浠剁被鍨嬶紝鍖呮嫭锛?
+//! - BoundaryKind: 杈圭晫绫诲瀷鏋氫妇
+//! - BoundaryCondition: 杈圭晫鏉′欢閰嶇疆
+//! - ExternalForcing: 澶栭儴寮鸿揩鏁版嵁
+//! - BoundaryParams: 杈圭晫璁＄畻鍙傛暟
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/domain/boundary/types.rs 迁移，适配新架构：
-//! - 使用 glam::DVec2 代替 (f64, f64) 表示速度
-//! - 使用 serde 支持配置文件
-//! - 使用 repr(u8) 支持 GPU 传输
+//! 浠?history_src/domain/boundary/types.rs 杩佺Щ锛岄€傞厤鏂版灦鏋勶細
+//! - 浣跨敤 glam::DVec2 浠ｆ浛 (f64, f64) 琛ㄧず閫熷害
+//! - 浣跨敤 serde 鏀寔閰嶇疆鏂囦欢
+//! - 浣跨敤 repr(u8) 鏀寔 GPU 浼犺緭
 
 use glam::DVec2;
 use serde::{Deserialize, Serialize};
@@ -21,73 +21,73 @@ use serde::{Deserialize, Serialize};
 use crate::types::NumericalParams;
 
 // ============================================================
-// 边界类型枚举
+// 杈圭晫绫诲瀷鏋氫妇
 // ============================================================
 
-/// 边界类型枚举
+/// 杈圭晫绫诲瀷鏋氫妇
 ///
-/// 定义浅水方程支持的边界条件类型。使用 `repr(u8)` 以便于 GPU 数据传输。
+/// 瀹氫箟娴呮按鏂圭▼鏀寔鐨勮竟鐣屾潯浠剁被鍨嬨€備娇鐢?`repr(u8)` 浠ヤ究浜?GPU 鏁版嵁浼犺緭銆?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[repr(u8)]
 pub enum BoundaryKind {
-    /// 固壁边界（无穿透）
+    /// 鍥哄杈圭晫锛堟棤绌块€忥級
     ///
-    /// 法向速度反射，切向速度保持。适用于不可渗透的边界。
+    /// 娉曞悜閫熷害鍙嶅皠锛屽垏鍚戦€熷害淇濇寔銆傞€傜敤浜庝笉鍙笚閫忕殑杈圭晫銆?
     #[default]
     Wall = 0,
 
-    /// 开海边界（Flather 辐射边界条件）
+    /// 寮€娴疯竟鐣岋紙Flather 杈愬皠杈圭晫鏉′欢锛?
     ///
-    /// 使用特征关系结合外部强迫数据，允许波动自由传出。
+    /// 浣跨敤鐗瑰緛鍏崇郴缁撳悎澶栭儴寮鸿揩鏁版嵁锛屽厑璁告尝鍔ㄨ嚜鐢变紶鍑恒€?
     OpenSea = 1,
 
-    /// 河流入流
+    /// 娌虫祦鍏ユ祦
     ///
-    /// 给定流量或水位的入流边界条件。
+    /// 缁欏畾娴侀噺鎴栨按浣嶇殑鍏ユ祦杈圭晫鏉′欢銆?
     RiverInflow = 2,
 
-    /// 自由出流
+    /// 鑷敱鍑烘祦
     ///
-    /// 零梯度外推，允许水流自由流出计算域。
+    /// 闆舵搴﹀鎺紝鍏佽姘存祦鑷敱娴佸嚭璁＄畻鍩熴€?
     Outflow = 3,
 
-    /// 对称边界
+    /// 瀵圭О杈圭晫
     ///
-    /// 与固壁类似但无摩擦，用于模型对称简化。
+    /// 涓庡浐澹佺被浼间絾鏃犳懇鎿︼紝鐢ㄤ簬妯″瀷瀵圭О绠€鍖栥€?
     Symmetry = 4,
 
-    /// 周期边界
+    /// 鍛ㄦ湡杈圭晫
     ///
-    /// 需要成对设置，用于模拟周期性流动。
+    /// 闇€瑕佹垚瀵硅缃紝鐢ㄤ簬妯℃嫙鍛ㄦ湡鎬ф祦鍔ㄣ€?
     Periodic = 5,
 }
 
 impl BoundaryKind {
-    /// 是否需要外部强迫数据
+    /// 鏄惁闇€瑕佸閮ㄥ己杩暟鎹?
     ///
-    /// OpenSea 和 RiverInflow 类型需要外部提供水位或流量数据。
+    /// OpenSea 鍜?RiverInflow 绫诲瀷闇€瑕佸閮ㄦ彁渚涙按浣嶆垨娴侀噺鏁版嵁銆?
     #[inline]
     pub fn requires_forcing(&self) -> bool {
         matches!(self, Self::OpenSea | Self::RiverInflow)
     }
 
-    /// 是否为固壁类型（反射边界）
+    /// 鏄惁涓哄浐澹佺被鍨嬶紙鍙嶅皠杈圭晫锛?
     ///
-    /// Wall 和 Symmetry 都会反射法向速度。
+    /// Wall 鍜?Symmetry 閮戒細鍙嶅皠娉曞悜閫熷害銆?
     #[inline]
     pub fn is_solid(&self) -> bool {
         matches!(self, Self::Wall | Self::Symmetry)
     }
 
-    /// 是否为开边界类型
+    /// 鏄惁涓哄紑杈圭晫绫诲瀷
     ///
-    /// 允许物质和能量通过的边界。
+    /// 鍏佽鐗╄川鍜岃兘閲忛€氳繃鐨勮竟鐣屻€?
     #[inline]
     pub fn is_open(&self) -> bool {
         matches!(self, Self::OpenSea | Self::Outflow | Self::RiverInflow)
     }
 
-    /// 从 u8 值转换（用于 GPU 数据读取）
+    /// 浠?u8 鍊艰浆鎹紙鐢ㄤ簬 GPU 鏁版嵁璇诲彇锛?
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Wall),
@@ -100,7 +100,7 @@ impl BoundaryKind {
         }
     }
 
-    /// 转换为 u8 值
+    /// 杞崲涓?u8 鍊?
     #[inline]
     pub fn as_u8(self) -> u8 {
         self as u8
@@ -122,45 +122,45 @@ impl std::fmt::Display for BoundaryKind {
 }
 
 // ============================================================
-// 边界条件配置
+// 杈圭晫鏉′欢閰嶇疆
 // ============================================================
 
-/// 边界条件配置
+/// 杈圭晫鏉′欢閰嶇疆
 ///
-/// 完整描述一个边界条件的参数，包括类型、固定值和关联的强迫数据源。
+/// 瀹屾暣鎻忚堪涓€涓竟鐣屾潯浠剁殑鍙傛暟锛屽寘鎷被鍨嬨€佸浐瀹氬€煎拰鍏宠仈鐨勫己杩暟鎹簮銆?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoundaryCondition {
-    /// 边界名称（用于标识和查找）
+    /// 杈圭晫鍚嶇О锛堢敤浜庢爣璇嗗拰鏌ユ壘锛?
     pub name: String,
 
-    /// 边界类型
+    /// 杈圭晫绫诲瀷
     pub kind: BoundaryKind,
 
-    /// 固定水位值 [m]
+    /// 鍥哄畾姘翠綅鍊?[m]
     ///
-    /// 用于 OpenSea 边界的恒定水位或 Outflow 的参考水位。
+    /// 鐢ㄤ簬 OpenSea 杈圭晫鐨勬亽瀹氭按浣嶆垨 Outflow 鐨勫弬鑰冩按浣嶃€?
     pub fixed_eta: Option<f64>,
 
-    /// 固定流量值 [m³/s]
+    /// 鍥哄畾娴侀噺鍊?[m鲁/s]
     ///
-    /// 用于 RiverInflow 边界的恒定流量。
+    /// 鐢ㄤ簬 RiverInflow 杈圭晫鐨勬亽瀹氭祦閲忋€?
     pub fixed_discharge: Option<f64>,
 
-    /// 关联的强迫数据 Provider ID
+    /// 鍏宠仈鐨勫己杩暟鎹?Provider ID
     ///
-    /// 用于查找时变强迫数据源。
+    /// 鐢ㄤ簬鏌ユ壘鏃跺彉寮鸿揩鏁版嵁婧愩€?
     pub forcing_id: Option<usize>,
 
-    /// 曼宁粗糙度系数
+    /// 鏇煎畞绮楃硻搴︾郴鏁?
     ///
-    /// 用于边界处的摩擦计算。
+    /// 鐢ㄤ簬杈圭晫澶勭殑鎽╂摝璁＄畻銆?
     pub manning_n: Option<f64>,
 }
 
 impl BoundaryCondition {
-    /// 创建固壁边界条件
+    /// 鍒涘缓鍥哄杈圭晫鏉′欢
     ///
-    /// # 示例
+    /// # 绀轰緥
     /// ```
     /// use mh_physics::boundary::BoundaryCondition;
     ///
@@ -178,9 +178,9 @@ impl BoundaryCondition {
         }
     }
 
-    /// 创建开海边界条件
+    /// 鍒涘缓寮€娴疯竟鐣屾潯浠?
     ///
-    /// # 示例
+    /// # 绀轰緥
     /// ```
     /// use mh_physics::boundary::BoundaryCondition;
     ///
@@ -198,13 +198,13 @@ impl BoundaryCondition {
         }
     }
 
-    /// 创建河流入流边界条件
+    /// 鍒涘缓娌虫祦鍏ユ祦杈圭晫鏉′欢
     ///
-    /// # 参数
-    /// - `name`: 边界名称
-    /// - `discharge`: 恒定入流量 [m³/s]
+    /// # 鍙傛暟
+    /// - `name`: 杈圭晫鍚嶇О
+    /// - `discharge`: 鎭掑畾鍏ユ祦閲?[m鲁/s]
     ///
-    /// # 示例
+    /// # 绀轰緥
     /// ```
     /// use mh_physics::boundary::BoundaryCondition;
     ///
@@ -222,7 +222,7 @@ impl BoundaryCondition {
         }
     }
 
-    /// 创建自由出流边界条件
+    /// 鍒涘缓鑷敱鍑烘祦杈圭晫鏉′欢
     pub fn outflow(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -234,7 +234,7 @@ impl BoundaryCondition {
         }
     }
 
-    /// 创建对称边界条件
+    /// 鍒涘缓瀵圭О杈圭晫鏉′欢
     pub fn symmetry(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -246,25 +246,25 @@ impl BoundaryCondition {
         }
     }
 
-    /// 设置强迫数据源 ID
+    /// 璁剧疆寮鸿揩鏁版嵁婧?ID
     pub fn with_forcing(mut self, forcing_id: usize) -> Self {
         self.forcing_id = Some(forcing_id);
         self
     }
 
-    /// 设置固定水位
+    /// 璁剧疆鍥哄畾姘翠綅
     pub fn with_fixed_eta(mut self, eta: f64) -> Self {
         self.fixed_eta = Some(eta);
         self
     }
 
-    /// 设置固定流量
+    /// 璁剧疆鍥哄畾娴侀噺
     pub fn with_fixed_discharge(mut self, discharge: f64) -> Self {
         self.fixed_discharge = Some(discharge);
         self
     }
 
-    /// 设置曼宁粗糙度
+    /// 璁剧疆鏇煎畞绮楃硻搴?
     pub fn with_manning_n(mut self, n: f64) -> Self {
         self.manning_n = Some(n);
         self
@@ -278,34 +278,34 @@ impl Default for BoundaryCondition {
 }
 
 // ============================================================
-// 外部强迫数据
+// 澶栭儴寮鸿揩鏁版嵁
 // ============================================================
 
-/// 外部强迫数据
+/// 澶栭儴寮鸿揩鏁版嵁
 ///
-/// 边界处的水位和速度数据，用于 OpenSea、RiverInflow 等边界条件。
+/// 杈圭晫澶勭殑姘翠綅鍜岄€熷害鏁版嵁锛岀敤浜?OpenSea銆丷iverInflow 绛夎竟鐣屾潯浠躲€?
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ExternalForcing {
-    /// 水位 [m]
+    /// 姘翠綅 [m]
     pub eta: f64,
 
-    /// 速度向量 [m/s]
+    /// 閫熷害鍚戦噺 [m/s]
     pub velocity: DVec2,
 }
 
 impl ExternalForcing {
-    /// 零强迫常量
+    /// 闆跺己杩父閲?
     pub const ZERO: Self = Self {
         eta: 0.0,
         velocity: DVec2::ZERO,
     };
 
-    /// 创建完整的强迫数据
+    /// 鍒涘缓瀹屾暣鐨勫己杩暟鎹?
     ///
-    /// # 参数
-    /// - `eta`: 水位 [m]
-    /// - `u`: x 方向速度 [m/s]
-    /// - `v`: y 方向速度 [m/s]
+    /// # 鍙傛暟
+    /// - `eta`: 姘翠綅 [m]
+    /// - `u`: x 鏂瑰悜閫熷害 [m/s]
+    /// - `v`: y 鏂瑰悜閫熷害 [m/s]
     #[inline]
     pub fn new(eta: f64, u: f64, v: f64) -> Self {
         Self {
@@ -314,7 +314,7 @@ impl ExternalForcing {
         }
     }
 
-    /// 创建仅水位的强迫数据
+    /// 鍒涘缓浠呮按浣嶇殑寮鸿揩鏁版嵁
     #[inline]
     pub fn with_eta(eta: f64) -> Self {
         Self {
@@ -323,7 +323,7 @@ impl ExternalForcing {
         }
     }
 
-    /// 创建仅速度的强迫数据
+    /// 鍒涘缓浠呴€熷害鐨勫己杩暟鎹?
     #[inline]
     pub fn with_velocity(u: f64, v: f64) -> Self {
         Self {
@@ -332,19 +332,19 @@ impl ExternalForcing {
         }
     }
 
-    /// 获取 x 方向速度
+    /// 鑾峰彇 x 鏂瑰悜閫熷害
     #[inline]
     pub fn u(&self) -> f64 {
         self.velocity.x
     }
 
-    /// 获取 y 方向速度
+    /// 鑾峰彇 y 鏂瑰悜閫熷害
     #[inline]
     pub fn v(&self) -> f64 {
         self.velocity.y
     }
 
-    /// 检查数据是否有效
+    /// 妫€鏌ユ暟鎹槸鍚︽湁鏁?
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.eta.is_finite() && self.velocity.is_finite()
@@ -352,30 +352,30 @@ impl ExternalForcing {
 }
 
 // ============================================================
-// 边界计算参数
+// 杈圭晫璁＄畻鍙傛暟
 // ============================================================
 
-/// 边界计算参数
+/// 杈圭晫璁＄畻鍙傛暟
 ///
-/// 边界通量计算所需的物理参数和预计算常量。
+/// 杈圭晫閫氶噺璁＄畻鎵€闇€鐨勭墿鐞嗗弬鏁板拰棰勮绠楀父閲忋€?
 #[derive(Debug, Clone, Copy)]
 pub struct BoundaryParams {
-    /// 重力加速度 [m/s²]
+    /// 閲嶅姏鍔犻€熷害 [m/s虏]
     pub gravity: f64,
 
-    /// 最小水深阈值 [m]
+    /// 鏈€灏忔按娣遍槇鍊?[m]
     pub h_min: f64,
 
-    /// sqrt(g) - 预计算以提高性能
+    /// sqrt(g) - 棰勮绠椾互鎻愰珮鎬ц兘
     pub sqrt_g: f64,
 }
 
 impl BoundaryParams {
-    /// 创建边界参数
+    /// 鍒涘缓杈圭晫鍙傛暟
     ///
-    /// # 参数
-    /// - `gravity`: 重力加速度 [m/s²]
-    /// - `h_min`: 最小水深阈值 [m]
+    /// # 鍙傛暟
+    /// - `gravity`: 閲嶅姏鍔犻€熷害 [m/s虏]
+    /// - `h_min`: 鏈€灏忔按娣遍槇鍊?[m]
     pub fn new(gravity: f64, h_min: f64) -> Self {
         Self {
             gravity,
@@ -384,20 +384,20 @@ impl BoundaryParams {
         }
     }
 
-    /// 从数值参数创建
+    /// 浠庢暟鍊煎弬鏁板垱寤?
     ///
-    /// 使用默认重力加速度 (9.81 m/s²)。
-    /// 如果需要自定义重力，请使用 `new` 方法。
+    /// 浣跨敤榛樿閲嶅姏鍔犻€熷害 (9.81 m/s虏)銆?
+    /// 濡傛灉闇€瑕佽嚜瀹氫箟閲嶅姏锛岃浣跨敤 `new` 鏂规硶銆?
     pub fn from_numerical_params(params: &NumericalParams) -> Self {
         Self::new(9.81, params.h_min)
     }
 
-    /// 从数值参数和物理常数创建
+    /// 浠庢暟鍊煎弬鏁板拰鐗╃悊甯告暟鍒涘缓
     pub fn from_params(numerical: &NumericalParams, physics: &crate::types::PhysicalConstants) -> Self {
         Self::new(physics.g, numerical.h_min)
     }
 
-    /// 计算特征速度（波速）
+    /// 璁＄畻鐗瑰緛閫熷害锛堟尝閫燂級
     ///
     /// c = sqrt(g * h)
     #[inline]
@@ -405,9 +405,9 @@ impl BoundaryParams {
         self.sqrt_g * h.max(self.h_min).sqrt()
     }
 
-    /// 计算静水压力
+    /// 璁＄畻闈欐按鍘嬪姏
     ///
-    /// p = 0.5 * g * h²
+    /// p = 0.5 * g * h虏
     #[inline]
     pub fn hydrostatic_pressure(&self, h: f64) -> f64 {
         0.5 * self.gravity * h * h
@@ -421,7 +421,7 @@ impl Default for BoundaryParams {
 }
 
 // ============================================================
-// 测试
+// 娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -488,11 +488,11 @@ mod tests {
         assert!((params.gravity - 9.81).abs() < 1e-10);
         assert!((params.sqrt_g - 9.81_f64.sqrt()).abs() < 1e-10);
 
-        // 波速测试
+        // 娉㈤€熸祴璇?
         let c = params.wave_speed(1.0);
         assert!((c - 9.81_f64.sqrt()).abs() < 1e-10);
 
-        // 静水压力测试
+        // 闈欐按鍘嬪姏娴嬭瘯
         let p = params.hydrostatic_pressure(1.0);
         assert!((p - 0.5 * 9.81).abs() < 1e-10);
     }

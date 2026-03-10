@@ -1,23 +1,23 @@
-// marihydro\crates\mh_physics\src\engine\strategy\semi_implicit.rs
-//! 半隐式时间积分策略（泛型版本）
+﻿// marihydro\crates\mh_physics\src\engine\strategy\semi_implicit.rs
+//! 鍗婇殣寮忔椂闂寸Н鍒嗙瓥鐣ワ紙娉涘瀷鐗堟湰锛?
 //!
-//! 基于压力校正的半隐式时间推进算法。
+//! 鍩轰簬鍘嬪姏鏍℃鐨勫崐闅愬紡鏃堕棿鎺ㄨ繘绠楁硶銆?
 //!
-//! # 算法概述
+//! # 绠楁硶姒傝堪
 //!
-//! 半隐式方法将浅水方程分为显式和隐式两部分：
-//! 1. **预测步**：显式计算对流和扩散项，得到预测速度 u*, v*
-//! 2. **压力校正步**：隐式求解压力泊松方程
-//! 3. **校正步**：用压力梯度校正速度和水位
+//! 鍗婇殣寮忔柟娉曞皢娴呮按鏂圭▼鍒嗕负鏄惧紡鍜岄殣寮忎袱閮ㄥ垎锛?
+//! 1. **棰勬祴姝?*锛氭樉寮忚绠楀娴佸拰鎵╂暎椤癸紝寰楀埌棰勬祴閫熷害 u*, v*
+//! 2. **鍘嬪姏鏍℃姝?*锛氶殣寮忔眰瑙ｅ帇鍔涙硦鏉炬柟绋?
+//! 3. **鏍℃姝?*锛氱敤鍘嬪姏姊害鏍℃閫熷害鍜屾按浣?
 //!
-//! 这种方法允许使用比显式方法更大的 CFL 数（通常 2-10 倍），
-//! 因为重力波的传播是隐式处理的。
+//! 杩欑鏂规硶鍏佽浣跨敤姣旀樉寮忔柟娉曟洿澶х殑 CFL 鏁帮紙閫氬父 2-10 鍊嶏級锛?
+//! 鍥犱负閲嶅姏娉㈢殑浼犳挱鏄殣寮忓鐞嗙殑銆?
 //!
-//! # 优势
+//! # 浼樺娍
 //!
-//! - 对于重力波主导的流动，可以使用更大的时间步长
-//! - 在低 Froude 数流动中特别有效
-//! - 适合长时间尺度的模拟
+//! - 瀵逛簬閲嶅姏娉富瀵肩殑娴佸姩锛屽彲浠ヤ娇鐢ㄦ洿澶х殑鏃堕棿姝ラ暱
+//! - 鍦ㄤ綆 Froude 鏁版祦鍔ㄤ腑鐗瑰埆鏈夋晥
+//! - 閫傚悎闀挎椂闂村昂搴︾殑妯℃嫙
 
 use super::{SemiImplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
@@ -26,49 +26,49 @@ use crate::engine::pcg::{PcgSolver, PcgConfig, DiagonalMatrix, PreconditionerTyp
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
 
-/// 泛型半隐式策略
+/// 娉涘瀷鍗婇殣寮忕瓥鐣?
 /// 
-/// 使用压力校正法的半隐式时间积分策略。
-/// 内部使用 PCG 求解器求解压力泊松方程。
+/// 浣跨敤鍘嬪姏鏍℃娉曠殑鍗婇殣寮忔椂闂寸Н鍒嗙瓥鐣ャ€?
+/// 鍐呴儴浣跨敤 PCG 姹傝В鍣ㄦ眰瑙ｅ帇鍔涙硦鏉炬柟绋嬨€?
 /// 
-/// # 类型参数
+/// # 绫诲瀷鍙傛暟
 /// 
-/// - `B`: 计算后端类型
+/// - `B`: 璁＄畻鍚庣绫诲瀷
 pub struct SemiImplicitStrategyGeneric<B: Backend> {
-    /// 计算后端实例
+    /// 璁＄畻鍚庣瀹炰緥
     backend: B,
-    /// 配置
+    /// 閰嶇疆
     config: SemiImplicitConfig,
-    /// PCG 求解器
+    /// PCG 姹傝В鍣?
     pcg_solver: Option<PcgSolver<B>>,
-    /// 预测速度 u*
+    /// 棰勬祴閫熷害 u*
     u_star: B::Buffer<B::Scalar>,
-    /// 预测速度 v*
+    /// 棰勬祴閫熷害 v*
     v_star: B::Buffer<B::Scalar>,
-    /// 水位校正量 η'
+    /// 姘翠綅鏍℃閲?畏'
     eta_prime: B::Buffer<B::Scalar>,
-    /// 右端项（散度）
+    /// 鍙崇椤癸紙鏁ｅ害锛?
     rhs: B::Buffer<B::Scalar>,
-    /// 对角矩阵（预处理器）
+    /// 瀵硅鐭╅樀锛堥澶勭悊鍣級
     diag: B::Buffer<B::Scalar>,
-    /// 压力梯度 x 分量
+    /// 鍘嬪姏姊害 x 鍒嗛噺
     grad_eta_x: B::Buffer<B::Scalar>,
-    /// 压力梯度 y 分量
+    /// 鍘嬪姏姊害 y 鍒嗛噺
     grad_eta_y: B::Buffer<B::Scalar>,
-    /// 求解器已分配的单元数
+    /// 姹傝В鍣ㄥ凡鍒嗛厤鐨勫崟鍏冩暟
     n_cells_allocated: usize,
 }
 
 impl<B: Backend + Clone> SemiImplicitStrategyGeneric<B> {
-    /// 使用后端实例创建半隐式策略
+    /// 浣跨敤鍚庣瀹炰緥鍒涘缓鍗婇殣寮忕瓥鐣?
     /// 
-    /// # 参数
+    /// # 鍙傛暟
     /// 
-    /// - `backend`: 计算后端实例
-    /// - `n_cells`: 单元数量
-    /// - `config`: 半隐式策略配置
+    /// - `backend`: 璁＄畻鍚庣瀹炰緥
+    /// - `n_cells`: 鍗曞厓鏁伴噺
+    /// - `config`: 鍗婇殣寮忕瓥鐣ラ厤缃?
     pub fn new_with_backend(backend: B, n_cells: usize, config: SemiImplicitConfig) -> Self {
-        // 创建 PCG 求解器配置
+        // 鍒涘缓 PCG 姹傝В鍣ㄩ厤缃?
         let pcg_config = PcgConfig {
             rtol: config.solver_rtol,
             atol: 1e-14,
@@ -92,19 +92,19 @@ impl<B: Backend + Clone> SemiImplicitStrategyGeneric<B> {
         }
     }
     
-    /// 获取后端引用
+    /// 鑾峰彇鍚庣寮曠敤
     #[inline]
     pub fn backend(&self) -> &B {
         &self.backend
     }
     
-    /// 获取配置引用
+    /// 鑾峰彇閰嶇疆寮曠敤
     #[inline]
     pub fn config(&self) -> &SemiImplicitConfig {
         &self.config
     }
     
-    /// 确保工作区大小足够
+    /// 纭繚宸ヤ綔鍖哄ぇ灏忚冻澶?
     fn ensure_capacity(&mut self, n_cells: usize) {
         if n_cells > self.n_cells_allocated {
             self.u_star = self.backend.alloc(n_cells);
@@ -124,34 +124,10 @@ impl<B: Backend + Clone> SemiImplicitStrategyGeneric<B> {
     }
 }
 
-// 为了向后兼容，保留旧的构造函数（但标记为废弃）
-impl<B: Backend> SemiImplicitStrategyGeneric<B> {
-    /// 创建半隐式策略（废弃，请使用 new_with_backend）
-    #[deprecated(note = "请使用 new_with_backend 方法显式传入后端实例")]
-    pub fn new(n_cells: usize, config: SemiImplicitConfig) -> Self
-    where
-        B: Default + Clone,
-    {
-        let backend = B::default();
-        Self {
-            u_star: backend.alloc(n_cells),
-            v_star: backend.alloc(n_cells),
-            eta_prime: backend.alloc(n_cells),
-            rhs: backend.alloc(n_cells),
-            diag: backend.alloc(n_cells),
-            grad_eta_x: backend.alloc(n_cells),
-            grad_eta_y: backend.alloc(n_cells),
-            pcg_solver: None,  // 旧版本不使用 PCG
-            backend,
-            config,
-            n_cells_allocated: n_cells,
-        }
-    }
-}
 
 impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<CpuBackend<f64>> {
     fn name(&self) -> &'static str {
-        "半隐式压力校正法"
+        "鍗婇殣寮忓帇鍔涙牎姝ｆ硶"
     }
     
     fn step(
@@ -168,13 +144,13 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         let h_min = self.config.h_min;
         let theta = self.config.theta;
         
-        // 获取状态引用（只读）
+        // 鑾峰彇鐘舵€佸紩鐢紙鍙锛?
         let h: &[f64] = &state.h;
         let hu: &[f64] = &state.hu;
         let hv: &[f64] = &state.hv;
         let _z: &[f64] = &state.z;
         
-        // 获取工作缓冲区（可写）
+        // 鑾峰彇宸ヤ綔缂撳啿鍖猴紙鍙啓锛?
         let u_star: &mut [f64] = &mut self.u_star;
         let v_star: &mut [f64] = &mut self.v_star;
         let eta_prime: &mut [f64] = &mut self.eta_prime;
@@ -183,10 +159,10 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         let grad_eta_x: &mut [f64] = &mut self.grad_eta_x;
         let grad_eta_y: &mut [f64] = &mut self.grad_eta_y;
         
-        // ========== 第1步：预测步 ==========
-        // 计算预测速度 u* = u^n + dt * (显式项)
-        // 显式项包括：对流、扩散、床底坡度、摩擦等
-        // 这里使用简化实现：直接从当前动量计算速度
+        // ========== 绗?姝ワ細棰勬祴姝?==========
+        // 璁＄畻棰勬祴閫熷害 u* = u^n + dt * (鏄惧紡椤?
+        // 鏄惧紡椤瑰寘鎷細瀵规祦銆佹墿鏁ｃ€佸簥搴曞潯搴︺€佹懇鎿︾瓑
+        // 杩欓噷浣跨敤绠€鍖栧疄鐜帮細鐩存帴浠庡綋鍓嶅姩閲忚绠楅€熷害
         for i in 0..n_cells {
             if h[i] > h_min {
                 u_star[i] = hu[i] / h[i];
@@ -197,25 +173,25 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             }
         }
         
-        // ========== 第2步：组装压力泊松方程 ==========
-        // 离散形式：A * η' = b
-        // 其中 A 是拉普拉斯算子的离散化，b 是速度散度
+        // ========== 绗?姝ワ細缁勮鍘嬪姏娉婃澗鏂圭▼ ==========
+        // 绂绘暎褰㈠紡锛欰 * 畏' = b
+        // 鍏朵腑 A 鏄媺鏅媺鏂畻瀛愮殑绂绘暎鍖栵紝b 鏄€熷害鏁ｅ害
         //
-        // 对于简化的对角近似：
-        // A_ii ≈ Σ_f (H_f * L_f / d_f)
-        // 这里使用更简单的形式：A_ii = Area_i / (g * θ * dt² * H_i)
+        // 瀵逛簬绠€鍖栫殑瀵硅杩戜技锛?
+        // A_ii 鈮?危_f (H_f * L_f / d_f)
+        // 杩欓噷浣跨敤鏇寸畝鍗曠殑褰㈠紡锛欰_ii = Area_i / (g * 胃 * dt虏 * H_i)
         
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
             let h_eff = h[i].max(h_min);
             
-            // 对角项：来自压力泊松方程的离散化
-            // 系数与时间步长、重力和水深相关
+            // 瀵硅椤癸細鏉ヨ嚜鍘嬪姏娉婃澗鏂圭▼鐨勭鏁ｅ寲
+            // 绯绘暟涓庢椂闂存闀裤€侀噸鍔涘拰姘存繁鐩稿叧
             diag[i] = area / (gravity * theta * dt * dt * h_eff);
         }
         
-        // 计算右端项：预测速度的散度
-        // b_i = -∫∫ ∇·(H u*) dA ≈ -Σ_f (H_f * u*_f · n_f) * L_f
+        // 璁＄畻鍙崇椤癸細棰勬祴閫熷害鐨勬暎搴?
+        // b_i = -鈭埆 鈭嚶?H u*) dA 鈮?-危_f (H_f * u*_f 路 n_f) * L_f
         rhs.fill(0.0);
         for face in mesh.interior_faces() {
             let owner = mesh.face_owner(*face);
@@ -224,29 +200,29 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             let normal = mesh.face_normal(*face);
             let length = mesh.face_length(*face);
             
-            // 界面处的水深（算术平均）
+            // 鐣岄潰澶勭殑姘存繁锛堢畻鏈钩鍧囷級
             let h_face = 0.5 * (h[owner] + h[neighbor]).max(h_min);
             
-            // 界面处的预测速度（算术平均）
+            // 鐣岄潰澶勭殑棰勬祴閫熷害锛堢畻鏈钩鍧囷級
             let u_face = 0.5 * (u_star[owner] + u_star[neighbor]);
             let v_face = 0.5 * (v_star[owner] + v_star[neighbor]);
             
-            // 通过界面的体积通量
+            // 閫氳繃鐣岄潰鐨勪綋绉€氶噺
             let flux = h_face * (u_face * normal[0] + v_face * normal[1]) * length;
             
-            // 累加到相邻单元（守恒形式）
+            // 绱姞鍒扮浉閭诲崟鍏冿紙瀹堟亽褰㈠紡锛?
             rhs[owner] -= flux;
             rhs[neighbor] += flux;
         }
         
-        // ========== 第3步：求解压力校正方程 ==========
-        // 使用 PCG 求解器或简单的 Jacobi 迭代
+        // ========== 绗?姝ワ細姹傝В鍘嬪姏鏍℃鏂圭▼ ==========
+        // 浣跨敤 PCG 姹傝В鍣ㄦ垨绠€鍗曠殑 Jacobi 杩唬
         eta_prime.fill(0.0);
         let mut converged = true;
         let mut iterations = 0;
         
         if let Some(ref mut pcg_solver) = self.pcg_solver {
-            // 使用 PCG 求解器
+            // 浣跨敤 PCG 姹傝В鍣?
             let diag_matrix = DiagonalMatrix::new(diag.to_vec(), n_cells);
             let mut eta_vec = eta_prime.to_vec();
             let rhs_vec = rhs.to_vec();
@@ -256,12 +232,12 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             converged = result.converged;
             iterations = result.iterations;
             
-            // 复制结果回缓冲区
+            // 澶嶅埗缁撴灉鍥炵紦鍐插尯
             for i in 0..n_cells {
                 eta_prime[i] = eta_vec[i];
             }
         } else {
-            // 回退到简单的 Jacobi 迭代
+            // 鍥為€€鍒扮畝鍗曠殑 Jacobi 杩唬
             for iter in 0..self.config.solver_max_iter {
                 let mut max_residual = 0.0f64;
                 
@@ -285,8 +261,8 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             }
         }
         
-        // ========== 第4步：计算压力梯度 ==========
-        // ∇η' 通过 Green-Gauss 公式计算
+        // ========== 绗?姝ワ細璁＄畻鍘嬪姏姊害 ==========
+        // 鈭囄? 閫氳繃 Green-Gauss 鍏紡璁＄畻
         grad_eta_x.fill(0.0);
         grad_eta_y.fill(0.0);
         
@@ -297,10 +273,10 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             let normal = mesh.face_normal(*face);
             let length = mesh.face_length(*face);
             
-            // 界面处的水位校正（算术平均）
+            // 鐣岄潰澶勭殑姘翠綅鏍℃锛堢畻鏈钩鍧囷級
             let eta_face = 0.5 * (eta_prime[owner] + eta_prime[neighbor]);
             
-            // 梯度贡献（Green-Gauss 定理）
+            // 姊害璐＄尞锛圙reen-Gauss 瀹氱悊锛?
             let contrib_x = eta_face * normal[0] * length;
             let contrib_y = eta_face * normal[1] * length;
             
@@ -310,7 +286,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             grad_eta_y[neighbor] -= contrib_y;
         }
         
-        // 除以单元面积得到梯度
+        // 闄や互鍗曞厓闈㈢Н寰楀埌姊害
         for i in 0..n_cells {
             let area = mesh.cell_area(i);
             if area > 1e-14 {
@@ -320,9 +296,9 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             }
         }
         
-        // ========== 第5步：校正速度和水位 ==========
-        // u^{n+1} = u* - g * θ * dt * ∇η'
-        // η^{n+1} = η^n + η'
+        // ========== 绗?姝ワ細鏍℃閫熷害鍜屾按浣?==========
+        // u^{n+1} = u* - g * 胃 * dt * 鈭囄?
+        // 畏^{n+1} = 畏^n + 畏'
         let h_mut: &mut [f64] = &mut state.h;
         let hu_mut: &mut [f64] = &mut state.hu;
         let hv_mut: &mut [f64] = &mut state.hv;
@@ -331,25 +307,25 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         let mut dry_cells = 0usize;
         
         for i in 0..n_cells {
-            // 更新水位
+            // 鏇存柊姘翠綅
             h_mut[i] += eta_prime[i];
             
             if h_mut[i] < h_min {
-                // 干单元处理
+                // 骞插崟鍏冨鐞?
                 h_mut[i] = 0.0;
                 hu_mut[i] = 0.0;
                 hv_mut[i] = 0.0;
                 dry_cells += 1;
             } else {
-                // 速度校正
+                // 閫熷害鏍℃
                 let u_new = u_star[i] - gravity * theta * dt * grad_eta_x[i];
                 let v_new = v_star[i] - gravity * theta * dt * grad_eta_y[i];
                 
-                // 更新动量
+                // 鏇存柊鍔ㄩ噺
                 hu_mut[i] = h_mut[i] * u_new;
                 hv_mut[i] = h_mut[i] * v_new;
                 
-                // 计算最大波速
+                // 璁＄畻鏈€澶ф尝閫?
                 let c = (gravity * h_mut[i]).sqrt();
                 let speed = (u_new * u_new + v_new * v_new).sqrt() + c;
                 max_wave_speed = max_wave_speed.max(speed);
@@ -366,10 +342,10 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         }
     }
     
-    /// 计算稳定时间步长
+    /// 璁＄畻绋冲畾鏃堕棿姝ラ暱
     /// 
-    /// 半隐式方法可以使用比显式方法更大的 CFL 数，
-    /// 因为重力波是隐式处理的。
+    /// 鍗婇殣寮忔柟娉曞彲浠ヤ娇鐢ㄦ瘮鏄惧紡鏂规硶鏇村ぇ鐨?CFL 鏁帮紝
+    /// 鍥犱负閲嶅姏娉㈡槸闅愬紡澶勭悊鐨勩€?
     fn compute_stable_dt(
         &self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
@@ -386,7 +362,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
         let mut dt_min = f64::MAX;
         
         for i in 0..mesh.n_cells() {
-            // 跳过干单元
+            // 璺宠繃骞插崟鍏?
             if h[i] <= h_min {
                 continue;
             }
@@ -395,8 +371,8 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             let v = hv[i] / h[i];
             let c = (gravity * h[i]).sqrt();
             
-            // 对于半隐式方法，时间步长主要受对流速度限制
-            // 重力波速度的影响较小
+            // 瀵逛簬鍗婇殣寮忔柟娉曪紝鏃堕棿姝ラ暱涓昏鍙楀娴侀€熷害闄愬埗
+            // 閲嶅姏娉㈤€熷害鐨勫奖鍝嶈緝灏?
             let speed = (u * u + v * v).sqrt() + c;
             
             if speed > 1e-10 {
@@ -411,18 +387,18 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for SemiImplicitStrategyGeneric<Cp
             dt_min = 1e-6;
         }
         
-        // 半隐式方法允许更大的 CFL 数（通常可以是显式的 2-5 倍）
+        // 鍗婇殣寮忔柟娉曞厑璁告洿澶х殑 CFL 鏁帮紙閫氬父鍙互鏄樉寮忕殑 2-5 鍊嶏級
         dt_min * 2.0
     }
     
-    /// 半隐式方法支持大 CFL 数
+    /// 鍗婇殣寮忔柟娉曟敮鎸佸ぇ CFL 鏁?
     fn supports_large_cfl(&self) -> bool {
         true
     }
     
-    /// 推荐的 CFL 数
+    /// 鎺ㄨ崘鐨?CFL 鏁?
     fn recommended_cfl(&self) -> f64 {
-        // 半隐式方法推荐使用 CFL ≈ 2.0
+        // 鍗婇殣寮忔柟娉曟帹鑽愪娇鐢?CFL 鈮?2.0
         2.0
     }
 }

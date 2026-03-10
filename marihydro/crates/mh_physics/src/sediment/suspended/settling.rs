@@ -15,7 +15,8 @@
 
 use crate::sediment::properties::SedimentProperties;
 use crate::types::PhysicalConstants;
-use mh_foundation::Scalar;
+
+type Scalar = f64;
 
 /// 沉降速度公式 trait
 pub trait SettlingFormula: Send + Sync {

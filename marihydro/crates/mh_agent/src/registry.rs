@@ -23,9 +23,9 @@ use std::collections::HashMap;
 /// // 应用所有代理的修正
 /// registry.apply_all(&mut state)?;
 /// ```
-pub struct AgentRegistry {
+pub struct AgentRegistry<S: Assimilable> {
     /// 已注册的代理
-    agents: HashMap<String, Box<dyn AIAgent>>,
+    agents: HashMap<String, Box<dyn AIAgent<State = S>>>,
     /// 代理启用状态
     enabled: HashMap<String, bool>,
     /// 执行顺序（按注册顺序）
@@ -36,7 +36,7 @@ pub struct AgentRegistry {
     conservation_tolerance: f64,
 }
 
-impl AgentRegistry {
+impl<S: Assimilable> AgentRegistry<S> {
     /// 创建新的注册中心
     pub fn new() -> Self {
         Self {
@@ -51,7 +51,7 @@ impl AgentRegistry {
     /// 注册代理
     ///
     /// 代理按注册顺序执行。
-    pub fn register(&mut self, agent: Box<dyn AIAgent>) {
+    pub fn register(&mut self, agent: Box<dyn AIAgent<State = S>>) {
         let name = agent.name().to_string();
         if !self.agents.contains_key(&name) {
             self.order.push(name.clone());
@@ -61,7 +61,7 @@ impl AgentRegistry {
     }
     
     /// 移除代理
-    pub fn unregister(&mut self, name: &str) -> Option<Box<dyn AIAgent>> {
+    pub fn unregister(&mut self, name: &str) -> Option<Box<dyn AIAgent<State = S>>> {
         self.enabled.remove(name);
         self.order.retain(|n| n != name);
         self.agents.remove(name)
@@ -138,7 +138,7 @@ impl AgentRegistry {
     /// # 返回
     ///
     /// 如果任何代理应用失败或守恒校验失败，返回错误
-    pub fn apply_all(&self, state: &mut dyn Assimilable) -> Result<(), AiError> {
+    pub fn apply_all(&self, state: &mut S) -> Result<(), AiError> {
         for name in &self.order {
             if *self.enabled.get(name).unwrap_or(&false) {
                 if let Some(agent) = self.agents.get(name) {
@@ -181,7 +181,7 @@ impl AgentRegistry {
     pub fn update_and_apply(
         &mut self,
         snapshot: &PhysicsSnapshot,
-        state: &mut dyn Assimilable,
+        state: &mut S,
     ) -> Result<(), AiError> {
         self.update_all(snapshot)?;
         self.apply_all(state)?;
@@ -189,7 +189,7 @@ impl AgentRegistry {
     }
 }
 
-impl Default for AgentRegistry {
+impl<S: Assimilable> Default for AgentRegistry<S> {
     fn default() -> Self {
         Self::new()
     }
@@ -198,6 +198,28 @@ impl Default for AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    struct DummyState {
+        h: Vec<f64>,
+        z: Vec<f64>,
+        areas: Vec<f64>,
+    }
+    
+    impl DummyState {
+        fn new(n: usize) -> Self {
+            Self { h: vec![1.0; n], z: vec![0.0; n], areas: vec![1.0; n] }
+        }
+    }
+    
+    impl Assimilable for DummyState {
+        fn get_tracer_mut(&mut self, _name: &str) -> Option<&mut [f64]> { None }
+        fn get_velocity_mut(&mut self) -> Option<(&mut [f64], &mut [f64])> { None }
+        fn get_depth_mut(&mut self) -> &mut [f64] { self.h.as_mut_slice() }
+        fn get_depth(&self) -> &[f64] { self.h.as_slice() }
+        fn get_bed_elevation_mut(&mut self) -> &mut [f64] { self.z.as_mut_slice() }
+        fn n_cells(&self) -> usize { self.h.len() }
+        fn cell_areas(&self) -> &[f64] { self.areas.as_slice() }
+    }
     
     /// 测试用的简单代理
     struct TestAgent {
@@ -212,6 +234,8 @@ mod tests {
     }
     
     impl AIAgent for TestAgent {
+        type State = DummyState;
+        
         fn name(&self) -> &'static str {
             self.name
         }
@@ -221,7 +245,7 @@ mod tests {
             Ok(())
         }
         
-        fn apply(&self, _state: &mut dyn Assimilable) -> Result<(), AiError> {
+        fn apply(&self, _state: &mut Self::State) -> Result<(), AiError> {
             Ok(())
         }
         
@@ -232,7 +256,7 @@ mod tests {
     
     #[test]
     fn test_registry_basic() {
-        let mut registry = AgentRegistry::new();
+        let mut registry = AgentRegistry::<DummyState>::new();
         
         registry.register(Box::new(TestAgent::new("test1")));
         registry.register(Box::new(TestAgent::new("test2")));
@@ -243,5 +267,10 @@ mod tests {
         
         registry.set_enabled("test1", false);
         assert!(!registry.is_enabled("test1"));
+        
+        let mut state = DummyState::new(4);
+        let snapshot = PhysicsSnapshot::empty(4);
+        assert!(registry.update_all(&snapshot).is_ok());
+        assert!(registry.apply_all(&mut state).is_ok());
     }
 }

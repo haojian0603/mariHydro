@@ -1,68 +1,68 @@
-// marihydro\crates\mh_physics\src\core\gpu.rs
-//! GPU 后端（骨架实现）
+﻿// marihydro\crates\mh_physics\src\core\gpu.rs
+//! GPU 鍚庣锛堥鏋跺疄鐜帮級
 //!
-//! 预留 CUDA 后端支持，当前仅提供接口定义。
-//! 实际 GPU 实现将在未来阶段完成。
+//! 棰勭暀 CUDA 鍚庣鏀寔锛屽綋鍓嶄粎鎻愪緵鎺ュ彛瀹氫箟銆?
+//! 瀹為檯 GPU 瀹炵幇灏嗗湪鏈潵闃舵瀹屾垚銆?
 
 use super::buffer::DeviceBuffer;
 use super::scalar::Scalar;
 use bytemuck::Pod;
 use std::marker::PhantomData;
 
-/// CUDA 后端占位符
+/// CUDA 鍚庣鍗犱綅绗?
 /// 
-/// 这是一个占位结构，用于定义 GPU 后端接口。
-/// 实际实现需要在启用 `cuda` feature 时完成。
+/// 杩欐槸涓€涓崰浣嶇粨鏋勶紝鐢ㄤ簬瀹氫箟 GPU 鍚庣鎺ュ彛銆?
+/// 瀹為檯瀹炵幇闇€瑕佸湪鍚敤 `cuda` feature 鏃跺畬鎴愩€?
 #[derive(Debug, Clone)]
 pub struct CudaBackendPlaceholder<S: Scalar> {
     _marker: PhantomData<S>,
 }
 
 impl<S: Scalar> CudaBackendPlaceholder<S> {
-    /// 创建 CUDA 后端（占位）
+    /// 鍒涘缓 CUDA 鍚庣锛堝崰浣嶏級
     pub fn new(_device_id: usize) -> Result<Self, CudaError> {
         Err(CudaError("CUDA backend not implemented yet".into()))
     }
 }
 
-/// GPU 缓冲区占位符
+/// GPU 缂撳啿鍖哄崰浣嶇
 #[derive(Debug, Clone)]
 pub struct GpuBuffer<T: Pod> {
-    len: usize,
-    _marker: PhantomData<T>,
+    data: Vec<T>,
 }
 
-// 手动实现 Send 和 Sync（GPU 缓冲区是安全的）
+// 鎵嬪姩瀹炵幇 Send 鍜?Sync锛圙PU 缂撳啿鍖烘槸瀹夊叏鐨勶級
 unsafe impl<T: Pod> Send for GpuBuffer<T> {}
 unsafe impl<T: Pod> Sync for GpuBuffer<T> {}
 
 impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for GpuBuffer<T> {
     fn len(&self) -> usize {
-        self.len
+        self.data.len()
     }
     
-    fn copy_from_slice(&mut self, _src: &[T]) {
-        unimplemented!("GPU buffer not implemented")
+    fn copy_from_slice(&mut self, src: &[T]) {
+        self.data.clear();
+        self.data.extend_from_slice(src);
     }
     
     fn copy_to_vec(&self) -> Vec<T> {
-        unimplemented!("GPU buffer not implemented")
+        self.data.clone()
     }
     
     fn as_slice(&self) -> Option<&[T]> {
-        None // GPU 缓冲区无法直接访问
+        None // GPU 缂撳啿鍖烘棤娉曠洿鎺ヨ闂?
     }
     
     fn as_slice_mut(&mut self) -> Option<&mut [T]> {
-        None // GPU 缓冲区无法直接访问
+        None // GPU 缂撳啿鍖烘棤娉曠洿鎺ヨ闂?
     }
     
-    fn fill(&mut self, _value: T) {
-        unimplemented!("GPU buffer not implemented")
+    fn fill(&mut self, value: T) {
+        self.data.iter_mut().for_each(|x| *x = value.clone());
     }
 }
 
-/// CUDA 错误类型
+/// CUDA 閿欒绫诲瀷
 #[derive(Debug)]
 pub struct CudaError(pub String);
 
@@ -74,26 +74,26 @@ impl std::fmt::Display for CudaError {
 
 impl std::error::Error for CudaError {}
 
-/// GPU 设备信息
+/// GPU 璁惧淇℃伅
 #[derive(Debug, Clone)]
 pub struct GpuDeviceInfo {
-    /// 设备 ID
+    /// 璁惧 ID
     pub id: usize,
-    /// 设备名称
+    /// 璁惧鍚嶇О
     pub name: String,
-    /// 显存大小（字节）
+    /// 鏄惧瓨澶у皬锛堝瓧鑺傦級
     pub memory_bytes: usize,
-    /// 计算能力
+    /// 璁＄畻鑳藉姏
     pub compute_capability: (u32, u32),
 }
 
-/// 查询可用 GPU 设备
+/// 鏌ヨ鍙敤 GPU 璁惧
 pub fn available_gpus() -> Vec<GpuDeviceInfo> {
-    // 占位实现
+    // 鍗犱綅瀹炵幇
     Vec::new()
 }
 
-/// 检查是否有可用 GPU
+/// 妫€鏌ユ槸鍚︽湁鍙敤 GPU
 pub fn has_cuda() -> bool {
     false
 }

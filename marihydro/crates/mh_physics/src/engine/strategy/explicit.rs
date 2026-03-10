@@ -1,10 +1,10 @@
-// marihydro\crates\mh_physics\src\engine\strategy\explicit.rs
-//! 显式时间积分策略
+﻿// marihydro\crates\mh_physics\src\engine\strategy\explicit.rs
+//! 鏄惧紡鏃堕棿绉垎绛栫暐
 //!
-//! 基于 Godunov 格式的显式有限体积法。
+//! 鍩轰簬 Godunov 鏍煎紡鐨勬樉寮忔湁闄愪綋绉硶銆?
 //! 
-//! 该模块实现了经典的 Godunov 有限体积方法，使用 HLL 近似黎曼求解器
-//! 计算单元间的数值通量。支持静水重构以处理变化的地形。
+//! 璇ユā鍧楀疄鐜颁簡缁忓吀鐨?Godunov 鏈夐檺浣撶Н鏂规硶锛屼娇鐢?HLL 杩戜技榛庢浖姹傝В鍣?
+//! 璁＄畻鍗曞厓闂寸殑鏁板€奸€氶噺銆傛敮鎸侀潤姘撮噸鏋勪互澶勭悊鍙樺寲鐨勫湴褰€?
 
 use super::{ExplicitConfig, StepResult, TimeIntegrationStrategy};
 use super::workspace::SolverWorkspaceGeneric;
@@ -12,17 +12,17 @@ use crate::core::{Backend, CpuBackend, Scalar};
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterStateGeneric;
 
-/// 显式时间积分策略
+/// 鏄惧紡鏃堕棿绉垎绛栫暐
 /// 
-/// 使用 Godunov 格式的显式有限体积法进行时间积分。
-/// 通过 HLL 近似黎曼求解器计算单元间的数值通量，
-/// 结合静水重构技术处理变化地形。
+/// 浣跨敤 Godunov 鏍煎紡鐨勬樉寮忔湁闄愪綋绉硶杩涜鏃堕棿绉垎銆?
+/// 閫氳繃 HLL 杩戜技榛庢浖姹傝В鍣ㄨ绠楀崟鍏冮棿鐨勬暟鍊奸€氶噺锛?
+/// 缁撳悎闈欐按閲嶆瀯鎶€鏈鐞嗗彉鍖栧湴褰€?
 /// 
-/// # 类型参数
+/// # 绫诲瀷鍙傛暟
 /// 
-/// - `B`: 计算后端类型，必须实现 `Backend` trait
+/// - `B`: 璁＄畻鍚庣绫诲瀷锛屽繀椤诲疄鐜?`Backend` trait
 /// 
-/// # 示例
+/// # 绀轰緥
 /// 
 /// ```ignore
 /// let backend = CpuBackend::<f64>::new();
@@ -30,29 +30,29 @@ use crate::state::ShallowWaterStateGeneric;
 /// let strategy = ExplicitStrategy::new_with_backend(backend, config);
 /// ```
 pub struct ExplicitStrategy<B: Backend> {
-    /// 计算后端实例
+    /// 璁＄畻鍚庣瀹炰緥
     backend: B,
-    /// 配置
+    /// 閰嶇疆
     config: ExplicitConfig,
-    /// 重力加速度（缓存的后端标量类型）
+    /// 閲嶅姏鍔犻€熷害锛堢紦瀛樼殑鍚庣鏍囬噺绫诲瀷锛?
     #[allow(dead_code)]
     gravity: B::Scalar,
-    /// 干单元阈值（缓存的后端标量类型）
+    /// 骞插崟鍏冮槇鍊硷紙缂撳瓨鐨勫悗绔爣閲忕被鍨嬶級
     #[allow(dead_code)]
     h_dry: B::Scalar,
 }
 
 impl<B: Backend> ExplicitStrategy<B> {
-    /// 使用后端实例创建显式策略
+    /// 浣跨敤鍚庣瀹炰緥鍒涘缓鏄惧紡绛栫暐
     /// 
-    /// # 参数
+    /// # 鍙傛暟
     /// 
-    /// - `backend`: 计算后端实例，用于所有数值计算操作
-    /// - `config`: 显式策略配置，包含 CFL 数、重力加速度等参数
+    /// - `backend`: 璁＄畻鍚庣瀹炰緥锛岀敤浜庢墍鏈夋暟鍊艰绠楁搷浣?
+    /// - `config`: 鏄惧紡绛栫暐閰嶇疆锛屽寘鍚?CFL 鏁般€侀噸鍔涘姞閫熷害绛夊弬鏁?
     /// 
-    /// # 返回
+    /// # 杩斿洖
     /// 
-    /// 返回初始化完成的显式策略实例
+    /// 杩斿洖鍒濆鍖栧畬鎴愮殑鏄惧紡绛栫暐瀹炰緥
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
             backend,
@@ -62,61 +62,48 @@ impl<B: Backend> ExplicitStrategy<B> {
         }
     }
     
-    /// 获取后端引用
+    /// 鑾峰彇鍚庣寮曠敤
     #[inline]
     pub fn backend(&self) -> &B {
         &self.backend
     }
     
-    /// 获取配置引用
+    /// 鑾峰彇閰嶇疆寮曠敤
     #[inline]
     pub fn config(&self) -> &ExplicitConfig {
         &self.config
     }
 }
 
-impl<B: Backend + Clone> ExplicitStrategy<B> {
-    /// 创建显式策略（需要 Clone 后端）
-    /// 
-    /// 此方法用于兼容默认后端场景。对于大多数情况，
-    /// 建议使用 `new_with_backend` 方法显式传入后端实例。
-    #[deprecated(note = "请使用 new_with_backend 方法显式传入后端实例")]
-    pub fn new(config: ExplicitConfig) -> Self
-    where
-        B: Default,
-    {
-        Self::new_with_backend(B::default(), config)
-    }
-}
 
-/// HLL 通量计算结果
+/// HLL 閫氶噺璁＄畻缁撴灉
 struct HllFlux {
-    /// 质量通量
+    /// 璐ㄩ噺閫氶噺
     f_h: f64,
-    /// x 方向动量通量
+    /// x 鏂瑰悜鍔ㄩ噺閫氶噺
     f_hu: f64,
-    /// y 方向动量通量
+    /// y 鏂瑰悜鍔ㄩ噺閫氶噺
     f_hv: f64,
-    /// 最大波速
+    /// 鏈€澶ф尝閫?
     max_speed: f64,
 }
 
-/// 计算 HLL 数值通量
+/// 璁＄畻 HLL 鏁板€奸€氶噺
 /// 
-/// 使用 Harten-Lax-van Leer (HLL) 近似黎曼求解器计算单元界面的数值通量。
-/// 该方法考虑了左右两侧的状态，使用波速估计来确定通量的方向。
+/// 浣跨敤 Harten-Lax-van Leer (HLL) 杩戜技榛庢浖姹傝В鍣ㄨ绠楀崟鍏冪晫闈㈢殑鏁板€奸€氶噺銆?
+/// 璇ユ柟娉曡€冭檻浜嗗乏鍙充袱渚х殑鐘舵€侊紝浣跨敤娉㈤€熶及璁℃潵纭畾閫氶噺鐨勬柟鍚戙€?
 /// 
-/// # 参数
+/// # 鍙傛暟
 /// 
-/// - `h_l`, `u_l`, `v_l`: 左侧状态（水深、x速度、y速度）
-/// - `h_r`, `u_r`, `v_r`: 右侧状态
-/// - `normal`: 界面法向量 [nx, ny]
-/// - `gravity`: 重力加速度
-/// - `h_dry`: 干单元阈值
+/// - `h_l`, `u_l`, `v_l`: 宸︿晶鐘舵€侊紙姘存繁銆亁閫熷害銆亂閫熷害锛?
+/// - `h_r`, `u_r`, `v_r`: 鍙充晶鐘舵€?
+/// - `normal`: 鐣岄潰娉曞悜閲?[nx, ny]
+/// - `gravity`: 閲嶅姏鍔犻€熷害
+/// - `h_dry`: 骞插崟鍏冮槇鍊?
 /// 
-/// # 返回
+/// # 杩斿洖
 /// 
-/// 返回 HLL 通量结构，包含质量和动量通量以及最大波速
+/// 杩斿洖 HLL 閫氶噺缁撴瀯锛屽寘鍚川閲忓拰鍔ㄩ噺閫氶噺浠ュ強鏈€澶ф尝閫?
 #[inline]
 fn compute_hll_flux(
     h_l: f64, u_l: f64, v_l: f64,
@@ -125,25 +112,25 @@ fn compute_hll_flux(
     gravity: f64,
     h_dry: f64,
 ) -> HllFlux {
-    // 投影到法向的速度分量
+    // 鎶曞奖鍒版硶鍚戠殑閫熷害鍒嗛噺
     let un_l = u_l * normal[0] + v_l * normal[1];
     let un_r = u_r * normal[0] + v_r * normal[1];
     
-    // 波速估计（Einfeldt 估计）
+    // 娉㈤€熶及璁★紙Einfeldt 浼拌锛?
     let c_l = if h_l > h_dry { (gravity * h_l).sqrt() } else { 0.0 };
     let c_r = if h_r > h_dry { (gravity * h_r).sqrt() } else { 0.0 };
     
-    // Roe 平均波速
+    // Roe 骞冲潎娉㈤€?
     let h_roe = 0.5 * (h_l + h_r);
     let _c_roe = if h_roe > h_dry { (gravity * h_roe).sqrt() } else { 0.0 };
     
-    // HLL 波速边界
+    // HLL 娉㈤€熻竟鐣?
     let s_l = (un_l - c_l).min(un_r - c_r).min(0.0);
     let s_r = (un_l + c_l).max(un_r + c_r).max(0.0);
     
     let max_speed = s_l.abs().max(s_r.abs());
     
-    // 计算左右通量
+    // 璁＄畻宸﹀彸閫氶噺
     let f_l_h = h_l * un_l;
     let f_l_hu = h_l * u_l * un_l + 0.5 * gravity * h_l * h_l * normal[0];
     let f_l_hv = h_l * v_l * un_l + 0.5 * gravity * h_l * h_l * normal[1];
@@ -152,15 +139,15 @@ fn compute_hll_flux(
     let f_r_hu = h_r * u_r * un_r + 0.5 * gravity * h_r * h_r * normal[0];
     let f_r_hv = h_r * v_r * un_r + 0.5 * gravity * h_r * h_r * normal[1];
     
-    // HLL 通量公式
+    // HLL 閫氶噺鍏紡
     let (f_h, f_hu, f_hv) = if s_l >= 0.0 {
-        // 全部来自左侧
+        // 鍏ㄩ儴鏉ヨ嚜宸︿晶
         (f_l_h, f_l_hu, f_l_hv)
     } else if s_r <= 0.0 {
-        // 全部来自右侧
+        // 鍏ㄩ儴鏉ヨ嚜鍙充晶
         (f_r_h, f_r_hu, f_r_hv)
     } else {
-        // 中间状态
+        // 涓棿鐘舵€?
         let denom = s_r - s_l;
         if denom.abs() < 1e-14 {
             (0.0, 0.0, 0.0)
@@ -177,7 +164,7 @@ fn compute_hll_flux(
 
 impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f64>> {
     fn name(&self) -> &'static str {
-        "显式 Godunov (HLL)"
+        "鏄惧紡 Godunov (HLL)"
     }
     
     fn step(
@@ -187,18 +174,18 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         workspace: &mut SolverWorkspaceGeneric<CpuBackend<f64>>,
         dt: f64,
     ) -> StepResult<f64> {
-        // ========== 第1步：重置工作区 ==========
+        // ========== 绗?姝ワ細閲嶇疆宸ヤ綔鍖?==========
         workspace.reset();
         
         let n_cells = mesh.n_cells();
         
-        // 获取状态切片（只读）
+        // 鑾峰彇鐘舵€佸垏鐗囷紙鍙锛?
         let h: &[f64] = &state.h;
         let hu: &[f64] = &state.hu;
         let hv: &[f64] = &state.hv;
         let z: &[f64] = &state.z;
         
-        // 获取通量缓冲区（可写）
+        // 鑾峰彇閫氶噺缂撳啿鍖猴紙鍙啓锛?
         let flux_h: &mut [f64] = &mut workspace.flux_h;
         let flux_hu: &mut [f64] = &mut workspace.flux_hu;
         let flux_hv: &mut [f64] = &mut workspace.flux_hv;
@@ -209,7 +196,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         let mut max_wave_speed = 0.0f64;
         let mut dry_cells = 0usize;
         
-        // ========== 第2步：计算内部面通量 ==========
+        // ========== 绗?姝ワ細璁＄畻鍐呴儴闈㈤€氶噺 ==========
         for face in mesh.interior_faces() {
             let owner = mesh.face_owner(*face);
             let neighbor = mesh.face_neighbor(*face).unwrap();
@@ -217,13 +204,13 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             let normal = mesh.face_normal(*face);
             let length = mesh.face_length(*face);
             
-            // 获取左右单元状态
+            // 鑾峰彇宸﹀彸鍗曞厓鐘舵€?
             let h_l = h[owner];
             let h_r = h[neighbor];
             let z_l = z[owner];
             let z_r = z[neighbor];
             
-            // 计算左右单元的速度分量
+            // 璁＄畻宸﹀彸鍗曞厓鐨勯€熷害鍒嗛噺
             let (u_l, v_l) = if h_l > h_dry {
                 (hu[owner] / h_l, hv[owner] / h_l)
             } else {
@@ -236,31 +223,31 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
                 (0.0, 0.0)
             };
             
-            // 静水重构：确保平衡态时通量为零
-            // 使用 Audusse et al. (2004) 的静水重构方法
-            let eta_l = h_l + z_l;  // 左侧水位
-            let eta_r = h_r + z_r;  // 右侧水位
-            let z_star = z_l.max(z_r);  // 界面处的最高床底高程
+            // 闈欐按閲嶆瀯锛氱‘淇濆钩琛℃€佹椂閫氶噺涓洪浂
+            // 浣跨敤 Audusse et al. (2004) 鐨勯潤姘撮噸鏋勬柟娉?
+            let eta_l = h_l + z_l;  // 宸︿晶姘翠綅
+            let eta_r = h_r + z_r;  // 鍙充晶姘翠綅
+            let z_star = z_l.max(z_r);  // 鐣岄潰澶勭殑鏈€楂樺簥搴曢珮绋?
             
-            let h_l_star = (eta_l - z_star).max(0.0);  // 重构后的左侧水深
-            let h_r_star = (eta_r - z_star).max(0.0);  // 重构后的右侧水深
+            let h_l_star = (eta_l - z_star).max(0.0);  // 閲嶆瀯鍚庣殑宸︿晶姘存繁
+            let h_r_star = (eta_r - z_star).max(0.0);  // 閲嶆瀯鍚庣殑鍙充晶姘存繁
             
-            // 使用重构后的水深计算 HLL 通量
+            // 浣跨敤閲嶆瀯鍚庣殑姘存繁璁＄畻 HLL 閫氶噺
             let hll = compute_hll_flux(
                 h_l_star, u_l, v_l,
                 h_r_star, u_r, v_r,
                 normal, gravity, h_dry,
             );
             
-            // 更新最大波速
+            // 鏇存柊鏈€澶ф尝閫?
             max_wave_speed = max_wave_speed.max(hll.max_speed);
             
-            // 通量乘以界面长度并累加到单元
+            // 閫氶噺涔樹互鐣岄潰闀垮害骞剁疮鍔犲埌鍗曞厓
             let flux_mag_h = hll.f_h * length;
             let flux_mag_hu = hll.f_hu * length;
             let flux_mag_hv = hll.f_hv * length;
             
-            // Owner 单元减去通量，Neighbor 单元加上通量
+            // Owner 鍗曞厓鍑忓幓閫氶噺锛孨eighbor 鍗曞厓鍔犱笂閫氶噺
             flux_h[owner] -= flux_mag_h;
             flux_h[neighbor] += flux_mag_h;
             flux_hu[owner] -= flux_mag_hu;
@@ -269,8 +256,8 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             flux_hv[neighbor] += flux_mag_hv;
         }
         
-        // ========== 第3步：边界面处理（反射边界）==========
-        // 对于固壁边界，法向速度为零，仅存在压力作用
+        // ========== 绗?姝ワ細杈圭晫闈㈠鐞嗭紙鍙嶅皠杈圭晫锛?=========
+        // 瀵逛簬鍥哄杈圭晫锛屾硶鍚戦€熷害涓洪浂锛屼粎瀛樺湪鍘嬪姏浣滅敤
         for face in mesh.boundary_faces() {
             let owner = mesh.face_owner(*face);
             let normal = mesh.face_normal(*face);
@@ -278,7 +265,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             
             let h_l = h[owner];
             
-            // 干单元跳过
+            // 骞插崟鍏冭烦杩?
             if h_l <= h_dry {
                 continue;
             }
@@ -286,10 +273,10 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             let u_l = hu[owner] / h_l;
             let v_l = hv[owner] / h_l;
             
-            // 计算法向速度（用于波速估计）
+            // 璁＄畻娉曞悜閫熷害锛堢敤浜庢尝閫熶及璁★級
             let un_l = u_l * normal[0] + v_l * normal[1];
             
-            // 固壁边界：仅静水压力作用于边界
+            // 鍥哄杈圭晫锛氫粎闈欐按鍘嬪姏浣滅敤浜庤竟鐣?
             // F_pressure = (1/2) * g * h^2 * n
             let f_hu = 0.5 * gravity * h_l * h_l * normal[0] * length;
             let f_hv = 0.5 * gravity * h_l * h_l * normal[1] * length;
@@ -297,13 +284,13 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             flux_hu[owner] -= f_hu;
             flux_hv[owner] -= f_hv;
             
-            // 更新最大波速
+            // 鏇存柊鏈€澶ф尝閫?
             let c = (gravity * h_l).sqrt();
             max_wave_speed = max_wave_speed.max(un_l.abs() + c);
         }
         
-        // ========== 第4步：更新状态 ==========
-        // 使用前向欧拉时间积分：U^{n+1} = U^n + dt * (1/A) * Σ F
+        // ========== 绗?姝ワ細鏇存柊鐘舵€?==========
+        // 浣跨敤鍓嶅悜娆ф媺鏃堕棿绉垎锛歎^{n+1} = U^n + dt * (1/A) * 危 F
         let h_mut: &mut [f64] = &mut state.h;
         let hu_mut: &mut [f64] = &mut state.hu;
         let hv_mut: &mut [f64] = &mut state.hv;
@@ -315,12 +302,12 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             }
             let inv_area = 1.0 / area;
             
-            // 前向欧拉更新
+            // 鍓嶅悜娆ф媺鏇存柊
             h_mut[i] += dt * flux_h[i] * inv_area;
             hu_mut[i] += dt * flux_hu[i] * inv_area;
             hv_mut[i] += dt * flux_hv[i] * inv_area;
             
-            // 干单元处理：水深低于阈值时清零
+            // 骞插崟鍏冨鐞嗭細姘存繁浣庝簬闃堝€兼椂娓呴浂
             if h_mut[i] < h_dry {
                 h_mut[i] = 0.0;
                 hu_mut[i] = 0.0;
@@ -334,16 +321,16 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             max_wave_speed,
             dry_cells,
             limited_cells: 0,
-            converged: true,  // 显式方法总是"收敛"
+            converged: true,  // 鏄惧紡鏂规硶鎬绘槸"鏀舵暃"
             iterations: 0,
         }
     }
     
-    /// 计算稳定时间步长
+    /// 璁＄畻绋冲畾鏃堕棿姝ラ暱
     /// 
-    /// 基于 CFL 条件计算最大允许时间步长：
+    /// 鍩轰簬 CFL 鏉′欢璁＄畻鏈€澶у厑璁告椂闂存闀匡細
     /// dt <= CFL * dx / (|u| + c)
-    /// 其中 c = sqrt(g*h) 是浅水波速
+    /// 鍏朵腑 c = sqrt(g*h) 鏄祬姘存尝閫?
     fn compute_stable_dt(
         &self,
         state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
@@ -360,23 +347,23 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         let mut dt_min = f64::MAX;
         
         for i in 0..mesh.n_cells() {
-            // 跳过干单元
+            // 璺宠繃骞插崟鍏?
             if h[i] <= h_dry {
                 continue;
             }
             
-            // 计算速度分量
+            // 璁＄畻閫熷害鍒嗛噺
             let u = hu[i] / h[i];
             let v = hv[i] / h[i];
             
-            // 浅水波速
+            // 娴呮按娉㈤€?
             let c = (gravity * h[i]).sqrt();
             
-            // 特征速度 = 流速 + 波速
+            // 鐗瑰緛閫熷害 = 娴侀€?+ 娉㈤€?
             let speed = (u * u + v * v).sqrt() + c;
             
             if speed > 1e-10 {
-                // 使用单元面积的平方根作为特征长度
+                // 浣跨敤鍗曞厓闈㈢Н鐨勫钩鏂规牴浣滀负鐗瑰緛闀垮害
                 let area = mesh.cell_area(i);
                 let dx = area.sqrt();
                 let dt_local = cfl * dx / speed;
@@ -384,7 +371,7 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
             }
         }
         
-        // 如果所有单元都是干的，返回一个小的默认值
+        // 濡傛灉鎵€鏈夊崟鍏冮兘鏄共鐨勶紝杩斿洖涓€涓皬鐨勯粯璁ゅ€?
         if dt_min == f64::MAX {
             dt_min = 1e-6;
         }
@@ -392,18 +379,18 @@ impl TimeIntegrationStrategy<CpuBackend<f64>> for ExplicitStrategy<CpuBackend<f6
         dt_min
     }
     
-    /// 推荐的 CFL 数
+    /// 鎺ㄨ崘鐨?CFL 鏁?
     fn recommended_cfl(&self) -> f64 {
-        // 显式方法通常使用 0.5 左右的 CFL 数以确保稳定性
+        // 鏄惧紡鏂规硶閫氬父浣跨敤 0.5 宸﹀彸鐨?CFL 鏁颁互纭繚绋冲畾鎬?
         self.config.cfl.max(0.5)
     }
 }
 
 // =============================================================================
-// f32 后端实现
+// f32 鍚庣瀹炵幇
 // =============================================================================
 
-/// 计算 HLL 数值通量（f32 版本）
+/// 璁＄畻 HLL 鏁板€奸€氶噺锛坒32 鐗堟湰锛?
 #[inline]
 fn compute_hll_flux_f32(
     h_l: f32, u_l: f32, v_l: f32,
@@ -412,21 +399,21 @@ fn compute_hll_flux_f32(
     gravity: f32,
     h_dry: f32,
 ) -> (f32, f32, f32, f32) {
-    // 投影到法向的速度分量
+    // 鎶曞奖鍒版硶鍚戠殑閫熷害鍒嗛噺
     let un_l = u_l * normal[0] + v_l * normal[1];
     let un_r = u_r * normal[0] + v_r * normal[1];
     
-    // 波速估计
+    // 娉㈤€熶及璁?
     let c_l = if h_l > h_dry { (gravity * h_l).sqrt() } else { 0.0 };
     let c_r = if h_r > h_dry { (gravity * h_r).sqrt() } else { 0.0 };
     
-    // HLL 波速边界
+    // HLL 娉㈤€熻竟鐣?
     let s_l = (un_l - c_l).min(un_r - c_r).min(0.0);
     let s_r = (un_l + c_l).max(un_r + c_r).max(0.0);
     
     let max_speed = s_l.abs().max(s_r.abs());
     
-    // 计算左右通量
+    // 璁＄畻宸﹀彸閫氶噺
     let f_l_h = h_l * un_l;
     let f_l_hu = h_l * u_l * un_l + 0.5 * gravity * h_l * h_l * normal[0];
     let f_l_hv = h_l * v_l * un_l + 0.5 * gravity * h_l * h_l * normal[1];
@@ -435,7 +422,7 @@ fn compute_hll_flux_f32(
     let f_r_hu = h_r * u_r * un_r + 0.5 * gravity * h_r * h_r * normal[0];
     let f_r_hv = h_r * v_r * un_r + 0.5 * gravity * h_r * h_r * normal[1];
     
-    // HLL 通量公式
+    // HLL 閫氶噺鍏紡
     let (f_h, f_hu, f_hv) = if s_l >= 0.0 {
         (f_l_h, f_l_hu, f_l_hv)
     } else if s_r <= 0.0 {
@@ -457,7 +444,7 @@ fn compute_hll_flux_f32(
 
 impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f32>> {
     fn name(&self) -> &'static str {
-        "显式 Godunov (HLL) [f32]"
+        "鏄惧紡 Godunov (HLL) [f32]"
     }
     
     fn step(
@@ -486,7 +473,7 @@ impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f3
         let mut max_wave_speed = 0.0f32;
         let mut dry_cells = 0usize;
         
-        // 计算内部面通量
+        // 璁＄畻鍐呴儴闈㈤€氶噺
         for face in mesh.interior_faces() {
             let owner = mesh.face_owner(*face);
             let neighbor = mesh.face_neighbor(*face).unwrap();
@@ -512,7 +499,7 @@ impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f3
                 (0.0, 0.0)
             };
             
-            // 静水重构
+            // 闈欐按閲嶆瀯
             let eta_l = h_l + z_l;
             let eta_r = h_r + z_r;
             let z_star = z_l.max(z_r);
@@ -540,7 +527,7 @@ impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f3
             flux_hv[neighbor] += flux_mag_hv;
         }
         
-        // 边界面处理
+        // 杈圭晫闈㈠鐞?
         for face in mesh.boundary_faces() {
             let owner = mesh.face_owner(*face);
             let normal_f64 = mesh.face_normal(*face);
@@ -567,7 +554,7 @@ impl TimeIntegrationStrategy<CpuBackend<f32>> for ExplicitStrategy<CpuBackend<f3
             max_wave_speed = max_wave_speed.max(un_l.abs() + c);
         }
         
-        // 更新状态
+        // 鏇存柊鐘舵€?
         let h_mut: &mut [f32] = &mut state.h;
         let hu_mut: &mut [f32] = &mut state.hu;
         let hv_mut: &mut [f32] = &mut state.hv;

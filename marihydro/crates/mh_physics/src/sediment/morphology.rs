@@ -31,8 +31,10 @@
 
 use crate::adapter::PhysicsMesh;
 use crate::state::ShallowWaterState;
-use mh_foundation::{AlignedVec, Scalar};
+use mh_foundation::AlignedVec;
 use serde::{Deserialize, Serialize};
+
+type Scalar = f64;
 
 /// 河床演变配置
 #[derive(Debug, Clone, Serialize, Deserialize)]

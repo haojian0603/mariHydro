@@ -26,7 +26,8 @@
 //! ```
 
 use super::csr::CsrMatrix;
-use mh_foundation::Scalar;
+
+type Scalar = f64;
 
 /// 预条件器 trait
 ///

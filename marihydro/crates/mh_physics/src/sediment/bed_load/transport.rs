@@ -1,6 +1,6 @@
-//! 推移质输运计算器
+﻿//! 鎺ㄧЩ璐ㄨ緭杩愯绠楀櫒
 //!
-//! 提供推移质输沙率计算功能。
+//! 鎻愪緵鎺ㄧЩ璐ㄨ緭娌欑巼璁＄畻鍔熻兘銆?
 
-// 重导出现有的 BedLoadTransport
+// 閲嶅鍑虹幇鏈夌殑 BedLoadTransport
 pub use super::super::bed_load_legacy::BedLoadTransport;

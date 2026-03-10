@@ -1,23 +1,23 @@
-// crates/mh_physics/src/engine/mod.rs
+﻿// crates/mh_physics/src/engine/mod.rs
 
-//! 物理引擎模块
+//! 鐗╃悊寮曟搸妯″潡
 //!
-//! 提供求解器、时间积分器、通量累加等核心计算组件。
+//! 鎻愪緵姹傝В鍣ㄣ€佹椂闂寸Н鍒嗗櫒銆侀€氶噺绱姞绛夋牳蹇冭绠楃粍浠躲€?
 //!
-//! # 模块结构
+//! # 妯″潡缁撴瀯
 //!
-//! - `flux_accumulator` - 通量累加器
-//! - `time_integrator` - 时间积分器 (ForwardEuler, SSP-RK2, SSP-RK3)
-//! - `timestep` - CFL时间步控制
-//! - `solver` - 主求解器
-//! - `parallel` - 并行通量计算
-//! - `semi_implicit` - 半隐式时间推进策略
-//! - `strategy` - 时间积分策略模式
-//! - `pcg` - 预处理共轭梯度法求解器
+//! - `flux_accumulator` - 閫氶噺绱姞鍣?
+//! - `time_integrator` - 鏃堕棿绉垎鍣?(ForwardEuler, SSP-RK2, SSP-RK3)
+//! - `timestep` - CFL鏃堕棿姝ユ帶鍒?
+//! - `solver` - 涓绘眰瑙ｅ櫒
+//! - `parallel` - 骞惰閫氶噺璁＄畻
+//! - `semi_implicit` - 鍗婇殣寮忔椂闂存帹杩涚瓥鐣?
+//! - `strategy` - 鏃堕棿绉垎绛栫暐妯″紡
+//! - `pcg` - 棰勫鐞嗗叡杞搴︽硶姹傝В鍣?
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/physics/engine 迁移，保持算法不变。
+//! 浠?history_src/physics/engine 杩佺Щ锛屼繚鎸佺畻娉曚笉鍙樸€?
 
 pub mod flux_accumulator;
 pub mod friction;
@@ -29,7 +29,7 @@ pub mod strategy;
 pub mod time_integrator;
 pub mod timestep;
 
-// 重导出常用类型
+// 閲嶅鍑哄父鐢ㄧ被鍨?
 pub use flux_accumulator::{FluxAccumulator, AtomicFluxAccumulator};
 pub use time_integrator::{
     TimeIntegrator, TimeIntegratorKind, TimeIntegratorEnum,
@@ -56,7 +56,7 @@ pub use pcg::{
     PoissonMatrixBuilder,
 };
 
-// 重导出策略模式类型
+// 閲嶅鍑虹瓥鐣ユā寮忕被鍨?
 pub use strategy::{
     TimeIntegrationStrategy, StrategyKind, StepResult,
     ExplicitStrategy, ExplicitConfig,

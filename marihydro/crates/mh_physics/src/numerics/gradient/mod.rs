@@ -1,15 +1,15 @@
-// crates/mh_physics/src/numerics/gradient/mod.rs
+﻿// crates/mh_physics/src/numerics/gradient/mod.rs
 
-//! 梯度计算模块
+//! 姊害璁＄畻妯″潡
 //!
-//! 提供多种梯度计算方法：
-//! - Green-Gauss 梯度 (面积分法)
-//! - 最小二乘梯度 (带 SVD 回退)
+//! 鎻愪緵澶氱姊害璁＄畻鏂规硶锛?
+//! - Green-Gauss 姊害 (闈㈢Н鍒嗘硶)
+//! - 鏈€灏忎簩涔樻搴?(甯?SVD 鍥為€€)
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/physics/numerics/gradient 迁移，保持算法不变。
-//! 适配 PhysicsMesh 接口。
+//! 浠?history_src/physics/numerics/gradient 杩佺Щ锛屼繚鎸佺畻娉曚笉鍙樸€?
+//! 閫傞厤 PhysicsMesh 鎺ュ彛銆?
 
 mod traits;
 mod green_gauss;

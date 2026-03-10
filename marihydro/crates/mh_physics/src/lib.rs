@@ -1,28 +1,28 @@
-// marihydro\crates\mh_physics\src/lib.rs
+﻿// marihydro\crates\mh_physics\src/lib.rs
 
-//! 物理求解器模块
+//! 鐗╃悊姹傝В鍣ㄦā鍧?
 //!
-//! 提供浅水方程数值求解功能，包括：
-//! - 核心抽象层 (core) - Backend, Buffer, f64 抽象
-//! - 网格适配层 (adapter)
-//! - 核心类型定义 (types)
-//! - 状态管理 (state)
-//! - 状态访问抽象 (traits)
-//! - 数值格式 (schemes)
-//! - 引擎核心 (engine) - 时间积分、通量累加、时间步控制
-//! - 源项处理 (sources) - 摩擦、科氏力、湍流等
-//! - 垂向剖面 (vertical) - σ坐标、分层状态
+//! 鎻愪緵娴呮按鏂圭▼鏁板€兼眰瑙ｅ姛鑳斤紝鍖呮嫭锛?
+//! - 鏍稿績鎶借薄灞?(core) - Backend, Buffer, f64 鎶借薄
+//! - 缃戞牸閫傞厤灞?(adapter)
+//! - 鏍稿績绫诲瀷瀹氫箟 (types)
+//! - 鐘舵€佺鐞?(state)
+//! - 鐘舵€佽闂娊璞?(traits)
+//! - 鏁板€兼牸寮?(schemes)
+//! - 寮曟搸鏍稿績 (engine) - 鏃堕棿绉垎銆侀€氶噺绱姞銆佹椂闂存鎺у埗
+//! - 婧愰」澶勭悊 (sources) - 鎽╂摝銆佺姘忓姏銆佹箥娴佺瓑
+//! - 鍨傚悜鍓栭潰 (vertical) - 蟽鍧愭爣銆佸垎灞傜姸鎬?
 //!
-//! # Trait 抽象
+//! # Trait 鎶借薄
 //!
-//! - [`StateAccess`]: 状态只读访问接口
-//! - [`StateAccessMut`]: 状态可变访问接口
+//! - [`StateAccess`]: 鐘舵€佸彧璇昏闂帴鍙?
+//! - [`StateAccessMut`]: 鐘舵€佸彲鍙樿闂帴鍙?
 //!
 
-// 核心抽象层
+// 鏍稿績鎶借薄灞?
 pub mod core;
 
-// 网格抽象层
+// 缃戞牸鎶借薄灞?
 pub mod mesh;
 
 pub mod adapter;
@@ -36,25 +36,25 @@ pub mod traits;
 pub mod types;
 pub mod vertical;
 
-// 待迁移模块（占位）
+// 寰呰縼绉绘ā鍧楋紙鍗犱綅锛?
 pub mod forcing;
 pub mod numerics;
 pub mod sediment;
 pub mod sources;
 pub mod waves;
 
-// 新增模块：字段注册、gpu和算子抽象
+// 鏂板妯″潡锛氬瓧娈垫敞鍐屻€乬pu鍜岀畻瀛愭娊璞?
 pub mod fields;
 pub mod gpu;
 pub mod operators;
 
-// 重导出核心抽象
+// 閲嶅鍑烘牳蹇冩娊璞?
 pub use core::{Backend, CpuBackend, DefaultBackend, Scalar, DeviceBuffer, D2, D3};
 
-// 重导出网格抽象
+// 閲嶅鍑虹綉鏍兼娊璞?
 pub use mesh::{MeshTopology, MeshKind, UnstructuredMeshAdapter};
 
-// 重导出常用类型
+// 閲嶅鍑哄父鐢ㄧ被鍨?
 pub use adapter::PhysicsMesh;
 pub use engine::{
     AtomicFluxAccumulator, CflCalculator, FluxAccumulator, ForwardEuler, RhsComputer, SspRk2,
@@ -77,21 +77,22 @@ pub use types::{
     BoundaryValueProvider, ConstantBoundaryProvider, ZeroBoundaryProvider,
 };
 
-// 重导出源项类型
+// 閲嶅鍑烘簮椤圭被鍨?
 pub use sources::{
-    SourceContribution, SourceContext, SourceTerm, SourceHelpers,
+    SourceContributionGeneric, SourceContextGeneric, SourceTermGeneric, SourceStiffness, SourceRegistry,
+    SourceHelpers,
     ManningFriction, ManningFrictionConfig, ChezyFriction, ChezyFrictionConfig,
     CoriolisConfig, CoriolisSource,
 };
 
-// 重导出边界条件类型
+// 閲嶅鍑鸿竟鐣屾潯浠剁被鍨?
 pub use boundary::{
     BoundaryKind, BoundaryCondition, ExternalForcing, BoundaryParams,
     BoundaryFaceInfo, BoundaryManager, BoundaryDataProvider, ConstantForcingProvider,
     BoundaryError, GhostStateCalculator, GhostMomentumMode,
 };
 
-// 重导出示踪剂类型
+// 閲嶅鍑虹ず韪墏绫诲瀷
 pub use tracer::{
     TracerType, TracerProperties, TracerField, TracerFieldStats, TracerState, TracerError,
     TracerAdvectionScheme, TracerDiffusionConfig, TracerTransportConfig, TracerTransportSolver,

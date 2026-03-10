@@ -1,54 +1,53 @@
-// crates/mh_physics/src/sources/traits.rs
+﻿// crates/mh_physics/src/sources/traits.rs
 
-//! 源项 Trait 定义
+//! 婧愰」 Trait 瀹氫箟
 //!
-//! 定义源项的核心接口和数据结构。
+//! 瀹氫箟婧愰」鐨勬牳蹇冩帴鍙ｅ拰鏁版嵁缁撴瀯銆?
 
-use crate::core::{Backend, CpuBackend, Scalar};
+use crate::core::{Backend, Scalar};
 use crate::state::{ShallowWaterState, ShallowWaterStateGeneric};
 use crate::types::NumericalParams;
-use std::marker::PhantomData;
 
-/// 源项贡献
+/// 婧愰」璐＄尞
 ///
-/// 表示单个单元的源项贡献，包括质量和动量变化率。
+/// 琛ㄧず鍗曚釜鍗曞厓鐨勬簮椤硅础鐚紝鍖呮嫭璐ㄩ噺鍜屽姩閲忓彉鍖栫巼銆?
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SourceContribution {
-    /// 质量源 [m/s]
+    /// 璐ㄩ噺婧?[m/s]
     pub s_h: f64,
-    /// x动量源 [m²/s²]
+    /// x鍔ㄩ噺婧?[m虏/s虏]
     pub s_hu: f64,
-    /// y动量源 [m²/s²]
+    /// y鍔ㄩ噺婧?[m虏/s虏]
     pub s_hv: f64,
 }
 
 impl SourceContribution {
-    /// 零贡献常量
+    /// 闆惰础鐚父閲?
     pub const ZERO: Self = Self {
         s_h: 0.0,
         s_hu: 0.0,
         s_hv: 0.0,
     };
 
-    /// 创建新的源项贡献
+    /// 鍒涘缓鏂扮殑婧愰」璐＄尞
     #[inline]
     pub fn new(s_h: f64, s_hu: f64, s_hv: f64) -> Self {
         Self { s_h, s_hu, s_hv }
     }
 
-    /// 创建仅动量贡献
+    /// 鍒涘缓浠呭姩閲忚础鐚?
     #[inline]
     pub fn momentum(s_hu: f64, s_hv: f64) -> Self {
         Self { s_h: 0.0, s_hu, s_hv }
     }
 
-    /// 创建仅质量贡献
+    /// 鍒涘缓浠呰川閲忚础鐚?
     #[inline]
     pub fn mass(s_h: f64) -> Self {
         Self { s_h, s_hu: 0.0, s_hv: 0.0 }
     }
 
-    /// 加法
+    /// 鍔犳硶
     #[inline]
     pub fn add(&self, other: &Self) -> Self {
         Self {
@@ -58,7 +57,7 @@ impl SourceContribution {
         }
     }
 
-    /// 原地加法
+    /// 鍘熷湴鍔犳硶
     #[inline]
     pub fn add_assign(&mut self, other: &Self) {
         self.s_h += other.s_h;
@@ -66,7 +65,7 @@ impl SourceContribution {
         self.s_hv += other.s_hv;
     }
 
-    /// 缩放
+    /// 缂╂斁
     #[inline]
     pub fn scale(&self, factor: f64) -> Self {
         Self {
@@ -76,13 +75,13 @@ impl SourceContribution {
         }
     }
 
-    /// 检查是否有效（所有分量都是有限数）
+    /// 妫€鏌ユ槸鍚︽湁鏁堬紙鎵€鏈夊垎閲忛兘鏄湁闄愭暟锛?
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.s_h.is_finite() && self.s_hu.is_finite() && self.s_hv.is_finite()
     }
 
-    /// 钳位到安全范围
+    /// 閽充綅鍒板畨鍏ㄨ寖鍥?
     #[inline]
     pub fn clamp(&self, max_abs: f64) -> Self {
         Self {
@@ -121,49 +120,49 @@ impl std::ops::Mul<f64> for SourceContribution {
     }
 }
 
-/// 源项计算上下文
+/// 婧愰」璁＄畻涓婁笅鏂?
 ///
-/// 包含源项计算所需的时间和参数信息。
+/// 鍖呭惈婧愰」璁＄畻鎵€闇€鐨勬椂闂村拰鍙傛暟淇℃伅銆?
 #[derive(Debug, Clone)]
 pub struct SourceContext<'a> {
-    /// 当前模拟时间 [s]
+    /// 褰撳墠妯℃嫙鏃堕棿 [s]
     pub time: f64,
-    /// 时间步长 [s]
+    /// 鏃堕棿姝ラ暱 [s]
     pub dt: f64,
-    /// 数值参数
+    /// 鏁板€煎弬鏁?
     pub params: &'a NumericalParams,
 }
 
 impl<'a> SourceContext<'a> {
-    /// 创建新的源项上下文
+    /// 鍒涘缓鏂扮殑婧愰」涓婁笅鏂?
     pub fn new(time: f64, dt: f64, params: &'a NumericalParams) -> Self {
         Self { time, dt, params }
     }
 
-    /// 检查单元是否干燥
+    /// 妫€鏌ュ崟鍏冩槸鍚﹀共鐕?
     #[inline]
     pub fn is_dry(&self, h: f64) -> bool {
         h < self.params.h_dry
     }
 
-    /// 检查单元是否湿润
+    /// 妫€鏌ュ崟鍏冩槸鍚︽箍娑?
     #[inline]
     pub fn is_wet(&self, h: f64) -> bool {
         h >= self.params.h_wet
     }
 }
 
-/// 源项 Trait
+/// 婧愰」 Trait
 ///
-/// 定义源项计算的统一接口。
+/// 瀹氫箟婧愰」璁＄畻鐨勭粺涓€鎺ュ彛銆?
 pub trait SourceTerm: Send + Sync {
-    /// 获取源项名称
+    /// 鑾峰彇婧愰」鍚嶇О
     fn name(&self) -> &'static str;
 
-    /// 是否启用
+    /// 鏄惁鍚敤
     fn is_enabled(&self) -> bool;
 
-    /// 计算单个单元的源项贡献
+    /// 璁＄畻鍗曚釜鍗曞厓鐨勬簮椤硅础鐚?
     fn compute_cell(
         &self,
         state: &ShallowWaterState,
@@ -171,10 +170,10 @@ pub trait SourceTerm: Send + Sync {
         ctx: &SourceContext,
     ) -> SourceContribution;
 
-    /// 批量计算所有单元的源项
+    /// 鎵归噺璁＄畻鎵€鏈夊崟鍏冪殑婧愰」
     ///
-    /// 默认实现逐单元调用 `compute_cell`。
-    /// 子类可以覆盖以提供优化的批量计算。
+    /// 榛樿瀹炵幇閫愬崟鍏冭皟鐢?`compute_cell`銆?
+    /// 瀛愮被鍙互瑕嗙洊浠ユ彁渚涗紭鍖栫殑鎵归噺璁＄畻銆?
     fn compute_all(
         &self,
         state: &ShallowWaterState,
@@ -196,30 +195,24 @@ pub trait SourceTerm: Send + Sync {
         }
     }
 
-    /// 源项是否显式（需要CFL限制）
+    /// 婧愰」鏄惁鏄惧紡锛堥渶瑕丆FL闄愬埗锛?
     fn is_explicit(&self) -> bool {
         true
     }
 
-    /// 源项是否使用局部隐式处理
+    /// 婧愰」鏄惁浣跨敤灞€閮ㄩ殣寮忓鐞?
     /// 
-    /// 局部隐式意味着源项内部处理刚性（如摩擦的 1/(1+dt*γ)），
-    /// 而非需要全局隐式求解器。
+    /// 灞€閮ㄩ殣寮忔剰鍛崇潃婧愰」鍐呴儴澶勭悊鍒氭€э紙濡傛懇鎿︾殑 1/(1+dt*纬)锛夛紝
+    /// 鑰岄潪闇€瑕佸叏灞€闅愬紡姹傝В鍣ㄣ€?
     fn is_locally_implicit(&self) -> bool {
         false
     }
 
-    /// 是否需要隐式处理（已废弃，使用 is_locally_implicit）
-    #[deprecated(since = "0.5.0", note = "use is_locally_implicit() instead")]
-    fn requires_implicit_treatment(&self) -> bool {
-        self.is_locally_implicit()
-    }
+    // ========== 鍗婇殣寮忓垎瑁傛柟娉?==========
 
-    // ========== 半隐式分裂方法 ==========
-
-    /// 计算预测步源项贡献
+    /// 璁＄畻棰勬祴姝ユ簮椤硅础鐚?
     ///
-    /// 用于半隐式方法的预测阶段。默认返回完整源项。
+    /// 鐢ㄤ簬鍗婇殣寮忔柟娉曠殑棰勬祴闃舵銆傞粯璁よ繑鍥炲畬鏁存簮椤广€?
     fn compute_prediction(
         &self,
         state: &ShallowWaterState,
@@ -229,9 +222,9 @@ pub trait SourceTerm: Send + Sync {
         self.compute_cell(state, cell, ctx)
     }
 
-    /// 计算校正步源项贡献
+    /// 璁＄畻鏍℃姝ユ簮椤硅础鐚?
     ///
-    /// 用于半隐式方法的校正阶段。默认返回零贡献。
+    /// 鐢ㄤ簬鍗婇殣寮忔柟娉曠殑鏍℃闃舵銆傞粯璁よ繑鍥為浂璐＄尞銆?
     fn compute_correction(
         &self,
         _state: &ShallowWaterState,
@@ -241,15 +234,15 @@ pub trait SourceTerm: Send + Sync {
         SourceContribution::ZERO
     }
 
-    /// 校正步是否需要此源项
+    /// 鏍℃姝ユ槸鍚﹂渶瑕佹婧愰」
     fn requires_correction(&self) -> bool {
         false
     }
 
-    /// 获取隐式因子
+    /// 鑾峰彇闅愬紡鍥犲瓙
     ///
-    /// 返回 0.0 表示完全显式，1.0 表示完全隐式。
-    /// 用于时间步长控制和稳定性分析。
+    /// 杩斿洖 0.0 琛ㄧず瀹屽叏鏄惧紡锛?.0 琛ㄧず瀹屽叏闅愬紡銆?
+    /// 鐢ㄤ簬鏃堕棿姝ラ暱鎺у埗鍜岀ǔ瀹氭€у垎鏋愩€?
     fn implicit_factor(&self) -> f64 {
         if self.is_locally_implicit() {
             1.0
@@ -258,19 +251,19 @@ pub trait SourceTerm: Send + Sync {
         }
     }
 
-    /// 获取稳定性限制时间步长
+    /// 鑾峰彇绋冲畾鎬ч檺鍒舵椂闂存闀?
     ///
-    /// 返回 None 表示无限制，Some(dt) 表示最大允许时间步长。
+    /// 杩斿洖 None 琛ㄧず鏃犻檺鍒讹紝Some(dt) 琛ㄧず鏈€澶у厑璁告椂闂存闀裤€?
     fn stability_limit(&self, _state: &ShallowWaterState, _ctx: &SourceContext) -> Option<f64> {
         None
     }
 }
 
-/// 源项辅助函数
+/// 婧愰」杈呭姪鍑芥暟
 pub struct SourceHelpers;
 
 impl SourceHelpers {
-    /// 安全累加（忽略无效值）
+    /// 瀹夊叏绱姞锛堝拷鐣ユ棤鏁堝€硷級
     #[inline]
     pub fn safe_accumulate(acc: &mut f64, val: f64) {
         if val.is_finite() {
@@ -278,7 +271,7 @@ impl SourceHelpers {
         }
     }
 
-    /// 验证贡献值并钳位
+    /// 楠岃瘉璐＄尞鍊煎苟閽充綅
     #[inline]
     pub fn validate_contribution(val: f64, max_abs: f64) -> f64 {
         if !val.is_finite() {
@@ -287,9 +280,9 @@ impl SourceHelpers {
         val.clamp(-max_abs, max_abs)
     }
 
-    /// 光滑过渡函数 (干湿过渡)
+    /// 鍏夋粦杩囨浮鍑芥暟 (骞叉箍杩囨浮)
     ///
-    /// 返回 0.0 (完全干) 到 1.0 (完全湿) 之间的值
+    /// 杩斿洖 0.0 (瀹屽叏骞? 鍒?1.0 (瀹屽叏婀? 涔嬮棿鐨勫€?
     #[inline]
     pub fn smooth_transition(h: f64, h_dry: f64, h_wet: f64) -> f64 {
         if h <= h_dry {
@@ -301,7 +294,7 @@ impl SourceHelpers {
         }
     }
 
-    /// 计算安全速度（避免除以零）
+    /// 璁＄畻瀹夊叏閫熷害锛堥伩鍏嶉櫎浠ラ浂锛?
     #[inline]
     pub fn safe_velocity(hu: f64, hv: f64, h: f64, h_min: f64) -> (f64, f64) {
         let h_safe = h.max(h_min);
@@ -310,29 +303,29 @@ impl SourceHelpers {
 }
 
 // =============================================================================
-// 泛型版本（推荐使用）
+// 娉涘瀷鐗堟湰锛堟帹鑽愪娇鐢級
 // =============================================================================
 
-/// 源项刚性分类
+/// 婧愰」鍒氭€у垎绫?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceStiffness {
-    /// 显式处理：源项较为平缓，可以显式积分
+    /// 鏄惧紡澶勭悊锛氭簮椤硅緝涓哄钩缂擄紝鍙互鏄惧紡绉垎
     Explicit,
-    /// 局部隐式：源项可能较刚性（如摩擦），需要局部隐式处理
-    /// 使用 1/(1 + dt*γ) 形式的隐式因子
+    /// 灞€閮ㄩ殣寮忥細婧愰」鍙兘杈冨垰鎬э紙濡傛懇鎿︼級锛岄渶瑕佸眬閮ㄩ殣寮忓鐞?
+    /// 浣跨敤 1/(1 + dt*纬) 褰㈠紡鐨勯殣寮忓洜瀛?
     LocallyImplicit,
-    /// 全隐式：需要在全局隐式求解器中处理
+    /// 鍏ㄩ殣寮忥細闇€瑕佸湪鍏ㄥ眬闅愬紡姹傝В鍣ㄤ腑澶勭悊
     FullyImplicit,
 }
 
-/// 泛型源项贡献
+/// 娉涘瀷婧愰」璐＄尞
 #[derive(Debug, Clone, Copy)]
 pub struct SourceContributionGeneric<S: Scalar> {
-    /// 质量源 [m/s]
+    /// 璐ㄩ噺婧?[m/s]
     pub s_h: S,
-    /// x 方向动量源 [m²/s²]
+    /// x 鏂瑰悜鍔ㄩ噺婧?[m虏/s虏]
     pub s_hu: S,
-    /// y 方向动量源 [m²/s²]
+    /// y 鏂瑰悜鍔ㄩ噺婧?[m虏/s虏]
     pub s_hv: S,
 }
 
@@ -347,31 +340,31 @@ impl<S: Scalar> Default for SourceContributionGeneric<S> {
 }
 
 impl<S: Scalar> SourceContributionGeneric<S> {
-    /// 零贡献
+    /// 闆惰础鐚?
     #[inline]
     pub fn zero() -> Self {
         Self { s_h: S::ZERO, s_hu: S::ZERO, s_hv: S::ZERO }
     }
     
-    /// 创建新的源项贡献
+    /// 鍒涘缓鏂扮殑婧愰」璐＄尞
     #[inline]
     pub fn new(s_h: S, s_hu: S, s_hv: S) -> Self {
         Self { s_h, s_hu, s_hv }
     }
     
-    /// 创建仅动量贡献
+    /// 鍒涘缓浠呭姩閲忚础鐚?
     #[inline]
     pub fn momentum(s_hu: S, s_hv: S) -> Self {
         Self { s_h: S::ZERO, s_hu, s_hv }
     }
     
-    /// 创建仅质量贡献
+    /// 鍒涘缓浠呰川閲忚础鐚?
     #[inline]
     pub fn mass(s_h: S) -> Self {
         Self { s_h, s_hu: S::ZERO, s_hv: S::ZERO }
     }
     
-    /// 原地加法
+    /// 鍘熷湴鍔犳硶
     #[inline]
     pub fn add_assign(&mut self, other: &Self) {
         self.s_h += other.s_h;
@@ -380,29 +373,29 @@ impl<S: Scalar> SourceContributionGeneric<S> {
     }
 }
 
-/// 泛型源项计算上下文
+/// 娉涘瀷婧愰」璁＄畻涓婁笅鏂?
 #[derive(Debug, Clone)]
 pub struct SourceContextGeneric<S: Scalar> {
-    /// 当前模拟时间 [s]
+    /// 褰撳墠妯℃嫙鏃堕棿 [s]
     pub time: f64,
-    /// 时间步长 [s]
+    /// 鏃堕棿姝ラ暱 [s]
     pub dt: S,
-    /// 重力加速度 [m/s²]
+    /// 閲嶅姏鍔犻€熷害 [m/s虏]
     pub gravity: S,
-    /// 干单元阈值 [m]
+    /// 骞插崟鍏冮槇鍊?[m]
     pub h_dry: S,
-    /// 湿单元阈值 [m]
+    /// 婀垮崟鍏冮槇鍊?[m]
     pub h_wet: S,
 }
 
 
 impl<S: Scalar> SourceContextGeneric<S> {
-    /// 创建新的源项上下文
+    /// 鍒涘缓鏂扮殑婧愰」涓婁笅鏂?
     pub fn new(time: f64, dt: S, gravity: S, h_dry: S, h_wet: S) -> Self {
         Self { time, dt, gravity, h_dry, h_wet }
     }
     
-    /// 使用默认物理参数创建
+    /// 浣跨敤榛樿鐗╃悊鍙傛暟鍒涘缓
     pub fn with_defaults(time: f64, dt: S) -> Self {
         Self {
             time,
@@ -413,27 +406,27 @@ impl<S: Scalar> SourceContextGeneric<S> {
         }
     }
     
-    /// 检查水深是否为干
+    /// 妫€鏌ユ按娣辨槸鍚︿负骞?
     #[inline]
     pub fn is_dry(&self, h: S) -> bool { h < self.h_dry }
     
-    /// 检查水深是否为湿
+    /// 妫€鏌ユ按娣辨槸鍚︿负婀?
     #[inline]
     pub fn is_wet(&self, h: S) -> bool { h >= self.h_wet }
 }
 
-/// 泛型源项 Trait
+/// 娉涘瀷婧愰」 Trait
 pub trait SourceTermGeneric<B: Backend>: Send + Sync {
-    /// 获取源项名称
+    /// 鑾峰彇婧愰」鍚嶇О
     fn name(&self) -> &'static str;
     
-    /// 获取源项刚性分类
+    /// 鑾峰彇婧愰」鍒氭€у垎绫?
     fn stiffness(&self) -> SourceStiffness;
     
-    /// 源项是否启用
+    /// 婧愰」鏄惁鍚敤
     fn is_enabled(&self) -> bool { true }
     
-    /// 计算单个单元的源项贡献
+    /// 璁＄畻鍗曚釜鍗曞厓鐨勬簮椤硅础鐚?
     fn compute_cell(
         &self,
         cell: usize,
@@ -441,7 +434,7 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
         ctx: &SourceContextGeneric<B::Scalar>,
     ) -> SourceContributionGeneric<B::Scalar>;
     
-    /// 批量计算所有单元的源项
+    /// 鎵归噺璁＄畻鎵€鏈夊崟鍏冪殑婧愰」
     fn compute_batch(
         &self,
         state: &ShallowWaterStateGeneric<B>,
@@ -454,7 +447,7 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
         }
     }
     
-    /// 累加源项到右端项缓冲区
+    /// 绱姞婧愰」鍒板彸绔」缂撳啿鍖?
     fn accumulate(
         &self,
         state: &ShallowWaterStateGeneric<B>,
@@ -465,75 +458,6 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
     );
 }
 
-/// 源项注册中心（兼容旧版）
-pub struct SourceRegistryGeneric<B: Backend> {
-    /// 注册的源项列表
-    sources: Vec<Box<dyn SourceTermGeneric<B>>>,
-    /// 工作缓冲区（用于批量计算）
-    contributions: Vec<SourceContributionGeneric<B::Scalar>>,
-    /// 后端标记
-    _marker: PhantomData<B>,
-}
-
-impl<B: Backend> SourceRegistryGeneric<B> {
-    /// 创建空的注册中心
-    pub fn new() -> Self {
-        Self { sources: Vec::new(), contributions: Vec::new(), _marker: PhantomData }
-    }
-    
-    /// 注册新的源项
-    pub fn register(&mut self, source: Box<dyn SourceTermGeneric<B>>) { self.sources.push(source); }
-    
-    /// 获取已注册的源项数量
-    pub fn len(&self) -> usize { self.sources.len() }
-    
-    /// 检查是否为空
-    pub fn is_empty(&self) -> bool { self.sources.is_empty() }
-    
-    /// 获取所有源项的名称
-    pub fn names(&self) -> Vec<&'static str> { self.sources.iter().map(|s| s.name()).collect() }
-    
-    /// 确保工作缓冲区容量
-    fn ensure_capacity(&mut self, n_cells: usize) {
-        if self.contributions.len() < n_cells {
-            self.contributions.resize(n_cells, SourceContributionGeneric::default());
-        }
-    }
-}
-
-impl<B: Backend> Default for SourceRegistryGeneric<B> {
-    fn default() -> Self { Self::new() }
-}
-
-/// CPU f64 后端的源项注册中心特化实现
-impl SourceRegistryGeneric<CpuBackend<f64>> {
-    /// 累加所有源项到右端项缓冲区
-    pub fn accumulate_all(
-        &mut self,
-        state: &ShallowWaterStateGeneric<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
-    ) {
-        let n_cells = state.n_cells();
-        self.ensure_capacity(n_cells);
-        for source in &self.sources {
-            if !source.is_enabled() { continue; }
-            for c in self.contributions[..n_cells].iter_mut() { *c = SourceContributionGeneric::default(); }
-            source.compute_batch(state, &mut self.contributions[..n_cells], ctx);
-            for (i, c) in self.contributions[..n_cells].iter().enumerate() {
-                rhs_h[i] += c.s_h;
-                rhs_hu[i] += c.s_hu;
-                rhs_hv[i] += c.s_hv;
-            }
-        }
-    }
-}
-
-/// 向后兼容别名
-#[deprecated(since = "0.4.0", note = "Use SourceTermGeneric<CpuBackend<f64>> instead")]
-pub type SourceTermF64 = dyn SourceTermGeneric<CpuBackend<f64>>;
 
 #[cfg(test)]
 mod tests {
@@ -612,7 +536,7 @@ mod tests {
         
         assert_eq!(ctx.time, 10.0);
         assert_eq!(ctx.dt, 0.1);
-        // 默认 h_dry = 1e-6，所以 1e-7 是干的，1e-5 不是
+        // 榛樿 h_dry = 1e-6锛屾墍浠?1e-7 鏄共鐨勶紝1e-5 涓嶆槸
         assert!(ctx.is_dry(1e-7));
         assert!(!ctx.is_dry(1e-5));
         assert!(ctx.is_wet(0.1));

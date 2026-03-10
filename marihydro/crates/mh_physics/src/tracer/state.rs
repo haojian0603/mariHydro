@@ -1,64 +1,64 @@
-// crates/mh_physics/src/tracer/state.rs
+﻿// crates/mh_physics/src/tracer/state.rs
 
-//! 示踪剂状态模块
+//! 绀鸿釜鍓傜姸鎬佹ā鍧?
 //!
-//! 本模块定义示踪剂相关的状态类型：
-//! - TracerType: 示踪剂类型枚举
-//! - TracerProperties: 示踪剂物理属性
-//! - TracerField: 单个示踪剂的场数据
-//! - TracerState: 多示踪剂集合状态
+//! 鏈ā鍧楀畾涔夌ず韪墏鐩稿叧鐨勭姸鎬佺被鍨嬶細
+//! - TracerType: 绀鸿釜鍓傜被鍨嬫灇涓?
+//! - TracerProperties: 绀鸿釜鍓傜墿鐞嗗睘鎬?
+//! - TracerField: 鍗曚釜绀鸿釜鍓傜殑鍦烘暟鎹?
+//! - TracerState: 澶氱ず韪墏闆嗗悎鐘舵€?
 //!
-//! # 概念说明
+//! # 姒傚康璇存槑
 //!
-//! 示踪剂（Tracer）是指随水流运移的物质，包括：
-//! - 被动示踪剂：盐度、温度等（不影响水动力）
-//! - 主动示踪剂：泥沙等（可能影响水密度和流动）
+//! 绀鸿釜鍓傦紙Tracer锛夋槸鎸囬殢姘存祦杩愮Щ鐨勭墿璐紝鍖呮嫭锛?
+//! - 琚姩绀鸿釜鍓傦細鐩愬害銆佹俯搴︾瓑锛堜笉褰卞搷姘村姩鍔涳級
+//! - 涓诲姩绀鸿釜鍓傦細娉ユ矙绛夛紙鍙兘褰卞搷姘村瘑搴﹀拰娴佸姩锛?
 //!
-//! # 迁移说明
+//! # 杩佺Щ璇存槑
 //!
-//! 从 legacy_src/tracer/tracer.rs 迁移，改进：
-//! - 使用枚举类型替代字符串标识
-//! - 支持 serde 序列化
-//! - 与新架构的 StateAccess trait 集成
+//! 浠?history_src/tracer/tracer.rs 杩佺Щ锛屾敼杩涳細
+//! - 浣跨敤鏋氫妇绫诲瀷鏇夸唬瀛楃涓叉爣璇?
+//! - 鏀寔 serde 搴忓垪鍖?
+//! - 涓庢柊鏋舵瀯鐨?StateAccess trait 闆嗘垚
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
 // ============================================================
-// 示踪剂类型
+// 绀鸿釜鍓傜被鍨?
 // ============================================================
 
-/// 示踪剂类型
+/// 绀鸿釜鍓傜被鍨?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum TracerType {
-    /// 盐度 [PSU 或 kg/m³]
+    /// 鐩愬害 [PSU 鎴?kg/m鲁]
     #[default]
     Salinity,
 
-    /// 温度 [°C 或 K]
+    /// 娓╁害 [掳C 鎴?K]
     Temperature,
 
-    /// 悬浮泥沙 [kg/m³]
+    /// 鎮诞娉ユ矙 [kg/m鲁]
     Sediment,
 
-    /// 污染物 [任意浓度单位]
+    /// 姹℃煋鐗?[浠绘剰娴撳害鍗曚綅]
     Pollutant,
 
-    /// 溶解氧 [mg/L]
+    /// 婧惰В姘?[mg/L]
     DissolvedOxygen,
 
-    /// 叶绿素 [μg/L]
+    /// 鍙剁豢绱?[渭g/L]
     Chlorophyll,
 
-    /// 自定义示踪剂
+    /// 鑷畾涔夌ず韪墏
     Custom(u16),
 }
 
 impl TracerType {
-    /// 获取类型的字符串标识
+    /// 鑾峰彇绫诲瀷鐨勫瓧绗︿覆鏍囪瘑
     pub fn name(&self) -> &'static str {
         match self {
             Self::Salinity => "salinity",
@@ -71,21 +71,21 @@ impl TracerType {
         }
     }
 
-    /// 是否为被动示踪剂
+    /// 鏄惁涓鸿鍔ㄧず韪墏
     ///
-    /// 被动示踪剂不影响水动力方程。
+    /// 琚姩绀鸿釜鍓備笉褰卞搷姘村姩鍔涙柟绋嬨€?
     pub fn is_passive(&self) -> bool {
         match self {
-            Self::Sediment => false, // 泥沙可能影响密度
+            Self::Sediment => false, // 娉ユ矙鍙兘褰卞搷瀵嗗害
             _ => true,
         }
     }
 
-    /// 是否需要额外的源汇项
+    /// 鏄惁闇€瑕侀澶栫殑婧愭眹椤?
     pub fn has_source_terms(&self) -> bool {
         match self {
-            Self::DissolvedOxygen | Self::Chlorophyll => true, // 生化反应
-            Self::Sediment => true, // 沉降/再悬浮
+            Self::DissolvedOxygen | Self::Chlorophyll => true, // 鐢熷寲鍙嶅簲
+            Self::Sediment => true, // 娌夐檷/鍐嶆偓娴?
             _ => false,
         }
     }
@@ -93,43 +93,43 @@ impl TracerType {
 
 
 // ============================================================
-// 示踪剂属性
+// 绀鸿釜鍓傚睘鎬?
 // ============================================================
 
-/// 示踪剂物理属性
+/// 绀鸿釜鍓傜墿鐞嗗睘鎬?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracerProperties {
-    /// 示踪剂类型
+    /// 绀鸿釜鍓傜被鍨?
     pub tracer_type: TracerType,
 
-    /// 示踪剂名称（用于显示）
+    /// 绀鸿釜鍓傚悕绉帮紙鐢ㄤ簬鏄剧ず锛?
     pub name: String,
 
-    /// 单位
+    /// 鍗曚綅
     pub unit: String,
 
-    /// 分子扩散系数 [m²/s]
+    /// 鍒嗗瓙鎵╂暎绯绘暟 [m虏/s]
     pub molecular_diffusivity: f64,
 
-    /// 背景浓度（用于边界和初始化）
+    /// 鑳屾櫙娴撳害锛堢敤浜庤竟鐣屽拰鍒濆鍖栵級
     pub background_value: f64,
 
-    /// 衰减系数 [1/s]
+    /// 琛板噺绯绘暟 [1/s]
     ///
-    /// 用于简单的一阶衰减模型：dC/dt = -k * C
+    /// 鐢ㄤ簬绠€鍗曠殑涓€闃惰“鍑忔ā鍨嬶細dC/dt = -k * C
     pub decay_rate: f64,
 
-    /// 沉降速度 [m/s]
+    /// 娌夐檷閫熷害 [m/s]
     ///
-    /// 仅适用于泥沙等可沉降物质，正值表示向下沉降。
+    /// 浠呴€傜敤浜庢偿娌欑瓑鍙矇闄嶇墿璐紝姝ｅ€艰〃绀哄悜涓嬫矇闄嶃€?
     pub settling_velocity: f64,
 
-    /// 是否启用
+    /// 鏄惁鍚敤
     pub enabled: bool,
 }
 
 impl TracerProperties {
-    /// 创建默认盐度示踪剂
+    /// 鍒涘缓榛樿鐩愬害绀鸿釜鍓?
     pub fn salinity() -> Self {
         Self {
             tracer_type: TracerType::Salinity,
@@ -143,12 +143,12 @@ impl TracerProperties {
         }
     }
 
-    /// 创建默认温度示踪剂
+    /// 鍒涘缓榛樿娓╁害绀鸿釜鍓?
     pub fn temperature() -> Self {
         Self {
             tracer_type: TracerType::Temperature,
             name: "Temperature".to_string(),
-            unit: "°C".to_string(),
+            unit: "掳C".to_string(),
             molecular_diffusivity: 1.4e-7,
             background_value: 20.0,
             decay_rate: 0.0,
@@ -157,13 +157,13 @@ impl TracerProperties {
         }
     }
 
-    /// 创建默认泥沙示踪剂
+    /// 鍒涘缓榛樿娉ユ矙绀鸿釜鍓?
     pub fn sediment() -> Self {
         Self {
             tracer_type: TracerType::Sediment,
             name: "Suspended Sediment".to_string(),
-            unit: "kg/m³".to_string(),
-            molecular_diffusivity: 0.0, // 主要靠湍流扩散
+            unit: "kg/m鲁".to_string(),
+            molecular_diffusivity: 0.0, // 涓昏闈犳箥娴佹墿鏁?
             background_value: 0.0,
             decay_rate: 0.0,
             settling_velocity: 1e-4, // 0.1 mm/s
@@ -171,7 +171,7 @@ impl TracerProperties {
         }
     }
 
-    /// 创建自定义示踪剂
+    /// 鍒涘缓鑷畾涔夌ず韪墏
     pub fn custom(id: u16, name: &str, unit: &str) -> Self {
         Self {
             tracer_type: TracerType::Custom(id),
@@ -185,25 +185,25 @@ impl TracerProperties {
         }
     }
 
-    /// 使用 Builder 模式设置分子扩散系数
+    /// 浣跨敤 Builder 妯″紡璁剧疆鍒嗗瓙鎵╂暎绯绘暟
     pub fn with_diffusivity(mut self, diffusivity: f64) -> Self {
         self.molecular_diffusivity = diffusivity;
         self
     }
 
-    /// 使用 Builder 模式设置背景值
+    /// 浣跨敤 Builder 妯″紡璁剧疆鑳屾櫙鍊?
     pub fn with_background(mut self, value: f64) -> Self {
         self.background_value = value;
         self
     }
 
-    /// 使用 Builder 模式设置衰减率
+    /// 浣跨敤 Builder 妯″紡璁剧疆琛板噺鐜?
     pub fn with_decay_rate(mut self, rate: f64) -> Self {
         self.decay_rate = rate;
         self
     }
 
-    /// 使用 Builder 模式设置沉降速度
+    /// 浣跨敤 Builder 妯″紡璁剧疆娌夐檷閫熷害
     pub fn with_settling_velocity(mut self, velocity: f64) -> Self {
         self.settling_velocity = velocity;
         self
@@ -217,48 +217,48 @@ impl Default for TracerProperties {
 }
 
 // ============================================================
-// 示踪剂场
+// 绀鸿釜鍓傚満
 // ============================================================
 
-/// 单个示踪剂的场数据
+/// 鍗曚釜绀鸿釜鍓傜殑鍦烘暟鎹?
 ///
-/// 存储示踪剂在所有计算单元上的浓度值。
+/// 瀛樺偍绀鸿釜鍓傚湪鎵€鏈夎绠楀崟鍏冧笂鐨勬祿搴﹀€笺€?
 #[derive(Debug, Clone)]
 pub struct TracerField {
-    /// 示踪剂属性
+    /// 绀鸿釜鍓傚睘鎬?
     properties: TracerProperties,
 
-    /// 浓度场 [单位取决于示踪剂类型]
+    /// 娴撳害鍦?[鍗曚綅鍙栧喅浜庣ず韪墏绫诲瀷]
     ///
-    /// 索引与计算单元对应。
+    /// 绱㈠紩涓庤绠楀崟鍏冨搴斻€?
     concentration: Vec<f64>,
 
-    /// 守恒量场 (h * C)
+    /// 瀹堟亽閲忓満 (h * C)
     ///
-    /// 用于有限体积法计算。
+    /// 鐢ㄤ簬鏈夐檺浣撶Н娉曡绠椼€?
     conserved: Vec<f64>,
 
-    /// 右手项累加器 (dC/dt)
+    /// 鍙虫墜椤圭疮鍔犲櫒 (dC/dt)
     rhs: Vec<f64>,
 }
 
 impl TracerField {
-    /// 创建新的示踪剂场
+    /// 鍒涘缓鏂扮殑绀鸿釜鍓傚満
     ///
-    /// # 参数
-    /// - `properties`: 示踪剂属性
-    /// - `n_cells`: 计算单元数量
+    /// # 鍙傛暟
+    /// - `properties`: 绀鸿釜鍓傚睘鎬?
+    /// - `n_cells`: 璁＄畻鍗曞厓鏁伴噺
     pub fn new(properties: TracerProperties, n_cells: usize) -> Self {
         let background = properties.background_value;
         Self {
             properties,
             concentration: vec![background; n_cells],
-            conserved: vec![0.0; n_cells], // 需要与水深配合初始化
+            conserved: vec![0.0; n_cells], // 闇€瑕佷笌姘存繁閰嶅悎鍒濆鍖?
             rhs: vec![0.0; n_cells],
         }
     }
 
-    /// 从浓度数组创建
+    /// 浠庢祿搴︽暟缁勫垱寤?
     pub fn from_concentration(properties: TracerProperties, concentration: Vec<f64>) -> Self {
         let n = concentration.len();
         Self {
@@ -269,69 +269,69 @@ impl TracerField {
         }
     }
 
-    /// 获取示踪剂属性
+    /// 鑾峰彇绀鸿釜鍓傚睘鎬?
     pub fn properties(&self) -> &TracerProperties {
         &self.properties
     }
 
-    /// 获取示踪剂类型
+    /// 鑾峰彇绀鸿釜鍓傜被鍨?
     pub fn tracer_type(&self) -> TracerType {
         self.properties.tracer_type
     }
 
-    /// 获取单元数量
+    /// 鑾峰彇鍗曞厓鏁伴噺
     pub fn len(&self) -> usize {
         self.concentration.len()
     }
 
-    /// 检查是否为空
+    /// 妫€鏌ユ槸鍚︿负绌?
     pub fn is_empty(&self) -> bool {
         self.concentration.is_empty()
     }
 
-    /// 获取单元浓度（只读）
+    /// 鑾峰彇鍗曞厓娴撳害锛堝彧璇伙級
     pub fn concentration(&self, cell_idx: usize) -> f64 {
         self.concentration[cell_idx]
     }
 
-    /// 获取浓度场切片
+    /// 鑾峰彇娴撳害鍦哄垏鐗?
     pub fn concentration_slice(&self) -> &[f64] {
         &self.concentration
     }
 
-    /// 获取浓度场可变切片
+    /// 鑾峰彇娴撳害鍦哄彲鍙樺垏鐗?
     pub fn concentration_slice_mut(&mut self) -> &mut [f64] {
         &mut self.concentration
     }
 
-    /// 获取守恒量（h * C）
+    /// 鑾峰彇瀹堟亽閲忥紙h * C锛?
     pub fn conserved(&self, cell_idx: usize) -> f64 {
         self.conserved[cell_idx]
     }
 
-    /// 获取守恒量场切片
+    /// 鑾峰彇瀹堟亽閲忓満鍒囩墖
     pub fn conserved_slice(&self) -> &[f64] {
         &self.conserved
     }
 
-    /// 获取守恒量场可变切片
+    /// 鑾峰彇瀹堟亽閲忓満鍙彉鍒囩墖
     pub fn conserved_slice_mut(&mut self) -> &mut [f64] {
         &mut self.conserved
     }
 
-    /// 设置单元浓度
+    /// 璁剧疆鍗曞厓娴撳害
     pub fn set_concentration(&mut self, cell_idx: usize, value: f64) {
         self.concentration[cell_idx] = value;
     }
 
-    /// 设置守恒量
+    /// 璁剧疆瀹堟亽閲?
     pub fn set_conserved(&mut self, cell_idx: usize, value: f64) {
         self.conserved[cell_idx] = value;
     }
 
-    /// 从水深更新守恒量
+    /// 浠庢按娣辨洿鏂板畧鎭掗噺
     ///
-    /// 用于初始化或重置：conserved = h * concentration
+    /// 鐢ㄤ簬鍒濆鍖栨垨閲嶇疆锛歝onserved = h * concentration
     pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
         debug_assert_eq!(water_depths.len(), self.concentration.len());
         for i in 0..self.concentration.len() {
@@ -339,9 +339,9 @@ impl TracerField {
         }
     }
 
-    /// 从守恒量更新浓度
+    /// 浠庡畧鎭掗噺鏇存柊娴撳害
     ///
-    /// 用于时间步进后：concentration = conserved / h
+    /// 鐢ㄤ簬鏃堕棿姝ヨ繘鍚庯細concentration = conserved / h
     pub fn update_concentration_from_conserved(&mut self, water_depths: &[f64], h_min: f64) {
         debug_assert_eq!(water_depths.len(), self.concentration.len());
         for i in 0..self.concentration.len() {
@@ -350,42 +350,42 @@ impl TracerField {
         }
     }
 
-    /// 获取 RHS 切片（用于时间积分）
+    /// 鑾峰彇 RHS 鍒囩墖锛堢敤浜庢椂闂寸Н鍒嗭級
     pub fn rhs_slice(&self) -> &[f64] {
         &self.rhs
     }
 
-    /// 获取 RHS 可变切片
+    /// 鑾峰彇 RHS 鍙彉鍒囩墖
     pub fn rhs_slice_mut(&mut self) -> &mut [f64] {
         &mut self.rhs
     }
 
-    /// 清零 RHS
+    /// 娓呴浂 RHS
     pub fn clear_rhs(&mut self) {
         self.rhs.fill(0.0);
     }
 
-    /// 累加 RHS
+    /// 绱姞 RHS
     pub fn add_rhs(&mut self, cell_idx: usize, value: f64) {
         self.rhs[cell_idx] += value;
     }
 
-    /// 使用显式欧拉格式更新守恒量
+    /// 浣跨敤鏄惧紡娆ф媺鏍煎紡鏇存柊瀹堟亽閲?
     ///
     /// conserved += dt * rhs
     ///
-    /// # 参数
-    /// - `dt`: 时间步长 [s]
+    /// # 鍙傛暟
+    /// - `dt`: 鏃堕棿姝ラ暱 [s]
     pub fn apply_euler_update(&mut self, dt: f64) {
         for i in 0..self.conserved.len() {
             self.conserved[i] += dt * self.rhs[i];
         }
     }
 
-    /// 应用衰减（一阶衰减模型）
+    /// 搴旂敤琛板噺锛堜竴闃惰“鍑忔ā鍨嬶級
     ///
-    /// # 参数
-    /// - `dt`: 时间步长 [s]
+    /// # 鍙傛暟
+    /// - `dt`: 鏃堕棿姝ラ暱 [s]
     pub fn apply_decay(&mut self, dt: f64) {
         let k = self.properties.decay_rate;
         if k > 0.0 {
@@ -399,7 +399,7 @@ impl TracerField {
         }
     }
 
-    /// 计算场统计量
+    /// 璁＄畻鍦虹粺璁￠噺
     pub fn statistics(&self) -> TracerFieldStats {
         if self.concentration.is_empty() {
             return TracerFieldStats::default();
@@ -422,11 +422,11 @@ impl TracerField {
         }
     }
 
-    /// 限制浓度在物理范围内
+    /// 闄愬埗娴撳害鍦ㄧ墿鐞嗚寖鍥村唴
     ///
-    /// # 参数
-    /// - `c_min`: 最小浓度（通常为 0）
-    /// - `c_max`: 最大浓度（可选）
+    /// # 鍙傛暟
+    /// - `c_min`: 鏈€灏忔祿搴︼紙閫氬父涓?0锛?
+    /// - `c_max`: 鏈€澶ф祿搴︼紙鍙€夛級
     pub fn clamp_concentration(&mut self, c_min: f64, c_max: Option<f64>) {
         for c in &mut self.concentration {
             *c = c.max(c_min);
@@ -437,7 +437,7 @@ impl TracerField {
     }
 }
 
-/// 示踪剂场统计量
+/// 绀鸿釜鍓傚満缁熻閲?
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TracerFieldStats {
     pub min: f64,
@@ -446,26 +446,26 @@ pub struct TracerFieldStats {
 }
 
 // ============================================================
-// 多示踪剂状态
+// 澶氱ず韪墏鐘舵€?
 // ============================================================
 
-/// 多示踪剂集合状态
+/// 澶氱ず韪墏闆嗗悎鐘舵€?
 ///
-/// 管理多个示踪剂的场数据。
+/// 绠＄悊澶氫釜绀鸿釜鍓傜殑鍦烘暟鎹€?
 #[derive(Debug, Clone)]
 pub struct TracerState {
-    /// 示踪剂场集合（按类型索引）
+    /// 绀鸿釜鍓傚満闆嗗悎锛堟寜绫诲瀷绱㈠紩锛?
     fields: HashMap<TracerType, TracerField>,
 
-    /// 类型列表（保持添加顺序）
+    /// 绫诲瀷鍒楄〃锛堜繚鎸佹坊鍔犻『搴忥級
     types: Vec<TracerType>,
 
-    /// 计算单元数量
+    /// 璁＄畻鍗曞厓鏁伴噺
     n_cells: usize,
 }
 
 impl TracerState {
-    /// 创建新的多示踪剂状态
+    /// 鍒涘缓鏂扮殑澶氱ず韪墏鐘舵€?
     pub fn new(n_cells: usize) -> Self {
         Self {
             fields: HashMap::new(),
@@ -474,13 +474,13 @@ impl TracerState {
         }
     }
 
-    /// 添加示踪剂
+    /// 娣诲姞绀鸿釜鍓?
     ///
-    /// # 参数
-    /// - `properties`: 示踪剂属性
+    /// # 鍙傛暟
+    /// - `properties`: 绀鸿釜鍓傚睘鎬?
     ///
-    /// # 返回
-    /// 如果类型已存在则返回错误
+    /// # 杩斿洖
+    /// 濡傛灉绫诲瀷宸插瓨鍦ㄥ垯杩斿洖閿欒
     pub fn add_tracer(&mut self, properties: TracerProperties) -> Result<(), TracerError> {
         let tracer_type = properties.tracer_type;
         if self.fields.contains_key(&tracer_type) {
@@ -493,68 +493,68 @@ impl TracerState {
         Ok(())
     }
 
-    /// 获取示踪剂场
+    /// 鑾峰彇绀鸿釜鍓傚満
     pub fn get(&self, tracer_type: TracerType) -> Option<&TracerField> {
         self.fields.get(&tracer_type)
     }
 
-    /// 获取示踪剂场（可变）
+    /// 鑾峰彇绀鸿釜鍓傚満锛堝彲鍙橈級
     pub fn get_mut(&mut self, tracer_type: TracerType) -> Option<&mut TracerField> {
         self.fields.get_mut(&tracer_type)
     }
 
-    /// 检查是否包含指定类型
+    /// 妫€鏌ユ槸鍚﹀寘鍚寚瀹氱被鍨?
     pub fn contains(&self, tracer_type: TracerType) -> bool {
         self.fields.contains_key(&tracer_type)
     }
 
-    /// 获取示踪剂数量
+    /// 鑾峰彇绀鸿釜鍓傛暟閲?
     pub fn len(&self) -> usize {
         self.fields.len()
     }
 
-    /// 检查是否为空
+    /// 妫€鏌ユ槸鍚︿负绌?
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }
 
-    /// 获取所有示踪剂类型
+    /// 鑾峰彇鎵€鏈夌ず韪墏绫诲瀷
     pub fn types(&self) -> &[TracerType] {
         &self.types
     }
 
-    /// 遍历所有场
+    /// 閬嶅巻鎵€鏈夊満
     pub fn iter(&self) -> impl Iterator<Item = (&TracerType, &TracerField)> {
         self.fields.iter()
     }
 
-    /// 遍历所有场（可变）
+    /// 閬嶅巻鎵€鏈夊満锛堝彲鍙橈級
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&TracerType, &mut TracerField)> {
         self.fields.iter_mut()
     }
 
-    /// 从水深更新所有守恒量
+    /// 浠庢按娣辨洿鏂版墍鏈夊畧鎭掗噺
     pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
         for field in self.fields.values_mut() {
             field.update_conserved_from_depth(water_depths);
         }
     }
 
-    /// 从守恒量更新所有浓度
+    /// 浠庡畧鎭掗噺鏇存柊鎵€鏈夋祿搴?
     pub fn update_concentration_from_conserved(&mut self, water_depths: &[f64], h_min: f64) {
         for field in self.fields.values_mut() {
             field.update_concentration_from_conserved(water_depths, h_min);
         }
     }
 
-    /// 清零所有 RHS
+    /// 娓呴浂鎵€鏈?RHS
     pub fn clear_all_rhs(&mut self) {
         for field in self.fields.values_mut() {
             field.clear_rhs();
         }
     }
 
-    /// 应用衰减到所有示踪剂
+    /// 搴旂敤琛板噺鍒版墍鏈夌ず韪墏
     pub fn apply_all_decay(&mut self, dt: f64) {
         for field in self.fields.values_mut() {
             field.apply_decay(dt);
@@ -563,31 +563,31 @@ impl TracerState {
 }
 
 // ============================================================
-// 错误类型
+// 閿欒绫诲瀷
 // ============================================================
 
-/// 示踪剂模块错误
+/// 绀鸿釜鍓傛ā鍧楅敊璇?
 #[derive(Debug, Error)]
 pub enum TracerError {
-    /// 重复的示踪剂类型
+    /// 閲嶅鐨勭ず韪墏绫诲瀷
     #[error("示踪剂类型 {0:?} 已存在")]
     DuplicateType(TracerType),
 
-    /// 示踪剂未找到
+    /// 绀鸿釜鍓傛湭鎵惧埌
     #[error("示踪剂类型 {0:?} 未找到")]
     NotFound(TracerType),
 
-    /// 数组大小不匹配
-    #[error("数组大小不匹配: 期望 {expected}, 实际 {actual}")]
+    /// 鏁扮粍澶у皬涓嶅尮閰?
+    #[error("鏁扮粍澶у皬涓嶅尮閰? 鏈熸湜 {expected}, 瀹為檯 {actual}")]
     SizeMismatch { expected: usize, actual: usize },
 
-    /// 无效的浓度值
-    #[error("无效的浓度值: {0}")]
+    /// 鏃犳晥鐨勬祿搴﹀€?
+    #[error("鏃犳晥鐨勬祿搴﹀€? {0}")]
     InvalidValue(f64),
 }
 
 // ============================================================
-// 测试
+// 娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -628,7 +628,7 @@ mod tests {
 
         assert_eq!(field.len(), 100);
         assert_eq!(field.tracer_type(), TracerType::Salinity);
-        assert!(approx_eq(field.concentration(0), 35.0)); // 背景值
+        assert!(approx_eq(field.concentration(0), 35.0)); // 鑳屾櫙鍊?
     }
 
     #[test]
@@ -636,7 +636,7 @@ mod tests {
         let props = TracerProperties::salinity().with_background(10.0);
         let mut field = TracerField::new(props, 3);
 
-        // 假设水深
+        // 鍋囪姘存繁
         let depths = vec![1.0, 2.0, 3.0];
         field.update_conserved_from_depth(&depths);
 
@@ -653,7 +653,7 @@ mod tests {
         let mut field = TracerField::new(props, 1);
 
         field.apply_decay(1.0);
-        // 精确指数衰减解：C = C0 * exp(-k * dt)
+        // 绮剧‘鎸囨暟琛板噺瑙ｏ細C = C0 * exp(-k * dt)
         let expected = 100.0 * (-0.1_f64).exp();
         assert!((field.concentration(0) - expected).abs() < 1e-12);
     }
@@ -668,7 +668,7 @@ mod tests {
         assert!(approx_eq(stats.max, 30.0));
         assert!(approx_eq(stats.mean, 20.0));
 
-        // 测试限制
+        // 娴嬭瘯闄愬埗
         field.clamp_concentration(15.0, Some(25.0));
         assert!(approx_eq(field.concentration(0), 15.0));
         assert!(approx_eq(field.concentration(1), 20.0));
@@ -718,36 +718,36 @@ mod tests {
 
 
 // ============================================================
-// 泛型示踪剂场（Backend 抽象）
+// 娉涘瀷绀鸿釜鍓傚満锛圔ackend 鎶借薄锛?
 // ============================================================
 
 use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
 
-/// 泛型示踪剂场
+/// 娉涘瀷绀鸿釜鍓傚満
 ///
-/// 使用 Backend trait 抽象存储，支持 CPU/GPU 后端。
+/// 浣跨敤 Backend trait 鎶借薄瀛樺偍锛屾敮鎸?CPU/GPU 鍚庣銆?
 ///
-/// # 类型参数
+/// # 绫诲瀷鍙傛暟
 ///
-/// - `B`: 计算后端类型，必须实现 `Backend` trait
+/// - `B`: 璁＄畻鍚庣绫诲瀷锛屽繀椤诲疄鐜?`Backend` trait
 #[derive(Debug, Clone)]
 pub struct TracerFieldGeneric<B: Backend> {
-    /// 示踪剂属性
+    /// 绀鸿釜鍓傚睘鎬?
     properties: TracerProperties,
-    /// 浓度场 [单位取决于示踪剂类型]
+    /// 娴撳害鍦?[鍗曚綅鍙栧喅浜庣ず韪墏绫诲瀷]
     concentration: B::Buffer<B::Scalar>,
-    /// 守恒量场 (h * C)
+    /// 瀹堟亽閲忓満 (h * C)
     conserved: B::Buffer<B::Scalar>,
-    /// 右手项累加器 (dC/dt)
+    /// 鍙虫墜椤圭疮鍔犲櫒 (dC/dt)
     rhs: B::Buffer<B::Scalar>,
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     n_cells: usize,
-    /// 后端实例
+    /// 鍚庣瀹炰緥
     backend: B,
 }
 
 impl<B: Backend> TracerFieldGeneric<B> {
-    /// 使用后端实例创建新的示踪剂场
+    /// 浣跨敤鍚庣瀹炰緥鍒涘缓鏂扮殑绀鸿釜鍓傚満
     pub fn new_with_backend(backend: B, properties: TracerProperties, n_cells: usize) -> Self {
         let background = <B::Scalar as Scalar>::from_f64(properties.background_value);
         let mut concentration = backend.alloc(n_cells);
@@ -763,67 +763,67 @@ impl<B: Backend> TracerFieldGeneric<B> {
         }
     }
     
-    /// 获取示踪剂属性
+    /// 鑾峰彇绀鸿釜鍓傚睘鎬?
     pub fn properties(&self) -> &TracerProperties {
         &self.properties
     }
     
-    /// 获取示踪剂类型
+    /// 鑾峰彇绀鸿釜鍓傜被鍨?
     pub fn tracer_type(&self) -> TracerType {
         self.properties.tracer_type
     }
     
-    /// 获取单元数量
+    /// 鑾峰彇鍗曞厓鏁伴噺
     pub fn len(&self) -> usize {
         self.n_cells
     }
     
-    /// 检查是否为空
+    /// 妫€鏌ユ槸鍚︿负绌?
     pub fn is_empty(&self) -> bool {
         self.n_cells == 0
     }
     
-    /// 获取后端引用
+    /// 鑾峰彇鍚庣寮曠敤
     pub fn backend(&self) -> &B {
         &self.backend
     }
     
-    /// 获取浓度场引用
+    /// 鑾峰彇娴撳害鍦哄紩鐢?
     pub fn concentration(&self) -> &B::Buffer<B::Scalar> {
         &self.concentration
     }
     
-    /// 获取浓度场可变引用
+    /// 鑾峰彇娴撳害鍦哄彲鍙樺紩鐢?
     pub fn concentration_mut(&mut self) -> &mut B::Buffer<B::Scalar> {
         &mut self.concentration
     }
     
-    /// 获取守恒量场引用
+    /// 鑾峰彇瀹堟亽閲忓満寮曠敤
     pub fn conserved(&self) -> &B::Buffer<B::Scalar> {
         &self.conserved
     }
     
-    /// 获取守恒量场可变引用
+    /// 鑾峰彇瀹堟亽閲忓満鍙彉寮曠敤
     pub fn conserved_mut(&mut self) -> &mut B::Buffer<B::Scalar> {
         &mut self.conserved
     }
     
-    /// 获取 RHS 引用
+    /// 鑾峰彇 RHS 寮曠敤
     pub fn rhs(&self) -> &B::Buffer<B::Scalar> {
         &self.rhs
     }
     
-    /// 获取 RHS 可变引用
+    /// 鑾峰彇 RHS 鍙彉寮曠敤
     pub fn rhs_mut(&mut self) -> &mut B::Buffer<B::Scalar> {
         &mut self.rhs
     }
     
-    /// 清零 RHS
+    /// 娓呴浂 RHS
     pub fn clear_rhs(&mut self) {
         self.rhs.fill(B::Scalar::ZERO);
     }
     
-    /// 重置为背景值
+    /// 閲嶇疆涓鸿儗鏅€?
     pub fn reset(&mut self) {
         let background = <B::Scalar as Scalar>::from_f64(self.properties.background_value);
         self.concentration.fill(background);
@@ -832,67 +832,45 @@ impl<B: Backend> TracerFieldGeneric<B> {
     }
 }
 
-/// CPU f64 后端的便捷方法
+/// CPU f64 鍚庣鐨勪究鎹锋柟娉?
 impl TracerFieldGeneric<CpuBackend<f64>> {
-    /// 使用默认 CPU f64 后端创建
+    /// 浣跨敤榛樿 CPU f64 鍚庣鍒涘缓
     pub fn new(properties: TracerProperties, n_cells: usize) -> Self {
         Self::new_with_backend(CpuBackend::<f64>::new(), properties, n_cells)
     }
     
-    /// 从传统 TracerField 创建
-    pub fn from_legacy(field: &TracerField) -> Self {
-        let n = field.len();
-        let mut new_field = Self::new(field.properties().clone(), n);
-        
-        new_field.concentration.copy_from_slice(field.concentration_slice());
-        new_field.conserved.copy_from_slice(field.conserved_slice());
-        new_field.rhs.copy_from_slice(field.rhs_slice());
-        
-        new_field
-    }
     
-    /// 转换回传统 TracerField
-    pub fn to_legacy(&self) -> TracerField {
-        let mut field = TracerField::new(self.properties.clone(), self.n_cells);
-        
-        field.concentration_slice_mut().copy_from_slice(&self.concentration);
-        field.conserved_slice_mut().copy_from_slice(&self.conserved);
-        field.rhs_slice_mut().copy_from_slice(&self.rhs);
-        
-        field
-    }
-    
-    /// 获取浓度切片（仅 CPU 后端）
+    /// 鑾峰彇娴撳害鍒囩墖锛堜粎 CPU 鍚庣锛?
     pub fn concentration_slice(&self) -> &[f64] {
         &self.concentration
     }
     
-    /// 获取浓度可变切片（仅 CPU 后端）
+    /// 鑾峰彇娴撳害鍙彉鍒囩墖锛堜粎 CPU 鍚庣锛?
     pub fn concentration_slice_mut(&mut self) -> &mut [f64] {
         &mut self.concentration
     }
     
-    /// 获取守恒量切片（仅 CPU 后端）
+    /// 鑾峰彇瀹堟亽閲忓垏鐗囷紙浠?CPU 鍚庣锛?
     pub fn conserved_slice(&self) -> &[f64] {
         &self.conserved
     }
     
-    /// 获取守恒量可变切片（仅 CPU 后端）
+    /// 鑾峰彇瀹堟亽閲忓彲鍙樺垏鐗囷紙浠?CPU 鍚庣锛?
     pub fn conserved_slice_mut(&mut self) -> &mut [f64] {
         &mut self.conserved
     }
     
-    /// 获取 RHS 切片（仅 CPU 后端）
+    /// 鑾峰彇 RHS 鍒囩墖锛堜粎 CPU 鍚庣锛?
     pub fn rhs_slice(&self) -> &[f64] {
         &self.rhs
     }
     
-    /// 获取 RHS 可变切片（仅 CPU 后端）
+    /// 鑾峰彇 RHS 鍙彉鍒囩墖锛堜粎 CPU 鍚庣锛?
     pub fn rhs_slice_mut(&mut self) -> &mut [f64] {
         &mut self.rhs
     }
     
-    /// 从水深更新守恒量
+    /// 浠庢按娣辨洿鏂板畧鎭掗噺
     pub fn update_conserved_from_depth(&mut self, water_depths: &[f64]) {
         debug_assert_eq!(water_depths.len(), self.n_cells);
         for i in 0..self.n_cells {
@@ -900,7 +878,7 @@ impl TracerFieldGeneric<CpuBackend<f64>> {
         }
     }
     
-    /// 从守恒量更新浓度
+    /// 浠庡畧鎭掗噺鏇存柊娴撳害
     pub fn update_concentration_from_conserved(&mut self, water_depths: &[f64], h_min: f64) {
         debug_assert_eq!(water_depths.len(), self.n_cells);
         for i in 0..self.n_cells {
@@ -909,14 +887,14 @@ impl TracerFieldGeneric<CpuBackend<f64>> {
         }
     }
     
-    /// 使用显式欧拉格式更新守恒量
+    /// 浣跨敤鏄惧紡娆ф媺鏍煎紡鏇存柊瀹堟亽閲?
     pub fn apply_euler_update(&mut self, dt: f64) {
         for i in 0..self.n_cells {
             self.conserved[i] += dt * self.rhs[i];
         }
     }
     
-    /// 应用衰减
+    /// 搴旂敤琛板噺
     pub fn apply_decay(&mut self, dt: f64) {
         let k = self.properties.decay_rate;
         if k > 0.0 {
@@ -930,7 +908,7 @@ impl TracerFieldGeneric<CpuBackend<f64>> {
         }
     }
     
-    /// 计算场统计量
+    /// 璁＄畻鍦虹粺璁￠噺
     pub fn statistics(&self) -> TracerFieldStats {
         if self.n_cells == 0 {
             return TracerFieldStats::default();
@@ -953,7 +931,7 @@ impl TracerFieldGeneric<CpuBackend<f64>> {
         }
     }
     
-    /// 限制浓度在物理范围内
+    /// 闄愬埗娴撳害鍦ㄧ墿鐞嗚寖鍥村唴
     pub fn clamp_concentration(&mut self, c_min: f64, c_max: Option<f64>) {
         for c in self.concentration.iter_mut() {
             *c = c.max(c_min);
@@ -964,19 +942,19 @@ impl TracerFieldGeneric<CpuBackend<f64>> {
     }
 }
 
-/// CPU f32 后端的便捷方法
+/// CPU f32 鍚庣鐨勪究鎹锋柟娉?
 impl TracerFieldGeneric<CpuBackend<f32>> {
-    /// 使用 CPU f32 后端创建
+    /// 浣跨敤 CPU f32 鍚庣鍒涘缓
     pub fn new_f32(properties: TracerProperties, n_cells: usize) -> Self {
         Self::new_with_backend(CpuBackend::<f32>::new(), properties, n_cells)
     }
 }
 
-/// 类型别名：默认后端的示踪剂场
+/// 绫诲瀷鍒悕锛氶粯璁ゅ悗绔殑绀鸿釜鍓傚満
 pub type TracerFieldDefault = TracerFieldGeneric<CpuBackend<f64>>;
 
 // ============================================================
-// 泛型示踪剂场测试
+// 娉涘瀷绀鸿釜鍓傚満娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -1037,17 +1015,4 @@ mod generic_tests {
         assert!(approx_eq(stats.mean, 20.0));
     }
     
-    #[test]
-    fn test_legacy_conversion() {
-        let props = TracerProperties::salinity().with_background(25.0);
-        let legacy = TracerField::new(props.clone(), 10);
-        
-        let generic = TracerFieldGeneric::<CpuBackend<f64>>::from_legacy(&legacy);
-        assert_eq!(generic.len(), 10);
-        assert!(approx_eq(generic.concentration_slice()[0], 25.0));
-        
-        let back = generic.to_legacy();
-        assert_eq!(back.len(), 10);
-        assert!(approx_eq(back.concentration(0), 25.0));
-    }
 }

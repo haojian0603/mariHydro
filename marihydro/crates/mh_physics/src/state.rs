@@ -1,16 +1,16 @@
-// crates/mh_physics/src/state.rs
+﻿// crates/mh_physics/src/state.rs
 
-//! 浅水方程状态管理
+//! 娴呮按鏂圭▼鐘舵€佺鐞?
 //!
-//! 本模块提供浅水方程求解所需的状态管理，包括：
-//! - ShallowWaterState: 守恒变量状态 (h, hu, hv, z)
-//! - GradientState: 梯度状态 (grad_h, grad_hu, grad_hv)
-//! - Flux: 数值通量
-//! - RhsBuffers: 右端项缓冲区
+//! 鏈ā鍧楁彁渚涙祬姘存柟绋嬫眰瑙ｆ墍闇€鐨勭姸鎬佺鐞嗭紝鍖呮嫭锛?
+//! - ShallowWaterState: 瀹堟亽鍙橀噺鐘舵€?(h, hu, hv, z)
+//! - GradientState: 姊害鐘舵€?(grad_h, grad_hu, grad_hv)
+//! - Flux: 鏁板€奸€氶噺
+//! - RhsBuffers: 鍙崇椤圭紦鍐插尯
 //!
-//! # 布局设计
+//! # 甯冨眬璁捐
 //!
-//! 采用 SoA (Structure of Arrays) 布局以优化缓存性能：
+//! 閲囩敤 SoA (Structure of Arrays) 甯冨眬浠ヤ紭鍖栫紦瀛樻€ц兘锛?
 //! ```text
 //! h:  [h_0,  h_1,  h_2,  ...]
 //! hu: [hu_0, hu_1, hu_2, ...]
@@ -30,35 +30,35 @@ use crate::fields::{FieldMeta, FieldRegistry};
 use crate::types::{CellIndex, NumericalParams, SafeVelocity};
 
 // ============================================================
-// 守恒状态
+// 瀹堟亽鐘舵€?
 // ============================================================
 
-/// 单个单元的守恒状态
+/// 鍗曚釜鍗曞厓鐨勫畧鎭掔姸鎬?
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ConservedState {
-    /// 水深 [m]
+    /// 姘存繁 [m]
     pub h: f64,
-    /// x 方向动量 [m²/s]
+    /// x 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hu: f64,
-    /// y 方向动量 [m²/s]
+    /// y 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hv: f64,
 }
 
 impl ConservedState {
-    /// 创建新的守恒状态
+    /// 鍒涘缓鏂扮殑瀹堟亽鐘舵€?
     #[inline]
     pub const fn new(h: f64, hu: f64, hv: f64) -> Self {
         Self { h, hu, hv }
     }
 
-    /// 零状态
+    /// 闆剁姸鎬?
     pub const ZERO: Self = Self {
         h: 0.0,
         hu: 0.0,
         hv: 0.0,
     };
 
-    /// 从原始变量创建
+    /// 浠庡師濮嬪彉閲忓垱寤?
     #[inline]
     pub fn from_primitive(h: f64, u: f64, v: f64) -> Self {
         Self {
@@ -68,13 +68,13 @@ impl ConservedState {
         }
     }
 
-    /// 获取速度 (使用安全除法)
+    /// 鑾峰彇閫熷害 (浣跨敤瀹夊叏闄ゆ硶)
     #[inline]
     pub fn velocity(&self, params: &NumericalParams) -> SafeVelocity {
         params.safe_velocity(self.hu, self.hv, self.h)
     }
 
-    /// 状态是否有效
+    /// 鐘舵€佹槸鍚︽湁鏁?
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.h.is_finite() && self.hu.is_finite() && self.hv.is_finite() && self.h >= 0.0
@@ -118,25 +118,25 @@ impl Mul<f64> for ConservedState {
 }
 
 // ============================================================
-// 动态标量场（示踪剂等）
+// 鍔ㄦ€佹爣閲忓満锛堢ず韪墏绛夛級
 // ============================================================
 
-/// 动态标量场集合，按名称管理示踪剂等扩展字段
+/// 鍔ㄦ€佹爣閲忓満闆嗗悎锛屾寜鍚嶇О绠＄悊绀鸿釜鍓傜瓑鎵╁睍瀛楁
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DynamicScalars {
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     #[serde(default)]
     len: usize,
-    /// 字段名称列表（顺序即存储顺序）
+    /// 瀛楁鍚嶇О鍒楄〃锛堥『搴忓嵆瀛樺偍椤哄簭锛?
     #[serde(default)]
     names: Vec<String>,
-    /// 数据存储
+    /// 鏁版嵁瀛樺偍
     #[serde(default)]
     data: Vec<AlignedVec<f64>>,
 }
 
 impl DynamicScalars {
-    /// 创建空集合
+    /// 鍒涘缓绌洪泦鍚?
     pub fn new(len: usize) -> Self {
         Self {
             len,
@@ -145,7 +145,7 @@ impl DynamicScalars {
         }
     }
 
-    /// 创建指定数量的匿名示踪剂字段（名称为 tracer_i）
+    /// 鍒涘缓鎸囧畾鏁伴噺鐨勫尶鍚嶇ず韪墏瀛楁锛堝悕绉颁负 tracer_i锛?
     pub fn with_count(len: usize, count: usize) -> Self {
         let mut scalars = Self::new(len);
         for i in 0..count {
@@ -154,29 +154,29 @@ impl DynamicScalars {
         scalars
     }
 
-    /// 当前单元数量
+    /// 褰撳墠鍗曞厓鏁伴噺
     #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// 字段数量
+    /// 瀛楁鏁伴噺
     #[inline]
     pub fn count(&self) -> usize {
         self.data.len()
     }
 
-    /// 字段名称列表
+    /// 瀛楁鍚嶇О鍒楄〃
     #[inline]
     pub fn names(&self) -> &[String] {
         &self.names
     }
 
-    /// 注册一个新字段，如已存在则直接返回索引
+    /// 娉ㄥ唽涓€涓柊瀛楁锛屽宸插瓨鍦ㄥ垯鐩存帴杩斿洖绱㈠紩
     pub fn register(&mut self, name: impl Into<String>) -> usize {
         let name = name.into();
         if let Some(pos) = self.names.iter().position(|n| n == &name) {
-            // 确保长度一致
+            // 纭繚闀垮害涓€鑷?
             self.data[pos].resize(self.len);
             return pos;
         }
@@ -186,24 +186,24 @@ impl DynamicScalars {
         self.data.len() - 1
     }
 
-    /// 按索引获取只读切片
+    /// 鎸夌储寮曡幏鍙栧彧璇诲垏鐗?
     #[inline]
     pub fn get(&self, idx: usize) -> Option<&[f64]> {
         self.data.get(idx).map(|v| v.as_slice())
     }
 
-    /// 按索引获取可变切片
+    /// 鎸夌储寮曡幏鍙栧彲鍙樺垏鐗?
     #[inline]
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut [f64]> {
         self.data.get_mut(idx).map(|v| v.as_mut_slice())
     }
 
-    /// 按名称获取只读切片
+    /// 鎸夊悕绉拌幏鍙栧彧璇诲垏鐗?
     pub fn get_by_name(&self, name: &str) -> Option<&[f64]> {
         self.names.iter().position(|n| n == name).and_then(|i| self.get(i))
     }
 
-    /// 按名称获取可变切片
+    /// 鎸夊悕绉拌幏鍙栧彲鍙樺垏鐗?
     pub fn get_mut_by_name(&mut self, name: &str) -> Option<&mut [f64]> {
         if let Some(pos) = self.names.iter().position(|n| n == name) {
             return self.get_mut(pos);
@@ -211,14 +211,14 @@ impl DynamicScalars {
         None
     }
 
-    /// 将所有字段清零
+    /// 灏嗘墍鏈夊瓧娈垫竻闆?
     pub fn clear_all(&mut self) {
         for field in &mut self.data {
             field.as_mut_slice().fill(0.0);
         }
     }
 
-    /// 调整单元长度并保持已有数据（新增部分填零）
+    /// 璋冩暣鍗曞厓闀垮害骞朵繚鎸佸凡鏈夋暟鎹紙鏂板閮ㄥ垎濉浂锛?
     pub fn resize_len(&mut self, len: usize) {
         self.len = len;
         for field in &mut self.data {
@@ -226,7 +226,7 @@ impl DynamicScalars {
         }
     }
 
-    /// 按另一个集合的布局对齐（名称、数量、长度），但不复制数据
+    /// 鎸夊彟涓€涓泦鍚堢殑甯冨眬瀵归綈锛堝悕绉般€佹暟閲忋€侀暱搴︼級锛屼絾涓嶅鍒舵暟鎹?
     pub fn match_layout(&mut self, other: &Self) {
         if self.len != other.len || self.names != other.names {
             self.len = other.len;
@@ -241,7 +241,7 @@ impl DynamicScalars {
         }
     }
 
-    /// 复制数据并对齐布局
+    /// 澶嶅埗鏁版嵁骞跺榻愬竷灞€
     pub fn copy_from(&mut self, other: &Self) {
         self.match_layout(other);
         for (dst, src) in self.data.iter_mut().zip(other.data.iter()) {
@@ -259,7 +259,7 @@ impl DynamicScalars {
         }
     }
 
-    /// 设置字段数量，多余的截断，不足的以 tracer_i 填充
+    /// 璁剧疆瀛楁鏁伴噺锛屽浣欑殑鎴柇锛屼笉瓒崇殑浠?tracer_i 濉厖
     pub fn set_count(&mut self, count: usize) {
         self.names.truncate(count);
         self.data.truncate(count);
@@ -301,7 +301,7 @@ impl DynamicScalars {
         }
     }
 
-    /// 迭代所有字段的可变存储
+    /// 杩唬鎵€鏈夊瓧娈电殑鍙彉瀛樺偍
     #[inline]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut AlignedVec<f64>> {
         self.data.iter_mut()
@@ -309,40 +309,40 @@ impl DynamicScalars {
 }
 
 // ============================================================
-// 浅水方程状态 (SoA 布局)
+// 娴呮按鏂圭▼鐘舵€?(SoA 甯冨眬)
 // ============================================================
 
-/// 浅水方程守恒状态（SoA 布局）
+/// 娴呮按鏂圭▼瀹堟亽鐘舵€侊紙SoA 甯冨眬锛?
 ///
-/// 存储整个网格的状态变量，采用 SoA 布局优化缓存访问。
+/// 瀛樺偍鏁翠釜缃戞牸鐨勭姸鎬佸彉閲忥紝閲囩敤 SoA 甯冨眬浼樺寲缂撳瓨璁块棶銆?
 /// 
-/// 速度场通过 `velocity()` 方法从动量和水深实时计算，
-/// 避免存储冗余数据并确保数据一致性。
+/// 閫熷害鍦洪€氳繃 `velocity()` 鏂规硶浠庡姩閲忓拰姘存繁瀹炴椂璁＄畻锛?
+/// 閬垮厤瀛樺偍鍐椾綑鏁版嵁骞剁‘淇濇暟鎹竴鑷存€с€?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShallowWaterState {
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     n_cells: usize,
 
-    /// 水深 [m]
+    /// 姘存繁 [m]
     pub h: AlignedVec<f64>,
-    /// x 方向动量 [m²/s]
+    /// x 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hu: AlignedVec<f64>,
-    /// y 方向动量 [m²/s]
+    /// y 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hv: AlignedVec<f64>,
-    /// 底床高程 [m]
+    /// 搴曞簥楂樼▼ [m]
     pub z: AlignedVec<f64>,
 
-    /// 动态示踪剂字段
+    /// 鍔ㄦ€佺ず韪墏瀛楁
     #[serde(default)]
     pub tracers: DynamicScalars,
 
-    /// 字段注册表（元数据）
+    /// 瀛楁娉ㄥ唽琛紙鍏冩暟鎹級
     #[serde(default = "FieldRegistry::shallow_water")]
     pub field_registry: FieldRegistry,
 }
 
 impl ShallowWaterState {
-    /// 创建新状态
+    /// 鍒涘缓鏂扮姸鎬?
     pub fn new(n_cells: usize) -> Self {
         Self {
             n_cells,
@@ -355,14 +355,14 @@ impl ShallowWaterState {
         }
     }
 
-    /// 创建带标量的状态
+    /// 鍒涘缓甯︽爣閲忕殑鐘舵€?
     pub fn with_scalar(n_cells: usize) -> Self {
         let mut state = Self::new(n_cells);
         state.register_tracer("tracer_0", "");
         state
     }
 
-    /// 从初始水位和底床创建（冷启动）
+    /// 浠庡垵濮嬫按浣嶅拰搴曞簥鍒涘缓锛堝喎鍚姩锛?
     pub fn cold_start(initial_eta: f64, z_bed: &[f64]) -> Self {
         let n_cells = z_bed.len();
 
@@ -379,7 +379,7 @@ impl ShallowWaterState {
         }
     }
 
-    /// 克隆结构（不复制数据，创建零初始化的状态）
+    /// 鍏嬮殕缁撴瀯锛堜笉澶嶅埗鏁版嵁锛屽垱寤洪浂鍒濆鍖栫殑鐘舵€侊級
     pub fn clone_structure(&self) -> Self {
         let mut tracers = DynamicScalars::new(self.n_cells);
         tracers.match_layout(&self.tracers);
@@ -394,13 +394,13 @@ impl ShallowWaterState {
         }
     }
 
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     #[inline]
     pub fn n_cells(&self) -> usize {
         self.n_cells
     }
 
-    /// 注册一个新的示踪剂字段，若已存在则返回其索引
+    /// 娉ㄥ唽涓€涓柊鐨勭ず韪墏瀛楁锛岃嫢宸插瓨鍦ㄥ垯杩斿洖鍏剁储寮?
     pub fn register_tracer(&mut self, name: impl Into<String>, unit: impl Into<String>) -> usize {
         let name = name.into();
         let idx = self.tracers.register(name.clone());
@@ -411,57 +411,57 @@ impl ShallowWaterState {
         idx
     }
 
-    /// 获取示踪剂数量
+    /// 鑾峰彇绀鸿釜鍓傛暟閲?
     #[inline]
     pub fn tracer_count(&self) -> usize {
         self.tracers.count()
     }
 
-    /// 获取所有示踪剂名称
+    /// 鑾峰彇鎵€鏈夌ず韪墏鍚嶇О
     #[inline]
     pub fn tracer_names(&self) -> &[String] {
         self.tracers.names()
     }
 
-    /// 按索引获取示踪剂切片
+    /// 鎸夌储寮曡幏鍙栫ず韪墏鍒囩墖
     #[inline]
     pub fn tracer_slice(&self, idx: usize) -> Option<&[f64]> {
         self.tracers.get(idx)
     }
 
-    /// 按索引获取可变示踪剂切片
+    /// 鎸夌储寮曡幏鍙栧彲鍙樼ず韪墏鍒囩墖
     #[inline]
     pub fn tracer_slice_mut(&mut self, idx: usize) -> Option<&mut [f64]> {
         self.tracers.get_mut(idx)
     }
 
-    /// 按名称获取示踪剂切片
+    /// 鎸夊悕绉拌幏鍙栫ず韪墏鍒囩墖
     #[inline]
     pub fn tracer_by_name(&self, name: &str) -> Option<&[f64]> {
         self.tracers.get_by_name(name)
     }
 
-    /// 按名称获取可变示踪剂切片
+    /// 鎸夊悕绉拌幏鍙栧彲鍙樼ず韪墏鍒囩墖
     #[inline]
     pub fn tracer_by_name_mut(&mut self, name: &str) -> Option<&mut [f64]> {
         self.tracers.get_mut_by_name(name)
     }
 
-    // ========== 状态访问 ==========
+    // ========== 鐘舵€佽闂?==========
 
-    /// 获取单元的守恒状态
+    /// 鑾峰彇鍗曞厓鐨勫畧鎭掔姸鎬?
     #[inline]
     pub fn get(&self, idx: usize) -> ConservedState {
         ConservedState::new(self.h[idx], self.hu[idx], self.hv[idx])
     }
 
-    /// 获取单元的守恒状态（使用 CellIndex）
+    /// 鑾峰彇鍗曞厓鐨勫畧鎭掔姸鎬侊紙浣跨敤 CellIndex锛?
     #[inline]
     pub fn get_by_index(&self, cell: CellIndex) -> ConservedState {
         self.get(cell.get())
     }
 
-    /// 获取原始变量 (h, u, v)
+    /// 鑾峰彇鍘熷鍙橀噺 (h, u, v)
     #[inline]
     pub fn primitive(&self, idx: usize, params: &NumericalParams) -> (f64, f64, f64) {
         let h = self.h[idx];
@@ -469,13 +469,13 @@ impl ShallowWaterState {
         (h, vel.u, vel.v)
     }
 
-    /// 获取速度
+    /// 鑾峰彇閫熷害
     #[inline]
     pub fn velocity(&self, idx: usize, params: &NumericalParams) -> SafeVelocity {
         params.safe_velocity(self.hu[idx], self.hv[idx], self.h[idx])
     }
 
-    /// 获取速度（使用阈值）
+    /// 鑾峰彇閫熷害锛堜娇鐢ㄩ槇鍊硷級
     #[inline]
     pub fn velocity_with_eps(&self, idx: usize, eps: f64) -> DVec2 {
         let h = self.h[idx];
@@ -486,15 +486,15 @@ impl ShallowWaterState {
         }
     }
 
-    /// 获取水位 (eta = h + z)
+    /// 鑾峰彇姘翠綅 (eta = h + z)
     #[inline]
     pub fn water_level(&self, idx: usize) -> f64 {
         self.h[idx] + self.z[idx]
     }
 
-    // ========== 状态修改 ==========
+    // ========== 鐘舵€佷慨鏀?==========
 
-    /// 设置守恒变量
+    /// 璁剧疆瀹堟亽鍙橀噺
     #[inline]
     pub fn set(&mut self, idx: usize, h: f64, hu: f64, hv: f64) {
         self.h[idx] = h;
@@ -502,7 +502,7 @@ impl ShallowWaterState {
         self.hv[idx] = hv;
     }
 
-    /// 设置守恒状态
+    /// 璁剧疆瀹堟亽鐘舵€?
     #[inline]
     pub fn set_state(&mut self, idx: usize, state: ConservedState) {
         self.h[idx] = state.h;
@@ -510,7 +510,7 @@ impl ShallowWaterState {
         self.hv[idx] = state.hv;
     }
 
-    /// 从原始变量设置
+    /// 浠庡師濮嬪彉閲忚缃?
     #[inline]
     pub fn set_from_primitive(&mut self, idx: usize, h: f64, u: f64, v: f64) {
         self.h[idx] = h;
@@ -518,7 +518,7 @@ impl ShallowWaterState {
         self.hv[idx] = h * v;
     }
 
-    /// 重置为零
+    /// 閲嶇疆涓洪浂
     pub fn reset(&mut self) {
         self.h.fill(0.0);
         self.hu.fill(0.0);
@@ -526,73 +526,73 @@ impl ShallowWaterState {
         self.tracers.clear_all();
     }
 
-    // ========== 切片访问 ==========
+    // ========== 鍒囩墖璁块棶 ==========
 
-    /// 获取水深切片
+    /// 鑾峰彇姘存繁鍒囩墖
     #[inline]
     pub fn h_slice(&self) -> &[f64] {
         &self.h
     }
 
-    /// 获取 x 动量切片
+    /// 鑾峰彇 x 鍔ㄩ噺鍒囩墖
     #[inline]
     pub fn hu_slice(&self) -> &[f64] {
         &self.hu
     }
 
-    /// 获取 y 动量切片
+    /// 鑾峰彇 y 鍔ㄩ噺鍒囩墖
     #[inline]
     pub fn hv_slice(&self) -> &[f64] {
         &self.hv
     }
 
-    /// 获取底床高程切片
+    /// 鑾峰彇搴曞簥楂樼▼鍒囩墖
     #[inline]
     pub fn z_slice(&self) -> &[f64] {
         &self.z
     }
 
-    /// 获取可变水深切片
+    /// 鑾峰彇鍙彉姘存繁鍒囩墖
     #[inline]
     pub fn h_slice_mut(&mut self) -> &mut [f64] {
         &mut self.h
     }
 
-    /// 获取可变 x 动量切片
+    /// 鑾峰彇鍙彉 x 鍔ㄩ噺鍒囩墖
     #[inline]
     pub fn hu_slice_mut(&mut self) -> &mut [f64] {
         &mut self.hu
     }
 
-    /// 获取可变 y 动量切片
+    /// 鑾峰彇鍙彉 y 鍔ㄩ噺鍒囩墖
     #[inline]
     pub fn hv_slice_mut(&mut self) -> &mut [f64] {
         &mut self.hv
     }
 
-    /// 获取可变底床高程切片
+    /// 鑾峰彇鍙彉搴曞簥楂樼▼鍒囩墖
     #[inline]
     pub fn z_slice_mut(&mut self) -> &mut [f64] {
         &mut self.z
     }
 
-    // ========== 积分计算 ==========
+    // ========== 绉垎璁＄畻 ==========
 
-    /// 计算总质量
+    /// 璁＄畻鎬昏川閲?
     pub fn total_mass(&self, cell_areas: &[f64]) -> f64 {
         self.h.iter().zip(cell_areas).map(|(h, a)| h * a).sum()
     }
 
-    /// 计算总动量
+    /// 璁＄畻鎬诲姩閲?
     pub fn total_momentum(&self, cell_areas: &[f64]) -> DVec2 {
         let hux: f64 = self.hu.iter().zip(cell_areas).map(|(hu, a)| hu * a).sum();
         let hvx: f64 = self.hv.iter().zip(cell_areas).map(|(hv, a)| hv * a).sum();
         DVec2::new(hux, hvx)
     }
 
-    // ========== 时间积分支持 ==========
+    // ========== 鏃堕棿绉垎鏀寔 ==========
 
-    /// 从另一个状态复制数据
+    /// 浠庡彟涓€涓姸鎬佸鍒舵暟鎹?
     pub fn copy_from(&mut self, other: &Self) {
         debug_assert_eq!(self.n_cells(), other.n_cells());
         self.h.copy_from_slice(&other.h);
@@ -601,7 +601,7 @@ impl ShallowWaterState {
         self.tracers.copy_from(&other.tracers);
     }
 
-    /// 添加缩放的 RHS: self += scale * rhs
+    /// 娣诲姞缂╂斁鐨?RHS: self += scale * rhs
     pub fn add_scaled_rhs(&mut self, rhs: &RhsBuffers, scale: f64) {
         for i in 0..self.n_cells {
             self.h[i] += scale * rhs.dh_dt[i];
@@ -611,7 +611,7 @@ impl ShallowWaterState {
         self.tracers.add_scaled(&rhs.tracer_rhs, scale);
     }
 
-    /// 二元线性组合: self = a*A + b*B
+    /// 浜屽厓绾挎€х粍鍚? self = a*A + b*B
     pub fn linear_combine(&mut self, a: f64, state_a: &Self, b: f64, state_b: &Self) {
         debug_assert_eq!(self.n_cells(), state_a.n_cells());
         debug_assert_eq!(self.n_cells(), state_b.n_cells());
@@ -624,7 +624,7 @@ impl ShallowWaterState {
         self.tracers.linear_combine(a, &state_a.tracers, b, &state_b.tracers);
     }
 
-    /// 自线性组合: self = a * self + b * other
+    /// 鑷嚎鎬х粍鍚? self = a * self + b * other
     pub fn axpy(&mut self, a: f64, b: f64, other: &Self) {
         debug_assert_eq!(self.n_cells(), other.n_cells());
 
@@ -636,7 +636,7 @@ impl ShallowWaterState {
         self.tracers.axpy(a, b, &other.tracers);
     }
 
-    /// 强制正性约束
+    /// 寮哄埗姝ｆ€х害鏉?
     pub fn enforce_positivity(&mut self) {
         for h in self.h.iter_mut() {
             if *h < 0.0 {
@@ -653,12 +653,12 @@ impl ShallowWaterState {
         }
     }
 
-    // ========== 验证 ==========
+    // ========== 楠岃瘉 ==========
 
-    /// 验证状态有效性
+    /// 楠岃瘉鐘舵€佹湁鏁堟€?
     pub fn validate(&self, time: f64, params: &NumericalParams) -> Result<(), StateError> {
         for idx in 0..self.n_cells {
-            // 检查 NaN/Inf
+            // 妫€鏌?NaN/Inf
             if !self.h[idx].is_finite() {
                 return Err(StateError::InvalidValue {
                     field: "h",
@@ -681,7 +681,7 @@ impl ShallowWaterState {
                 });
             }
 
-            // 检查负水深
+            // 妫€鏌ヨ礋姘存繁
             if self.h[idx] < 0.0 {
                 return Err(StateError::NegativeDepth {
                     cell: idx,
@@ -690,7 +690,7 @@ impl ShallowWaterState {
                 });
             }
 
-            // 检查速度
+            // 妫€鏌ラ€熷害
             if !params.is_dry(self.h[idx]) {
                 let vel = self.velocity(idx, params);
                 if params.is_velocity_excessive(vel.speed()) {
@@ -709,24 +709,24 @@ impl ShallowWaterState {
 }
 
 // ============================================================
-// 右端项缓冲区
+// 鍙崇椤圭紦鍐插尯
 // ============================================================
 
-/// 右端项缓冲区 (用于时间积分)
+/// 鍙崇椤圭紦鍐插尯 (鐢ㄤ簬鏃堕棿绉垎)
 #[derive(Debug, Clone)]
 pub struct RhsBuffers {
-    /// 水深变化率 [m/s]
+    /// 姘存繁鍙樺寲鐜?[m/s]
     pub dh_dt: AlignedVec<f64>,
-    /// x 动量变化率 [m²/s²]
+    /// x 鍔ㄩ噺鍙樺寲鐜?[m虏/s虏]
     pub dhu_dt: AlignedVec<f64>,
-    /// y 动量变化率 [m²/s²]
+    /// y 鍔ㄩ噺鍙樺寲鐜?[m虏/s虏]
     pub dhv_dt: AlignedVec<f64>,
-    /// 标量示踪剂变化率（可选）
+    /// 鏍囬噺绀鸿釜鍓傚彉鍖栫巼锛堝彲閫夛級
     pub tracer_rhs: DynamicScalars,
 }
 
 impl RhsBuffers {
-    /// 创建新的 RHS 缓冲区
+    /// 鍒涘缓鏂扮殑 RHS 缂撳啿鍖?
     pub fn new(n_cells: usize) -> Self {
         Self {
             dh_dt: AlignedVec::zeros(n_cells),
@@ -736,24 +736,24 @@ impl RhsBuffers {
         }
     }
 
-    /// 创建带有示踪剂的 RHS 缓冲区
+    /// 鍒涘缓甯︽湁绀鸿釜鍓傜殑 RHS 缂撳啿鍖?
     pub fn with_tracers(n_cells: usize, n_tracers: usize) -> Self {
         let mut rhs = Self::new(n_cells);
         rhs.tracer_rhs.set_count(n_tracers);
         rhs
     }
 
-    /// 获取单元数量
+    /// 鑾峰彇鍗曞厓鏁伴噺
     pub fn n_cells(&self) -> usize {
         self.dh_dt.len()
     }
 
-    /// 获取示踪剂数量
+    /// 鑾峰彇绀鸿釜鍓傛暟閲?
     pub fn n_tracers(&self) -> usize {
         self.tracer_rhs.count()
     }
 
-    /// 重置为零
+    /// 閲嶇疆涓洪浂
     pub fn reset(&mut self) {
         self.dh_dt.fill(0.0);
         self.dhu_dt.fill(0.0);
@@ -761,7 +761,7 @@ impl RhsBuffers {
         self.tracer_rhs.clear_all();
     }
 
-    /// 调整大小
+    /// 璋冩暣澶у皬
     pub fn resize(&mut self, n_cells: usize, n_tracers: usize) {
         self.dh_dt.resize(n_cells);
         self.dhu_dt.resize(n_cells);
@@ -770,12 +770,12 @@ impl RhsBuffers {
         self.tracer_rhs.set_count(n_tracers);
     }
 
-    /// 将示踪剂布局对齐到给定状态
+    /// 灏嗙ず韪墏甯冨眬瀵归綈鍒扮粰瀹氱姸鎬?
     pub fn match_tracers(&mut self, layout: &DynamicScalars) {
         self.tracer_rhs.match_layout(layout);
     }
 
-    /// 添加通量贡献
+    /// 娣诲姞閫氶噺璐＄尞
     #[inline]
     pub fn add_flux(&mut self, cell: usize, flux: Flux, area_inv: f64) {
         self.dh_dt[cell] += flux.mass * area_inv;
@@ -783,7 +783,7 @@ impl RhsBuffers {
         self.dhv_dt[cell] += flux.mom_y * area_inv;
     }
 
-    /// 添加源项贡献
+    /// 娣诲姞婧愰」璐＄尞
     #[inline]
     pub fn add_source(&mut self, cell: usize, source: ConservedState) {
         self.dh_dt[cell] += source.h;
@@ -793,22 +793,22 @@ impl RhsBuffers {
 }
 
 // ============================================================
-// 梯度状态
+// 姊害鐘舵€?
 // ============================================================
 
-/// 梯度状态 (用于二阶重构)
+/// 姊害鐘舵€?(鐢ㄤ簬浜岄樁閲嶆瀯)
 #[derive(Debug, Clone)]
 pub struct GradientState {
-    /// 水深梯度
+    /// 姘存繁姊害
     pub grad_h: Vec<DVec2>,
-    /// x 动量梯度
+    /// x 鍔ㄩ噺姊害
     pub grad_hu: Vec<DVec2>,
-    /// y 动量梯度
+    /// y 鍔ㄩ噺姊害
     pub grad_hv: Vec<DVec2>,
 }
 
 impl GradientState {
-    /// 创建新的梯度状态
+    /// 鍒涘缓鏂扮殑姊害鐘舵€?
     pub fn new(n_cells: usize) -> Self {
         Self {
             grad_h: vec![DVec2::ZERO; n_cells],
@@ -817,20 +817,20 @@ impl GradientState {
         }
     }
 
-    /// 重置为零
+    /// 閲嶇疆涓洪浂
     pub fn reset(&mut self) {
         self.grad_h.fill(DVec2::ZERO);
         self.grad_hu.fill(DVec2::ZERO);
         self.grad_hv.fill(DVec2::ZERO);
     }
 
-    /// 获取单元梯度
+    /// 鑾峰彇鍗曞厓姊害
     #[inline]
     pub fn get(&self, cell: usize) -> (DVec2, DVec2, DVec2) {
         (self.grad_h[cell], self.grad_hu[cell], self.grad_hv[cell])
     }
 
-    /// 设置单元梯度
+    /// 璁剧疆鍗曞厓姊害
     #[inline]
     pub fn set(&mut self, cell: usize, grad_h: DVec2, grad_hu: DVec2, grad_hv: DVec2) {
         self.grad_h[cell] = grad_h;
@@ -840,35 +840,35 @@ impl GradientState {
 }
 
 // ============================================================
-// 数值通量
+// 鏁板€奸€氶噺
 // ============================================================
 
-/// 数值通量
+/// 鏁板€奸€氶噺
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Flux {
-    /// 质量通量 [m²/s]
+    /// 璐ㄩ噺閫氶噺 [m虏/s]
     pub mass: f64,
-    /// x 动量通量 [m³/s²]
+    /// x 鍔ㄩ噺閫氶噺 [m鲁/s虏]
     pub mom_x: f64,
-    /// y 动量通量 [m³/s²]
+    /// y 鍔ㄩ噺閫氶噺 [m鲁/s虏]
     pub mom_y: f64,
 }
 
 impl Flux {
-    /// 创建新通量
+    /// 鍒涘缓鏂伴€氶噺
     #[inline]
     pub const fn new(mass: f64, mom_x: f64, mom_y: f64) -> Self {
         Self { mass, mom_x, mom_y }
     }
 
-    /// 零通量
+    /// 闆堕€氶噺
     pub const ZERO: Self = Self {
         mass: 0.0,
         mom_x: 0.0,
         mom_y: 0.0,
     };
 
-    /// 缩放通量
+    /// 缂╂斁閫氶噺
     #[inline]
     pub fn scale(self, factor: f64) -> Self {
         Self {
@@ -878,13 +878,13 @@ impl Flux {
         }
     }
 
-    /// 通量大小
+    /// 閫氶噺澶у皬
     #[inline]
     pub fn magnitude(&self) -> f64 {
         (self.mass * self.mass + self.mom_x * self.mom_x + self.mom_y * self.mom_y).sqrt()
     }
 
-    /// 检查通量是否有效
+    /// 妫€鏌ラ€氶噺鏄惁鏈夋晥
     #[inline]
     pub fn is_valid(&self) -> bool {
         self.mass.is_finite() && self.mom_x.is_finite() && self.mom_y.is_finite()
@@ -962,33 +962,33 @@ impl Mul<Flux> for f64 {
 }
 
 // ============================================================
-// 错误类型
+// 閿欒绫诲瀷
 // ============================================================
 
-/// 状态错误
+/// 鐘舵€侀敊璇?
 #[derive(Debug, Clone)]
 pub enum StateError {
-    /// 无效值 (NaN/Inf)
+    /// 鏃犳晥鍊?(NaN/Inf)
     InvalidValue {
         field: &'static str,
         cell: usize,
         value: f64,
         time: f64,
     },
-    /// 负水深
+    /// 璐熸按娣?
     NegativeDepth {
         cell: usize,
         value: f64,
         time: f64,
     },
-    /// 速度过大
+    /// 閫熷害杩囧ぇ
     ExcessiveVelocity {
         cell: usize,
         speed: f64,
         max_speed: f64,
         time: f64,
     },
-    /// 尺寸不匹配
+    /// 灏哄涓嶅尮閰?
     SizeMismatch {
         expected: usize,
         actual: usize,
@@ -1043,7 +1043,7 @@ impl std::fmt::Display for StateError {
 impl std::error::Error for StateError {}
 
 // ============================================================
-// StateAccess / StateAccessMut trait 实现
+// StateAccess / StateAccessMut trait 瀹炵幇
 // ============================================================
 
 use crate::traits::{StateAccess, StateAccessMut};
@@ -1150,7 +1150,7 @@ impl StateAccessMut for ShallowWaterState {
 }
 
 // ============================================================
-// 单元测试
+// 鍗曞厓娴嬭瘯
 // ============================================================
 
 #[cfg(test)]
@@ -1288,38 +1288,38 @@ mod tests {
 }
 
 // ============================================================
-// 泛型浅水状态 (Backend 抽象)
+// 娉涘瀷娴呮按鐘舵€?(Backend 鎶借薄)
 // ============================================================
 
 use crate::core::{Backend, CpuBackend, DeviceBuffer, Scalar};
 
-/// 泛型浅水状态
+/// 娉涘瀷娴呮按鐘舵€?
 ///
-/// 使用 Backend trait 抽象存储，支持 CPU/GPU 后端。
-/// 永远只有4个核心字段：h, hu, hv, z。
+/// 浣跨敤 Backend trait 鎶借薄瀛樺偍锛屾敮鎸?CPU/GPU 鍚庣銆?
+/// 姘歌繙鍙湁4涓牳蹇冨瓧娈碉細h, hu, hv, z銆?
 ///
-/// # 设计说明
+/// # 璁捐璇存槑
 ///
-/// 状态持有 Backend 实例的克隆，用于后续的缓冲区操作。
-/// 由于 CpuBackend 是零大小类型，这不会带来额外开销。
+/// 鐘舵€佹寔鏈?Backend 瀹炰緥鐨勫厠闅嗭紝鐢ㄤ簬鍚庣画鐨勭紦鍐插尯鎿嶄綔銆?
+/// 鐢变簬 CpuBackend 鏄浂澶у皬绫诲瀷锛岃繖涓嶄細甯︽潵棰濆寮€閿€銆?
 #[derive(Debug, Clone)]
 pub struct ShallowWaterStateGeneric<B: Backend> {
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     n_cells: usize,
-    /// 水深 [m]
+    /// 姘存繁 [m]
     pub h: B::Buffer<B::Scalar>,
-    /// x 方向动量 [m²/s]
+    /// x 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hu: B::Buffer<B::Scalar>,
-    /// y 方向动量 [m²/s]
+    /// y 鏂瑰悜鍔ㄩ噺 [m虏/s]
     pub hv: B::Buffer<B::Scalar>,
-    /// 底床高程 [m]
+    /// 搴曞簥楂樼▼ [m]
     pub z: B::Buffer<B::Scalar>,
-    /// 后端实例
+    /// 鍚庣瀹炰緥
     backend: B,
 }
 
 impl<B: Backend> ShallowWaterStateGeneric<B> {
-    /// 使用后端实例创建新状态
+    /// 浣跨敤鍚庣瀹炰緥鍒涘缓鏂扮姸鎬?
     pub fn new_with_backend(backend: B, n_cells: usize) -> Self {
         Self {
             n_cells,
@@ -1331,103 +1331,79 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         }
     }
     
-    /// 单元数量
+    /// 鍗曞厓鏁伴噺
     #[inline]
     pub fn n_cells(&self) -> usize {
         self.n_cells
     }
     
-    /// 获取后端引用
+    /// 鑾峰彇鍚庣寮曠敤
     #[inline]
     pub fn backend(&self) -> &B {
         &self.backend
     }
     
-    /// 重置为零
+    /// 閲嶇疆涓洪浂
     pub fn reset(&mut self) {
         self.h.fill(<B::Scalar as Scalar>::from_f64(0.0));
         self.hu.fill(<B::Scalar as Scalar>::from_f64(0.0));
         self.hv.fill(<B::Scalar as Scalar>::from_f64(0.0));
     }
     
-    /// 验证状态有效性
+    /// 楠岃瘉鐘舵€佹湁鏁堟€?
     pub fn is_valid(&self) -> bool {
         if let Some(h) = self.h.as_slice() {
             h.iter().all(|&x| x.to_f64().is_finite() && x.to_f64() >= 0.0)
         } else {
-            // GPU 缓冲区需要同步检查
+            // GPU 缂撳啿鍖洪渶瑕佸悓姝ユ鏌?
             true
         }
     }
 }
 
-/// CPU f64 后端的便捷方法
+/// CPU f64 鍚庣鐨勪究鎹锋柟娉?
 impl ShallowWaterStateGeneric<CpuBackend<f64>> {
-    /// 使用默认 CPU f64 后端创建（向后兼容）
+    /// 浣跨敤榛樿 CPU f64 鍚庣鍒涘缓锛堝悜鍚庡吋瀹癸級
     pub fn new(n_cells: usize) -> Self {
         Self::new_with_backend(CpuBackend::<f64>::new(), n_cells)
     }
     
-    /// 从传统 ShallowWaterState 创建
-    pub fn from_legacy(state: &ShallowWaterState) -> Self {
-        let n = state.n_cells();
-        let mut new_state = Self::new(n);
-        
-        new_state.h.copy_from_slice(state.h.as_slice());
-        new_state.hu.copy_from_slice(state.hu.as_slice());
-        new_state.hv.copy_from_slice(state.hv.as_slice());
-        new_state.z.copy_from_slice(state.z.as_slice());
-        
-        new_state
-    }
-    
-    /// 转换回传统 ShallowWaterState
-    pub fn to_legacy(&self) -> ShallowWaterState {
-        let mut state = ShallowWaterState::new(self.n_cells);
-        
-        state.h.as_mut_slice().copy_from_slice(&self.h);
-        state.hu.as_mut_slice().copy_from_slice(&self.hu);
-        state.hv.as_mut_slice().copy_from_slice(&self.hv);
-        state.z.as_mut_slice().copy_from_slice(&self.z);
-        
-        state
-    }
 }
 
-/// CPU f32 后端的便捷方法
+/// CPU f32 鍚庣鐨勪究鎹锋柟娉?
 impl ShallowWaterStateGeneric<CpuBackend<f32>> {
-    /// 使用 CPU f32 后端创建
+    /// 浣跨敤 CPU f32 鍚庣鍒涘缓
     pub fn new_f32(n_cells: usize) -> Self {
         Self::new_with_backend(CpuBackend::<f32>::new(), n_cells)
     }
 }
 
-/// 类型别名：默认后端的状态
+/// 绫诲瀷鍒悕锛氶粯璁ゅ悗绔殑鐘舵€?
 pub type ShallowWaterStateDefault = ShallowWaterStateGeneric<CpuBackend<f64>>;
 
 // ============================================================
-// 泛型状态的统计计算
+// 娉涘瀷鐘舵€佺殑缁熻璁＄畻
 // ============================================================
 
-/// 状态统计信息
+/// 鐘舵€佺粺璁′俊鎭?
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StateStatisticsData<S> {
-    /// 最大水深
+    /// 鏈€澶ф按娣?
     pub h_max: S,
-    /// 最小水深（非零）
+    /// 鏈€灏忔按娣憋紙闈為浂锛?
     pub h_min: S,
-    /// 平均水深
+    /// 骞冲潎姘存繁
     pub h_mean: S,
-    /// 最大速度
+    /// 鏈€澶ч€熷害
     pub velocity_max: S,
-    /// 水体总体积
+    /// 姘翠綋鎬讳綋绉?
     pub total_volume: S,
-    /// 湿单元数量
+    /// 婀垮崟鍏冩暟閲?
     pub wet_cells: usize,
 }
 
 impl<B: Backend> ShallowWaterStateGeneric<B> {
-    /// 计算状态统计信息（仅 CPU 后端有效）
+    /// 璁＄畻鐘舵€佺粺璁′俊鎭紙浠?CPU 鍚庣鏈夋晥锛?
     pub fn compute_statistics(&self, cell_areas: &[B::Scalar], h_dry: B::Scalar) -> Option<StateStatisticsData<B::Scalar>> {
         let h_slice = self.h.as_slice()?;
         let hu_slice = self.hu.as_slice()?;
@@ -1450,13 +1426,13 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
                 stats.h_max = Float::max(stats.h_max, h);
                 stats.h_min = Float::min(stats.h_min, h);
                 
-                // 计算速度
+                // 璁＄畻閫熷害
                 let u = hu_slice[i] / h;
                 let v = hv_slice[i] / h;
                 let speed = Float::sqrt(u * u + v * v);
                 stats.velocity_max = Float::max(stats.velocity_max, speed);
                 
-                // 累加体积
+                // 绱姞浣撶Н
                 if i < cell_areas.len() {
                     stats.total_volume = stats.total_volume + h * cell_areas[i];
                 }
@@ -1470,11 +1446,11 @@ impl<B: Backend> ShallowWaterStateGeneric<B> {
         Some(stats)
     }
     
-    /// 复制状态数据到另一个状态
+    /// 澶嶅埗鐘舵€佹暟鎹埌鍙︿竴涓姸鎬?
     pub fn copy_to(&self, other: &mut Self) {
         debug_assert_eq!(self.n_cells, other.n_cells, "状态复制: 单元数量不匹配");
         
-        // CPU 后端直接复制
+        // CPU 鍚庣鐩存帴澶嶅埗
         if let (Some(src_h), Some(dst_h)) = (self.h.as_slice(), other.h.as_slice_mut()) {
             dst_h.copy_from_slice(src_h);
         }

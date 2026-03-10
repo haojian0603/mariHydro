@@ -37,8 +37,9 @@
 //! matrix.mul_vec(&x, &mut y);
 //! ```
 
-use mh_foundation::Scalar;
 use std::collections::BTreeMap;
+
+type Scalar = f64;
 
 /// CSR 矩阵的稀疏模式
 ///
