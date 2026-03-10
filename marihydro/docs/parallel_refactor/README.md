@@ -136,6 +136,8 @@ T02/T03/T04/T05 可以：
 问题到任务的完整映射见：
 
 - `docs/parallel_refactor/issue-coverage-matrix.md`
+- `docs/parallel_refactor/coordination-protocol.md`
+- `docs/parallel_refactor/agent-assignment-templates.md`
 
 ## 10. 使用方式
 
@@ -153,3 +155,8 @@ T02/T03/T04/T05 可以：
 - `task-04-transport-physics-family.md`
 - `task-05-ai-and-assimilation.md`
 - `task-06-tests-docs-and-gates.md`
+
+协作附加文档：
+
+- `coordination-protocol.md`
+- `agent-assignment-templates.md`
