@@ -188,7 +188,13 @@ impl<B: Backend> VerticalMixing<B> {
                     }
 
                     // PP 公式
-                    let denominator = (one + alpha * ri.max(zero)).powf(n);
+                    let stability = one + alpha * ri.max(zero);
+                    let stability = if stability.is_finite() {
+                        stability.max(min_shear)
+                    } else {
+                        one
+                    };
+                    let denominator = stability.powf(n);
                     let nu = nu_0 + nu_max / denominator;
 
                     self.nu_v[k][cell] = nu;

@@ -338,7 +338,15 @@ impl ConservationMonitor {
         
         // 相对误差（避免除零）
         let scale = initial_value.abs().max(expected.abs()).max(1e-10);
-        let relative_error = absolute_error / scale;
+        let relative_error = if initial_value.is_finite()
+            && current_value.is_finite()
+            && expected.is_finite()
+            && absolute_error.is_finite()
+        {
+            absolute_error / scale
+        } else {
+            f64::INFINITY
+        };
 
         if relative_error.abs() > self.config.warning_threshold {
             Some(ConservationError {
@@ -387,12 +395,13 @@ impl ConservationMonitor {
             cumulative_sources: *self.cumulative_sources.get(&ConservationType::Mass).unwrap_or(&0.0),
             max_relative_error: self.error_history.iter()
                 .map(|e| e.relative_error.abs())
+                .filter(|v| v.is_finite())
                 .fold(0.0f64, f64::max),
             error_count: self.error_history.iter()
-                .filter(|e| e.relative_error.abs() > self.config.error_threshold)
+                .filter(|e| e.relative_error.is_finite() && e.relative_error.abs() > self.config.error_threshold)
                 .count(),
             warning_count: self.error_history.iter()
-                .filter(|e| e.relative_error.abs() > self.config.warning_threshold)
+                .filter(|e| e.relative_error.is_finite() && e.relative_error.abs() > self.config.warning_threshold)
                 .count(),
         }
     }

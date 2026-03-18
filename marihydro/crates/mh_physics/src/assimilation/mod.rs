@@ -11,7 +11,7 @@ pub use bridge::{AssimilableBridge, StateSnapshot};
 pub use conservation::{ConservationChecker, ConservationError, ConservedQuantities};
 
 use crate::tracer::TracerType;
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use mh_runtime::{Backend, CellIndex, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
 
 /// 可同化状态接口（Backend-first）
@@ -61,7 +61,7 @@ where
         &mut self,
         reference: &ConservedQuantities<B>,
         tolerance: B::Scalar,
-        constraints: &ConservationConstraints,
+        constraints: &ConservationConstraints<B>,
     ) {
         let _ = constraints;
         self.enforce_conservation(reference, tolerance)
@@ -70,24 +70,27 @@ where
 
 /// 守恒约束条件
 #[derive(Debug, Clone)]
-pub struct ConservationConstraints {
+pub struct ConservationConstraints<B: Backend = mh_runtime::CpuBackend<f64>> {
     /// 干单元索引（不参与修正）
-    pub dry_cells: Vec<usize>,
+    pub dry_cells: Vec<CellIndex>,
     /// 边界单元索引（不缩放）
-    pub boundary_cells: Vec<usize>,
+    pub boundary_cells: Vec<CellIndex>,
     /// 最大速度限制
-    pub max_velocity: f64,
+    pub max_velocity: B::Scalar,
     /// 最小水深（修正后不能低于此值）
-    pub min_depth: f64,
+    pub min_depth: B::Scalar,
 }
 
-impl Default for ConservationConstraints {
+impl<B: Backend> Default for ConservationConstraints<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     fn default() -> Self {
         Self {
             dry_cells: Vec::new(),
             boundary_cells: Vec::new(),
-            max_velocity: 50.0,
-            min_depth: 1e-6,
+            max_velocity: B::Scalar::from_config(50.0).unwrap_or(B::Scalar::MAX),
+            min_depth: B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE),
         }
     }
 }

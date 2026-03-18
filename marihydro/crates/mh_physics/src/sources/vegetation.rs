@@ -23,7 +23,7 @@
 //! - 柔性植被（随流弯曲）
 //! - 淹没/露出植被
 
-use super::traits::{SourceContribution, SourceContext, SourceTerm};
+use super::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
 use mh_runtime::CpuBackend;
 
@@ -235,66 +235,52 @@ impl VegetationConfig {
     }
 }
 
-impl SourceTerm for VegetationConfig {
-    fn name(&self) -> &'static str {
-        "Vegetation"
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for VegetationConfig {
+    fn name(&self) -> &'static str { "Vegetation" }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
-
-        // 干单元不计算
-        if !h.is_finite() || h < self.h_min || ctx.is_dry(h) {
-            return SourceContribution::ZERO;
-        }
-
+        if !h.is_finite() || h < self.h_min || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
         let veg = self.vegetation.get(cell).copied().unwrap_or(VegetationType::None);
-        if matches!(veg, VegetationType::None) {
-            return SourceContribution::ZERO;
-        }
-
+        if matches!(veg, VegetationType::None) { return SourceContributionGeneric::default(); }
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
         let vel = (u * u + v * v).sqrt();
-
-        if !u.is_finite() || !v.is_finite() || !vel.is_finite() {
-            return SourceContribution::ZERO;
-        }
-
-        if vel < self.vel_min {
-            return SourceContribution::ZERO;
-        }
-
-        // 计算有效阻力
+        if !u.is_finite() || !v.is_finite() || !vel.is_finite() || vel < self.vel_min { return SourceContributionGeneric::default(); }
         let cd_av = veg.effective_drag(h, vel);
-        if cd_av <= 0.0 {
-            return SourceContribution::ZERO;
-        }
-
-        // 植被阻力: F = -0.5 * C_d * A_v * |u| * u
-        // 这是单位体积的阻力，需要乘以水深得到单位面积的阻力
-        // S_hu = -0.5 * C_d * A_v * h * |u| * u
+        if cd_av <= 0.0 { return SourceContributionGeneric::default(); }
         let factor = -0.5 * cd_av * h * vel;
-
-        SourceContribution::momentum(factor * u, factor * v)
+        SourceContributionGeneric::momentum(factor * u, factor * v)
     }
 
-    fn is_explicit(&self) -> bool {
-        // 植被阻力可能很大，使用隐式处理更稳定
-        false
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled { return; }
+        let n_cells = state.n_cells().min(self.vegetation.len());
+        if rhs_h.len() < n_cells { rhs_h.resize(n_cells, 0.0); }
+        if rhs_hu.len() < n_cells { rhs_hu.resize(n_cells, 0.0); }
+        if rhs_hv.len() < n_cells { rhs_hv.resize(n_cells, 0.0); }
+        for cell in 0..n_cells {
+            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
 
-/// 植被阻力便捷构造器
 pub struct VegetationSource;
 
 impl VegetationSource {
@@ -391,7 +377,7 @@ impl VegetationImplicit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
@@ -490,10 +476,10 @@ mod tests {
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
         assert_eq!(contrib.s_h, 0.0);
         assert!(contrib.s_hu < 0.0); // 阻力与流向相反
@@ -505,10 +491,10 @@ mod tests {
         let config = VegetationConfig::new(10, 1000.0);
 
         let state = create_test_state(10, 2.0, 1.0, 0.5);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
         assert_eq!(contrib.s_hu, 0.0);
         assert_eq!(contrib.s_hv, 0.0);
@@ -520,10 +506,10 @@ mod tests {
             .with_uniform_vegetation(VegetationType::reed());
 
         let state = create_test_state(10, 1e-7, 0.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
         assert_eq!(contrib.s_hu, 0.0);
         assert_eq!(contrib.s_hv, 0.0);
@@ -532,8 +518,8 @@ mod tests {
     #[test]
     fn test_source_term_trait() {
         let config = VegetationConfig::default_config(10);
-        assert_eq!(config.name(), "Vegetation");
-        assert!(!config.is_explicit()); // 使用隐式处理
+        assert_eq!(SourceTermGeneric::name(&config), "Vegetation");
+        assert_eq!(SourceTermGeneric::stiffness(&config), SourceStiffness::LocallyImplicit); // 使用隐式处理
     }
 
     #[test]

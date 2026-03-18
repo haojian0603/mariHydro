@@ -1,6 +1,6 @@
 //! Kernel 接口规范
 //!
-//! 定义 GPU kernel 的 Rust 侧接口，并提供 CPU 侧实现作为默认执行路径。
+//! 定义 GPU kernel 的 Rust 侧接口，并提供 CPU 侧实现作为参考路径。
 
 use crate::numerics::linear_algebra::csr::CsrMatrix;
 use mh_runtime::RuntimeScalar;
@@ -25,7 +25,7 @@ pub struct KernelSpec {
     pub name: &'static str,
     /// 优先级
     pub priority: KernelPriority,
-    /// 预计加速比
+    /// 预估加速比
     pub expected_speedup: f64,
     /// 是否已实现
     pub implemented: bool,
@@ -36,25 +36,25 @@ pub const CORE_KERNELS: &[KernelSpec] = &[
     KernelSpec {
         name: "flux_compute",
         priority: KernelPriority::Critical,
-        expected_speedup: 30.0,
+        expected_speedup: 0.0,
         implemented: false,
     },
     KernelSpec {
         name: "state_update",
         priority: KernelPriority::Critical,
-        expected_speedup: 30.0,
+        expected_speedup: 0.0,
         implemented: false,
     },
     KernelSpec {
         name: "source_batch",
         priority: KernelPriority::High,
-        expected_speedup: 10.0,
+        expected_speedup: 0.0,
         implemented: false,
     },
     KernelSpec {
         name: "gradient_compute",
         priority: KernelPriority::High,
-        expected_speedup: 20.0,
+        expected_speedup: 0.0,
         implemented: false,
     },
     KernelSpec {
@@ -66,7 +66,7 @@ pub const CORE_KERNELS: &[KernelSpec] = &[
     KernelSpec {
         name: "profile_restore",
         priority: KernelPriority::Medium,
-        expected_speedup: 10.0,
+        expected_speedup: 0.0,
         implemented: false,
     },
 ];
@@ -78,12 +78,11 @@ pub enum TransferPolicy {
     /// 延迟传输
     #[default]
     Lazy,
-    /// 即时传输
+    /// 立即传输
     Eager,
     /// 流水线传输
     Pipelined,
 }
-
 
 /// 获取未实现的核心 kernel
 pub fn unimplemented_kernels() -> Vec<&'static KernelSpec> {
@@ -99,11 +98,14 @@ pub fn kernels_by_priority(priority: KernelPriority) -> Vec<&'static KernelSpec>
 // CPU Kernel 实现
 // ============================================================================
 
-/// 稀疏矩阵乘向量 (SpMV) kernel: y = A * x
+/// 稀疏矩阵向量乘法 (SpMV) kernel: y = A * x。
+///
+/// 这是 CPU 参考实现，不应被误解为 GPU 加速路径。
+#[deprecated(note = "use the backend-provided SpMV path instead")]
 pub fn spmv_kernel<S: RuntimeScalar>(matrix: &CsrMatrix<S>, x: &[S], y: &mut [S]) {
     let n_rows = matrix.n_rows();
-    assert_eq!(x.len(), matrix.n_cols(), "x 长度必须等于矩阵列数");
-    assert_eq!(y.len(), n_rows, "y 长度必须等于矩阵行数");
+    assert_eq!(x.len(), matrix.n_cols(), "x 间隔长度必须等于矩阵列数");
+    assert_eq!(y.len(), n_rows, "y 间隔长度必须等于矩阵行数");
 
     let row_ptr = matrix.row_ptr();
     let col_idx = matrix.col_idx();

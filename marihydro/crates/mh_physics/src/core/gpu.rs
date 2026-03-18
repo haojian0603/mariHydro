@@ -1,12 +1,8 @@
 // marihydro\crates\mh_physics\src\core\gpu.rs
-//! GPU 后端（模拟实现）
+//! GPU 后端契约层。
 //!
-//! 预留 CUDA 后端支持，当前提供可运行的模拟实现。
-//! 模拟设备通过环境变量声明，运行时可安全回退到 CPU。
-//!
-//! # 说明
-//!
-//! 当前模块不依赖真实 CUDA 运行时，便于在无 GPU 环境下完成流程验证。
+//! `ungpu` 分支不提供可用的 GPU 运行时。该模块只保留显式错误类型和
+//! 兼容性的占位结构，避免把“可用 GPU”伪装成运行时能力。
 
 use mh_runtime::DeviceBuffer;
 use mh_runtime::RuntimeScalar as Scalar;
@@ -14,9 +10,10 @@ use bytemuck::Pod;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-/// CUDA 后端模拟结构
-/// 
-/// 使用环境变量模拟设备列表，便于在无 CUDA 环境下测试接口流程。
+/// CUDA 后端占位结构。
+///
+/// 该类型仅用于保留上层契约。当前分支不提供真实 GPU 后端，因此构造
+/// 始终返回错误。
 #[derive(Debug, Clone)]
 pub struct CudaBackendPlaceholder<S: Scalar> {
     device_id: usize,
@@ -25,18 +22,12 @@ pub struct CudaBackendPlaceholder<S: Scalar> {
 }
 
 impl<S: Scalar> CudaBackendPlaceholder<S> {
-    /// 创建 CUDA 后端（模拟）
+    /// 创建 CUDA 后端占位实例。
     pub fn new(device_id: usize) -> Result<Self, CudaError> {
-        let device = available_gpus()
-            .into_iter()
-            .find(|d| d.id == device_id)
-            .ok_or_else(|| CudaError(format!("CUDA 设备不可用: {}", device_id)))?;
-
-        Ok(Self {
-            device_id,
-            device_name: device.name,
-            _marker: PhantomData,
-        })
+        let _ = device_id;
+        Err(CudaError(
+            "CUDA backend is unavailable in the ungpu branch".to_string(),
+        ))
     }
 
     /// 获取设备 ID
@@ -50,7 +41,7 @@ impl<S: Scalar> CudaBackendPlaceholder<S> {
     }
 }
 
-/// GPU 缓冲区（CPU 回退实现）
+/// GPU 缓冲区占位类型（内部使用 CPU 内存）。
 #[derive(Debug, Clone)]
 pub struct GpuBuffer<T: Pod> {
     data: Vec<T>,
@@ -83,8 +74,8 @@ impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for GpuBuffer<T> {
         self.data.len()
     }
     
-    fn copy_from_slice(&mut self, _src: &[T]) {
-        self.data.copy_from_slice(_src)
+    fn copy_from_slice(&mut self, src: &[T]) {
+        self.data.copy_from_slice(src)
     }
     
     fn copy_to_vec(&self) -> Vec<T> {
@@ -141,50 +132,14 @@ pub struct GpuDeviceInfo {
     pub compute_capability: (u32, u32),
 }
 
-/// 查询可用 GPU 设备
+/// 查询可用 GPU 设备。
 ///
-/// 通过环境变量模拟设备列表：
-/// - `CUDA_VISIBLE_DEVICES`: 逗号分隔的设备 ID
-/// - `CUDA_DEVICE_COUNT`: 设备数量（如 2）
+/// `ungpu` 分支不声明任何 GPU 设备。
 pub fn available_gpus() -> Vec<GpuDeviceInfo> {
-    let mut devices = Vec::new();
-    if let Ok(visible) = std::env::var("CUDA_VISIBLE_DEVICES") {
-        if !visible.trim().is_empty() && visible.trim() != "NoDevFiles" {
-            let ids: Vec<usize> = visible
-                .split(',')
-                .filter_map(|s| s.trim().parse::<usize>().ok())
-                .collect();
-            for id in ids {
-                devices.push(GpuDeviceInfo {
-                    id,
-                    name: format!("CUDA GPU {} (simulated)", id),
-                    memory_bytes: 0,
-                    compute_capability: (0, 0),
-                });
-            }
-        }
-    }
-
-    if devices.is_empty() {
-        if let Some(count) = std::env::var("CUDA_DEVICE_COUNT")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-        {
-            for id in 0..count {
-                devices.push(GpuDeviceInfo {
-                    id,
-                    name: format!("CUDA GPU {} (simulated)", id),
-                    memory_bytes: 0,
-                    compute_capability: (0, 0),
-                });
-            }
-        }
-    }
-
-    devices
+    Vec::new()
 }
 
-/// 检查是否有可用 GPU
+/// 检查是否有可用 GPU。
 pub fn has_cuda() -> bool {
-    !available_gpus().is_empty()
+    false
 }

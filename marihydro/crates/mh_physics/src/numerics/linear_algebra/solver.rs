@@ -34,7 +34,6 @@
 
 use super::csr::CsrMatrix;
 use super::preconditioner::Preconditioner;
-use crate::core::kernel::spmv_kernel;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
@@ -346,7 +345,7 @@ where
         let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
-        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
+        matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
@@ -378,7 +377,7 @@ where
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, self.p.as_slice(), self.ap.as_slice_mut());
+            matrix.mul_vec(self.p.as_slice(), self.ap.as_slice_mut());
 
             // alpha = r'r / p'Ap
             let pap = self.backend.dot(&self.p, &self.ap);
@@ -532,7 +531,7 @@ impl<B: Backend> PcgSolver<B> {
         let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
-        spmv_kernel(matrix, x.as_slice(), ws.r.as_slice_mut());
+        matrix.mul_vec(x.as_slice(), ws.r.as_slice_mut());
         for i in 0..n {
             ws.r[i] = b[i] - ws.r[i];
         }
@@ -577,7 +576,7 @@ impl<B: Backend> PcgSolver<B> {
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, ws.p.as_slice(), ws.ap.as_slice_mut());
+            matrix.mul_vec(ws.p.as_slice(), ws.ap.as_slice_mut());
 
             // alpha = r'z / p'Ap
             let pap = self.backend.dot(&ws.p, &ws.ap);
@@ -692,7 +691,7 @@ where
         let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
-        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
+        matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
@@ -735,7 +734,7 @@ where
 
         for iter in 0..self.config.max_iter {
             // ap = A * p
-            spmv_kernel(matrix, self.p.as_slice(), self.ap.as_slice_mut());
+            matrix.mul_vec(self.p.as_slice(), self.ap.as_slice_mut());
 
             // alpha = r'z / p'Ap
             let pap = self.backend.dot(&self.p, &self.ap);
@@ -915,7 +914,7 @@ where
         let div_factor = B::Scalar::from_config(1e6).unwrap_or(B::Scalar::ZERO);
 
         // r = b - A*x
-        spmv_kernel(matrix, x.as_slice(), self.r.as_slice_mut());
+        matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
         for i in 0..n {
             self.r[i] = b[i] - self.r[i];
         }
@@ -1013,7 +1012,7 @@ where
             }
 
             // v = A * z
-            spmv_kernel(matrix, self.z.as_slice(), self.v.as_slice_mut());
+            matrix.mul_vec(self.z.as_slice(), self.v.as_slice_mut());
 
             // alpha = rho / (r0, v)
             let r0v = self.backend.dot(&self.r0, &self.v);
@@ -1067,7 +1066,7 @@ where
             }
 
             // t = A * z
-            spmv_kernel(matrix, self.z.as_slice(), self.t.as_slice_mut());
+            matrix.mul_vec(self.z.as_slice(), self.t.as_slice_mut());
 
             // omega = (t, s) / (t, t)
             let tt = self.backend.dot(&self.t, &self.t);
@@ -1315,7 +1314,7 @@ mod tests {
         let mut x_exact_buf = backend.alloc(3);
         x_exact_buf.copy_from_slice(&x_exact);
         let mut b = backend.alloc(3);
-        spmv_kernel(&matrix, x_exact_buf.as_slice(), b.as_slice_mut());
+        matrix.mul_vec(x_exact_buf.as_slice(), b.as_slice_mut());
 
         let mut x = x_exact_buf.clone();
 

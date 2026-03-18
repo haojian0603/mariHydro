@@ -74,6 +74,81 @@ pub struct SettlingSolver<B: Backend> {
 }
 
 impl<B: Backend> SettlingSolver<B> {
+    #[inline]
+    fn compute_implicit_coefficients(
+        &mut self,
+        depth: &B::Buffer<B::Scalar>,
+        dt: B::Scalar,
+    ) {
+        let n = depth.len().min(self.coeff.len());
+        let min_depth = self.config.min_depth;
+        let one = B::Scalar::ONE;
+
+        if let (Some(depth_slice), Some(coeff_slice)) = (
+            depth.try_as_slice(),
+            self.coeff.try_as_slice_mut(),
+        ) {
+            for i in 0..n {
+                let h = Float::max(depth_slice[i], min_depth);
+                coeff_slice[i] = one / (one + dt * self.config.settling_velocity / h);
+            }
+        } else {
+            let depth_host = depth.copy_to_vec();
+            let mut coeff_host = self.coeff.copy_to_vec();
+            for i in 0..n {
+                let h = Float::max(depth_host[i], min_depth);
+                coeff_host[i] = one / (one + dt * self.config.settling_velocity / h);
+            }
+            self.coeff.copy_from_slice(&coeff_host[..n]);
+        }
+    }
+
+    #[inline]
+    fn apply_implicit_update(
+        &self,
+        concentration: &mut B::Buffer<B::Scalar>,
+        depth: &B::Buffer<B::Scalar>,
+    ) -> (B::Scalar, B::Scalar) {
+        let n = concentration.len().min(depth.len()).min(self.coeff.len());
+        let min_depth = self.config.min_depth;
+        let mut max_rel = B::Scalar::ZERO;
+        let mut settled = B::Scalar::ZERO;
+
+        if let (Some(c_old), Some(coeff), Some(c_new), Some(h_slice)) = (
+            self.c_old.try_as_slice(),
+            self.coeff.try_as_slice(),
+            concentration.try_as_slice_mut(),
+            depth.try_as_slice(),
+        ) {
+            for i in 0..n {
+                let h = Float::max(h_slice[i], min_depth);
+                let updated = Float::max(c_old[i] * coeff[i], B::Scalar::ZERO);
+                let denom = Float::max(Float::abs(c_new[i]), self.backend.scalar_from_f64(1e-12));
+                let rel = Float::abs(updated - c_new[i]) / denom;
+                max_rel = Float::max(max_rel, rel);
+                settled = settled + Float::max(c_old[i] - updated, B::Scalar::ZERO) * h;
+                c_new[i] = updated;
+            }
+        } else {
+            let c_old_host = self.c_old.copy_to_vec();
+            let coeff_host = self.coeff.copy_to_vec();
+            let mut c_new_host = concentration.copy_to_vec();
+            let depth_host = depth.copy_to_vec();
+            for i in 0..n {
+                let h = Float::max(depth_host[i], min_depth);
+                let updated = Float::max(c_old_host[i] * coeff_host[i], B::Scalar::ZERO);
+                let denom = Float::max(Float::abs(c_new_host[i]), self.backend.scalar_from_f64(1e-12));
+                let rel = Float::abs(updated - c_new_host[i]) / denom;
+                max_rel = Float::max(max_rel, rel);
+                settled = settled + Float::max(c_old_host[i] - updated, B::Scalar::ZERO) * h;
+                c_new_host[i] = updated;
+            }
+            concentration.copy_from_slice(&c_new_host);
+        }
+
+        (max_rel, settled)
+    }
+
     pub fn new(backend: B, n_cells: usize, config: SettlingConfig<B::Scalar>) -> Self {
         let zero = B::Scalar::ZERO;
         Self {
@@ -98,7 +173,6 @@ impl<B: Backend> SettlingSolver<B> {
         depth: &B::Buffer<B::Scalar>,
         dt: B::Scalar,
     ) -> SettlingResult<B::Scalar> {
-        let n = concentration.len().min(depth.len());
         let mut result = SettlingResult {
             iterations: 0,
             converged: false,
@@ -111,78 +185,21 @@ impl<B: Backend> SettlingSolver<B> {
         }
 
         self.backend.copy(concentration, &mut self.c_old);
-        
-        // 计算隐式系数
-        let n_coeff = depth.len().min(self.coeff.len());
-        if let (Some(depth_slice), Some(coeff_slice)) = (
-            depth.try_as_slice(),
-            self.coeff.try_as_slice_mut(),
-        ) {
-            for i in 0..n_coeff {
-                let h = Float::max(depth_slice[i], self.config.min_depth);
-                coeff_slice[i] = B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
-            }
-        } else {
-            let depth_host = depth.copy_to_vec();
-            let mut coeff_host = self.coeff.copy_to_vec();
-            for i in 0..n_coeff {
-                let h = Float::max(depth_host[i], self.config.min_depth);
-                coeff_host[i] = B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
-            }
-            self.coeff.copy_from_slice(&coeff_host[..n_coeff]);
-        }
+        self.compute_implicit_coefficients(depth, dt);
 
-        for iter in 0..self.config.max_iterations {
-            result.iterations = iter + 1;
-            let (mut max_rel, mut settled) = (B::Scalar::ZERO, B::Scalar::ZERO);
-
-            if let (Some(c_old), Some(coeff), Some(c_new), Some(h_slice)) = (
-                self.c_old.try_as_slice(),
-                self.coeff.try_as_slice(),
-                concentration.try_as_slice_mut(),
-                depth.try_as_slice(),
-            ) {
-                for i in 0..n {
-                    let h = Float::max(h_slice[i], self.config.min_depth);
-                    let updated = Float::max(c_old[i] * coeff[i], B::Scalar::ZERO);
-                    let denom = Float::max(
-                        Float::abs(c_new[i]),
-                        self.backend.scalar_from_f64(1e-12),
-                    );
-                    let rel = Float::abs(updated - c_new[i]) / denom;
-                    max_rel = Float::max(max_rel, rel);
-                    settled = settled + Float::max(c_old[i] - updated, B::Scalar::ZERO) * h;
-                    c_new[i] = updated;
-                }
-            } else {
-                let c_old_host = self.c_old.copy_to_vec();
-                let coeff_host = self.coeff.copy_to_vec();
-                let mut c_new_host = concentration.copy_to_vec();
-                let depth_host = depth.copy_to_vec();
-                for i in 0..n {
-                    let h = Float::max(depth_host[i], self.config.min_depth);
-                    let updated = Float::max(c_old_host[i] * coeff_host[i], B::Scalar::ZERO);
-                    let denom = Float::max(
-                        Float::abs(c_new_host[i]),
-                        self.backend.scalar_from_f64(1e-12),
-                    );
-                    let rel = Float::abs(updated - c_new_host[i]) / denom;
-                    max_rel = Float::max(max_rel, rel);
-                    settled = settled + Float::max(c_old_host[i] - updated, B::Scalar::ZERO) * h;
-                    c_new_host[i] = updated;
-                }
-                concentration.copy_from_slice(&c_new_host);
-            }
-
+        if self.config.implicit {
+            let (max_rel, settled) = self.apply_implicit_update(concentration, depth);
+            result.iterations = 1;
+            result.converged = true;
             result.max_relative_change = max_rel;
             result.total_settled_mass = settled;
-            if max_rel < self.config.tolerance {
-                result.converged = true;
-                break;
-            }
-
-            self.backend.copy(concentration, &mut self.c_old);
+            return result;
         }
+
+        self.apply_explicit(concentration, depth, dt);
+        result.iterations = 1;
+        result.converged = true;
+        result.total_settled_mass = B::Scalar::ZERO;
 
         result
     }

@@ -361,8 +361,7 @@ impl<B: Backend> TracerTransportSolver<B> {
 
         let n_cells = field.len();
         let mut rhs_accum = vec![B::Scalar::ZERO; n_cells];
-        {
-            let concentration = field.concentration_slice()?;
+        let concentration = field.concentration_slice()?;
         for (i, face) in flow_data.iter().enumerate() {
             if face.h_face <= self.config.h_min || !face.h_face.is_finite() {
                 self.face_fluxes[i] = TracerFaceFlux::default();
@@ -421,7 +420,6 @@ impl<B: Backend> TracerTransportSolver<B> {
                     rhs_accum[right_cell] = rhs_accum[right_cell] + flux / vol_right;
                 }
             }
-        }
         }
         let rhs = field.rhs_slice_mut()?;
         for i in 0..n_cells {

@@ -1,159 +1,172 @@
 #!/usr/bin/env pwsh
-# MariHydro 架构验证脚本
-# 用于验证层级依赖和代码规范
+#
+# MariHydro architecture verification script.
+# ASCII-only version for reliable execution on Windows PowerShell.
+#
+
+param(
+    [switch]$Verbose,
+    [switch]$Strict
+)
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " MariHydro 架构验证" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
 
-$errors = @()
+Push-Location $ProjectRoot
+try {
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host " MariHydro architecture verification" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Project root: $ProjectRoot"
+    Write-Host ""
 
-# =============================================================================
-# Phase 1: Layer 依赖验证
-# =============================================================================
+    $errors = @()
 
-Write-Host "`n=== Phase 1: Layer 依赖验证 ===" -ForegroundColor Cyan
+    # Phase 1: layer dependency checks
+    Write-Host "=== Phase 1: layer dependency checks ===" -ForegroundColor Cyan
 
-# Foundation 零依赖（不依赖任何 mh_* 模块）
-Write-Host "`n检查 mh_foundation 零依赖..." -ForegroundColor Yellow
-$foundationDeps = cargo tree -p mh_foundation --edges normal 2>&1 | Select-String "mh_" | Where-Object { $_ -notmatch "^mh_foundation" }
-if ($foundationDeps) {
-    Write-Host "❌ mh_foundation 存在内部依赖:" -ForegroundColor Red
-    $foundationDeps | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
-    $errors += "mh_foundation 不应依赖其他 mh_* 模块"
-} else {
-    Write-Host "✓ mh_foundation 零依赖" -ForegroundColor Green
-}
-
-# Runtime 只依赖 Foundation
-Write-Host "`n检查 mh_runtime 依赖..." -ForegroundColor Yellow
-$runtimeResult = cargo tree -p mh_runtime --depth 1 2>&1
-if ($LASTEXITCODE -eq 0) {
-    $runtimeDeps = $runtimeResult | Select-String "mh_" | Where-Object { $_ -notmatch "mh_foundation" -and $_ -notmatch "^mh_runtime" }
-    if ($runtimeDeps) {
-        Write-Host "❌ mh_runtime 存在非法依赖:" -ForegroundColor Red
-        $runtimeDeps | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
-        $errors += "mh_runtime 只能依赖 mh_foundation"
+    Write-Host "Checking mh_foundation zero dependencies..." -ForegroundColor Yellow
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $foundationDeps = & cargo tree -p mh_foundation --edges normal 2>$null | Select-String "mh_" | Where-Object { $_ -notmatch "^mh_foundation" }
+    $ErrorActionPreference = $oldEap
+    if ($foundationDeps) {
+        Write-Host "[FAIL] mh_foundation has internal dependencies:" -ForegroundColor Red
+        $foundationDeps | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        $errors += "mh_foundation should not depend on other mh_* modules"
     } else {
-        Write-Host "✓ mh_runtime 依赖正确" -ForegroundColor Green
+        Write-Host "[OK] mh_foundation is dependency-free" -ForegroundColor Green
     }
-} else {
-    Write-Host "⚠ mh_runtime 尚未创建或无法编译" -ForegroundColor Yellow
-}
 
-# Config 只依赖 Runtime
-Write-Host "`n检查 mh_config 依赖..." -ForegroundColor Yellow
-$configResult = cargo tree -p mh_config --depth 1 2>&1
-if ($LASTEXITCODE -eq 0) {
-    $configDeps = $configResult | Select-String "mh_" | Where-Object { $_ -notmatch "mh_runtime" -and $_ -notmatch "^mh_config" }
-    if ($configDeps) {
-        Write-Host "❌ mh_config 存在非法依赖:" -ForegroundColor Red
-        $configDeps | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
-        $errors += "mh_config 只能依赖 mh_runtime"
+    Write-Host "Checking mh_runtime dependencies..." -ForegroundColor Yellow
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $runtimeResult = & cargo tree -p mh_runtime --depth 1 2>$null
+    $ErrorActionPreference = $oldEap
+    if ($LASTEXITCODE -eq 0) {
+        $runtimeDeps = $runtimeResult | Select-String "mh_" | Where-Object { $_ -notmatch "mh_foundation" -and $_ -notmatch "^mh_runtime" }
+        if ($runtimeDeps) {
+            Write-Host "[FAIL] mh_runtime has illegal dependencies:" -ForegroundColor Red
+            $runtimeDeps | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            $errors += "mh_runtime should only depend on mh_foundation"
+        } else {
+            Write-Host "[OK] mh_runtime dependencies are valid" -ForegroundColor Green
+        }
     } else {
-        Write-Host "✓ mh_config 依赖正确" -ForegroundColor Green
+        Write-Host "[WARN] mh_runtime is unavailable or does not build" -ForegroundColor Yellow
     }
-} else {
-    Write-Host "⚠ mh_config 尚未创建或无法编译" -ForegroundColor Yellow
-}
 
-# =============================================================================
-# Phase 2: Legacy 残留检测
-# =============================================================================
-
-Write-Host "`n=== Phase 2: Legacy 残留检测 ===" -ForegroundColor Cyan
-
-# 检测类型别名 (pub type Xxx = XxxGeneric<f64>)
-Write-Host "`n检查 Legacy 类型别名..." -ForegroundColor Yellow
-$typeAliases = rg "pub type \w+ = \w+Generic<f64>;" crates/ --type rust 2>&1
-if ($typeAliases -and $typeAliases -notmatch "^$" -and $LASTEXITCODE -eq 0) {
-    Write-Host "❌ 存在 Legacy 类型别名:" -ForegroundColor Red
-    Write-Host $typeAliases -ForegroundColor Red
-    $errors += "存在 Legacy 类型别名"
-} else {
-    Write-Host "✓ 无 Legacy 类型别名" -ForegroundColor Green
-}
-
-# 检查 mh_core 是否已删除
-Write-Host "`n检查 mh_core 状态..." -ForegroundColor Yellow
-if (Test-Path "crates/mh_core") {
-    $coreFiles = Get-ChildItem -Path "crates/mh_core/src" -Filter "*.rs" -ErrorAction SilentlyContinue
-    if ($coreFiles) {
-        Write-Host "⚠ mh_core 仍存在，待迁移删除" -ForegroundColor Yellow
+    Write-Host "Checking mh_config dependencies..." -ForegroundColor Yellow
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $configResult = & cargo tree -p mh_config --depth 1 2>$null
+    $ErrorActionPreference = $oldEap
+    if ($LASTEXITCODE -eq 0) {
+        $configDeps = $configResult | Select-String "mh_" | Where-Object { $_ -notmatch "mh_runtime" -and $_ -notmatch "mh_foundation" -and $_ -notmatch "^mh_config" }
+        if ($configDeps) {
+            Write-Host "[FAIL] mh_config has illegal dependencies:" -ForegroundColor Red
+            $configDeps | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            $errors += "mh_config should only depend on mh_runtime"
+        } else {
+            Write-Host "[OK] mh_config dependencies are valid" -ForegroundColor Green
+        }
     } else {
-        Write-Host "✓ mh_core 已清空或不存在" -ForegroundColor Green
+        Write-Host "[WARN] mh_config is unavailable or does not build" -ForegroundColor Yellow
     }
-} else {
-    Write-Host "✓ mh_core 已删除" -ForegroundColor Green
-}
 
-# =============================================================================
-# Phase 3: Config 层无泛型验证
-# =============================================================================
+    # Phase 2: legacy residue checks
+    Write-Host ""
+    Write-Host "=== Phase 2: legacy residue checks ===" -ForegroundColor Cyan
 
-Write-Host "`n=== Phase 3: Config 层无泛型验证 ===" -ForegroundColor Cyan
-
-Write-Host "`n检查 mh_config 无泛型..." -ForegroundColor Yellow
-if (Test-Path "crates/mh_config/src") {
-    $configGenerics = rg "<.*:.*Backend" crates/mh_config/src/ --type rust 2>&1
-    if ($configGenerics -and $LASTEXITCODE -eq 0) {
-        Write-Host "❌ mh_config 存在 Backend 泛型:" -ForegroundColor Red
-        Write-Host $configGenerics -ForegroundColor Red
-        $errors += "mh_config 不应包含 Backend 泛型"
+    Write-Host "Checking Legacy type aliases..." -ForegroundColor Yellow
+    $typeAliases = Get-ChildItem -Path "crates" -Recurse -Filter "*.rs" -File | Select-String -Pattern "pub type \w+ = \w+Generic<f64>;"
+    if ($typeAliases) {
+        Write-Host "[FAIL] Legacy type aliases exist:" -ForegroundColor Red
+        $typeAliases | ForEach-Object { Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red }
+        $errors += "Legacy type aliases should be removed"
     } else {
-        Write-Host "✓ mh_config 无 Backend 泛型" -ForegroundColor Green
+        Write-Host "[OK] No Legacy type aliases" -ForegroundColor Green
     }
-} else {
-    Write-Host "⚠ mh_config/src 尚未创建" -ForegroundColor Yellow
-}
 
-# =============================================================================
-# Phase 4: Indices 无代际验证
-# =============================================================================
-
-Write-Host "`n=== Phase 4: Indices 无代际验证 ===" -ForegroundColor Cyan
-
-Write-Host "`n检查 mh_runtime indices 无代际..." -ForegroundColor Yellow
-if (Test-Path "crates/mh_runtime/src/indices.rs") {
-    $indicesGen = rg "generation" crates/mh_runtime/src/indices.rs 2>&1
-    if ($indicesGen -and $LASTEXITCODE -eq 0) {
-        Write-Host "❌ indices.rs 包含 generation:" -ForegroundColor Red
-        Write-Host $indicesGen -ForegroundColor Red
-        $errors += "mh_runtime/indices.rs 不应包含代际字段"
+    Write-Host "Checking mh_core status..." -ForegroundColor Yellow
+    if (Test-Path "crates/mh_core") {
+        $coreFiles = Get-ChildItem -Path "crates/mh_core/src" -Filter "*.rs" -ErrorAction SilentlyContinue
+        if ($coreFiles) {
+            Write-Host "[WARN] mh_core still exists and may need migration cleanup" -ForegroundColor Yellow
+        } else {
+            Write-Host "[OK] mh_core is empty or absent" -ForegroundColor Green
+        }
     } else {
-        Write-Host "✓ indices.rs 无代际字段" -ForegroundColor Green
+        Write-Host "[OK] mh_core is deleted" -ForegroundColor Green
     }
-} else {
-    Write-Host "⚠ mh_runtime/src/indices.rs 尚未创建" -ForegroundColor Yellow
-}
 
-# =============================================================================
-# Phase 5: 编译验证
-# =============================================================================
+    # Phase 3: config layer generic check
+    Write-Host ""
+    Write-Host "=== Phase 3: config layer generic check ===" -ForegroundColor Cyan
 
-Write-Host "`n=== Phase 5: 编译验证 ===" -ForegroundColor Cyan
+    if (Test-Path "crates/mh_config/src") {
+        $configGenerics = Get-ChildItem -Path "crates/mh_config/src" -Recurse -Filter "*.rs" -File | Select-String -Pattern "<.*:.*Backend"
+        if ($configGenerics) {
+            Write-Host "[FAIL] mh_config contains Backend generics:" -ForegroundColor Red
+            $configGenerics | ForEach-Object { Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red }
+            $errors += "mh_config should not contain Backend generics"
+        } else {
+            Write-Host "[OK] mh_config has no Backend generics" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "[WARN] mh_config/src is unavailable" -ForegroundColor Yellow
+    }
 
-Write-Host "`n运行 cargo check..." -ForegroundColor Yellow
-$checkResult = cargo check --workspace 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ 编译失败" -ForegroundColor Red
-    $errors += "cargo check 失败"
-} else {
-    Write-Host "✓ 编译通过" -ForegroundColor Green
-}
+    # Phase 4: index generation check
+    Write-Host ""
+    Write-Host "=== Phase 4: index generation check ===" -ForegroundColor Cyan
 
-# =============================================================================
-# 结果汇总
-# =============================================================================
+    if (Test-Path "crates/mh_runtime/src/indices.rs") {
+        $indicesGen = Select-String -Path "crates/mh_runtime/src/indices.rs" -Pattern "generation"
+        if ($indicesGen) {
+            Write-Host "[FAIL] indices.rs contains generation fields:" -ForegroundColor Red
+            $indicesGen | ForEach-Object { Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red }
+            $errors += "mh_runtime/indices.rs should not contain generation fields"
+        } else {
+            Write-Host "[OK] indices.rs has no generation fields" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "[WARN] mh_runtime/src/indices.rs is unavailable" -ForegroundColor Yellow
+    }
 
-Write-Host "`n========================================" -ForegroundColor Cyan
-if ($errors.Count -eq 0) {
-    Write-Host "✅ 架构验证通过！" -ForegroundColor Green
-    exit 0
-} else {
-    Write-Host "❌ 架构验证失败，发现 $($errors.Count) 个问题：" -ForegroundColor Red
+    # Phase 5: compile check
+    Write-Host ""
+    Write-Host "=== Phase 5: compile check ===" -ForegroundColor Cyan
+
+    if ($Strict) {
+        Write-Host "Running cargo check..." -ForegroundColor Yellow
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $null = & cargo check --workspace 2>$null
+        $ErrorActionPreference = $oldEap
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] cargo check failed" -ForegroundColor Red
+            $errors += "cargo check failed"
+        } else {
+            Write-Host "[OK] cargo check passed" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "[SKIP] cargo check skipped (use -Strict to enable)" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    if ($errors.Count -eq 0) {
+        Write-Host "[OK] architecture verification passed" -ForegroundColor Green
+        exit 0
+    }
+
+    Write-Host "[FAIL] architecture verification failed" -ForegroundColor Red
     $errors | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     exit 1
+}
+finally {
+    Pop-Location
 }

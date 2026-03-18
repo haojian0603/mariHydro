@@ -1,47 +1,54 @@
-// crates/mh_agent/src/assimilation.rs
-
-use crate::{AiError, AIAgent, Assimilable, PhysicsSnapshot};
+use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use mh_runtime::{Backend, CellIndex, RuntimeScalar, Vector2D};
+use bytemuck::Pod;
+use mh_runtime::prelude::{Float, FromPrimitive};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Nudging同化配置
+/// Nudging 鍚屽寲閰嶇疆
 #[derive(Debug, Clone)]
-pub struct NudgingConfig {
-    /// 同化率 (0.0 - 1.0)
-    pub rate: f64,
-    /// 最大修正量限制
-    pub max_correction: f64,
-    /// 空间平滑半径
-    pub smoothing_radius: Option<f64>,
-    /// 时间衰减系数
-    pub temporal_decay: f64,
+pub struct NudgingConfig<B: Backend = DefaultBackend> {
+    /// 同化率
+    pub rate: B::Scalar,
+    /// 鏈€澶т慨姝ｉ噺
+    pub max_correction: B::Scalar,
+    /// 绌洪棿骞虫粦鍗婂緞
+    pub smoothing_radius: Option<B::Scalar>,
+    /// 鏃堕棿琛板噺绯绘暟
+    pub temporal_decay: B::Scalar,
 }
 
-impl Default for NudgingConfig {
+impl<B: Backend> Default for NudgingConfig<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     fn default() -> Self {
         Self {
-            rate: 0.2,
-            max_correction: 0.2,
+            rate: B::Scalar::from_f64(0.2).unwrap_or(B::Scalar::ZERO),
+            max_correction: B::Scalar::from_f64(0.2).unwrap_or(B::Scalar::ZERO),
             smoothing_radius: None,
-            temporal_decay: 0.0,
+            temporal_decay: B::Scalar::ZERO,
         }
     }
 }
 
-/// 观测数据结构
+/// 瑙傛祴鏁版嵁
 #[derive(Debug, Clone)]
-pub struct Observation {
+pub struct Observation<B: Backend = DefaultBackend> {
     /// 观测值
-    pub values: Vec<f64>,
-    /// 观测位置索引
-    pub cell_indices: Vec<usize>,
+    pub values: Vec<B::Scalar>,
+    /// 瑙傛祴鍗曞厓绱㈠紩
+    pub cell_indices: Vec<CellIndex>,
     /// 观测不确定性
-    pub uncertainty: Vec<f64>,
-    /// 观测时间
-    pub time: f64,
+    pub uncertainty: Vec<B::Scalar>,
+    /// 瑙傛祴鏃堕棿
+    pub time: B::Scalar,
 }
 
-impl Observation {
+impl<B: Backend> Observation<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -51,15 +58,15 @@ impl Observation {
             || self.values.len() != self.uncertainty.len()
         {
             return Err(AiError::InvalidObservation(
-                "观测数据长度不一致".to_string(),
+                "observation data length mismatch".to_string(),
             ));
         }
         if !self.time.is_finite() {
-            return Err(AiError::InvalidObservation("观测时间非有限值".into()));
+            return Err(AiError::InvalidObservation("observation time is not finite".into()));
         }
         for (&v, &u) in self.values.iter().zip(self.uncertainty.iter()) {
-            if !v.is_finite() || !u.is_finite() || u < 0.0 {
-                return Err(AiError::InvalidObservation("观测值/不确定度非法".into()));
+            if !v.is_finite() || !u.is_finite() || u < B::Scalar::ZERO {
+                return Err(AiError::InvalidObservation("observation value or uncertainty is invalid".into()));
             }
         }
         Ok(())
@@ -67,10 +74,12 @@ impl Observation {
 
     fn validate_with_bounds(&self, n_cells: usize) -> Result<(), AiError> {
         self.validate()?;
-        for &idx in &self.cell_indices {
-            if idx >= n_cells {
+        for idx in &self.cell_indices {
+            if idx.get() >= n_cells {
                 return Err(AiError::InvalidObservation(format!(
-                    "观测索引超出范围: {idx} >= {n_cells}"
+                    "瑙傛祴绱㈠紩瓒呭嚭鑼冨洿: {} >= {}",
+                    idx.get(),
+                    n_cells
                 )));
             }
         }
@@ -78,75 +87,85 @@ impl Observation {
     }
 }
 
-struct NudgingState {
-    last_assimilation_time: f64,
-    cumulative_correction: f64,
-    pending_observation: Option<Observation>,
-    cell_centers: Option<Vec<[f64; 2]>>,
-    last_snapshot_time: f64,
+#[derive(Clone)]
+struct NudgingState<B: Backend> {
+    last_assimilation_time: B::Scalar,
+    cumulative_correction: B::Scalar,
+    pending_observation: Option<Observation<B>>,
+    cell_centers: Option<Vec<B::Vector2D>>,
+    last_snapshot_time: B::Scalar,
     neighbor_list: Option<Vec<Vec<usize>>>,
-    neighbor_radius: Option<f64>,
+    neighbor_radius: Option<B::Scalar>,
 }
 
-/// Nudging同化器
-pub struct NudgingAssimilator {
-    config: NudgingConfig,
-    state: Mutex<NudgingState>,
+/// Nudging 同化器
+pub struct NudgingAssimilator<B: Backend = DefaultBackend> {
+    config: NudgingConfig<B>,
+    state: Mutex<NudgingState<B>>,
 }
 
-impl NudgingAssimilator {
-    pub fn new(config: NudgingConfig) -> Self {
+impl<B: Backend> NudgingAssimilator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
+    pub fn new(config: NudgingConfig<B>) -> Self {
         Self {
             config,
             state: Mutex::new(NudgingState {
-                last_assimilation_time: 0.0,
-                cumulative_correction: 0.0,
+                last_assimilation_time: B::Scalar::ZERO,
+                cumulative_correction: B::Scalar::ZERO,
                 pending_observation: None,
                 cell_centers: None,
-                last_snapshot_time: 0.0,
+                last_snapshot_time: B::Scalar::ZERO,
                 neighbor_list: None,
                 neighbor_radius: None,
             }),
         }
     }
 
-    /// 设置当前可用的观测
-    pub fn set_observation(&mut self, observation: Observation) -> Result<(), AiError> {
+    /// 璁剧疆瑙傛祴
+    pub fn set_observation(&mut self, observation: Observation<B>) -> Result<(), AiError> {
         observation.validate()?;
         let mut state = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("获取同化状态锁失败".into()))?;
+            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
         state.pending_observation = Some(observation);
         Ok(())
     }
 
-    /// 执行Nudging同化
+    /// 鎵ц鍚屽寲
     pub fn assimilate(
         &mut self,
-        state: &mut dyn Assimilable,
-        observation: &Observation,
-        current_time: f64,
-    ) -> Result<AssimilationResult, AiError> {
+        state: &mut dyn Assimilable<B>,
+        observation: &Observation<B>,
+        current_time: B::Scalar,
+    ) -> Result<AssimilationResult<B>, AiError> {
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("获取同化状态锁失败".into()))?;
+            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
         self.assimilate_internal(&mut guard, state, observation, current_time)
     }
 
-    /// 计算单点修正量
-    fn compute_correction(&self, simulated: f64, observed: f64, uncertainty: f64) -> f64 {
+    /// 璁＄畻鍗曠偣淇
+    fn compute_correction(
+        &self,
+        simulated: B::Scalar,
+        observed: B::Scalar,
+        uncertainty: B::Scalar,
+    ) -> B::Scalar {
         let mismatch = observed - simulated;
-        let weight = 1.0 / (1.0 + uncertainty.abs());
+        let weight = B::Scalar::ONE / (B::Scalar::ONE + uncertainty.abs());
         let raw = mismatch * self.config.rate * weight;
-        raw.clamp(-self.config.max_correction, self.config.max_correction)
+        raw.clamp_value(-self.config.max_correction, self.config.max_correction)
     }
 
-    /// 应用空间平滑
-    fn apply_smoothing(&self, corrections: &mut [f64], cell_centers: &[[f64; 2]]) {
+    /// 绌洪棿骞虫粦
+    fn apply_smoothing(&self, corrections: &mut [B::Scalar], cell_centers: &[B::Vector2D]) {
         let radius = match self.config.smoothing_radius {
-            Some(r) if r > 0.0 => r,
+            Some(r) if r > B::Scalar::ZERO => r,
             _ => return,
         };
         let n = corrections.len();
@@ -154,36 +173,35 @@ impl NudgingAssimilator {
             return;
         }
 
-        let mut smoothed = vec![0.0; n];
+        let mut smoothed = vec![B::Scalar::ZERO; n];
         let radius_sq = radius * radius;
+        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
 
         for i in 0..n {
-            let mut weighted_sum = 0.0;
-            let mut weight_total = 0.0;
+            let mut weighted_sum = B::Scalar::ZERO;
+            let mut weight_total = B::Scalar::ZERO;
             for j in 0..n {
-                let dx = cell_centers[i][0] - cell_centers[j][0];
-                let dy = cell_centers[i][1] - cell_centers[j][1];
+                let dx = cell_centers[i].x() - cell_centers[j].x();
+                let dy = cell_centers[i].y() - cell_centers[j].y();
                 let dist_sq = dx * dx + dy * dy;
                 if dist_sq <= radius_sq {
-                    let w = 1.0 / (dist_sq.sqrt() + 1e-6);
+                    let w = B::Scalar::ONE / (dist_sq.safe_sqrt() + tiny);
                     weighted_sum += w * corrections[j];
                     weight_total += w;
                 }
             }
-            if weight_total > 0.0 {
+            if weight_total > B::Scalar::ZERO {
                 smoothed[i] = weighted_sum / weight_total;
             }
         }
 
-        for (dst, src) in corrections.iter_mut().zip(smoothed.iter()) {
-            *dst = *src;
-        }
+        corrections.copy_from_slice(&smoothed);
     }
 
     fn apply_smoothing_with_neighbors(
         &self,
-        corrections: &mut [f64],
-        cell_centers: &[[f64; 2]],
+        corrections: &mut [B::Scalar],
+        cell_centers: &[B::Vector2D],
         neighbors: &[Vec<usize>],
     ) {
         let n = corrections.len();
@@ -191,18 +209,19 @@ impl NudgingAssimilator {
             return;
         }
 
-        let mut smoothed = vec![0.0; n];
+        let mut smoothed = vec![B::Scalar::ZERO; n];
+        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         for (i, nbrs) in neighbors.iter().enumerate() {
-            let mut weighted_sum = 0.0;
-            let mut weight_total = 0.0;
+            let mut weighted_sum = B::Scalar::ZERO;
+            let mut weight_total = B::Scalar::ZERO;
             for &j in nbrs {
-                let dx = cell_centers[i][0] - cell_centers[j][0];
-                let dy = cell_centers[i][1] - cell_centers[j][1];
-                let w = 1.0 / (dx.hypot(dy) + 1e-6);
+                let dx = cell_centers[i].x() - cell_centers[j].x();
+                let dy = cell_centers[i].y() - cell_centers[j].y();
+                let w = B::Scalar::ONE / (dx.hypot(dy) + tiny);
                 weighted_sum += w * corrections[j];
                 weight_total += w;
             }
-            if weight_total > 0.0 {
+            if weight_total > B::Scalar::ZERO {
                 smoothed[i] = weighted_sum / weight_total;
             }
         }
@@ -211,34 +230,38 @@ impl NudgingAssimilator {
     }
 }
 
-fn build_neighbors(centers: &[[f64; 2]], radius: f64) -> Vec<Vec<usize>> {
+fn build_neighbors<B: Backend>(centers: &[B::Vector2D], radius: B::Scalar) -> Vec<Vec<usize>>
+where
+    B::Scalar: RuntimeScalar,
+{
     let n = centers.len();
-    if n == 0 || radius <= 0.0 {
+    if n == 0 || radius <= B::Scalar::ZERO {
         return vec![Vec::new(); n];
     }
 
     let r2 = radius * radius;
-    let cell_size = radius;
-
+    let cell_size = radius.max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
+    let cell_size_f64 = cell_size.to_f64_lossy();
     let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+
     for (i, c) in centers.iter().enumerate() {
-        let gx = (c[0] / cell_size).floor() as i32;
-        let gy = (c[1] / cell_size).floor() as i32;
+        let gx = (c.x().to_f64_lossy() / cell_size_f64).floor() as i32;
+        let gy = (c.y().to_f64_lossy() / cell_size_f64).floor() as i32;
         grid.entry((gx, gy)).or_default().push(i);
     }
 
     let mut neighbors = vec![Vec::new(); n];
     for (i, c) in centers.iter().enumerate() {
-        let gx = (c[0] / cell_size).floor() as i32;
-        let gy = (c[1] / cell_size).floor() as i32;
+        let gx = (c.x().to_f64_lossy() / cell_size_f64).floor() as i32;
+        let gy = (c.y().to_f64_lossy() / cell_size_f64).floor() as i32;
 
         for dx in -1..=1 {
             for dy in -1..=1 {
                 if let Some(bucket) = grid.get(&(gx + dx, gy + dy)) {
                     for &j in bucket {
-                        let dx = c[0] - centers[j][0];
-                        let dy = c[1] - centers[j][1];
-                        if dx * dx + dy * dy <= r2 {
+                        let ddx = c.x() - centers[j].x();
+                        let ddy = c.y() - centers[j].y();
+                        if ddx * ddx + ddy * ddy <= r2 {
                             neighbors[i].push(j);
                         }
                     }
@@ -250,105 +273,114 @@ fn build_neighbors(centers: &[[f64; 2]], radius: f64) -> Vec<Vec<usize>> {
     neighbors
 }
 
-/// 同化结果
+/// 鍚屽寲缁撴灉
 #[derive(Debug, Clone)]
-pub struct AssimilationResult {
+pub struct AssimilationResult<B: Backend = DefaultBackend> {
     pub cells_modified: usize,
-    pub total_correction: f64,
-    pub max_correction: f64,
-    pub conservation_error: f64,
+    pub total_correction: B::Scalar,
+    pub max_correction: B::Scalar,
+    pub conservation_error: B::Scalar,
 }
 
-impl AIAgent for NudgingAssimilator {
+impl<B: Backend> AIAgent<B> for NudgingAssimilator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
     fn name(&self) -> &'static str {
         "Nudging-Assimilator"
     }
 
-    fn update(&mut self, snapshot: &PhysicsSnapshot) -> Result<(), AiError> {
+    fn update(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<(), AiError> {
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("获取同化状态锁失败".into()))?;
+            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
         guard.last_snapshot_time = snapshot.time;
-        guard.cell_centers = Some(snapshot.cell_centers.clone());
+        guard.cell_centers = Some(snapshot.cell_centers.to_vec());
         if let Some(radius) = self.config.smoothing_radius {
             let rebuild = guard.neighbor_list.is_none()
-                || guard.neighbor_radius.map_or(true, |r| (r - radius).abs() > f64::EPSILON)
+                || guard
+                    .neighbor_radius
+                    .map_or(true, |r| (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON))
                 || guard
                     .cell_centers
                     .as_ref()
                     .map(|c| c.len())
                     != guard.neighbor_list.as_ref().map(|n| n.len());
             if rebuild {
-                guard.neighbor_list = Some(build_neighbors(&snapshot.cell_centers, radius));
+                guard.neighbor_list = Some(build_neighbors::<B>(&snapshot.cell_centers, radius));
                 guard.neighbor_radius = Some(radius);
             }
         }
         Ok(())
     }
 
-    fn apply(&self, state: &mut dyn Assimilable) -> Result<(), AiError> {
+    fn apply(&self, state: &mut dyn Assimilable<B>) -> Result<(), AiError> {
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("获取同化状态锁失败".into()))?;
-
+            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
         let observation = guard
             .pending_observation
             .as_ref()
-            .ok_or_else(|| AiError::InvalidObservation("缺少观测数据".into()))?
+            .ok_or_else(|| AiError::InvalidObservation("缂哄皯瑙傛祴鏁版嵁".into()))?
             .clone();
-
         let current_time = if observation.time.is_finite() {
             observation.time
         } else {
             guard.last_snapshot_time
         };
-
         self.assimilate_internal(&mut guard, state, &observation, current_time)
+            .map(|_| ())
     }
 }
 
-impl NudgingAssimilator {
+impl<B: Backend> NudgingAssimilator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
     fn assimilate_internal(
         &self,
-        internal: &mut NudgingState,
-        state: &mut dyn Assimilable,
-        observation: &Observation,
-        current_time: f64,
-    ) -> Result<AssimilationResult, AiError> {
+        internal: &mut NudgingState<B>,
+        state: &mut dyn Assimilable<B>,
+        observation: &Observation<B>,
+        current_time: B::Scalar,
+    ) -> Result<AssimilationResult<B>, AiError> {
         observation.validate_with_bounds(state.n_cells())?;
 
-        let mut depth = state.get_depth_mut();
-        let n_cells = depth.len();
+        let before = state.total_water_volume();
+        let depth_snapshot = state.get_depth().to_vec();
+        let n_cells = state.get_depth().len();
         if n_cells == 0 {
             return Err(AiError::StateAccessError("状态为空".into()));
         }
 
-        let dt = (current_time - internal.last_assimilation_time).max(0.0);
-        let temporal_factor = if self.config.temporal_decay > 0.0 {
+        let dt = (current_time - internal.last_assimilation_time).max(B::Scalar::ZERO);
+        let temporal_factor = if self.config.temporal_decay > B::Scalar::ZERO {
             (-self.config.temporal_decay * dt).exp()
         } else {
-            1.0
+            B::Scalar::ONE
         };
 
-        let mut corrections = vec![0.0f64; n_cells];
-        let mut max_corr = 0.0;
-        let mut total_corr = 0.0;
+        let mut corrections = vec![B::Scalar::ZERO; n_cells];
+        let mut max_corr = B::Scalar::ZERO;
+        let mut total_corr = B::Scalar::ZERO;
         let mut cells_modified = 0usize;
 
-        for ((&idx, &obs_val), &uncertainty) in observation
+        for ((idx, &obs_val), &uncertainty) in observation
             .cell_indices
             .iter()
             .zip(observation.values.iter())
             .zip(observation.uncertainty.iter())
         {
-            let simulated = depth[idx];
-            let corr = self.compute_correction(simulated, obs_val, uncertainty)
-                * temporal_factor;
-            if corr.abs() > 0.0 {
-                corrections[idx] = corr;
-                max_corr = max_corr.max(corr.abs());
+            let i = idx.get();
+            let simulated = depth_snapshot[i];
+            let corr = self.compute_correction(simulated, obs_val, uncertainty) * temporal_factor;
+            if corr.abs() > B::Scalar::ZERO {
+                corrections[i] = corr;
+                max_corr = max_corr.max_value(corr.abs());
                 total_corr += corr;
                 cells_modified += 1;
             }
@@ -362,18 +394,18 @@ impl NudgingAssimilator {
             }
             max_corr = corrections
                 .iter()
-                .fold(0.0, |m, &c| if c.abs() > m { c.abs() } else { m });
-            total_corr = corrections.iter().sum();
+                .fold(B::Scalar::ZERO, |m, &c| if c.abs() > m { c.abs() } else { m });
+            total_corr = corrections.iter().copied().sum();
         }
 
-        let before = state.total_water_volume();
-
-        for (cell, corr) in corrections.iter().enumerate() {
-            if corr.abs() < f64::EPSILON {
-                continue;
+        {
+            let depth = state.get_depth_mut();
+            for (cell, corr) in corrections.iter().enumerate() {
+                if corr.abs() <= B::Scalar::EPSILON {
+                    continue;
+                }
+                depth[cell] = (depth[cell] + *corr).max(B::Scalar::ZERO);
             }
-            let new_h = (depth[cell] + *corr).max(0.0);
-            depth[cell] = new_h;
         }
 
         let after = state.total_water_volume();
@@ -391,3 +423,4 @@ impl NudgingAssimilator {
         })
     }
 }
+

@@ -280,7 +280,9 @@ impl<B: Backend> WaveBottomFriction<B> {
         amplitude: B::Scalar,
         _period: B::Scalar,
     ) -> B::Scalar {
-        let amplitude = amplitude.to_f64_lossy();
+        let a_min = scalar_const(backend, 1e-6);
+        let a = amplitude.abs().max(a_min);
+        let ks = scalar_const(backend, config.roughness_height.max(1e-6));
         match config.model {
             WaveBottomFrictionModel::Jonswap => {
                 // JONSWAP 经验公式
@@ -290,27 +292,30 @@ impl<B: Backend> WaveBottomFriction<B> {
             WaveBottomFrictionModel::Madsen => {
                 // Madsen (1988)
                 // fw = exp(-5.977 + 5.213(a/ks)^(-0.194))
-                let a = amplitude.max(1e-6);
-                let ks = config.roughness_height.max(1e-6);
                 let ratio = a / ks;
+                let switch = scalar_const(backend, 1.57);
                 
-                if ratio < 1.57 {
+                if ratio < switch {
                     scalar_const(backend, 0.3)  // 最大值
                 } else {
-                    scalar_const(backend, (-5.977 + 5.213 * ratio.powf(-0.194)).exp())
+                    let term = scalar_const(backend, -5.977)
+                        + scalar_const(backend, 5.213) * ratio.powf(scalar_const(backend, -0.194));
+                    term.exp()
                 }
             }
             WaveBottomFrictionModel::Nielsen => {
                 // Nielsen (1992)
                 // fw = exp(5.5(a/ks)^(-0.2) - 6.3)
-                let a = amplitude.max(1e-6);
-                let ks = config.roughness_height.max(1e-6);
                 let ratio = a / ks;
+                let switch = scalar_const(backend, 1.0);
                 
-                if ratio < 1.0 {
+                if ratio < switch {
                     scalar_const(backend, 0.3)
                 } else {
-                    scalar_const(backend, (5.5 * ratio.powf(-0.2) - 6.3).exp())
+                    let term = scalar_const(backend, 5.5)
+                        * ratio.powf(scalar_const(backend, -0.2))
+                        - scalar_const(backend, 6.3);
+                    term.exp()
                 }
             }
             WaveBottomFrictionModel::Constant => {
@@ -353,11 +358,16 @@ impl<B: Backend> WaveBottomFriction<B> {
         let one_point_two = scalar_const(backend, 1.2);
         let three_point_two = scalar_const(backend, 3.2);
         let eps = scalar_const(backend, 1e-14);
-        
+
+        if !tau_current.is_finite() || !tau_wave.is_finite() || !angle_between.is_finite() {
+            return B::Scalar::ZERO;
+        }
+
         // Soulsby 非线性公式
-        let ratio = tau_wave / (tau_current + tau_wave + eps);
+        let denom = (tau_current + tau_wave).abs().max(eps);
+        let ratio = (tau_wave / denom).clamp(B::Scalar::ZERO, one);
         let tau_mean = tau_current * (one + one_point_two * ratio.powf(three_point_two));
-        
+
         ((tau_mean + tau_wave * cos_phi).powi(2)
             + (tau_wave * angle_between.sin()).powi(2)).sqrt()
     }

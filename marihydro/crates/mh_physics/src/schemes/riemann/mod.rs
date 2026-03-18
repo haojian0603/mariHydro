@@ -77,6 +77,7 @@ pub use batch::{
 #[derive(Clone)]
 pub enum RiemannSolverAny<B: Backend> {
     Hllc(HllcSolver<B>),
+    Hlle(HlleSolver<B>),
     Roe(RoeSolver<B>),
     Rusanov(RusanovSolver<B>),
     Central(CentralSolver<B>),
@@ -89,6 +90,7 @@ impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
     fn name(&self) -> &'static str {
         match self {
             Self::Hllc(solver) => solver.name(),
+            Self::Hlle(solver) => solver.name(),
             Self::Roe(solver) => solver.name(),
             Self::Rusanov(solver) => solver.name(),
             Self::Central(solver) => solver.name(),
@@ -98,6 +100,7 @@ impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
     fn capabilities(&self) -> SolverCapabilities {
         match self {
             Self::Hllc(solver) => solver.capabilities(),
+            Self::Hlle(solver) => solver.capabilities(),
             Self::Roe(solver) => solver.capabilities(),
             Self::Rusanov(solver) => solver.capabilities(),
             Self::Central(solver) => solver.capabilities(),
@@ -114,6 +117,7 @@ impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
     ) -> Result<RiemannFlux<Self::Scalar>, RiemannError> {
         match self {
             Self::Hllc(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
+            Self::Hlle(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
             Self::Roe(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
             Self::Rusanov(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
             Self::Central(solver) => solver.solve(h_left, h_right, vel_left, vel_right, normal),
@@ -123,6 +127,7 @@ impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
     fn gravity(&self) -> Self::Scalar {
         match self {
             Self::Hllc(solver) => solver.gravity(),
+            Self::Hlle(solver) => solver.gravity(),
             Self::Roe(solver) => solver.gravity(),
             Self::Rusanov(solver) => solver.gravity(),
             Self::Central(solver) => solver.gravity(),
@@ -132,6 +137,7 @@ impl<B: Backend> RiemannSolver for RiemannSolverAny<B> {
     fn dry_threshold(&self) -> Self::Scalar {
         match self {
             Self::Hllc(solver) => solver.dry_threshold(),
+            Self::Hlle(solver) => solver.dry_threshold(),
             Self::Roe(solver) => solver.dry_threshold(),
             Self::Rusanov(solver) => solver.dry_threshold(),
             Self::Central(solver) => solver.dry_threshold(),

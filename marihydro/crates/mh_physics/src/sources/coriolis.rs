@@ -20,7 +20,7 @@
 //! d(hv)/dt = -f hu
 //! ```
 
-use super::traits::{SourceContribution, SourceContext, SourceTerm};
+use super::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::prelude::*;
 use std::f64::consts::PI;
 
@@ -85,24 +85,22 @@ impl Default for CoriolisConfig {
     }
 }
 
-impl SourceTerm for CoriolisConfig {
-    fn name(&self) -> &'static str {
-        "Coriolis"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for CoriolisConfig {
+    fn name(&self) -> &'static str { "Coriolis" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
         if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= 0.0 || ctx.is_dry(h) {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
         let hu = state.hu[cell];
@@ -110,12 +108,8 @@ impl SourceTerm for CoriolisConfig {
         let dt = ctx.dt;
 
         let (hu_new, hv_new) = if self.use_exact_rotation {
-            // 精确旋转
             let theta = self.f * dt;
             let (sin_t, cos_t) = if theta.abs() < 1e-3 {
-                // 🔥 增强小角度优化（6阶泰勒展开）
-                // sin(x) ≈ x - x³/6 + x⁵/120
-                // cos(x) ≈ 1 - x²/2 + x⁴/24
                 let t2 = theta * theta;
                 let t4 = t2 * t2;
                 let sin_t = theta * (1.0 - t2 / 6.0 + t4 / 120.0);
@@ -126,26 +120,41 @@ impl SourceTerm for CoriolisConfig {
             };
             (hu * cos_t + hv * sin_t, -hu * sin_t + hv * cos_t)
         } else {
-            // 线性近似
             let dhu = self.f * hv * dt;
             let dhv = -self.f * hu * dt;
             (hu + dhu, hv + dhv)
         };
 
-        // 返回变化率（源项形式）
-        SourceContribution::momentum(
-            (hu_new - hu) / dt,
-            (hv_new - hv) / dt,
-        )
+        SourceContributionGeneric::momentum((hu_new - hu) / dt, (hv_new - hv) / dt)
     }
 
-    fn is_explicit(&self) -> bool {
-        // 科氏力是显式的（不含耗散）
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_hu.len() < n {
+            rhs_hu.resize(n, 0.0);
+        }
+        if rhs_hv.len() < n {
+            rhs_hv.resize(n, 0.0);
+        }
+
+        for cell in 0..n {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
-
-/// 科氏力便捷构造器
 pub struct CoriolisSource;
 
 impl CoriolisSource {
@@ -171,9 +180,6 @@ impl CoriolisSource {
 // 泛型科氏力源项
 // =============================================================================
 
-use super::traits::{
-    SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
-};
 use mh_runtime::{Backend, RuntimeScalar};
 
 /// 泛型科氏力配置
@@ -315,7 +321,7 @@ impl_coriolis_generic!(f64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
@@ -331,33 +337,33 @@ mod tests {
 
     #[test]
     fn test_coriolis_creation() {
-        let config = CoriolisConfig::new(1e-4);
-        assert!(config.enabled);
-        assert_eq!(config.f, 1e-4);
-        assert!(config.use_exact_rotation);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        assert!(config.config.enabled);
+        assert_eq!(config.config.f, 1e-4);
+        assert!(config.config.use_exact_rotation);
     }
 
     #[test]
     fn test_coriolis_from_latitude() {
-        let equator = CoriolisConfig::from_latitude(0.0);
-        assert!(equator.f.abs() < 1e-10);
+        let equator = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 0.0);
+        assert!(equator.config.f.abs() < 1e-10);
 
-        let north_pole = CoriolisConfig::from_latitude(90.0);
-        assert!((north_pole.f - 2.0 * EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
+        let north_pole = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 90.0);
+        assert!((north_pole.config.f - 2.0 * EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
 
-        let north_30 = CoriolisConfig::from_latitude(30.0);
-        assert!((north_30.f - EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
+        let north_30 = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 30.0);
+        assert!((north_30.config.f - EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
     }
 
     #[test]
     fn test_coriolis_dry_cell() {
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         // 使用 1e-7 作为干单元（小于默认 h_dry = 1e-6）
         let state = create_test_state(10, 1e-7, 1.0, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         assert_eq!(contrib.s_h, 0.0);
         assert_eq!(contrib.s_hu, 0.0);
@@ -366,12 +372,12 @@ mod tests {
 
     #[test]
     fn test_coriolis_still_water() {
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 0.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         assert_eq!(contrib.s_h, 0.0);
         assert_eq!(contrib.s_hu, 0.0);
@@ -381,30 +387,30 @@ mod tests {
     #[test]
     fn test_coriolis_x_flow_exact() {
         // 仅 x 方向流动，科氏力应该产生 y 方向变化
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         assert_eq!(contrib.s_h, 0.0);
         // hu 和 hv 都应该变化（旋转效果）
-        assert!(contrib.is_valid());
+        assert!(contrib.s_h.is_finite() && contrib.s_hu.is_finite() && contrib.s_hv.is_finite());
     }
 
     #[test]
     fn test_coriolis_y_flow_exact() {
         // 仅 y 方向流动
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 0.0, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         assert_eq!(contrib.s_h, 0.0);
-        assert!(contrib.is_valid());
+        assert!(contrib.s_h.is_finite() && contrib.s_hu.is_finite() && contrib.s_hv.is_finite());
     }
 
     #[test]
@@ -412,15 +418,15 @@ mod tests {
         let f = 1e-4;
         let dt = 100.0; // 较大时间步以看出差异
 
-        let exact = CoriolisConfig::new(f);
-        let linear = CoriolisConfig::new(f).with_linear_approximation();
+        let exact = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(f));
+        let linear = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(f).with_linear_approximation());
 
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, dt, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, dt);
 
-        let contrib_exact = exact.compute_cell(&state, 0, &ctx);
-        let contrib_linear = linear.compute_cell(&state, 0, &ctx);
+        let contrib_exact = exact.compute_cell(0, &state, &ctx);
+        let contrib_linear = linear.compute_cell(0, &state, &ctx);
 
         // 两种方法应该给出不同结果（除了小时间步）
         assert!((contrib_exact.s_hu - contrib_linear.s_hu).abs() > 1e-10 ||
@@ -430,16 +436,16 @@ mod tests {
     #[test]
     fn test_coriolis_momentum_conservation() {
         // 精确旋转应该保持动量大小
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 1.0, 0.5);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 100.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 100.0);
 
         let hu = state.hu[0];
         let hv = state.hv[0];
         let initial_mag = (hu * hu + hv * hv).sqrt();
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         let hu_new = hu + contrib.s_hu * ctx.dt;
         let hv_new = hv + contrib.s_hv * ctx.dt;
@@ -457,10 +463,10 @@ mod tests {
 
         let config = CoriolisConfig::new(f);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, dt, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, dt);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         // 小角度近似应该接近线性结果
         // dhu/dt ≈ f * hv = 0
@@ -481,11 +487,10 @@ mod tests {
 
     #[test]
     fn test_source_term_trait() {
-        let config = CoriolisConfig::new(1e-4);
+        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
         
         assert_eq!(config.name(), "Coriolis");
         assert!(config.is_enabled());
-        assert!(config.is_explicit());
-        assert!(!config.is_locally_implicit());
+        assert_eq!(config.stiffness(), SourceStiffness::Explicit);
     }
 }

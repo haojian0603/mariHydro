@@ -14,7 +14,7 @@
 //! S_y = -1/ρh × (∂S_xy/∂x + ∂S_yy/∂y)
 //! ```
 
-use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
+use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
 use mh_foundation::AlignedVec;
 use mh_runtime::CpuBackend;
@@ -216,44 +216,50 @@ impl WaveForcing {
     }
 }
 
-impl SourceTerm for WaveForcing {
-    fn name(&self) -> &'static str {
-        "WaveForcing"
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.config.enabled
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for WaveForcing {
+    fn name(&self) -> &'static str { "WaveForcing" }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+    fn is_enabled(&self) -> bool { self.config.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        _ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
-        if h < self.config.h_min {
-            return SourceContribution::ZERO;
-        }
-
+        if ctx.is_dry(h) || h < self.config.h_min { return SourceContributionGeneric::default(); }
         let rho = self.config.rho_water;
-
-        // S_x = -1/(ρh) × (∂S_xx/∂x + ∂S_xy/∂y)
-        let s_hu = -self.grad_sxx_sxy[cell] / (rho * h);
-        let s_hv = -self.grad_sxy_syy[cell] / (rho * h);
-
-        SourceContribution::momentum(s_hu, s_hv)
+        SourceContributionGeneric::momentum(-self.grad_sxx_sxy[cell] / (rho * h), -self.grad_sxy_syy[cell] / (rho * h))
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.is_enabled() { return; }
+        let n = state.n_cells().min(self.n_cells);
+        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
+        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        for cell in 0..n {
+            let h = state.h[cell];
+            if !ctx.is_dry(h) {
+                let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+                rhs_hu[cell] += contrib.s_hu;
+                rhs_hv[cell] += contrib.s_hv;
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
@@ -274,10 +280,10 @@ mod tests {
     fn test_zero_gradient() {
         let wf = WaveForcing::with_defaults(10);
         let state = create_test_state(10, 2.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = wf.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&wf, 0, &state, &ctx);
         
         // 零梯度 → 零源项
         assert!((contrib.s_hu).abs() < 1e-10);
@@ -292,9 +298,9 @@ mod tests {
         // 设置非零梯度
         wf.grad_sxx_sxy.fill(100.0); // N/m²
         
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
-        let contrib = wf.compute_cell(&state, 0, &ctx);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let contrib = SourceTermGeneric::compute_cell(&wf, 0, &state, &ctx);
         
         // 应该有负的 x 动量源（辐射应力驱动）
         assert!(contrib.s_hu < 0.0);

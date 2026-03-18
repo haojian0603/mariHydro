@@ -211,30 +211,20 @@ impl<T, Tag: ArenaTag> Arena<T, Tag> {
                         self.len += 1;
                             Ok(Idx::new(free_idx))
                     }
-                    Slot::Occupied { .. } => {
-                        // 这不应该发生，尝试恢复并追加新槽位
-                        #[cfg(debug_assertions)]
-                        eprintln!("Arena corruption: free_head points to occupied slot; fallback to append");
-                        self.free_head = None;
-                        if self.slots.len() >= u32::MAX as usize {
-                                return Err(crate::error::MhError::internal("Arena 索引溢出"));
-                        }
-                        let new_idx = self.slots.len() as u32;
-                        self.slots.push(Slot::Occupied { value });
-                        self.len += 1;
-                            Ok(Idx::new(new_idx))
-                    }
+                    Slot::Occupied { .. } => Err(crate::error::MhError::internal(
+                        "Arena free list corruption detected: free_head points to occupied slot",
+                    )),
                 }
             }
             None => {
                 // 追加新槽位
                 if self.slots.len() >= u32::MAX as usize {
-                        return Err(crate::error::MhError::internal("Arena 索引溢出"));
+                    return Err(crate::error::MhError::internal("Arena 索引溢出"));
                 }
                 let idx = self.slots.len() as u32;
                 self.slots.push(Slot::Occupied { value });
                 self.len += 1;
-                    Ok(Idx::new(idx))
+                Ok(Idx::new(idx))
             }
         }
     }

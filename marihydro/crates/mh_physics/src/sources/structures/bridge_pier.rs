@@ -9,7 +9,7 @@
 //! 当网格尺寸大于桥墩直径时，无法直接解析桥墩边界。
 //! 通过亚网格参数化方法将桥墩效应作为动量源项添加。
 
-use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
+use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
@@ -130,43 +130,49 @@ impl BridgePierDrag {
     }
 }
 
-impl SourceTerm for BridgePierDrag {
-    fn name(&self) -> &'static str {
-        "BridgePierDrag"
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.config.enabled
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for BridgePierDrag {
+    fn name(&self) -> &'static str { "BridgePierDrag" }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+    fn is_enabled(&self) -> bool { self.config.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        _ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
-        if h < self.config.h_min {
-            return SourceContribution::ZERO;
-        }
-
+        if h < self.config.h_min || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
-
         let (f_x, f_y) = self.compute_drag_force(cell, h, u, v);
-
-        SourceContribution::momentum(f_x, f_y)
+        SourceContributionGeneric::momentum(f_x, f_y)
     }
 
-    fn is_explicit(&self) -> bool {
-        true // 显式处理
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.is_enabled() { return; }
+        let n = state.n_cells().min(self.blockage.len());
+        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
+        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        for cell in 0..n {
+            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
@@ -189,10 +195,10 @@ mod tests {
     fn test_zero_blockage() {
         let pier = BridgePierDrag::with_defaults(10).unwrap();
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = pier.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
         
         // 无桥墩 → 无阻力
         assert!((contrib.s_hu).abs() < 1e-10);
@@ -204,10 +210,10 @@ mod tests {
         pier.set_pier(0, 0.2, None); // 20% 阻塞
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = pier.compute_cell(&state, 0, &ctx);
+        let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
         
         // 有桥墩 → 负 x 动量源
         assert!(contrib.s_hu < 0.0);

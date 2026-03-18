@@ -23,7 +23,6 @@
 use crate::forcing::wind::WindProvider;
 use crate::sources::atmosphere::DragCoefficientMethod;
 use crate::sources::traits::{
-    SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
@@ -105,9 +104,13 @@ impl WindForcingAdapter {
     }
 }
 
-impl SourceTerm for WindForcingAdapter {
+impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapter {
     fn name(&self) -> &'static str {
         "WindForcing"
+    }
+
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
     }
 
     fn is_enabled(&self) -> bool {
@@ -116,31 +119,55 @@ impl SourceTerm for WindForcingAdapter {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         if !self.enabled {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
+
         let h = state.h[cell];
         if ctx.is_dry(h) {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
         let (wind_u, wind_v) = self.cached_wind;
         let (tau_x, tau_y) = self.compute_stress(wind_u, wind_v);
-
-        // 动量源项 = τ / ρ_water (转换为 m²/s²)
-        SourceContribution::momentum(tau_x / self.rho_water, tau_y / self.rho_water)
+        SourceContributionGeneric::momentum(tau_x / self.rho_water, tau_y / self.rho_water)
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_hu.len() < n {
+            rhs_hu.resize(n, 0.0);
+        }
+        if rhs_hv.len() < n {
+            rhs_hv.resize(n, 0.0);
+        }
+
+        let (wind_u, wind_v) = self.cached_wind;
+        let (tau_x, tau_y) = self.compute_stress(wind_u, wind_v);
+        for cell in 0..n {
+            let h = state.h[cell];
+            if !ctx.is_dry(h) {
+                rhs_hu[cell] += tau_x / self.rho_water;
+                rhs_hv[cell] += tau_y / self.rho_water;
+            }
+        }
     }
 }
-
-/// 泛型版本
 pub struct WindForcingAdapterGeneric<S> {
     /// 缓存的风应力 (τ_x/ρ, τ_y/ρ) [m²/s²]
     cached_stress: (S, S),

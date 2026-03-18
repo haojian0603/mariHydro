@@ -52,7 +52,11 @@ impl WaveSpectrum {
         spread: f64,
     ) -> Self {
         let mut spectrum = Self::new(n_freq, n_dir);
-        let fp = 1.0 / tp.max(1e-6);
+        let hs = hs.max(0.0);
+        let tp = tp.max(1e-6);
+        let gamma = gamma.max(1.0);
+        let spread = spread.max(0.0);
+        let fp = 1.0 / tp;
         let g = 9.81;
 
         let alpha = 0.0624
@@ -77,7 +81,7 @@ impl WaveSpectrum {
 
         // 归一化到 Hs
         let hs_calc = spectrum.significant_height();
-        if hs_calc > 1e-12 {
+        if hs_calc.is_finite() && hs_calc > 1e-12 {
             let factor = (hs / hs_calc).powi(2);
             for i in 0..n_freq {
                 for j in 0..n_dir {
@@ -247,7 +251,14 @@ impl SpectralWaveSolver {
         };
 
         for i in 0..self.params.hs.len().min(depth.len()) {
-            let h = depth[i].to_f64_lossy().max(0.1);
+            let h = depth[i].to_f64_lossy();
+            if !h.is_finite() {
+                self.params.sxx[i] = 0.0;
+                self.params.sxy[i] = 0.0;
+                self.params.syy[i] = 0.0;
+                continue;
+            }
+            let h = h.max(0.1);
             let hs_raw = self.params.hs[i];
             let tp = self.params.tp[i];
             if !hs_raw.is_finite() || !tp.is_finite() || tp <= 0.0 {

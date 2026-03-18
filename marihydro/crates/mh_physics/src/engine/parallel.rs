@@ -222,6 +222,20 @@ fn create_atomic_buffer<S: RuntimeScalar>(len: usize) -> Vec<S::Atomic> {
     (0..len).map(|_| S::Atomic::new(zero)).collect()
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FaceContribution<S: RuntimeScalar> {
+    owner_idx: usize,
+    neighbor_idx: Option<usize>,
+    fh: S,
+    fhu: S,
+    fhv: S,
+    source_left_x: S,
+    source_left_y: S,
+    source_right_x: S,
+    source_right_y: S,
+    max_wave_speed: S,
+}
+
 /// 并行通量计算器
 ///
 /// 封装多种并行策略的通量计算逻辑，支持任意Backend。
@@ -508,53 +522,55 @@ where
     ) -> B::Scalar {
         let zero = B::Scalar::ZERO;
         let n_faces = mesh.face_count();
-        let n_cells = mesh.cell_count();
+        flux_h.fill(zero);
+        flux_hu.fill(zero);
+        flux_hv.fill(zero);
+        source_hu.fill(zero);
+        source_hv.fill(zero);
 
-        let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(zero);
-        let flux_h_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
-        let flux_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
-        let flux_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
-        let source_hu_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
-        let source_hv_atomic = create_atomic_buffer::<B::Scalar>(n_cells);
-
-        (0..n_faces)
+        let face_contributions: Vec<FaceContribution<B::Scalar>> = (0..n_faces)
             .into_par_iter()
-            .for_each(|face_idx| {
+            .map(|face_idx| {
                 let (flux, bed_src, length, owner, neighbor) =
                     self.compute_face(state, mesh, FaceIndex::new(face_idx));
 
-                max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
-
-                let fh = flux.mass * length;
-                let fhu = flux.momentum_x * length;
-                let fhv = flux.momentum_y * length;
-
-                let owner_idx = owner.get();
-                flux_h_atomic[owner_idx].fetch_add(-fh, Ordering::Relaxed);
-                flux_hu_atomic[owner_idx].fetch_add(-fhu, Ordering::Relaxed);
-                flux_hv_atomic[owner_idx].fetch_add(-fhv, Ordering::Relaxed);
-                source_hu_atomic[owner_idx].fetch_add(bed_src.source_left_x, Ordering::Relaxed);
-                source_hv_atomic[owner_idx].fetch_add(bed_src.source_left_y, Ordering::Relaxed);
-
-                if let Some(neigh) = neighbor {
-                    let neigh_idx = neigh.get();
-                    flux_h_atomic[neigh_idx].fetch_add(fh, Ordering::Relaxed);
-                    flux_hu_atomic[neigh_idx].fetch_add(fhu, Ordering::Relaxed);
-                    flux_hv_atomic[neigh_idx].fetch_add(fhv, Ordering::Relaxed);
-                    source_hu_atomic[neigh_idx].fetch_add(bed_src.source_right_x, Ordering::Relaxed);
-                    source_hv_atomic[neigh_idx].fetch_add(bed_src.source_right_y, Ordering::Relaxed);
+                FaceContribution {
+                    owner_idx: owner.get(),
+                    neighbor_idx: neighbor.map(|neigh| neigh.get()),
+                    fh: flux.mass * length,
+                    fhu: flux.momentum_x * length,
+                    fhv: flux.momentum_y * length,
+                    source_left_x: bed_src.source_left_x,
+                    source_left_y: bed_src.source_left_y,
+                    source_right_x: bed_src.source_right_x,
+                    source_right_y: bed_src.source_right_y,
+                    max_wave_speed: flux.max_wave_speed,
                 }
-            });
+            })
+            .collect();
 
-        for i in 0..n_cells {
-            flux_h[i] = flux_h_atomic[i].load(Ordering::Relaxed);
-            flux_hu[i] = flux_hu_atomic[i].load(Ordering::Relaxed);
-            flux_hv[i] = flux_hv_atomic[i].load(Ordering::Relaxed);
-            source_hu[i] = source_hu_atomic[i].load(Ordering::Relaxed);
-            source_hv[i] = source_hv_atomic[i].load(Ordering::Relaxed);
+        let mut max_wave_speed = zero;
+        for contribution in face_contributions {
+            if contribution.max_wave_speed > max_wave_speed {
+                max_wave_speed = contribution.max_wave_speed;
+            }
+
+            flux_h[contribution.owner_idx] -= contribution.fh;
+            flux_hu[contribution.owner_idx] -= contribution.fhu;
+            flux_hv[contribution.owner_idx] -= contribution.fhv;
+            source_hu[contribution.owner_idx] += contribution.source_left_x;
+            source_hv[contribution.owner_idx] += contribution.source_left_y;
+
+            if let Some(neigh_idx) = contribution.neighbor_idx {
+                flux_h[neigh_idx] += contribution.fh;
+                flux_hu[neigh_idx] += contribution.fhu;
+                flux_hv[neigh_idx] += contribution.fhv;
+                source_hu[neigh_idx] += contribution.source_right_x;
+                source_hv[neigh_idx] += contribution.source_right_y;
+            }
         }
 
-        max_speed_atomic.load(Ordering::Relaxed)
+        max_wave_speed
     }
 
     /// 基于图着色的无锁并行累加

@@ -34,6 +34,24 @@ impl<T: Pod + Default> AlignedBuffer<T> {
     pub fn from_aligned_vec(inner: AlignedVec<T>) -> Self {
         Self { inner }
     }
+
+    /// 用切片覆盖写入，要求长度严格匹配。
+    pub fn copy_from_slice_exact(&mut self, src: &[T]) {
+        assert_eq!(
+            self.inner.len(),
+            src.len(),
+            "AlignedBuffer::copy_from_slice_exact length mismatch: dst={}, src={}",
+            self.inner.len(),
+            src.len()
+        );
+        self.inner.as_mut_slice().copy_from_slice(src);
+    }
+
+    /// 先调整大小，再覆盖写入。
+    pub fn resize_and_copy_from_slice(&mut self, src: &[T]) {
+        self.inner.resize(src.len());
+        self.inner.as_mut_slice().copy_from_slice(src);
+    }
     
     /// 转换为 AlignedVec
     pub fn into_inner(self) -> AlignedVec<T> {
@@ -95,11 +113,7 @@ impl<T: Pod + Clone + Default + Send + Sync> DeviceBuffer<T> for AlignedBuffer<T
     }
     
     fn copy_from_slice(&mut self, src: &[T]) {
-        // 如果长度不匹配，先调整大小
-        if self.inner.len() != src.len() {
-            self.inner.resize(src.len());
-        }
-        self.inner.as_mut_slice().copy_from_slice(src);
+        self.copy_from_slice_exact(src);
     }
     
     fn copy_to_slice(&self, dst: &mut [T]) {
@@ -129,5 +143,19 @@ mod tests {
         buf.fill(1.0);
         assert_eq!(buf[0], 1.0);
         assert_eq!(DeviceBuffer::len(&buf), 10);
+    }
+
+    #[test]
+    fn test_copy_from_slice_exact() {
+        let mut buf: AlignedBuffer<f64> = AlignedBuffer::zeros(2);
+        buf.copy_from_slice_exact(&[1.0, 2.0]);
+        assert_eq!(buf.as_slice(), &[1.0, 2.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "AlignedBuffer::copy_from_slice_exact length mismatch")]
+    fn test_copy_from_slice_exact_rejects_resize_semantics() {
+        let mut buf: AlignedBuffer<f64> = AlignedBuffer::zeros(1);
+        buf.copy_from_slice_exact(&[1.0, 2.0]);
     }
 }

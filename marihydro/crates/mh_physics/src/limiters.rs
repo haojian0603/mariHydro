@@ -1,4 +1,10 @@
 // crates/mh_physics/src/limiters.rs
+//
+// Legacy note:
+// - The main engine path uses `crate::numerics::limiter` and
+//   `crate::numerics::reconstruction`.
+// - This module remains only as a scalar compatibility shim for older callers.
+// - New engine work should not add fresh dependencies on this module.
 
 //! 斜率限制器与重构方法
 //!
@@ -20,6 +26,7 @@
 // ============================================================================
 
 /// 限制器类型
+#[deprecated(note = "Use crate::types::LimiterType for configuration and crate::numerics::limiter for the engine path.")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimiterType {
     /// 无限制（一阶迎风）
@@ -443,6 +450,7 @@ impl BarthJespersenLimiter {
 // ============================================================================
 
 /// MUSCL 重构配置
+#[deprecated(note = "Use crate::numerics::reconstruction::MusclConfig on the main engine path.")]
 #[derive(Debug, Clone)]
 pub struct MusclConfig {
     /// 限制器类型
@@ -464,6 +472,7 @@ impl Default for MusclConfig {
 }
 
 /// MUSCL 重构器
+#[deprecated(note = "Use crate::numerics::reconstruction::MusclReconstructor on the main engine path.")]
 pub struct MusclReconstructor {
     config: MusclConfig,
 }

@@ -1,81 +1,42 @@
-// crates/mh_agent/src/surrogate.rs
-
-use crate::{AIAgent, AiError, Assimilable, PhysicsSnapshot};
+use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use mh_runtime::prelude::{Float, FromPrimitive};
 use serde::{Deserialize, Serialize};
-use serde_json;
 
-/// 代理模型类型
+/// 代理模型类型。
 #[derive(Debug, Clone, Copy)]
 pub enum SurrogateType {
-    /// 神经网络代理
     NeuralNetwork,
-    /// 降阶模型（POD/DMD）
     ReducedOrder,
-    /// 高斯过程回归
     GaussianProcess,
-    /// 多项式混沌展开
     PolynomialChaos,
 }
 
-/// 代理模型配置
+/// 代理模型配置。
 #[derive(Debug, Clone)]
-pub struct SurrogateConfig {
+pub struct SurrogateConfig<B: Backend = DefaultBackend> {
     pub model_type: SurrogateType,
     pub model_path: Option<String>,
-    /// 输入特征列表
     pub input_features: Vec<String>,
-    /// 输出特征列表
     pub output_features: Vec<String>,
-    /// 预测时间步长 [s]
-    pub prediction_horizon: f64,
-    /// 是否提供不确定性估计
+    pub prediction_horizon: B::Scalar,
     pub estimate_uncertainty: bool,
-    /// 融合系数
-    pub assimilation_rate: f64,
-    /// 学习率
-    pub learning_rate: f64,
-    /// L2 正则
-    pub l2_reg: f64,
-    /// 最小标准差
-    pub min_std: f64,
+    pub assimilation_rate: B::Scalar,
+    pub learning_rate: B::Scalar,
+    pub l2_reg: B::Scalar,
+    pub min_std: B::Scalar,
 }
 
-/// 代理模型预测结果
+/// 代理预测结果。
 #[derive(Debug, Clone)]
-pub struct SurrogatePrediction {
-    /// 预测值
-    pub values: Vec<f64>,
-    /// 不确定性（如果可用）
-    pub uncertainty: Option<Vec<f64>>,
-    /// 预测时间
-    pub prediction_time: f64,
-    /// 模型置信度
-    pub confidence: f64,
+pub struct SurrogatePrediction<B: Backend = DefaultBackend> {
+    pub values: Vec<B::Scalar>,
+    pub uncertainty: Option<Vec<B::Scalar>>,
+    pub prediction_time: B::Scalar,
+    pub confidence: B::Scalar,
 }
 
-/// 物理代理模型
-pub struct SurrogateModel {
-    config: SurrogateConfig,
-    /// 当前预测缓存
-    current_prediction: Option<SurrogatePrediction>,
-    /// 输入归一化参数
-    input_normalization: Option<NormalizationParams>,
-    /// 输出归一化参数
-    output_normalization: Option<NormalizationParams>,
-    /// 上次更新时间
-    last_update_time: f64,
-    /// 线性模型权重（输出维度 × 输入维度）
-    weights: Option<Vec<f64>>,
-    /// 偏置项
-    bias: Vec<f64>,
-    /// 误差指数滑动平均
-    error_ema: Option<f64>,
-    /// 输入维度
-    input_dim: usize,
-    /// 输出维度
-    output_dim: usize,
-}
-
+/// 归一化参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizationParams {
     pub mean: Vec<f64>,
@@ -84,8 +45,26 @@ pub struct NormalizationParams {
     pub m2: Vec<f64>,
 }
 
-impl SurrogateModel {
-    pub fn new(config: SurrogateConfig) -> Result<Self, AiError> {
+/// 代理模型。
+pub struct SurrogateModel<B: Backend = DefaultBackend> {
+    config: SurrogateConfig<B>,
+    current_prediction: Option<SurrogatePrediction<B>>,
+    input_normalization: Option<NormalizationParams>,
+    output_normalization: Option<NormalizationParams>,
+    last_update_time: B::Scalar,
+    weights: Option<Vec<f64>>,
+    bias: Vec<f64>,
+    error_ema: Option<f64>,
+    input_dim: usize,
+    output_dim: usize,
+}
+
+impl<B: Backend> SurrogateModel<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: bytemuck::Pod,
+{
+    pub fn new(config: SurrogateConfig<B>) -> Result<Self, AiError> {
         let mut model = Self {
             input_dim: 0,
             output_dim: config.output_features.len().max(1),
@@ -93,7 +72,7 @@ impl SurrogateModel {
             current_prediction: None,
             input_normalization: None,
             output_normalization: None,
-            last_update_time: 0.0,
+            last_update_time: B::Scalar::ZERO,
             weights: None,
             bias: Vec::new(),
             error_ema: None,
@@ -105,18 +84,22 @@ impl SurrogateModel {
 
         Ok(model)
     }
-    
-    /// 快速预测（替代完整物理计算）
-    pub fn predict(&mut self, snapshot: &PhysicsSnapshot) -> Result<SurrogatePrediction, AiError> {
+
+    /// 生成快速预测。
+    pub fn predict(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<SurrogatePrediction<B>, AiError> {
         let mut features = self.extract_features(snapshot);
         self.ensure_model_initialized(features.len());
         self.normalize_input(&mut features);
 
         let mut values = self.forward_linear(&features);
         self.denormalize_output(&mut values);
+        let values: Vec<B::Scalar> = values
+            .into_iter()
+            .map(|v| B::Scalar::from_f64(v).unwrap_or(B::Scalar::ZERO))
+            .collect();
 
         let uncertainty = if self.config.estimate_uncertainty {
-            Some(vec![0.1; values.len()])
+            Some(vec![B::Scalar::from_f64(0.1).unwrap_or(B::Scalar::ZERO); values.len()])
         } else {
             None
         };
@@ -131,31 +114,34 @@ impl SurrogateModel {
             values: values.clone(),
             uncertainty: uncertainty.clone(),
             prediction_time: snapshot.time + self.config.prediction_horizon,
-            confidence,
+            confidence: B::Scalar::from_f64(confidence).unwrap_or(B::Scalar::ZERO),
         };
 
         self.current_prediction = Some(prediction.clone());
         self.last_update_time = snapshot.time;
         Ok(prediction)
     }
-    
-    /// 提取输入特征
-    fn extract_features(&self, snapshot: &PhysicsSnapshot) -> Vec<f64> {
+
+    fn extract_features(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<f64> {
         let mut feats = Vec::new();
+        let push_buffer = |buf: &B::Buffer<B::Scalar>, out: &mut Vec<f64>| {
+            out.extend(buf.iter().map(|v| v.to_f64_lossy()));
+        };
+
         if self.config.input_features.is_empty() {
-            feats.extend_from_slice(&snapshot.h);
-            feats.extend_from_slice(&snapshot.u);
-            feats.extend_from_slice(&snapshot.v);
+            push_buffer(&snapshot.h, &mut feats);
+            push_buffer(&snapshot.u, &mut feats);
+            push_buffer(&snapshot.v, &mut feats);
         } else {
             for name in &self.config.input_features {
                 match name.as_str() {
-                    "h" => feats.extend_from_slice(&snapshot.h),
-                    "u" => feats.extend_from_slice(&snapshot.u),
-                    "v" => feats.extend_from_slice(&snapshot.v),
-                    "z" => feats.extend_from_slice(&snapshot.z),
+                    "h" => push_buffer(&snapshot.h, &mut feats),
+                    "u" => push_buffer(&snapshot.u, &mut feats),
+                    "v" => push_buffer(&snapshot.v, &mut feats),
+                    "z" => push_buffer(&snapshot.z, &mut feats),
                     "sediment" => {
                         if let Some(s) = &snapshot.sediment {
-                            feats.extend_from_slice(s);
+                            push_buffer(s, &mut feats);
                         }
                     }
                     _ => {}
@@ -164,13 +150,13 @@ impl SurrogateModel {
         }
         feats
     }
-    
-    /// 归一化输入
+
     fn normalize_input(&self, features: &mut [f64]) {
         if let Some(norm) = &self.input_normalization {
+            let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
             for (i, val) in features.iter_mut().enumerate() {
                 let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(self.config.min_std);
+                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(min_std);
                 *val = (*val - mean) / std;
             }
         }
@@ -178,15 +164,15 @@ impl SurrogateModel {
 
     fn normalize_output(&self, output: &mut [f64]) {
         if let Some(norm) = &self.output_normalization {
+            let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
             for (i, val) in output.iter_mut().enumerate() {
                 let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(self.config.min_std);
+                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(min_std);
                 *val = (*val - mean) / std;
             }
         }
     }
-    
-    /// 反归一化输出
+
     fn denormalize_output(&self, output: &mut [f64]) {
         if let Some(norm) = &self.output_normalization {
             for (i, val) in output.iter_mut().enumerate() {
@@ -196,25 +182,25 @@ impl SurrogateModel {
             }
         }
     }
-    
-    /// 评估预测质量（与完整物理对比）
+
     pub fn evaluate_prediction(
         &self,
-        prediction: &SurrogatePrediction,
-        ground_truth: &PhysicsSnapshot,
+        prediction: &SurrogatePrediction<B>,
+        ground_truth: &PhysicsSnapshot<B>,
     ) -> PredictionMetrics {
-        let gt = &ground_truth.h;
+        let gt: Vec<f64> = ground_truth.h.iter().map(|v| v.to_f64_lossy()).collect();
+        let pred: Vec<f64> = prediction.values.iter().map(|v| v.to_f64_lossy()).collect();
         let mut rmse = 0.0;
-        let mut max_err = 0.0;
+        let mut max_err: f64 = 0.0;
         let mut corr_num = 0.0;
         let mut corr_den = 0.0;
 
-        let n = gt.len().min(prediction.values.len());
+        let n = gt.len().min(pred.len());
         for i in 0..n {
-            let err = prediction.values[i] - gt[i];
+            let err = pred[i] - gt[i];
             rmse += err * err;
             max_err = max_err.max(err.abs());
-            corr_num += prediction.values[i] * gt[i];
+            corr_num += pred[i] * gt[i];
             corr_den += gt[i] * gt[i];
         }
         rmse = if n > 0 { (rmse / n as f64).sqrt() } else { 0.0 };
@@ -225,7 +211,7 @@ impl SurrogateModel {
             max_error: max_err,
             correlation,
             bias: if n > 0 {
-                let mean_pred = prediction.values.iter().take(n).sum::<f64>() / n as f64;
+                let mean_pred = pred.iter().take(n).sum::<f64>() / n as f64;
                 let mean_gt = gt.iter().take(n).sum::<f64>() / n as f64;
                 mean_pred - mean_gt
             } else {
@@ -233,9 +219,8 @@ impl SurrogateModel {
             },
         }
     }
-    
-    /// 更新模型（在线学习）
-    pub fn update_model(&mut self, snapshot: &PhysicsSnapshot, target: &[f64]) -> Result<(), AiError> {
+
+    pub fn update_model(&mut self, snapshot: &PhysicsSnapshot<B>, target: &[B::Scalar]) -> Result<(), AiError> {
         let features_raw = self.extract_features(snapshot);
         self.ensure_model_initialized(features_raw.len());
         let output_dim = target.len().max(1);
@@ -247,16 +232,17 @@ impl SurrogateModel {
         }
 
         self.update_normalization_input(&features_raw);
-        self.update_normalization_output(target);
+        let target_raw: Vec<f64> = target.iter().map(|v| v.to_f64_lossy()).collect();
+        self.update_normalization_output(&target_raw);
 
         let mut features = features_raw.clone();
-        let mut target_norm = target.to_vec();
+        let mut target_norm = target_raw.clone();
         self.normalize_input(&mut features);
         self.normalize_output(&mut target_norm);
 
         let pred = self.forward_linear(&features);
-        let lr = self.config.learning_rate.max(1e-8);
-        let l2 = self.config.l2_reg.max(0.0);
+        let lr = self.config.learning_rate.to_f64_lossy().max(1e-8);
+        let l2 = self.config.l2_reg.to_f64_lossy().max(0.0);
 
         if let Some(weights) = &mut self.weights {
             for o in 0..self.output_dim {
@@ -280,6 +266,7 @@ impl SurrogateModel {
             }
             (acc / pred.len() as f64).sqrt()
         };
+
         self.error_ema = Some(match self.error_ema {
             Some(old) => 0.9 * old + 0.1 * rmse,
             None => rmse,
@@ -293,17 +280,15 @@ impl SurrogateModel {
 
         Ok(())
     }
-    
-    /// 获取预测不确定性
-    pub fn uncertainty(&self) -> Option<&[f64]> {
+
+    pub fn uncertainty(&self) -> Option<&[B::Scalar]> {
         self.current_prediction
             .as_ref()
             .and_then(|p| p.uncertainty.as_ref())
             .map(|u| u.as_slice())
     }
-    
-    /// 检查模型是否适用于当前状态
-    pub fn is_applicable(&self, _snapshot: &PhysicsSnapshot) -> bool {
+
+    pub fn is_applicable(&self, _snapshot: &PhysicsSnapshot<B>) -> bool {
         true
     }
 
@@ -336,15 +321,15 @@ impl SurrogateModel {
 
     fn update_normalization_input(&mut self, values: &[f64]) {
         match &mut self.input_normalization {
-            Some(norm) => update_normalization(norm, values, self.config.min_std),
-            None => self.input_normalization = Some(init_normalization(values, self.config.min_std)),
+            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
+            None => self.input_normalization = Some(init_normalization(values, self.config.min_std.to_f64_lossy())),
         }
     }
 
     fn update_normalization_output(&mut self, values: &[f64]) {
         match &mut self.output_normalization {
-            Some(norm) => update_normalization(norm, values, self.config.min_std),
-            None => self.output_normalization = Some(init_normalization(values, self.config.min_std)),
+            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
+            None => self.output_normalization = Some(init_normalization(values, self.config.min_std.to_f64_lossy())),
         }
     }
 
@@ -384,7 +369,7 @@ pub struct PredictionMetrics {
     pub bias: f64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SurrogateState {
     input_dim: usize,
     output_dim: usize,
@@ -434,76 +419,90 @@ fn update_normalization(norm: &mut NormalizationParams, values: &[f64], min_std:
     norm.m2 = vec![m2];
 }
 
-impl AIAgent for SurrogateModel {
-    fn name(&self) -> &'static str { "Surrogate-Model" }
-    
-    fn update(&mut self, snapshot: &PhysicsSnapshot) -> Result<(), AiError> {
+impl<B: Backend> AIAgent<B> for SurrogateModel<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: bytemuck::Pod,
+{
+    fn name(&self) -> &'static str {
+        "Surrogate-Model"
+    }
+
+    fn update(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<(), AiError> {
         let _ = self.predict(snapshot)?;
         Ok(())
     }
-    
-    fn apply(&self, state: &mut dyn Assimilable) -> Result<(), AiError> {
+
+    fn apply(&self, state: &mut dyn Assimilable<B>) -> Result<(), AiError> {
         if let Some(pred) = &self.current_prediction {
-            let depth = state.get_depth_mut();
-            let n = pred.values.len().min(depth.len());
+            let before_volume = state.total_water_volume().to_f64_lossy();
+            let cell_areas = state.cell_areas().copy_to_vec();
+            let n = pred.values.len().min(cell_areas.len());
             if n == 0 {
                 return Ok(());
             }
 
-            let before_volume = state.total_water_volume();
-            let old_depth: Vec<f64> = depth.iter().take(n).copied().collect();
-            let mut proposed = vec![0.0f64; n];
+            let old_depth: Vec<B::Scalar> = {
+                let depth = state.get_depth();
+                depth.iter().take(n).copied().collect()
+            };
 
-            for i in 0..n {
-                let blended = (1.0 - self.config.assimilation_rate) * depth[i]
-                    + self.config.assimilation_rate * pred.values[i];
-                proposed[i] = blended.max(0.0);
-            }
-
-            for i in 0..n {
-                depth[i] = proposed[i];
-            }
-
-            let cell_areas = state.cell_areas();
-            let mut iter = 0usize;
-            let mut diff = before_volume - state.total_water_volume();
-            while diff.abs() > 1e-8 && iter < 5 {
-                let mut sum_area = 0.0f64;
+            {
+                let depth = state.get_depth_mut();
+                let mut proposed = vec![B::Scalar::ZERO; n];
                 for i in 0..n {
-                    if depth[i] > 0.0 {
-                        sum_area += cell_areas.get(i).copied().unwrap_or(0.0);
-                    }
+                    let blended = (B::Scalar::ONE - self.config.assimilation_rate) * depth[i]
+                        + self.config.assimilation_rate * pred.values[i];
+                    proposed[i] = blended.max(B::Scalar::ZERO);
                 }
-                if sum_area <= 0.0 {
-                    break;
-                }
-                let delta = diff / sum_area;
-                let mut applied = 0.0f64;
                 for i in 0..n {
-                    if depth[i] <= 0.0 {
-                        continue;
-                    }
-                    let area = cell_areas.get(i).copied().unwrap_or(0.0);
-                    if area <= 0.0 {
-                        continue;
-                    }
-                    let new_h = (depth[i] + delta).max(0.0);
-                    applied += (new_h - depth[i]) * area;
-                    depth[i] = new_h;
+                    depth[i] = proposed[i];
                 }
-                diff -= applied;
-                iter += 1;
             }
+
+            let depth_after = {
+                let mut diff = before_volume - state.total_water_volume().to_f64_lossy();
+                let depth = state.get_depth_mut();
+                let mut iter = 0usize;
+                while diff.abs() > 1e-8 && iter < 5 {
+                    let mut sum_area = 0.0f64;
+                    for i in 0..n {
+                        if depth[i] > B::Scalar::ZERO {
+                            sum_area += cell_areas.get(i).copied().unwrap_or(B::Scalar::ZERO).to_f64_lossy();
+                        }
+                    }
+                    if sum_area <= 0.0 {
+                        break;
+                    }
+                    let delta = diff / sum_area;
+                    let mut applied = 0.0f64;
+                    for i in 0..n {
+                        if depth[i] <= B::Scalar::ZERO {
+                            continue;
+                        }
+                        let area = cell_areas.get(i).copied().unwrap_or(B::Scalar::ZERO).to_f64_lossy();
+                        if area <= 0.0 {
+                            continue;
+                        }
+                        let new_h = (depth[i].to_f64_lossy() + delta).max(0.0);
+                        applied += (new_h - depth[i].to_f64_lossy()) * area;
+                        depth[i] = B::Scalar::from_f64(new_h).unwrap_or(B::Scalar::ZERO);
+                    }
+                    diff -= applied;
+                    iter += 1;
+                }
+                depth.to_vec()
+            };
 
             if let Some((u, v)) = state.get_velocity_mut() {
                 let n_vel = n.min(u.len()).min(v.len());
                 for i in 0..n_vel {
-                    let h0 = old_depth[i];
-                    let h1 = depth[i];
+                    let h0 = old_depth[i].to_f64_lossy();
+                    let h1 = depth_after[i].to_f64_lossy();
                     if h0 > 0.0 && h1 > 0.0 {
                         let scale = (h0 / h1).clamp(0.1, 10.0);
-                        u[i] *= scale;
-                        v[i] *= scale;
+                        u[i] = B::Scalar::from_f64(u[i].to_f64_lossy() * scale).unwrap_or(B::Scalar::ZERO);
+                        v[i] = B::Scalar::from_f64(v[i].to_f64_lossy() * scale).unwrap_or(B::Scalar::ZERO);
                     }
                 }
             }
@@ -513,12 +512,12 @@ impl AIAgent for SurrogateModel {
             Err(AiError::NotReady("代理预测尚未生成".into()))
         }
     }
-    
-    fn get_prediction(&self) -> Option<&[f64]> {
+
+    fn get_prediction(&self) -> Option<&[B::Scalar]> {
         self.current_prediction.as_ref().map(|p| p.values.as_slice())
     }
-    
-    fn get_uncertainty(&self) -> Option<&[f64]> {
+
+    fn get_uncertainty(&self) -> Option<&[B::Scalar]> {
         self.uncertainty()
     }
 }

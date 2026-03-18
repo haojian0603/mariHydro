@@ -163,6 +163,18 @@ pub struct ProfileRestorer<B: Backend> {
 }
 
 impl<B: Backend> ProfileRestorer<B> {
+    fn clear_output(&self, output: &mut VerticalProfile<B>) {
+        if let Some(slice) = output.u_layers.try_as_slice_mut() {
+            slice.fill(B::Scalar::ZERO);
+        }
+        if let Some(slice) = output.v_layers.try_as_slice_mut() {
+            slice.fill(B::Scalar::ZERO);
+        }
+        if let Some(slice) = output.z_layers.try_as_slice_mut() {
+            slice.fill(B::Scalar::ZERO);
+        }
+    }
+
     /// 使用后端创建恢复器
     pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
@@ -207,6 +219,7 @@ impl<B: Backend> ProfileRestorer<B> {
         output: &mut VerticalProfile<B>,
     ) {
         // 尽量通过切片访问以兼容 CPU/GPU，失败则直接返回
+        self.clear_output(output);
         let h = match state.h.try_as_slice() {
             Some(s) => s,
             None => return,

@@ -25,7 +25,7 @@
 use bytemuck::Pod;
 use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, realloc, Layout};
+use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
@@ -368,18 +368,15 @@ impl<T: Pod + Default, A: Alignment> AlignedVec<T, A> {
         }
 
         let old_layout = Self::layout_for(self.capacity);
-        let new_ptr = unsafe { realloc(self.ptr as *mut u8, old_layout, new_layout.size()) as *mut T };
+        let new_ptr = unsafe { alloc_zeroed(new_layout) as *mut T };
         if new_ptr.is_null() {
             handle_alloc_error(new_layout);
         }
-        self.ptr = new_ptr;
-
-        if new_cap > self.capacity {
-            let added = new_cap - self.capacity;
-            let start = self.capacity;
-            let slice = unsafe { std::slice::from_raw_parts_mut(self.ptr.add(start), added) };
-            slice.fill(T::default());
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.ptr, new_ptr, self.len);
+            dealloc(self.ptr as *mut u8, old_layout);
         }
+        self.ptr = new_ptr;
         self.capacity = new_cap;
     }
 }
@@ -561,6 +558,20 @@ mod tests {
 
         let vec_gpu: AlignedVec<f64, GpuAlign> = AlignedVec::zeros(100);
         assert_eq!((vec_gpu.as_ptr() as usize) % 256, 0);
+    }
+
+    #[test]
+    fn test_aligned_vec_resize_grows_preserves_values() {
+        let mut vec: AlignedVec<f64, CpuAlign> = AlignedVec::zeros(2);
+        vec[0] = 1.25;
+        vec[1] = 2.5;
+
+        vec.resize(128);
+
+        assert_eq!(vec.len(), 128);
+        assert_eq!(vec[0], 1.25);
+        assert_eq!(vec[1], 2.5);
+        assert_eq!((vec.as_ptr() as usize) % 64, 0);
     }
 
     #[test]

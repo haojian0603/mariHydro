@@ -16,6 +16,7 @@
 use crate::schemes::riemann::traits::{
     RiemannError, RiemannFlux, RiemannSolver, SolverCapabilities, SolverParams,
 };
+use crate::schemes::riemann::hlle::HlleSolver;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use num_traits::Float;
 
@@ -245,6 +246,19 @@ impl<B: Backend> HllcSolver<B> {
             self.gravity,
         ))
     }
+
+    #[inline]
+    fn solve_with_hlle_fallback(
+        &self,
+        h_left: B::Scalar,
+        h_right: B::Scalar,
+        vel_left: B::Vector2D,
+        vel_right: B::Vector2D,
+        normal: B::Vector2D,
+    ) -> Result<RiemannFlux<B::Scalar>, RiemannError> {
+        HlleSolver::<B>::new(&self.params, self.gravity)
+            .solve(h_left, h_right, vel_left, vel_right, normal)
+    }
 }
 
 impl<B: Backend> RiemannSolver for HllcSolver<B> {
@@ -293,9 +307,41 @@ impl<B: Backend> RiemannSolver for HllcSolver<B> {
                 let c_r = (self.gravity * h_right).sqrt();
 
                 let (s_l, s_r) = self.einfeldt_speeds(h_left, h_right, un_l, un_r, c_l, c_r);
-                let (mass, mom_n, mom_t) = self.hllc_star_flux(
+                if !s_l.is_finite() || !s_r.is_finite() || s_r < s_l {
+                    return self.solve_with_hlle_fallback(
+                        h_left,
+                        h_right,
+                        vel_left,
+                        vel_right,
+                        normal,
+                    );
+                }
+
+                let (mass, mom_n, mom_t) = match self.hllc_star_flux(
                     h_left, h_right, un_l, un_r, ut_l, ut_r, s_l, s_r,
-                )?;
+                ) {
+                    Ok(flux) => flux,
+                    Err(_) => {
+                        return self.solve_with_hlle_fallback(
+                            h_left,
+                            h_right,
+                            vel_left,
+                            vel_right,
+                            normal,
+                        );
+                    }
+                };
+
+                if !mass.is_finite() || !mom_n.is_finite() || !mom_t.is_finite() {
+                    return self.solve_with_hlle_fallback(
+                        h_left,
+                        h_right,
+                        vel_left,
+                        vel_right,
+                        normal,
+                    );
+                }
+
                 let max_speed = s_l.abs().max(s_r.abs());
 
                 Ok(RiemannFlux::from_rotated::<B>(
@@ -422,5 +468,22 @@ mod tests {
             )
             .unwrap();
         assert!(flux.is_valid());
+    }
+
+    #[test]
+    fn test_near_vacuum_state_falls_back_cleanly() {
+        let solver = create_solver::<CpuBackend<f64>>(9.81f64);
+        let flux = solver
+            .solve(
+                1e-8f64,
+                2e-8f64,
+                CpuBackend::<f64>::vec2_new(15.0, 0.0),
+                CpuBackend::<f64>::vec2_new(-15.0, 0.0),
+                CpuBackend::<f64>::vec2_new(1.0, 0.0),
+            )
+            .unwrap();
+
+        assert!(flux.is_valid());
+        assert!(flux.max_wave_speed.is_finite());
     }
 }

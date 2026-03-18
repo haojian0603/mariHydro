@@ -186,18 +186,20 @@ where
         &mut self,
         reference: &super::ConservedQuantities<B>,
         tolerance: B::Scalar,
-        constraints: &ConservationConstraints,
+        constraints: &ConservationConstraints<B>,
     ) {
         let n = self.n_cells();
         let areas = self.cell_areas().copy_to_vec();
 
         let mut active_mask = vec![true; n];
-        for &idx in &constraints.dry_cells {
+        for idx in &constraints.dry_cells {
+            let idx = idx.get();
             if idx < n {
                 active_mask[idx] = false;
             }
         }
-        for &idx in &constraints.boundary_cells {
+        for idx in &constraints.boundary_cells {
+            let idx = idx.get();
             if idx < n {
                 active_mask[idx] = false;
             }
@@ -222,7 +224,7 @@ where
         if mass_error.abs() > tolerance {
             let rho = B::Scalar::from_config(1000.0).unwrap_or(B::Scalar::ZERO);
             let h_correction_per_area = mass_error / (rho * total_active_area);
-            let min_h = B::Scalar::from_config(constraints.min_depth).unwrap_or(B::Scalar::ZERO);
+            let min_h = constraints.min_depth;
 
             let h_buf = self.get_depth_mut();
             let h_slice = h_buf.try_as_slice_mut().unwrap_or(&mut []);
@@ -251,8 +253,8 @@ where
         }
 
         let min_weight = B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE);
-        let min_depth = B::Scalar::from_config(constraints.min_depth).unwrap_or(B::Scalar::ZERO);
-        let max_vel = B::Scalar::from_config(constraints.max_velocity).unwrap_or(B::Scalar::MAX);
+        let min_depth = constraints.min_depth;
+        let max_vel = constraints.max_velocity;
         if total_weighted > min_weight {
             for i in 0..n {
                 if active_mask[i] {

@@ -17,6 +17,8 @@ pub enum BuildError {
     ConfigError(ConfigError),
     /// 缺少网格
     MissingMesh,
+    /// 缺少单元尺度
+    MissingCellLength,
     /// 网格无效
     InvalidMesh(String),
     /// 初始条件错误
@@ -30,6 +32,7 @@ impl std::fmt::Display for BuildError {
         match self {
             BuildError::ConfigError(e) => write!(f, "配置错误: {}", e),
             BuildError::MissingMesh => write!(f, "缺少网格"),
+            BuildError::MissingCellLength => write!(f, "缺少单元尺度"),
             BuildError::InvalidMesh(msg) => write!(f, "无效网格: {}", msg),
             BuildError::InitialConditionError(msg) => write!(f, "初始条件错误: {}", msg),
             BuildError::Other(msg) => write!(f, "构建错误: {}", msg),
@@ -64,6 +67,7 @@ impl From<ConfigError> for BuildError {
 pub struct SolverBuilder {
     config: SolverConfig,
     n_cells: usize,
+    cell_length: Option<f64>,
     initial_h: Option<Vec<f64>>,
     initial_u: Option<Vec<f64>>,
     initial_v: Option<Vec<f64>>,
@@ -76,6 +80,7 @@ impl SolverBuilder {
         Self {
             config,
             n_cells: 0,
+            cell_length: None,
             initial_h: None,
             initial_u: None,
             initial_v: None,
@@ -86,6 +91,12 @@ impl SolverBuilder {
     /// 设置单元数量（简化网格接口）
     pub fn with_cells(mut self, n_cells: usize) -> Self {
         self.n_cells = n_cells;
+        self
+    }
+
+    /// 设置均匀单元特征尺度
+    pub fn with_uniform_cell_length(mut self, cell_length: f64) -> Self {
+        self.cell_length = Some(cell_length);
         self
     }
 
@@ -118,6 +129,18 @@ impl SolverBuilder {
         self
     }
 
+    /// 设置静水初始条件并显式提供单元尺度
+    pub fn with_still_water_and_cell_length(
+        mut self,
+        depth: f64,
+        n_cells: usize,
+        cell_length: f64,
+    ) -> Self {
+        self = self.with_still_water(depth, n_cells);
+        self.cell_length = Some(cell_length);
+        self
+    }
+
     /// 构建求解器
     ///
     /// 根据配置中的精度选择实例化对应的泛型求解器。
@@ -131,6 +154,13 @@ impl SolverBuilder {
         // 验证单元数量
         if self.n_cells == 0 {
             return Err(BuildError::MissingMesh);
+        }
+
+        let cell_length = self.cell_length.ok_or(BuildError::MissingCellLength)?;
+        if !cell_length.is_finite() || cell_length <= 0.0 {
+            return Err(BuildError::InvalidMesh(
+                "单元尺度必须是有限正值".to_string(),
+            ));
         }
 
         // 确保有初始条件
@@ -161,32 +191,34 @@ impl SolverBuilder {
 
         // 根据精度分发
         match self.config.precision {
-            Precision::F32 => self.build_f32(),
-            Precision::F64 => self.build_f64(),
+            Precision::F32 => self.build_f32(cell_length),
+            Precision::F64 => self.build_f64(cell_length),
         }
     }
 
-    fn build_f32(self) -> Result<SolverHandle, BuildError> {
+    fn build_f32(self, cell_length: f64) -> Result<SolverHandle, BuildError> {
         let solver = SimpleSolver::<f32>::new(
             self.config.clone(),
             self.n_cells,
+            cell_length,
             self.initial_h.unwrap(),
             self.initial_u.unwrap(),
             self.initial_v.unwrap(),
             self.bathymetry.unwrap(),
-        );
+        )?;
         Ok(SolverHandle::F32(solver))
     }
 
-    fn build_f64(self) -> Result<SolverHandle, BuildError> {
+    fn build_f64(self, cell_length: f64) -> Result<SolverHandle, BuildError> {
         let solver = SimpleSolver::<f64>::new(
             self.config.clone(),
             self.n_cells,
+            cell_length,
             self.initial_h.unwrap(),
             self.initial_u.unwrap(),
             self.initial_v.unwrap(),
             self.bathymetry.unwrap(),
-        );
+        )?;
         Ok(SolverHandle::F64(solver))
     }
 }
@@ -276,6 +308,7 @@ impl SolverHandle {
 pub struct SimpleSolver<S: RuntimeScalar> {
     config: SolverConfig,
     n_cells: usize,
+    cell_length: S,
     h: Vec<S>,
     u: Vec<S>,
     v: Vec<S>,
@@ -294,24 +327,45 @@ where
     fn new(
         config: SolverConfig,
         n_cells: usize,
+        cell_length: f64,
         h: Vec<f64>,
         u: Vec<f64>,
         v: Vec<f64>,
         z: Vec<f64>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, BuildError> {
+        let convert_scalar = |field: &str, value: f64| {
+            S::from_f64(value).ok_or_else(|| {
+                BuildError::InitialConditionError(format!("{} 无法转换到目标精度", field))
+            })
+        };
+        let convert_vec = |field: &str, values: Vec<f64>| -> Result<Vec<S>, BuildError> {
+            values
+                .into_iter()
+                .map(|value| {
+                    S::from_f64(value).ok_or_else(|| {
+                        BuildError::InitialConditionError(format!(
+                            "{} 中存在无法转换到目标精度的值",
+                            field
+                        ))
+                    })
+                })
+                .collect()
+        };
+
+        Ok(Self {
             config,
             n_cells,
-            h: h.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
-            u: u.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
-            v: v.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
-            z: z.into_iter().map(|x| S::from_f64(x).unwrap_or(S::ZERO)).collect(),
+            cell_length: convert_scalar("cell_length", cell_length)?,
+            h: convert_vec("initial_h", h)?,
+            u: convert_vec("initial_u", u)?,
+            v: convert_vec("initial_v", v)?,
+            z: convert_vec("bathymetry", z)?,
             time: S::ZERO,
             step_count: 0,
             tolerance: Tolerance::<S>::default(),
             stats: SolverStats::default(),
             start_time: Instant::now(),
-        }
+        })
     }
 
     /// 执行一个时间步（简化版本）
@@ -328,7 +382,7 @@ where
                 // 计算波速
                 let c = (g * h).sqrt();
                 let vel = (self.u[i] * self.u[i] + self.v[i] * self.v[i]).sqrt();
-                let cfl = (vel + c) * dt / S::from_f64(1.0).unwrap_or(S::ZERO); // 假设 dx = 1
+                let cfl = (vel + c) * dt / self.cell_length;
                 if cfl > max_cfl {
                     max_cfl = cfl;
                 }
@@ -423,7 +477,7 @@ mod tests {
         };
         
         let solver = SolverBuilder::new(config)
-            .with_still_water(1.0, 100)
+            .with_still_water_and_cell_length(1.0, 100, 1.0)
             .build()
             .unwrap();
 
@@ -439,7 +493,7 @@ mod tests {
         };
         
         let solver = SolverBuilder::new(config)
-            .with_still_water(1.0, 100)
+            .with_still_water_and_cell_length(1.0, 100, 1.0)
             .build()
             .unwrap();
 
@@ -450,7 +504,7 @@ mod tests {
     fn test_solver_step() {
         let config = SolverConfig::default();
         let mut solver = SolverBuilder::new(config)
-            .with_still_water(1.0, 10)
+            .with_still_water_and_cell_length(1.0, 10, 1.0)
             .build()
             .unwrap();
 
@@ -464,7 +518,7 @@ mod tests {
     fn test_export_state() {
         let config = SolverConfig::default();
         let solver = SolverBuilder::new(config)
-            .with_still_water(2.5, 5)
+            .with_still_water_and_cell_length(2.5, 5, 1.0)
             .build()
             .unwrap();
 
@@ -479,5 +533,14 @@ mod tests {
         let config = SolverConfig::default();
         let result = SolverBuilder::new(config).build();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_cell_length() {
+        let config = SolverConfig::default();
+        let result = SolverBuilder::new(config)
+            .with_still_water(1.0, 10)
+            .build();
+        assert!(matches!(result, Err(BuildError::MissingCellLength)));
     }
 }

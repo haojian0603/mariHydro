@@ -5,7 +5,7 @@
 
 use crate::adapter::{CellIndex, FaceIndex, PhysicsMesh};
 use crate::engine::timestep::TimeStepController;
-use crate::schemes::{HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
+use crate::schemes::{CentralSolver, HllcSolver, RoeSolver, RusanovSolver, RiemannFlux, RiemannSolver, SolverParams};
 use crate::schemes::riemann::RiemannSolverAny;
 use crate::schemes::wetting_drying::{WetState, WettingDryingHandler};
 use crate::numerics::{MusclConfig, MusclReconstructor, WenoConfig, WenoReconstructor};
@@ -17,11 +17,10 @@ use crate::{BoundaryDataProvider, ExternalForcing};
 use crate::types::{NumericalParams};
 use crate::Layer3Config;
 
-use mh_runtime::{AtomicScalar, Backend, DeviceBuffer, RuntimeScalar, Vector2D};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar, Vector2D};
 use mh_config::solver_config::RiemannSolverType;
 use num_traits::Float;
 use rayon::prelude::*;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// 静水重构状态（Backend泛型化）
@@ -184,6 +183,94 @@ impl SolverStatsF64 {
 pub struct NanDetectionResult {
     pub found_nan: bool,
     pub affected_cells: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct ParallelFluxAccumulation<B: Backend> {
+    flux_h: Vec<B::Scalar>,
+    flux_hu: Vec<B::Scalar>,
+    flux_hv: Vec<B::Scalar>,
+    source_hu: Vec<B::Scalar>,
+    source_hv: Vec<B::Scalar>,
+    max_wave_speed: B::Scalar,
+}
+
+impl<B: Backend> ParallelFluxAccumulation<B> {
+    fn new(n_cells: usize) -> Self {
+        let zero = B::Scalar::ZERO;
+        Self {
+            flux_h: vec![zero; n_cells],
+            flux_hu: vec![zero; n_cells],
+            flux_hv: vec![zero; n_cells],
+            source_hu: vec![zero; n_cells],
+            source_hv: vec![zero; n_cells],
+            max_wave_speed: zero,
+        }
+    }
+
+    #[inline]
+    fn accumulate_face(
+        &mut self,
+        owner_idx: usize,
+        neighbor_idx: Option<usize>,
+        fh: B::Scalar,
+        fhu: B::Scalar,
+        fhv: B::Scalar,
+        source_left_x: B::Scalar,
+        source_left_y: B::Scalar,
+        source_right_x: B::Scalar,
+        source_right_y: B::Scalar,
+        wave_speed: B::Scalar,
+    ) {
+        self.max_wave_speed = self.max_wave_speed.max(wave_speed);
+
+        self.flux_h[owner_idx] -= fh;
+        self.flux_hu[owner_idx] -= fhu;
+        self.flux_hv[owner_idx] -= fhv;
+        self.source_hu[owner_idx] += source_left_x;
+        self.source_hv[owner_idx] += source_left_y;
+
+        if let Some(neigh_idx) = neighbor_idx {
+            self.flux_h[neigh_idx] += fh;
+            self.flux_hu[neigh_idx] += fhu;
+            self.flux_hv[neigh_idx] += fhv;
+            self.source_hu[neigh_idx] += source_right_x;
+            self.source_hv[neigh_idx] += source_right_y;
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        debug_assert_eq!(self.flux_h.len(), other.flux_h.len());
+
+        for (dst, src) in self.flux_h.iter_mut().zip(other.flux_h) {
+            *dst += src;
+        }
+        for (dst, src) in self.flux_hu.iter_mut().zip(other.flux_hu) {
+            *dst += src;
+        }
+        for (dst, src) in self.flux_hv.iter_mut().zip(other.flux_hv) {
+            *dst += src;
+        }
+        for (dst, src) in self.source_hu.iter_mut().zip(other.source_hu) {
+            *dst += src;
+        }
+        for (dst, src) in self.source_hv.iter_mut().zip(other.source_hv) {
+            *dst += src;
+        }
+
+        self.max_wave_speed = self.max_wave_speed.max(other.max_wave_speed);
+        self
+    }
+
+    fn write_into(&self, workspace: &mut SolverWorkspaceGeneric<B>) {
+        for i in 0..self.flux_h.len() {
+            workspace.flux_h[i] = self.flux_h[i];
+            workspace.flux_hu[i] = self.flux_hu[i];
+            workspace.flux_hv[i] = self.flux_hv[i];
+            workspace.source_hu[i] = self.source_hu[i];
+            workspace.source_hv[i] = self.source_hv[i];
+        }
+    }
 }
 
 /// 求解器工作区（Backend泛型版本）
@@ -500,6 +587,7 @@ where
     backend: B,
     workspace: SolverWorkspaceGeneric<B>,
     riemann: RiemannSolverAny<B>,
+    riemann_fallback: RusanovSolver<B>,
     wetting_drying: WettingDryingHandler<B>,
     hydrostatic: HydrostaticReconstruction<B>,
     timestep_ctrl: TimeStepController<B>,
@@ -525,10 +613,7 @@ where
             RiemannSolverType::Hllc => RiemannSolverAny::Hllc(HllcSolver::<B>::new(solver_params, gravity)),
             RiemannSolverType::Roe => RiemannSolverAny::Roe(RoeSolver::<B>::new(solver_params, gravity)),
             RiemannSolverType::Rusanov => RiemannSolverAny::Rusanov(RusanovSolver::<B>::new(params, gravity)),
-            RiemannSolverType::Central => {
-                log::warn!("Central 求解器未实现，已回退为 Rusanov");
-                RiemannSolverAny::Rusanov(RusanovSolver::<B>::new(params, gravity))
-            }
+            RiemannSolverType::Central => RiemannSolverAny::Central(CentralSolver::<B>::new(params, gravity)),
         }
     }
 
@@ -547,6 +632,7 @@ where
         // 转换参数类型：Layer 4 NumericalParams → Layer 3 SolverParams
         let solver_params = crate::schemes::riemann::SolverParams::<B::Scalar>::from_numerical(&params, gravity);
         let riemann = Self::build_riemann_solver(&config, &params, &solver_params, gravity);
+        let riemann_fallback = RusanovSolver::<B>::new(&params, gravity);
         let wetting_drying = WettingDryingHandler::<B>::from_params(&params)
             .expect("WettingDryingHandler 初始化失败");
         let hydrostatic = HydrostaticReconstruction::<B>::new(&solver_params, gravity);
@@ -562,6 +648,7 @@ where
             backend,
             workspace,
             riemann,
+            riemann_fallback,
             wetting_drying,
             hydrostatic,
             timestep_ctrl,
@@ -683,6 +770,24 @@ where
         }
     }
 
+    #[inline]
+    fn solve_riemann_with_fallback(
+        &self,
+        h_left: B::Scalar,
+        h_right: B::Scalar,
+        vel_left: B::Vector2D,
+        vel_right: B::Vector2D,
+        normal: B::Vector2D,
+    ) -> RiemannFlux<B::Scalar> {
+        self.riemann
+            .solve(h_left, h_right, vel_left, vel_right, normal)
+            .or_else(|_| {
+                self.riemann_fallback
+                    .solve(h_left, h_right, vel_left, vel_right, normal)
+            })
+            .unwrap_or_else(|_| RiemannFlux::zero())
+    }
+
     fn apply_boundary_forcing(&mut self, state: &ShallowWaterState<B>, time: f64) {
         if let Some(provider) = &self.boundary_provider {
             for face in self.mesh.boundary_face_indices() {
@@ -739,9 +844,7 @@ where
             self.backend.scalar_from_f64(forcing.v()),
         );
 
-        let flux = self.riemann
-            .solve(h_left, h_right, vel_left, vel_right, normal)
-            .unwrap_or_else(|_| RiemannFlux::zero());
+        let flux = self.solve_riemann_with_fallback(h_left, h_right, vel_left, vel_right, normal);
 
         (flux, length, owner)
     }
@@ -783,46 +886,40 @@ where
     }
 
     fn compute_fluxes_parallel(&mut self, state: &ShallowWaterState<B>, time: f64) -> B::Scalar {
-        let max_speed_atomic = <B::Scalar as RuntimeScalar>::Atomic::new(B::Scalar::ZERO);
-        let face_results: Vec<_> = self
+        let n_cells = self.mesh.cell_count();
+        // Per-thread buffers avoid the old collect-then-serial-accumulate path.
+        let accumulation = self
             .mesh
             .interior_face_indices()
             .collect::<Vec<_>>()
             .into_par_iter()
-            .map(|face_idx| {
-                let (flux, bed_src, length, owner, neighbor) = 
-                    self.compute_face(state, face_idx);
+            .fold(
+                || ParallelFluxAccumulation::<B>::new(n_cells),
+                |mut local, face_idx| {
+                    let (flux, bed_src, length, owner, neighbor) = self.compute_face(state, face_idx);
+                    local.accumulate_face(
+                        owner.get(),
+                        neighbor.map(|cell| cell.get()),
+                        flux.mass * length,
+                        flux.momentum_x * length,
+                        flux.momentum_y * length,
+                        bed_src.source_left_x,
+                        bed_src.source_left_y,
+                        bed_src.source_right_x,
+                        bed_src.source_right_y,
+                        flux.max_wave_speed,
+                    );
+                    local
+                },
+            )
+            .reduce(
+                || ParallelFluxAccumulation::<B>::new(n_cells),
+                |left, right| left.merge(right),
+            );
 
-                max_speed_atomic.fetch_max(flux.max_wave_speed, Ordering::Relaxed);
-
-                (flux, bed_src, length, owner, neighbor)
-            })
-            .collect();
-
-        for (flux, bed_src, length, owner, neighbor) in face_results {
-            let fh = flux.mass * length;
-            let fhu = flux.momentum_x * length;
-            let fhv = flux.momentum_y * length;
-
-            let owner_idx = owner.get();
-            self.workspace.flux_h[owner_idx] -= fh;
-            self.workspace.flux_hu[owner_idx] -= fhu;
-            self.workspace.flux_hv[owner_idx] -= fhv;
-            self.workspace.source_hu[owner_idx] += bed_src.source_left_x;
-            self.workspace.source_hv[owner_idx] += bed_src.source_left_y;
-
-            if let Some(neigh) = neighbor {
-                let neigh_idx = neigh.get();
-                self.workspace.flux_h[neigh_idx] += fh;
-                self.workspace.flux_hu[neigh_idx] += fhu;
-                self.workspace.flux_hv[neigh_idx] += fhv;
-                self.workspace.source_hu[neigh_idx] += bed_src.source_right_x;
-                self.workspace.source_hv[neigh_idx] += bed_src.source_right_y;
-            }
-        }
-
+        accumulation.write_into(&mut self.workspace);
         self.apply_boundary_forcing(state, time);
-        max_speed_atomic.load(Ordering::Relaxed)
+        accumulation.max_wave_speed
     }
 
     fn compute_face(
@@ -935,13 +1032,7 @@ where
             _ => B::Scalar::ONE,
         };
 
-        let flux = self.riemann.solve(
-            h_left,
-            h_right,
-            vel_left,
-            vel_right,
-            normal,
-        ).unwrap_or_else(|_| RiemannFlux::zero());
+        let flux = self.solve_riemann_with_fallback(h_left, h_right, vel_left, vel_right, normal);
 
         let limited_flux = flux.scaled(flux_limiter);
         let bed_src = self.hydrostatic.bed_slope_correction(h_l, h_r, recon_state.h_left, recon_state.h_right, normal, length);
@@ -952,7 +1043,12 @@ where
     fn update_state(&self, state: &mut ShallowWaterState<B>, dt: B::Scalar) {
         for cell in self.mesh.cell_indices() {
             let idx = cell.get();
-            let area_f64 = self.mesh.cell_area(cell).unwrap_or(1.0_f64);
+            let Some(area_f64) = self.mesh.cell_area(cell) else {
+                state.h[idx] = B::Scalar::ZERO;
+                state.hu[idx] = B::Scalar::ZERO;
+                state.hv[idx] = B::Scalar::ZERO;
+                continue;
+            };
             if !area_f64.is_finite() || area_f64 <= 0.0 {
                 state.h[idx] = B::Scalar::ZERO;
                 state.hu[idx] = B::Scalar::ZERO;

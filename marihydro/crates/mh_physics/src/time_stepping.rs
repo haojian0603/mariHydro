@@ -388,7 +388,7 @@ impl TimeStepController {
                 self.config.max_growth
             };
             
-            let factor_limited = factor.clamp(1.0 / self.config.max_shrink, self.config.max_growth);
+            let factor_limited = factor.clamp(self.config.max_shrink, self.config.max_growth);
             let new_dt = (self.state.current_dt * factor_limited)
                 .clamp(self.config.min_dt, self.config.max_dt);
             
@@ -647,6 +647,22 @@ mod tests {
         // 误差大于容限，应拒绝
         assert!(!controller.update_from_error(1e-2));
         assert!(controller.state().last_rejected);
+    }
+
+    #[test]
+    fn test_update_from_error_respects_growth_limits_without_reversed_clamp() {
+        let config = TimeStepConfig {
+            initial_dt: 1.0,
+            max_growth: 1.5,
+            max_shrink: 0.5,
+            error_tolerance: 1e-4,
+            ..Default::default()
+        };
+        let mut controller = TimeStepController::new(config);
+
+        assert!(controller.update_from_error(1e-6));
+        assert!(controller.current_dt() >= 0.5);
+        assert!(controller.current_dt() <= 1.5);
     }
 
     #[test]

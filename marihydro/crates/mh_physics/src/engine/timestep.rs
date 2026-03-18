@@ -14,7 +14,6 @@ use crate::types::NumericalParams;
 use mh_runtime::prelude::*;
 use rayon::prelude::*;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// CFL计算器
 #[derive(Clone, Debug)]
@@ -95,9 +94,7 @@ where
             return self.dt_max.max(self.dt_min);
         }
 
-        let min_length = self.cached_dx_min.unwrap_or_else(|| {
-            B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE)
-        });
+        let min_length = self.cached_dx_min.unwrap_or(B::Scalar::ZERO);
         if !min_length.is_finite() || min_length <= B::Scalar::ZERO {
             return self.dt_min;
         }
@@ -123,63 +120,61 @@ where
             return B::Scalar::ZERO;
         }
 
-        let max_speed = AtomicU64::new(0u64);
-
-        (0..n).into_par_iter().for_each(|i| {
-            let h = state.h[i];
-            if params.is_dry(h) {
-                return;
-            }
-
-            let (u, v) = params.safe_velocity_components(state.hu[i], state.hv[i], h);
-            let speed = (u * u + v * v).sqrt();
-            let c = (self.g * h.max(B::Scalar::ZERO)).sqrt();
-            let wave_speed = speed + c;
-
-            if wave_speed.is_finite() {
-                if let Some(bits) = wave_speed.to_f64().map(|f| f.to_bits()) {
-                    max_speed.fetch_max(bits, Ordering::Relaxed);
+        (0..n)
+            .into_par_iter()
+            .filter_map(|i| {
+                let h = state.h[i];
+                if params.is_dry(h) {
+                    return None;
                 }
-            }
-        });
 
-        B::Scalar::from_config(f64::from_bits(max_speed.load(Ordering::Relaxed)))
-            .unwrap_or(B::Scalar::ZERO)
+                let (u, v) = params.safe_velocity_components(state.hu[i], state.hv[i], h);
+                let speed = (u * u + v * v).sqrt();
+                let c = (self.g * h.max(B::Scalar::ZERO)).sqrt();
+                let wave_speed = speed + c;
+
+                if wave_speed.is_finite() {
+                    Some(wave_speed)
+                } else {
+                    None
+                }
+            })
+            .reduce(
+                || B::Scalar::ZERO,
+                |lhs, rhs| if lhs > rhs { lhs } else { rhs },
+            )
     }
 
     fn compute_min_char_length(&self, mesh: &PhysicsMesh) -> B::Scalar {
         let n = mesh.cell_count();
         if n == 0 {
-            return B::Scalar::from_config(f64::MAX).unwrap_or(B::Scalar::MAX);
+            return B::Scalar::ZERO;
         }
 
-        let min_dx = AtomicU64::new(f64::MAX.to_bits());
-        let found = std::sync::atomic::AtomicBool::new(false);
+        let min_val = (0..n)
+            .into_par_iter()
+            .filter_map(|i| {
+                let area = mesh.cell_area(CellIndex(i)).unwrap_or(0.0);
+                let perimeter = mesh.cell_perimeter(CellIndex(i)).unwrap_or(0.0);
 
-        (0..n).into_par_iter().for_each(|i| {
-            let area = mesh.cell_area(CellIndex(i)).unwrap_or(0.0);
-            let perimeter = mesh.cell_perimeter(CellIndex(i)).unwrap_or(0.0);
+                if !area.is_finite() || !perimeter.is_finite() || perimeter < 1e-14 || area <= 0.0 {
+                    return None;
+                }
 
-            if !area.is_finite() || !perimeter.is_finite() || perimeter < 1e-14 || area <= 0.0 {
-                return;
-            }
+                let dx = 2.0 * area / perimeter;
+                if dx.is_finite() && dx > 0.0 {
+                    Some(dx)
+                } else {
+                    None
+                }
+            })
+            .reduce(|| f64::INFINITY, f64::min);
 
-            let dx = 2.0 * area / perimeter;
-            let bits = dx.to_bits();
-            min_dx.fetch_min(bits, Ordering::Relaxed);
-            found.store(true, Ordering::Relaxed);
-        });
-
-        if !found.load(Ordering::Relaxed) {
-            return B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE);
-        }
-
-        let min_val = f64::from_bits(min_dx.load(Ordering::Relaxed));
         if !min_val.is_finite() || min_val <= 0.0 {
-            return B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE);
+            return B::Scalar::ZERO;
         }
 
-        B::Scalar::from_config(min_val).unwrap_or(B::Scalar::ONE)
+        B::Scalar::from_config(min_val).unwrap_or(B::Scalar::ZERO)
     }
 }
 

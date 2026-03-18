@@ -20,12 +20,12 @@
 //!
 //! 使用隐式处理避免大摩擦系数时的数值不稳定。
 use super::traits::{
-    SourceContribution,
+
     SourceContributionGeneric,
-    SourceContext,
+
     SourceContextGeneric,
     SourceStiffness,
-    SourceTerm,
+
     SourceTermGeneric,
 };
 use crate::prelude::*;
@@ -94,61 +94,54 @@ impl ManningFrictionConfig {
     }
 }
 
-impl SourceTerm for ManningFrictionConfig {
-    fn name(&self) -> &'static str {
-        "ManningFriction"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for ManningFrictionConfig {
+    fn name(&self) -> &'static str { "ManningFriction" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
 
         if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
-        // 干单元处理
         if ctx.is_dry(h) {
-            return SourceContribution::momentum(-hu / dt, -hv / dt);
+            return SourceContributionGeneric::momentum(-hu / dt, -hv / dt);
         }
 
-        // 计算速度
         let speed_sq = (hu * hu + hv * hv) / (h * h);
         if speed_sq < 1e-20 {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
-        // 计算摩擦系数
         let cf = self.compute_cf(h, cell);
         let speed = speed_sq.sqrt();
-
-        // 隐式衰减
         let decay = 1.0 / (1.0 + dt * cf * speed);
         let factor = (decay - 1.0) / dt;
 
-        SourceContribution::momentum(hu * factor, hv * factor)
+        SourceContributionGeneric::momentum(hu * factor, hv * factor)
     }
 
-    fn compute_all(
+    fn accumulate(
         &self,
         state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContext,
-        _output_h: &mut [f64],
-        output_hu: &mut [f64],
-        output_hv: &mut [f64],
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
     ) {
-        if !self.is_enabled() {
+        if !self.enabled {
             return;
         }
 
@@ -156,49 +149,22 @@ impl SourceTerm for ManningFrictionConfig {
         if !dt.is_finite() || dt <= 0.0 {
             return;
         }
+
         let n_cells = state.h.len();
+        if rhs_hu.len() < n_cells {
+            rhs_hu.resize(n_cells, 0.0);
+        }
+        if rhs_hv.len() < n_cells {
+            rhs_hv.resize(n_cells, 0.0);
+        }
 
         for i in 0..n_cells {
-            let h = state.h[i];
-            let hu = state.hu[i];
-            let hv = state.hv[i];
-
-            if !h.is_finite() {
-                continue;
-            }
-
-            if ctx.is_dry(h) {
-                output_hu[i] += -hu / dt;
-                output_hv[i] += -hv / dt;
-                continue;
-            }
-
-            let speed_sq = (hu * hu + hv * hv) / (h * h);
-            if speed_sq < 1e-20 {
-                continue;
-            }
-
-            let cf = self.compute_cf(h, i);
-            let speed = speed_sq.sqrt();
-            let decay = 1.0 / (1.0 + dt * cf * speed);
-            let factor = (decay - 1.0) / dt;
-
-            output_hu[i] += hu * factor;
-            output_hv[i] += hv * factor;
+            let contrib = self.compute_cell(i, state, ctx);
+            rhs_hu[i] += contrib.s_hu;
+            rhs_hv[i] += contrib.s_hv;
         }
     }
-
-    fn is_explicit(&self) -> bool {
-        false
-    }
-
-    fn is_locally_implicit(&self) -> bool {
-        true
-    }
 }
-
-/// Chezy 摩擦配置
-#[derive(Debug, Clone)]
 pub struct ChezyFrictionConfig {
     /// 是否启用
     pub enabled: bool,
@@ -229,62 +195,71 @@ impl ChezyFrictionConfig {
     }
 }
 
-impl SourceTerm for ChezyFrictionConfig {
-    fn name(&self) -> &'static str {
-        "ChezyFriction"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionConfig {
+    fn name(&self) -> &'static str { "ChezyFriction" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
 
         if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
-        // 干单元处理
         if ctx.is_dry(h) {
-            return SourceContribution::momentum(-hu / dt, -hv / dt);
+            return SourceContributionGeneric::momentum(-hu / dt, -hv / dt);
         }
 
-        // 计算速度
         let speed_sq = (hu * hu + hv * hv) / (h * h);
         if speed_sq < 1e-20 {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
         let speed = speed_sq.sqrt();
-
-        // 隐式衰减
         let decay = 1.0 / (1.0 + dt * self.cf * speed);
         let factor = (decay - 1.0) / dt;
 
-        SourceContribution::momentum(hu * factor, hv * factor)
+        SourceContributionGeneric::momentum(hu * factor, hv * factor)
     }
 
-    fn is_explicit(&self) -> bool {
-        false
-    }
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
 
-    fn is_locally_implicit(&self) -> bool {
-        true
+        let n_cells = state.h.len();
+        if rhs_hu.len() < n_cells {
+            rhs_hu.resize(n_cells, 0.0);
+        }
+        if rhs_hv.len() < n_cells {
+            rhs_hv.resize(n_cells, 0.0);
+        }
+
+        for i in 0..n_cells {
+            let contrib = self.compute_cell(i, state, ctx);
+            rhs_hu[i] += contrib.s_hu;
+            rhs_hv[i] += contrib.s_hv;
+        }
     }
 }
-
-/// 摩擦衰减计算器
-///
-/// 提供摩擦相关的辅助计算函数。
 pub struct FrictionCalculator {
     g: f64, 
     h_min: f64, 
@@ -664,7 +639,6 @@ impl_chezy_friction_generic!(f64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
     use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
@@ -690,10 +664,10 @@ mod tests {
     fn test_manning_dry_cell() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 0.0001, 1.0, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 0.1, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         // 干单元应该衰减动量
         assert!(contrib.s_h.abs() < 1e-10);
@@ -705,10 +679,10 @@ mod tests {
     fn test_manning_still_water() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 0.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 0.1, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         // 静水应该没有摩擦
         assert_eq!(contrib.s_h, 0.0);
@@ -720,10 +694,10 @@ mod tests {
     fn test_manning_flowing_water() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 0.1, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         // 流动水应该有摩擦减速
         assert_eq!(contrib.s_h, 0.0);
@@ -736,13 +710,13 @@ mod tests {
         // 验证隐式处理不会产生负动量
         let config = ManningFrictionConfig::new(9.81, 10, 0.1); // 高摩擦
         let state = create_test_state(10, 0.1, 1.0, 0.5); // 浅水
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params); // 大时间步
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0); // 大时间步
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         // 隐式处理应该给出有限的源项
-        assert!(contrib.is_valid());
+        assert!(contrib.s_h.is_finite() && contrib.s_hu.is_finite() && contrib.s_hv.is_finite());
         assert!(contrib.s_hu < 0.0);
     }
 
@@ -758,10 +732,10 @@ mod tests {
     fn test_chezy_flowing_water() {
         let config = ChezyFrictionConfig::new(9.81, 50.0);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 0.1, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
         
         assert_eq!(contrib.s_h, 0.0);
         assert!(contrib.s_hu < 0.0);
@@ -793,14 +767,14 @@ mod tests {
     fn test_manning_batch_compute() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 1.0, 0.5);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 0.1, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
 
         let mut out_h = vec![0.0; 10];
         let mut out_hu = vec![0.0; 10];
         let mut out_hv = vec![0.0; 10];
 
-        config.compute_all(&state, &ctx, &mut out_h, &mut out_hu, &mut out_hv);
+        config.accumulate(&state, &mut out_h, &mut out_hu, &mut out_hv, &ctx);
 
         // 所有单元应该有相同的负源项
         for i in 0..10 {
@@ -817,9 +791,7 @@ mod tests {
 
         assert_eq!(manning.name(), "ManningFriction");
         assert_eq!(chezy.name(), "ChezyFriction");
-
-        assert!(!manning.is_explicit());
-        assert!(manning.is_locally_implicit());
+        assert_eq!(manning.stiffness(), SourceStiffness::LocallyImplicit);
     }
 
     #[test]

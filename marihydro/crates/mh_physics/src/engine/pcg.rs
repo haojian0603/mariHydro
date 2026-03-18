@@ -96,6 +96,8 @@ pub struct PcgResult<S: RuntimeScalar> {
 }
 
 /// 稀疏矩阵-向量乘法trait
+/// 兼容层：新的 CSR SpMV 调用应优先走 `numerics::linear_algebra::csr::CsrMatrix`
+/// 的 backend 入口。
 pub trait SparseMvp<B: Backend> {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>);
     fn dimension(&self) -> usize;
@@ -107,24 +109,8 @@ where
     B::Scalar: RuntimeScalar,
 {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>) {
-        let x_slice = x.as_slice();
-        let y_slice = y.as_slice_mut();
-        y_slice.fill(B::Scalar::ZERO);
-
-        let row_ptr = self.row_ptr();
-        let col_idx = self.pattern().col_idx();
-        let values = self.values();
-
-        for row in 0..self.n_rows() {
-            let start = row_ptr[row];
-            let end = row_ptr[row + 1];
-            let mut sum = B::Scalar::ZERO;
-            for idx in start..end {
-                let col = col_idx[idx];
-                sum = sum + values[idx] * x_slice[col];
-            }
-            y_slice[row] = sum;
-        }
+        self.mul_vec_backend::<B>(x, y)
+            .expect("CSR SpMV backend access failed")
     }
 
     fn dimension(&self) -> usize {
@@ -287,6 +273,9 @@ where
     B::Buffer<B::Scalar>: Send + Sync,
     B: Clone,
 {
+    const BREAKDOWN_TOL_FLOOR: f64 = 1e-30;
+    const DIVERGENCE_FACTOR: f64 = 10.0;
+
     pub fn new_with_backend(backend: B, n: usize, config: PcgConfig) -> Self {
         let workspace = PcgWorkspace::new_with_backend(&backend, n);
         Self {
@@ -310,6 +299,14 @@ where
 
     pub fn ensure_capacity(&mut self, n: usize) {
         self.workspace.ensure_capacity(&self.backend, n);
+    }
+
+    fn breakdown_tolerance(&self) -> B::Scalar
+    where
+        B::Scalar: RuntimeScalar,
+    {
+        let tol = self.config.atol.max(Self::BREAKDOWN_TOL_FLOOR);
+        self.backend.scalar_from_f64(tol)
     }
 }
 
@@ -365,6 +362,9 @@ where
     ) -> PcgResult<B::Scalar> {
         let n = matrix.dimension();
         self.ensure_capacity(n);
+        let breakdown_tol = self.breakdown_tolerance();
+        let divergence_factor = self.backend.scalar_from_f64(Self::DIVERGENCE_FACTOR);
+        let eps = self.backend.scalar_from_f64(self.config.atol);
         let workspace = &mut self.workspace;
 
         let mut x_buf = self.backend.alloc(n);
@@ -377,8 +377,7 @@ where
 
         let b_norm = dot_product(&b.as_slice()[..n], &b.as_slice()[..n], n).sqrt();
         let initial_r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
-
-        let eps = self.backend.scalar_from_f64(self.config.atol);
+        let mut best_r_norm = initial_r_norm;
         if b_norm < eps {
             x.copy_from_slice(x_buf.as_slice());
             return PcgResult {
@@ -402,8 +401,7 @@ where
             matrix.apply(&workspace.p, &mut workspace.ap);
 
             let p_ap = dot_product(&workspace.p.as_slice()[..n], &workspace.ap.as_slice()[..n], n);
-            let eps = self.backend.scalar_from_f64(1e-30);
-            if p_ap.abs() < eps {
+            if p_ap.abs() < breakdown_tol {
                 return PcgResult {
                     converged: false,
                     iterations: iter,
@@ -432,6 +430,19 @@ where
                     initial_residual_norm: initial_r_norm,
                     relative_residual,
                 };
+            }
+
+            if iter >= 2 && best_r_norm > breakdown_tol && r_norm > best_r_norm * divergence_factor {
+                return PcgResult {
+                    converged: false,
+                    iterations: iter + 1,
+                    residual_norm: r_norm,
+                    initial_residual_norm: initial_r_norm,
+                    relative_residual,
+                };
+            }
+            if r_norm < best_r_norm {
+                best_r_norm = r_norm;
             }
 
             apply_preconditioner(&self.backend, &workspace.r, &mut workspace.z, &self.config, precond, n);

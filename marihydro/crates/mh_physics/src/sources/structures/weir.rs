@@ -18,7 +18,7 @@
 //! ```
 //! 其中 S 为淹没修正系数
 
-use crate::sources::traits::{SourceContribution, SourceContext, SourceTerm};
+use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
@@ -228,66 +228,60 @@ impl WeirFlow {
     }
 }
 
-impl SourceTerm for WeirFlow {
-    fn name(&self) -> &'static str {
-        "WeirFlow"
-    }
-
-    fn is_enabled(&self) -> bool {
-        self.config.enabled
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for WeirFlow {
+    fn name(&self) -> &'static str { "WeirFlow" }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+    fn is_enabled(&self) -> bool { self.config.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        _ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let crest = self.crest_elevation[cell];
-        if crest.is_infinite() {
-            return SourceContribution::ZERO;
-        }
-
+        if crest.is_infinite() { return SourceContributionGeneric::default(); }
         let h = state.h[cell];
         let z = state.z[cell];
         let water_level = h + z;
-
         let q = self.compute_discharge(cell, water_level);
-        if q.abs() < 1e-10 {
-            return SourceContribution::ZERO;
-        }
-
-        // 获取单元面积
+        if q.abs() < 1e-10 || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
         let area = self.cell_area[cell].max(1e-10);
-
-        // 质量源项：s_h = -Q/A（负值表示出流）
         let s_h = -q / area;
-
-        // 动量源项：假设过堰流速沿法向方向
-        // 过堰流速估计：v_weir = Q / (B × H_head)
         let head = (water_level - crest).max(self.config.h_min);
         let width = self.weir_width[cell].max(1e-10);
         let v_weir = q / (width * head);
-
-        // 动量损失沿法向方向
         let nx = self.normal_x[cell];
         let ny = self.normal_y[cell];
-
-        // s_hu = s_h × v_weir × nx（出流带走动量）
-        let s_hu = s_h * v_weir * nx;
-        let s_hv = s_h * v_weir * ny;
-
-        SourceContribution::new(s_h, s_hu, s_hv)
+        SourceContributionGeneric::new(s_h, s_h * v_weir * nx, s_h * v_weir * ny)
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.is_enabled() { return; }
+        let n = state.n_cells().min(self.n_cells);
+        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
+        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        for cell in 0..n {
+            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_runtime::CpuBackend;
 
     #[allow(dead_code)]
     fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterState<CpuBackend<f64>> {

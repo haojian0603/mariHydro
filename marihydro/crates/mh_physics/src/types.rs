@@ -35,6 +35,18 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, Mul, Sub};
 
+macro_rules! config_scalar {
+    ($value:expr, $field:expr) => {{
+        S::from_config($value).unwrap_or_else(|| {
+            panic!(
+                "NumericalParams conversion failed for {} = {}",
+                $field,
+                $value
+            )
+        })
+    }};
+}
+
 // ============================================================
 // 索引类型说明（分层设计）
 // ============================================================
@@ -230,7 +242,7 @@ impl<S: RuntimeScalar> SafeVelocity<S> {
     pub fn clamp_speed(self, max_speed: S) -> Self {
         let speed = self.speed();
         // 使用类型安全的阈值：EPSILON * 1000 提供足够的安全边际
-        let threshold = S::EPSILON * S::from_config(1000.0).unwrap_or(S::ONE);
+        let threshold = S::EPSILON * config_scalar!(1000.0, "speed_clamp_threshold");
         if speed > max_speed && speed > threshold {
             let factor = max_speed / speed;
             Self {
@@ -251,7 +263,7 @@ impl<S: RuntimeScalar> SafeVelocity<S> {
     /// 动能（单位质量）
     #[inline]
     pub fn kinetic_energy_per_mass(&self) -> S {
-        S::from_config(0.5).unwrap_or(S::HALF) * self.speed_squared()
+        config_scalar!(0.5, "kinetic_energy_half_factor") * self.speed_squared()
     }
 }
 
@@ -369,25 +381,25 @@ where
     /// 使用标准物理默认值初始化
     fn default() -> Self {
         Self {
-            h_min: S::from_config(1e-9).unwrap_or(S::ZERO),
-            h_dry: S::from_config(1e-6).unwrap_or(S::ZERO),
-            h_friction: S::from_config(1e-4).unwrap_or(S::ZERO),
-            h_wet: S::from_config(1e-3).unwrap_or(S::ZERO),
-            flux_eps: S::from_config(1e-14).unwrap_or(S::ZERO),
-            entropy_ratio: S::from_config(0.1).unwrap_or(S::ZERO),
-            min_wave_speed: S::from_config(1e-6).unwrap_or(S::ZERO),
-            det_min: S::from_config(1e-14).unwrap_or(S::ZERO),
-            limiter_k: S::from_config(5.0).unwrap_or(S::ZERO),
-            vel_min: S::from_config(1e-8).unwrap_or(S::ZERO),
-            vel_max: S::from_config(100.0).unwrap_or(S::ZERO),
-            nu_min: S::from_config(1e-6).unwrap_or(S::ZERO),
-            nu_max: S::from_config(1e3).unwrap_or(S::ZERO),
-            cfl: S::from_config(0.5).unwrap_or(S::ZERO),
-            dt_min: S::from_config(1e-8).unwrap_or(S::ZERO),
-            dt_max: S::from_config(3600.0).unwrap_or(S::ZERO),
-            eta_tolerance: S::from_config(1e-6).unwrap_or(S::ZERO),
-            flux_tolerance: S::from_config(1e-10).unwrap_or(S::ZERO),
-            conservation_tolerance: S::from_config(1e-8).unwrap_or(S::ZERO),
+            h_min: config_scalar!(1e-9, "h_min"),
+            h_dry: config_scalar!(1e-6, "h_dry"),
+            h_friction: config_scalar!(1e-4, "h_friction"),
+            h_wet: config_scalar!(1e-3, "h_wet"),
+            flux_eps: config_scalar!(1e-14, "flux_eps"),
+            entropy_ratio: config_scalar!(0.1, "entropy_ratio"),
+            min_wave_speed: config_scalar!(1e-6, "min_wave_speed"),
+            det_min: config_scalar!(1e-14, "det_min"),
+            limiter_k: config_scalar!(5.0, "limiter_k"),
+            vel_min: config_scalar!(1e-8, "vel_min"),
+            vel_max: config_scalar!(100.0, "vel_max"),
+            nu_min: config_scalar!(1e-6, "nu_min"),
+            nu_max: config_scalar!(1e3, "nu_max"),
+            cfl: config_scalar!(0.5, "cfl"),
+            dt_min: config_scalar!(1e-8, "dt_min"),
+            dt_max: config_scalar!(3600.0, "dt_max"),
+            eta_tolerance: config_scalar!(1e-6, "eta_tolerance"),
+            flux_tolerance: config_scalar!(1e-10, "flux_tolerance"),
+            conservation_tolerance: config_scalar!(1e-8, "conservation_tolerance"),
         }
     }
 }
@@ -524,8 +536,8 @@ where
     pub fn wet_fraction_smooth(&self, h: S) -> S {
         let t = self.wet_fraction(h);
         t * t * (
-            S::from_config(3.0).unwrap_or(S::ONE)
-                - S::from_config(2.0).unwrap_or(S::ONE) * t
+            config_scalar!(3.0, "wet_fraction_smooth_three")
+                - config_scalar!(2.0, "wet_fraction_smooth_two") * t
         )
     }
 
@@ -603,7 +615,7 @@ where
             
             // 限制最大速度
             let speed = (u * u + v * v).sqrt();
-            let threshold = S::EPSILON * S::from_config(1000.0).unwrap_or(S::ONE);
+            let threshold = S::EPSILON * config_scalar!(1000.0, "speed_clamp_threshold");
             if speed > self.vel_max && speed > threshold {
                 let factor = self.vel_max / speed;
                 (u * factor, v * factor)

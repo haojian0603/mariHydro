@@ -58,6 +58,9 @@ where
     config: FrictionConfig,
     /// 重力加速度
     g: B::Scalar,
+    h_min: B::Scalar,
+    four_thirds: B::Scalar,
+    pow_guard: B::Scalar,
 }
 
 impl<B: Backend> ManningFriction<B>
@@ -76,11 +79,7 @@ where
     /// 
     /// 返回初始化完成的摩擦计算器实例
     pub fn new(backend: B, g: f64) -> Self {
-        Self {
-            g: backend.scalar_from_f64(g),
-            config: FrictionConfig::default(),
-            backend,
-        }
+        Self::with_config(backend, g, FrictionConfig::default())
     }
 
     /// 使用自定义配置创建摩擦计算器
@@ -91,8 +90,12 @@ where
     /// - `g`: 重力加速度 [m/s²]
     /// - `config`: 摩擦计算配置
     pub fn with_config(backend: B, g: f64, config: FrictionConfig) -> Self {
+        let h_min = backend.scalar_from_f64(config.h_min);
         Self {
             g: backend.scalar_from_f64(g),
+            h_min,
+            four_thirds: backend.scalar_from_f64(4.0 / 3.0),
+            pow_guard: backend.scalar_from_f64(1e-12),
             config,
             backend,
         }
@@ -100,6 +103,7 @@ where
 
     /// 设置配置
     pub fn set_config(&mut self, config: FrictionConfig) {
+        self.h_min = self.backend.scalar_from_f64(config.h_min);
         self.config = config;
     }
 
@@ -134,12 +138,11 @@ where
         hv: B::Scalar,
         manning_n: B::Scalar,
     ) -> B::Scalar {
-        let h_min = self.backend.scalar_from_f64(self.config.h_min);
-        if h < h_min {
+        if h < self.h_min {
             return B::Scalar::ZERO;
         }
 
-        let h_safe = h.max(h_min);
+        let h_safe = h.max(self.h_min);
         let u = hu / h_safe;
         let v = hv / h_safe;
         let speed = (u * u + v * v).sqrt();
@@ -148,10 +151,8 @@ where
             return B::Scalar::ZERO;
         }
 
-        let four_thirds = self.backend.scalar_from_f64(4.0 / 3.0);
-        let h_pow = h_safe.powf(four_thirds);
-        let eps = self.backend.scalar_from_f64(1e-12);
-        if h_pow < eps {
+        let h_pow = h_safe.powf(self.four_thirds);
+        if h_pow < self.pow_guard {
             return B::Scalar::ZERO;
         }
 
@@ -308,13 +309,13 @@ where
         h: &[B::Scalar],
         hu: &mut [B::Scalar],
         hv: &mut [B::Scalar],
-        _manning_n: &[B::Scalar],
+        manning_n: &[B::Scalar],
         use_uniform_n: bool,
         uniform_n: B::Scalar,
         dt: B::Scalar,
     ) {
         for i in 0..h.len() {
-            let n_val = if use_uniform_n { uniform_n } else { B::Scalar::ZERO };
+            let n_val = if use_uniform_n { uniform_n } else { manning_n[i] };
             let (new_hu, new_hv) = self.apply_semi_implicit(h[i], hu[i], hv[i], n_val, dt);
             hu[i] = new_hu;
             hv[i] = new_hv;
@@ -326,7 +327,7 @@ where
         h: &[B::Scalar],
         hu: &mut [B::Scalar],
         hv: &mut [B::Scalar],
-        _manning_n: &[B::Scalar],
+        manning_n: &[B::Scalar],
         use_uniform_n: bool,
         uniform_n: B::Scalar,
         dt: B::Scalar,
@@ -336,7 +337,7 @@ where
             .zip(h.par_iter())
             .enumerate()
             .for_each(|(_i, ((hu_i, hv_i), &h_i))| {
-                let n_val = if use_uniform_n { uniform_n } else { B::Scalar::ZERO };
+                let n_val = if use_uniform_n { uniform_n } else { manning_n[_i] };
                 let (new_hu, new_hv) = self.apply_semi_implicit(h_i, *hu_i, *hv_i, n_val, dt);
                 *hu_i = new_hu;
                 *hv_i = new_hv;
@@ -399,5 +400,44 @@ mod tests {
         assert!(new_hv < hv);
         assert!(new_hu >= 0.0);
         assert!(new_hv >= 0.0);
+    }
+
+    #[test]
+    fn test_semi_implicit_batch_uses_cellwise_manning_serial() {
+        let backend = CpuBackend::<f64>::new();
+        let mut friction = ManningFriction::new(backend, G);
+        friction.set_config(FrictionConfig {
+            parallel: false,
+            ..FrictionConfig::default()
+        });
+
+        let h = [1.0_f64, 1.0_f64];
+        let mut hu = [1.0_f64, 1.0_f64];
+        let mut hv = [0.0_f64, 0.0_f64];
+        let manning_n = [0.02_f64, 0.08_f64];
+
+        friction.apply_semi_implicit_batch(&h, &mut hu, &mut hv, &manning_n, 0.1);
+
+        assert!(hu[0] > hu[1]);
+    }
+
+    #[test]
+    fn test_semi_implicit_batch_uses_cellwise_manning_parallel() {
+        let backend = CpuBackend::<f64>::new();
+        let mut friction = ManningFriction::new(backend, G);
+        friction.set_config(FrictionConfig {
+            parallel: true,
+            parallel_threshold: 1,
+            ..FrictionConfig::default()
+        });
+
+        let h = [1.0_f64, 1.0_f64];
+        let mut hu = [1.0_f64, 1.0_f64];
+        let mut hv = [0.0_f64, 0.0_f64];
+        let manning_n = [0.02_f64, 0.08_f64];
+
+        friction.apply_semi_implicit_batch(&h, &mut hu, &mut hv, &manning_n, 0.1);
+
+        assert!(hu[0] > hu[1]);
     }
 }

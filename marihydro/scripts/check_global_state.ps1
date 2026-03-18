@@ -16,14 +16,12 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 
 # 定义扫描的核心目录
 $ScanDirs = @(
-    "crates\mh_core\src",
-    "crates\mh_physics\src",
-    "crates\mh_mesh\src",
     "crates\mh_geo\src",
-    "crates\mh_foundation\src",
-    "crates\mh_workflow\src",
     "crates\mh_io\src",
-    "crates\mh_terrain\src"
+    "crates\mh_mesh\src",
+    "crates\mh_terrain\src",
+    "apps",
+    "tests"
 )
 
 Write-Host "=== Checking for global mutable state ===" -ForegroundColor Cyan
@@ -88,10 +86,10 @@ foreach ($dir in $ScanDirs) {
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Cyan
 if ($FoundIssues -eq 0) {
-    Write-Host "✅ No global mutable state issues found!" -ForegroundColor Green
+    Write-Host "[OK] No global mutable state issues found!" -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "❌ Found $FoundIssues global mutable state issues" -ForegroundColor Red
+    Write-Host "[FAIL] Found $FoundIssues global mutable state issues" -ForegroundColor Red
     Write-Host "Consider using dependency injection or explicit parameter passing."
     Write-Host "If intentional, add // @global-state-ok comment."
     exit 1

@@ -75,7 +75,7 @@ impl Default for GreenGaussConfig {
 pub struct GreenGaussGradient {
     config: GreenGaussConfig,
     /// 边界单元索引缓存（可选性能优化）
-    boundary_cells: Option<Vec<usize>>,
+    boundary_cells: Option<Vec<bool>>,
 }
 
 impl GreenGaussGradient {
@@ -120,16 +120,16 @@ impl GreenGaussGradient {
     ///
     /// 预计算后每次梯度计算可节省O(N×F)的检测时间。
     pub fn with_boundary_cache(mut self, mesh: &PhysicsMesh) -> Self {
-        let boundary_cells: Vec<usize> = (0..mesh.cell_count())
-            .filter(|&cell| {
-                let cell_idx = CellIndex::new(cell);
-                mesh.cell_faces(cell_idx)
-                    .any(|face| mesh.face_neighbor(face).is_none())
-            })
-            .collect();
+        let mut boundary_cells = vec![false; mesh.cell_count()];
+        for cell in 0..mesh.cell_count() {
+            let cell_idx = CellIndex::new(cell);
+            boundary_cells[cell] = mesh
+                .cell_faces(cell_idx)
+                .any(|face| mesh.face_neighbor(face).is_none());
+        }
 
         debug!("Cached {} boundary cells out of {} total cells", 
-            boundary_cells.len(), mesh.cell_count());
+            boundary_cells.iter().filter(|&&is_boundary| is_boundary).count(), mesh.cell_count());
 
         self.boundary_cells = Some(boundary_cells);
         self
@@ -139,7 +139,7 @@ impl GreenGaussGradient {
     #[inline]
     fn is_boundary_cell(&self, cell: usize, mesh: &PhysicsMesh) -> bool {
         if let Some(ref boundary_cells) = self.boundary_cells {
-            boundary_cells.contains(&cell)
+            boundary_cells.get(cell).copied().unwrap_or(false)
         } else {
             let cell_idx = CellIndex::new(cell);
             mesh.cell_faces(cell_idx)
@@ -490,7 +490,9 @@ mod tests {
     #[test]
     fn test_green_gauss_linear_field() {
         let mesh = create_test_mesh();
-        let gg = GreenGaussGradient::new().with_parallel(false);
+        let gg = GreenGaussGradient::new()
+            .with_parallel(false)
+            .without_boundary_zero();
         let backend = CpuBackend::<f64>::new();
 
         let mut field = backend.alloc(2);
@@ -521,7 +523,9 @@ mod tests {
     #[test]
     fn test_vector_gradient() {
         let mesh = create_test_mesh();
-        let gg = GreenGaussGradient::new().with_parallel(false);
+        let gg = GreenGaussGradient::new()
+            .with_parallel(false)
+            .without_boundary_zero();
         let backend = CpuBackend::<f64>::new();
 
         let mut u = backend.alloc(2);

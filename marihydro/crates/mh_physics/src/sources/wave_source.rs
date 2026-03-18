@@ -22,7 +22,6 @@
 //! ```
 
 use crate::sources::traits::{
-    SourceContribution, SourceContext, SourceTerm,
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
@@ -153,49 +152,43 @@ impl WaveRadiationSource {
     /// - `cell_centers`: 单元中心坐标 [(x, y), ...]
     /// - `neighbors`: 每个单元的邻居列表
     /// - `face_normals`: 面法向量
-    pub fn compute_gradient_simple(
-        &mut self,
-        cell_sizes: &[f64],
-    ) {
-        // 简化实现：假设均匀波场，梯度为零
-        // 完整实现需要网格拓扑
-        
-        let n_cells = self.stress.len();
-        for i in 0..n_cells {
-            // 当波场均匀时，梯度为零
-            // 这里预留接口，实际梯度需要通过网格计算
-            let dx = cell_sizes.get(i).copied().unwrap_or(100.0);
-            
-            // 使用有限差分估计（需要相邻单元信息）
-            // 这里简化为零
-            self.stress_gradient[i] = (0.0, 0.0);
-            let _ = dx; // 抑制警告
+    pub fn compute_gradient_simple(&mut self, _cell_sizes: &[f64]) {
+        // Explicit placeholder: without mesh topology we do not attempt an
+        // approximate gradient reconstruction.
+        for grad in &mut self.stress_gradient {
+            *grad = (0.0, 0.0);
         }
-        
-        self.gradient_computed = true;
+
+        self.enabled = false;
+        self.gradient_computed = false;
     }
 
-    /// 设置预计算的梯度（从外部计算后传入）
+    /// 璁剧疆棰勮绠楃殑姊害锛堜粠澶栭儴璁＄畻鍚庝紶鍏ワ級
     pub fn set_gradient(&mut self, gradient: &[(f64, f64)]) {
         let n = self.stress_gradient.len().min(gradient.len());
         self.stress_gradient[..n].copy_from_slice(&gradient[..n]);
+        self.enabled = true;
         self.gradient_computed = true;
     }
 
-    /// 获取辐射应力场
+    /// 鑾峰彇杈愬皠搴斿姏鍦?
     pub fn stress(&self) -> &[RadiationStressTensorGeneric<f64>] {
         &self.stress
     }
 
-    /// 获取波场
+    /// 鑾峰彇娉㈠満
     pub fn wave_field(&self) -> &WaveFieldGeneric<CpuBackend<f64>> {
         &self.wave_field
     }
 }
 
-impl SourceTerm for WaveRadiationSource {
+impl SourceTermGeneric<CpuBackend<f64>> for WaveRadiationSource {
     fn name(&self) -> &'static str {
         "WaveRadiation"
+    }
+
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
     }
 
     fn is_enabled(&self) -> bool {
@@ -204,32 +197,53 @@ impl SourceTerm for WaveRadiationSource {
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
+        if !self.is_enabled() {
+            return SourceContributionGeneric::default();
+        }
+
         let h = state.h[cell];
         if ctx.is_dry(h) {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
         let (grad_x, grad_y) = self.stress_gradient.get(cell).copied().unwrap_or((0.0, 0.0));
-
-        // 动量源项 = -∇·S / (ρh)
-        // grad_x = ∂S_xx/∂x + ∂S_xy/∂y
-        // grad_y = ∂S_xy/∂x + ∂S_yy/∂y
         let fx = -grad_x / (self.rho_water * h);
         let fy = -grad_y / (self.rho_water * h);
 
-        SourceContribution::momentum(fx, fy)
+        SourceContributionGeneric::momentum(fx, fy)
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.is_enabled() {
+            return;
+        }
+
+        let n = state.n_cells().min(self.stress.len());
+        if rhs_hu.len() < n {
+            rhs_hu.resize(n, 0.0);
+        }
+        if rhs_hv.len() < n {
+            rhs_hv.resize(n, 0.0);
+        }
+
+        for cell in 0..n {
+            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
-
-/// 泛型版波浪辐射应力源项
 pub struct WaveRadiationSourceGeneric {
     /// 预计算的动量源项 [m/s²]
     momentum_source: Vec<(f64, f64)>,

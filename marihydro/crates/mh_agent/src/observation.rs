@@ -1,95 +1,112 @@
-// crates/mh_agent/src/observation.rs
+use crate::{DefaultBackend, PhysicsSnapshot};
+use bytemuck::Pod;
+use mh_runtime::{Backend, CellIndex, RuntimeScalar};
+use mh_runtime::prelude::{Float, FromPrimitive};
 
-use crate::PhysicsSnapshot;
-
-/// 观测算子trait
-pub trait ObservationOperator: Send + Sync {
-    /// 观测类型名称
+/// 观测算子抽象。
+pub trait ObservationOperator<B: Backend = DefaultBackend>: Send + Sync
+where
+    B::Vector2D: Pod,
+{
+    /// 观测算子名称。
     fn name(&self) -> &'static str;
-    
-    /// 模拟状态 → 观测空间
-    fn observe(&self, snapshot: &PhysicsSnapshot) -> Vec<f64>;
-    
-    /// 计算观测-模拟残差
-    fn residual(&self, snapshot: &PhysicsSnapshot, observation: &[f64]) -> Vec<f64>;
-    
-    /// 获取观测误差协方差（对角阵时返回方差）
-    fn observation_error_variance(&self) -> Option<Vec<f64>> { None }
 
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<f64>> {
-        self.observation_error_variance().map(|v| vec![v[0]; n_obs])
+    /// 将物理状态映射到观测空间。
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar>;
+
+    /// 计算残差。
+    fn residual(&self, snapshot: &PhysicsSnapshot<B>, observation: &[B::Scalar]) -> Vec<B::Scalar> {
+        let simulated = self.observe(snapshot);
+        simulated
+            .iter()
+            .zip(observation.iter())
+            .map(|(s, o)| *o - *s)
+            .collect()
     }
-    
-    /// 线性化观测算子（返回雅可比矩阵）
-    fn linearize(&self, _snapshot: &PhysicsSnapshot) -> Option<Vec<Vec<f64>>> { None }
+
+    /// 观测误差方差。
+    fn observation_error_variance(&self) -> Option<Vec<B::Scalar>> {
+        None
+    }
+
+    /// 按观测数量扩展误差方差。
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
+        self.observation_error_variance()
+            .map(|v| vec![v.first().copied().unwrap_or(B::Scalar::ZERO); n_obs])
+    }
+
+    /// 线性化结果。
+    fn linearize(&self, _snapshot: &PhysicsSnapshot<B>) -> Option<Vec<Vec<B::Scalar>>> {
+        None
+    }
 }
 
-/// 遥感反射率观测算子
-pub struct ReflectanceOperator {
-    /// 波长 [nm]
-    wavelength: f64,
-    /// 校准参数 [a, b, c, ...] for R = a * ln(C) + b
-    calibration: Vec<f64>,
-    /// 观测误差标准差
-    observation_std: f64,
+/// 反射率观测算子。
+pub struct ReflectanceOperator<B: Backend = DefaultBackend> {
+    wavelength: B::Scalar,
+    calibration: Vec<B::Scalar>,
+    observation_std: B::Scalar,
 }
 
-impl ReflectanceOperator {
+impl<B: Backend> ReflectanceOperator<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     pub fn new(wavelength: f64, calibration: Vec<f64>, observation_std: f64) -> Self {
-        Self { wavelength, calibration, observation_std }
+        Self {
+            wavelength: B::Scalar::from_f64(wavelength).unwrap_or(B::Scalar::ZERO),
+            calibration: calibration
+                .into_iter()
+                .map(|v| B::Scalar::from_f64(v).unwrap_or(B::Scalar::ZERO))
+                .collect(),
+            observation_std: B::Scalar::from_f64(observation_std).unwrap_or(B::Scalar::ZERO),
+        }
     }
-    
-    /// 使用默认的MODIS红波段校准参数
+
+    /// MODIS 红波段默认参数。
     pub fn modis_red_band() -> Self {
         Self::new(645.0, vec![0.12, 0.01], 0.02)
     }
-    
-    /// 使用默认的Sentinel-2校准参数
+
+    /// Sentinel-2 B4 默认参数。
     pub fn sentinel2_b4() -> Self {
         Self::new(665.0, vec![0.09, 0.0], 0.02)
     }
 }
 
-impl ObservationOperator for ReflectanceOperator {
-    fn name(&self) -> &'static str { "Reflectance" }
-    
-    fn observe(&self, snapshot: &PhysicsSnapshot) -> Vec<f64> {
-        snapshot.sediment.as_ref()
-            .map(|c| c.iter().map(|&conc| {
-                let c_safe = conc.max(1e-10);
-                let a = *self.calibration.get(0).unwrap_or(&1.0);
-                let b = *self.calibration.get(1).unwrap_or(&0.0);
-                a * c_safe.ln() + b
-            }).collect())
-            .unwrap_or_else(|| vec![0.0; snapshot.n_cells()])
+impl<B: Backend> ObservationOperator<B> for ReflectanceOperator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
+    fn name(&self) -> &'static str {
+        "Reflectance"
     }
-    
-    fn residual(&self, snapshot: &PhysicsSnapshot, observation: &[f64]) -> Vec<f64> {
-        let simulated = self.observe(snapshot);
-        simulated
-            .iter()
-            .zip(observation.iter())
-            .map(|(s, o)| o - s)
-            .collect()
+
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
+        let _ = self.wavelength;
+        snapshot
+            .sediment
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|&conc| {
+                        let c_safe = conc.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
+                        let a = *self.calibration.get(0).unwrap_or(&B::Scalar::ONE);
+                        let b = *self.calibration.get(1).unwrap_or(&B::Scalar::ZERO);
+                        a * c_safe.ln() + b
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![B::Scalar::ZERO; snapshot.n_cells()])
     }
-    
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<f64>> {
-        Some(vec![self.observation_std.powi(2); n_obs])
+
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
+        Some(vec![self.observation_std * self.observation_std; n_obs])
     }
 }
 
-/// SAR后向散射观测算子
-pub struct SAROperator {
-    /// 入射角 [degrees]
-    incidence_angle: f64,
-    /// 极化方式
-    polarization: Polarization,
-    /// 风速校正系数
-    wind_correction: f64,
-    /// 观测误差标准差 [dB]
-    observation_std: f64,
-}
-
+/// SAR 极化方式。
 #[derive(Debug, Clone, Copy)]
 pub enum Polarization {
     VV,
@@ -98,85 +115,104 @@ pub enum Polarization {
     HV,
 }
 
-impl SAROperator {
+/// SAR 后向散射观测算子。
+pub struct SAROperator<B: Backend = DefaultBackend> {
+    incidence_angle: B::Scalar,
+    polarization: Polarization,
+    wind_correction: B::Scalar,
+    observation_std: B::Scalar,
+}
+
+impl<B: Backend> SAROperator<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     pub fn new(incidence_angle: f64, polarization: Polarization) -> Self {
         Self {
-            incidence_angle,
+            incidence_angle: B::Scalar::from_f64(incidence_angle).unwrap_or(B::Scalar::ZERO),
             polarization,
-            wind_correction: 1.0,
-            observation_std: 1.0,
+            wind_correction: B::Scalar::ONE,
+            observation_std: B::Scalar::ONE,
         }
     }
 }
 
-impl ObservationOperator for SAROperator {
-    fn name(&self) -> &'static str { "SAR-Backscatter" }
-    
-    fn observe(&self, snapshot: &PhysicsSnapshot) -> Vec<f64> {
+impl<B: Backend> ObservationOperator<B> for SAROperator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
+    fn name(&self) -> &'static str {
+        "SAR-Backscatter"
+    }
+
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
         let mut result = Vec::with_capacity(snapshot.n_cells());
+        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         for i in 0..snapshot.n_cells() {
-            let speed = snapshot.u.get(i).copied().unwrap_or(0.0).hypot(snapshot.v.get(i).copied().unwrap_or(0.0));
-            let depth = snapshot.h.get(i).copied().unwrap_or(0.0).max(1e-6);
-            let incidence_factor = self.incidence_angle.to_radians().cos().abs();
+            let speed = snapshot.u[i].hypot(snapshot.v[i]);
+            let depth = snapshot.h[i].max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
+            let incidence_factor = self.incidence_angle.to_f64_lossy().to_radians().cos().abs();
+            let incidence_factor = B::Scalar::from_f64(incidence_factor).unwrap_or(B::Scalar::ONE);
             let pol_factor = match self.polarization {
-                Polarization::VV | Polarization::HH => 1.0,
-                _ => 0.8,
+                Polarization::VV | Polarization::HH => B::Scalar::ONE,
+                _ => B::Scalar::from_f64(0.8).unwrap_or(B::Scalar::ONE),
             };
-            let backscatter = 10.0 * (speed / depth * incidence_factor * pol_factor * self.wind_correction + 1e-6).ln();
+            let backscatter = B::Scalar::from_f64(10.0).unwrap_or(B::Scalar::ONE)
+                * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny).ln();
             result.push(backscatter);
         }
         result
     }
-    
-    fn residual(&self, snapshot: &PhysicsSnapshot, observation: &[f64]) -> Vec<f64> {
-        let simulated = self.observe(snapshot);
-        simulated
-            .iter()
-            .zip(observation.iter())
-            .map(|(s, o)| o - s)
-            .collect()
+
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
+        Some(vec![self.observation_std * self.observation_std; n_obs])
     }
 }
 
-/// 水位观测算子（验潮站）
-pub struct WaterLevelOperator {
-    /// 观测站位置索引
-    station_indices: Vec<usize>,
-    /// 观测误差标准差 [m]
-    observation_std: f64,
+/// 水位观测算子。
+pub struct WaterLevelOperator<B: Backend = DefaultBackend> {
+    station_indices: Vec<CellIndex>,
+    observation_std: B::Scalar,
 }
 
-impl WaterLevelOperator {
+impl<B: Backend> WaterLevelOperator<B>
+where
+    B::Scalar: RuntimeScalar,
+{
     pub fn new(
-        station_indices: Vec<usize>,
+        station_indices: Vec<CellIndex>,
         observation_std: f64,
         n_cells: usize,
     ) -> Result<Self, crate::AiError> {
-        if station_indices.iter().any(|&i| i >= n_cells) {
+        if station_indices.iter().any(|idx| idx.get() >= n_cells) {
             return Err(crate::AiError::InvalidObservation("观测站索引超出范围".into()));
         }
-        Ok(Self { station_indices, observation_std })
+
+        Ok(Self {
+            station_indices,
+            observation_std: B::Scalar::from_f64(observation_std).unwrap_or(B::Scalar::ZERO),
+        })
     }
 }
 
-impl ObservationOperator for WaterLevelOperator {
-    fn name(&self) -> &'static str { "WaterLevel" }
-    
-    fn observe(&self, snapshot: &PhysicsSnapshot) -> Vec<f64> {
-        self.station_indices.iter()
-            .map(|&i| snapshot.h.get(i).copied().unwrap_or(0.0) + snapshot.z.get(i).copied().unwrap_or(0.0))
+impl<B: Backend> ObservationOperator<B> for WaterLevelOperator<B>
+where
+    B::Scalar: RuntimeScalar,
+    B::Vector2D: Pod,
+{
+    fn name(&self) -> &'static str {
+        "WaterLevel"
+    }
+
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
+        self.station_indices
+            .iter()
+            .map(|idx| snapshot.h[idx.get()] + snapshot.z[idx.get()])
             .collect()
     }
-    
-    fn residual(&self, snapshot: &PhysicsSnapshot, observation: &[f64]) -> Vec<f64> {
-        let sim = self.observe(snapshot);
-        sim.iter()
-            .zip(observation.iter())
-            .map(|(s, o)| o - s)
-            .collect()
-    }
-    
-    fn observation_error_variance(&self) -> Option<Vec<f64>> {
-        Some(vec![self.observation_std.powi(2); self.station_indices.len()])
+
+    fn observation_error_variance(&self) -> Option<Vec<B::Scalar>> {
+        Some(vec![self.observation_std * self.observation_std; self.station_indices.len()])
     }
 }

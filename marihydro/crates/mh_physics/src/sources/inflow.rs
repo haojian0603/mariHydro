@@ -23,7 +23,9 @@
 //! ∂(hu)/∂t + ∇·F = S_hu
 //! ```
 
-use super::traits::{SourceContribution, SourceContext, SourceTerm};
+use super::traits::{
+    SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
+};
 use crate::state::ShallowWaterState;
 use mh_runtime::CpuBackend;
 
@@ -192,102 +194,99 @@ impl InflowConfig {
     }
 }
 
-impl SourceTerm for InflowConfig {
-    fn name(&self) -> &'static str {
-        "Inflow"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
+    fn name(&self) -> &'static str { "Inflow" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        _ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        _ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let inflow = self.inflow_type.get(cell).copied().unwrap_or(InflowType::None);
 
         match inflow {
-            InflowType::None => SourceContribution::ZERO,
-
+            InflowType::None => SourceContributionGeneric::default(),
             InflowType::ConstantDischarge(q) => {
                 let area = self.cell_area.get(cell).copied().unwrap_or(1.0);
                 let direction = self.inflow_direction.get(cell).copied().unwrap_or(0.0);
 
                 if !q.is_finite() || !area.is_finite() || area <= 0.0 || !direction.is_finite() {
-                    return SourceContribution::ZERO;
+                    return SourceContributionGeneric::default();
                 }
 
-                // 水深变化率 = Q / A [m/s]
                 let s_h = q / area;
-
-                // 动量源项 = Q * v / A = Q² / (A * h) for 入流
-                // 简化：假设入流速度与方向一致
                 let h = state.h[cell].max(self.h_min);
                 let v_in = q / (area * h).max(1e-10);
-
                 let s_hu = s_h * v_in * direction.cos();
                 let s_hv = s_h * v_in * direction.sin();
-
-                SourceContribution::new(s_h, s_hu, s_hv)
+                SourceContributionGeneric::new(s_h, s_hu, s_hv)
             }
-
             InflowType::ConstantVelocity { velocity, direction } => {
                 if !velocity.is_finite() || !direction.is_finite() {
-                    return SourceContribution::ZERO;
+                    return SourceContributionGeneric::default();
                 }
                 let h = state.h[cell];
                 if h < self.h_min {
-                    return SourceContribution::ZERO;
+                    return SourceContributionGeneric::default();
                 }
-
-                // 对于速度入流，不改变水深，只改变动量
-                let s_hu = velocity * direction.cos();
-                let s_hv = velocity * direction.sin();
-
-                SourceContribution::momentum(s_hu, s_hv)
+                SourceContributionGeneric::momentum(velocity * direction.cos(), velocity * direction.sin())
             }
-
             InflowType::UniformFlux(flux) => {
-                // 均匀面源只影响水深
                 if flux.is_finite() {
-                    SourceContribution::mass(flux)
+                    SourceContributionGeneric::mass(flux)
                 } else {
-                    SourceContribution::ZERO
+                    SourceContributionGeneric::default()
                 }
             }
-
             InflowType::TimeVarying => {
                 let q = self.current_discharge.get(cell).copied().unwrap_or(0.0);
                 let area = self.cell_area.get(cell).copied().unwrap_or(1.0);
                 let direction = self.inflow_direction.get(cell).copied().unwrap_or(0.0);
 
                 if !q.is_finite() || !area.is_finite() || area <= 0.0 || !direction.is_finite() {
-                    return SourceContribution::ZERO;
+                    return SourceContributionGeneric::default();
                 }
 
                 let s_h = q / area;
-
                 let h = state.h[cell].max(self.h_min);
                 let v_in = q / (area * h).max(1e-10);
-
                 let s_hu = s_h * v_in * direction.cos();
                 let s_hv = s_h * v_in * direction.sin();
-
-                SourceContribution::new(s_h, s_hu, s_hv)
+                SourceContributionGeneric::new(s_h, s_hu, s_hv)
             }
         }
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        rhs_hu: &mut Vec<f64>,
+        rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
+        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+
+        for cell in 0..n {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
     }
 }
-
-/// 降雨配置
-#[derive(Debug, Clone)]
 pub struct RainfallConfig {
     /// 是否启用
     pub enabled: bool,
@@ -354,32 +353,42 @@ impl RainfallConfig {
     }
 }
 
-impl SourceTerm for RainfallConfig {
-    fn name(&self) -> &'static str {
-        "Rainfall"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for RainfallConfig {
+    fn name(&self) -> &'static str { "Rainfall" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        _state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        _ctx: &SourceContext,
-    ) -> SourceContribution {
-        let net = self.net_intensity(cell);
-        SourceContribution::mass(net)
+        _state: &ShallowWaterState<CpuBackend<f64>>,
+        _ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
+        SourceContributionGeneric::mass(self.net_intensity(cell))
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        _rhs_hu: &mut Vec<f64>,
+        _rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        for cell in 0..n {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+        }
     }
 }
-
-/// 蒸发配置
-#[derive(Debug, Clone)]
 pub struct EvaporationConfig {
     /// 是否启用
     pub enabled: bool,
@@ -416,40 +425,52 @@ impl EvaporationConfig {
     }
 }
 
-impl SourceTerm for EvaporationConfig {
-    fn name(&self) -> &'static str {
-        "Evaporation"
-    }
+impl SourceTermGeneric<CpuBackend<f64>> for EvaporationConfig {
+    fn name(&self) -> &'static str { "Evaporation" }
 
-    fn is_enabled(&self) -> bool {
-        self.enabled
-    }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+
+    fn is_enabled(&self) -> bool { self.enabled }
 
     fn compute_cell(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
         cell: usize,
-        ctx: &SourceContext,
-    ) -> SourceContribution {
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        ctx: &SourceContextGeneric<f64>,
+    ) -> SourceContributionGeneric<f64> {
         let h = state.h[cell];
         if h < self.h_min || ctx.is_dry(h) {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
 
         let rate = self.rate.get(cell).copied().unwrap_or(0.0);
         if !rate.is_finite() {
-            return SourceContribution::ZERO;
+            return SourceContributionGeneric::default();
         }
-        // 蒸发为负值（水深减少）
-        SourceContribution::mass(-rate)
+
+        SourceContributionGeneric::mass(-rate)
     }
 
-    fn is_explicit(&self) -> bool {
-        true
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<CpuBackend<f64>>,
+        rhs_h: &mut Vec<f64>,
+        _rhs_hu: &mut Vec<f64>,
+        _rhs_hv: &mut Vec<f64>,
+        ctx: &SourceContextGeneric<f64>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        for cell in 0..n {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+        }
     }
 }
-
-/// 入流源便捷构造器
 pub struct InflowSource;
 
 impl InflowSource {
@@ -494,7 +515,7 @@ impl EvaporationSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NumericalParams;
+    use mh_runtime::CpuBackend;
 
     fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
@@ -554,10 +575,10 @@ mod tests {
             .with_uniform_rainfall(36.0);
 
         let state = create_test_state(10, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
 
         assert!((contrib.s_h - 1e-5).abs() < 1e-10);
         assert_eq!(contrib.s_hu, 0.0);
@@ -571,10 +592,10 @@ mod tests {
         config.add_point_source(0, 1.0, 0.0); // 1 m³/s, 东向
 
         let state = create_test_state(10, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
 
         // s_h = Q/A = 1/100 = 0.01 m/s
         assert!((contrib.s_h - 0.01).abs() < 1e-10);
@@ -607,10 +628,10 @@ mod tests {
             .with_uniform_intensity(36.0);
 
         let state = create_test_state(10, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
 
         assert!((contrib.s_h - 1e-5).abs() < 1e-10);
         assert_eq!(config.name(), "Rainfall");
@@ -630,10 +651,10 @@ mod tests {
             .with_uniform_rate(3.6);
 
         let state = create_test_state(10, 1.0);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
 
         // 蒸发为负值
         assert!((contrib.s_h - (-1e-6)).abs() < 1e-12);
@@ -646,10 +667,10 @@ mod tests {
             .with_uniform_rate(3.6);
 
         let state = create_test_state(10, 1e-8);
-        let params = NumericalParams::default();
-        let ctx = SourceContext::new(0.0, 1.0, &params);
+        let backend = CpuBackend::<f64>::new();
+        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
-        let contrib = config.compute_cell(&state, 0, &ctx);
+        let contrib = config.compute_cell(0, &state, &ctx);
 
         // 干单元不蒸发
         assert_eq!(contrib.s_h, 0.0);
@@ -659,14 +680,14 @@ mod tests {
     fn test_source_term_traits() {
         let inflow = InflowConfig::new(10);
         assert_eq!(inflow.name(), "Inflow");
-        assert!(inflow.is_explicit());
+        assert_eq!(inflow.stiffness(), SourceStiffness::Explicit);
 
         let rainfall = RainfallConfig::new(10);
         assert_eq!(rainfall.name(), "Rainfall");
-        assert!(rainfall.is_explicit());
+        assert_eq!(rainfall.stiffness(), SourceStiffness::Explicit);
 
         let evap = EvaporationConfig::new(10);
         assert_eq!(evap.name(), "Evaporation");
-        assert!(evap.is_explicit());
+        assert_eq!(evap.stiffness(), SourceStiffness::Explicit);
     }
 }

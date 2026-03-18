@@ -46,6 +46,19 @@ pub struct SettlingVelocity<S: RuntimeScalar> {
 }
 
 impl<S: RuntimeScalar> SettlingVelocity<S> {
+    #[inline]
+    fn normalized_d_star<B: Backend<Scalar = S>>(
+        backend: &B,
+        value: S,
+    ) -> S {
+        let min_d_star = backend.scalar_from_f64(1e-12);
+        if value.is_finite() && value > min_d_star {
+            value
+        } else {
+            min_d_star
+        }
+    }
+
     /// 自动选择最佳公式计算沉降速度
     pub fn auto<B: Backend<Scalar = S>>(
         backend: &B,
@@ -53,7 +66,7 @@ impl<S: RuntimeScalar> SettlingVelocity<S> {
         physics: &PhysicalConstants,
     ) -> Self {
         // 根据无量纲粒径选择公式
-        let d_star = props.dimensionless_diameter;
+        let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
         let one = S::from_config(1.0).unwrap_or(S::ONE);
         let hundred = S::from_config(100.0).unwrap_or(S::MAX);
         
@@ -180,7 +193,7 @@ impl<S: RuntimeScalar> SettlingFormula<S> for VanRijnSettling<S> {
     ) -> S {
         let s = props.relative_density;
         let d = props.d50;
-        let d_star = props.dimensionless_diameter;
+        let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
         let nu = backend.scalar_from_f64(physics.nu_water);
         let g = backend.scalar_from_f64(physics.g);
         let one = S::ONE;
@@ -244,7 +257,13 @@ impl<S: RuntimeScalar> SettlingFormula<S> for DietrichSettling<S> {
         let one = S::ONE;
         
         // 无量纲粒径
-        let d_star = d * ((s - one) * g / (nu * nu)).powf(one / backend.scalar_from_f64(3.0));
+        let d_star = SettlingVelocity::normalized_d_star(
+            backend,
+            d * ((s - one) * g / (nu * nu)).powf(one / backend.scalar_from_f64(3.0)),
+        );
+        if !d_star.is_finite() {
+            return backend.scalar_from_f64(0.0);
+        }
         
         // Dietrich 公式
         let ln_d_star = d_star.ln();

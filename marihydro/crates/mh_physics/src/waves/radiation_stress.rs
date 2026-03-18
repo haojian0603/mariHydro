@@ -331,11 +331,16 @@ impl<S: RuntimeScalar> WaveFieldSnapshot<S> {
 ///
 /// 返回 (k, n)，其中 n = Cg/C = 群速度/相速度
 pub fn compute_wavenumber_and_n<B: Backend>(backend: &B, omega: B::Scalar, depth: B::Scalar) -> (B::Scalar, B::Scalar) {
+    if !omega.is_finite() || !depth.is_finite() {
+        return (B::Scalar::ZERO, B::Scalar::ZERO);
+    }
+
     let h = depth.max(backend.scalar_from_f64(0.01));
     let g = gravity(backend);
+    let eps = backend.scalar_from_f64(1e-10);
 
     // 初始猜测（深水近似）
-    let mut k = omega * omega / g;
+    let mut k = (omega * omega / g).max(B::Scalar::ZERO);
 
     // Newton-Raphson 迭代
     for _ in 0..20 {
@@ -343,11 +348,17 @@ pub fn compute_wavenumber_and_n<B: Backend>(backend: &B, omega: B::Scalar, depth
         let tanh_kh = kh.tanh();
         let f = omega * omega - g * k * tanh_kh;
         let df = -g * (tanh_kh + k * h * (B::Scalar::ONE - tanh_kh * tanh_kh));
+        if !df.is_finite() || df.abs() <= eps {
+            break;
+        }
 
         let dk = -f / df;
-        k = k + dk;
+        if !dk.is_finite() {
+            break;
+        }
+        k = (k + dk).max(B::Scalar::ZERO);
 
-        if dk.abs() < backend.scalar_from_f64(1e-10) * k {
+        if dk.abs() < eps * k.max(B::Scalar::ONE) {
             break;
         }
     }
@@ -355,7 +366,7 @@ pub fn compute_wavenumber_and_n<B: Backend>(backend: &B, omega: B::Scalar, depth
     // 群速度因子 n = Cg/C = 0.5(1 + 2kh/sinh(2kh))
     let kh = k * h;
     let sinh_2kh = (B::Scalar::TWO * kh).sinh();
-    let n = if sinh_2kh.abs() > backend.scalar_from_f64(1e-10) {
+    let n = if sinh_2kh.abs() > eps {
         B::Scalar::HALF * (B::Scalar::ONE + B::Scalar::TWO * kh / sinh_2kh)
     } else {
         B::Scalar::ONE // 浅水极限

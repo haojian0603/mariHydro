@@ -43,6 +43,11 @@ where
     B: Backend + Clone,
     B::Scalar: RuntimeScalar,
 {
+    #[inline]
+    fn min_depth(&self) -> B::Scalar {
+        self.transport_solver.config().h_min
+    }
+
     /// 创建新的悬移质输运求解器
     pub fn new_with_backend(
         backend: B,
@@ -188,13 +193,14 @@ where
     ) {
         // 1. 计算床面源项（侵蚀-沉降）
         self.compute_source_terms(tau_b, h);
-        
+
         // 2. 对流项贡献（简化版：使用一阶迎风）
         // 注意：完整实现需要网格连接信息
         // 这里只展示源项积分
+        let min_depth = self.min_depth();
         for i in 0..self.concentration.len() {
             let depth = h.get(i).copied().unwrap_or(B::Scalar::ZERO);
-                if depth < self.backend.scalar_from_f64(1e-6) {
+            if depth < min_depth {
                 continue;
             }
             
@@ -203,7 +209,7 @@ where
             let c = self.concentration[i];
             
             // 沉降使浓度减少（每单位水深）
-            let settling_term = -ws * c / depth.max(self.backend.scalar_from_f64(0.01));
+            let settling_term = -ws * c / depth.max(min_depth);
             
             // 源项 + 沉降
             self.concentration[i] += dt * (self.source_term[i] + settling_term);
@@ -233,7 +239,7 @@ where
     /// 其中 p 为孔隙率
     pub fn bed_change_rate(&self, cell: usize, porosity: B::Scalar) -> B::Scalar {
         let source = self.source_term.get(cell).copied().unwrap_or(B::Scalar::ZERO);
-        let h = B::Scalar::ONE; // 假设单位水深，实际应传入
+        let h = self.min_depth().max(B::Scalar::ONE); // 与悬移质步进一致的最小水深尺度
         
         // 源项为正表示侵蚀（床面降低）
         // 需要乘以水深转换为面通量

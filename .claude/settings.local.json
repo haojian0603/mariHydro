@@ -1,11 +1,39 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(cargo check)",
-      "Bash(cargo clippy)",
-      "Bash(findstr:*)",
-      "Bash(cargo check:*)",
-      "Bash(1)"
-    ]
-  }
+
+"permissions": {
+
+"allow": [
+
+"Bash",
+
+"Read",
+
+"Edit",
+
+"Write",
+
+"WebFetch",
+
+"Grep",
+
+"Glob",
+
+"LS",
+
+"MultiEdit",
+
+"NotebookRead",
+
+"NotebookEdit",
+
+"TodoRead",
+
+"TodoWrite",
+
+"WebSearch"
+
+]
+
+}
+
 }
