@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/mh_agent",
+  "crates/mh_physics",
+  "crates/mh_runtime",
+  "crates/mh_foundation",
+  "crates/mh_config",
+  "crates/mh_mesh",
+  "crates/mh_geo",
+  "crates/mh_io",
+]
+
+[workspace.lints]
