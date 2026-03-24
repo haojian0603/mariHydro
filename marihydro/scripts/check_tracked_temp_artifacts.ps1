@@ -13,7 +13,9 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 
 $TrackedPatterns = @(
+    "tmp_*",
     "tmp_*/",
+    "marihydro/tmp_*",
     "marihydro/tmp_*.log"
 )
 

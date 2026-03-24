@@ -327,7 +327,7 @@ impl<S: RuntimeScalar> WaveFieldSnapshot<S> {
         &self,
         backend: &B,
     ) -> WaveFieldSnapshot<T> {
-        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
+        self.map_scalar_with(|v| backend.config_scalar(v.to_f64_lossy(), "WaveFieldSnapshot.map_scalar"))
     }
 
     /// 精度转换（自定义映射）

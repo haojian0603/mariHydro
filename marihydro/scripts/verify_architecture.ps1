@@ -28,7 +28,7 @@ try {
     Write-Host "=== Phase 0: tracked temporary artifact guard ===" -ForegroundColor Cyan
 
     $trackedTempFiles = @()
-    foreach ($pattern in @("tmp_*/", "marihydro/tmp_*.log")) {
+    foreach ($pattern in @("tmp_*", "tmp_*/", "marihydro/tmp_*", "marihydro/tmp_*.log")) {
         $matches = & git ls-files $pattern 2>$null
         if ($LASTEXITCODE -ne 0) {
             continue
@@ -163,9 +163,28 @@ try {
         Write-Host "[WARN] mh_runtime/src/indices.rs is unavailable" -ForegroundColor Yellow
     }
 
-    # Phase 5: compile check
+    # Phase 5: raw scalar conversion guard
     Write-Host ""
-    Write-Host "=== Phase 5: compile check ===" -ForegroundColor Cyan
+    Write-Host "=== Phase 5: raw scalar conversion guard ===" -ForegroundColor Cyan
+
+    $rawScalarCalls = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
+        Select-String -Pattern '(?<!try_)\bscalar_from_f64\(' -CaseSensitive
+    if ($rawScalarCalls) {
+        Write-Host "[FAIL] raw scalar_from_f64 call sites exist:" -ForegroundColor Red
+        $rawScalarCalls | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($rawScalarCalls.Count -gt 10) {
+            Write-Host "  ... and $($rawScalarCalls.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "raw scalar_from_f64 call sites must be removed from mh_physics/src"
+    } else {
+        Write-Host "[OK] no raw scalar_from_f64 call sites in mh_physics/src" -ForegroundColor Green
+    }
+
+    # Phase 6: compile check
+    Write-Host ""
+    Write-Host "=== Phase 6: compile check ===" -ForegroundColor Cyan
 
     if ($Strict) {
         Write-Host "Running cargo check..." -ForegroundColor Yellow

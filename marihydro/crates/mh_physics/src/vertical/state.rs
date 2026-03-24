@@ -309,7 +309,12 @@ impl<B: Backend> LayeredState<B> {
     /// 计算深度平均速度
     pub fn depth_average_velocity(&self) -> (B::Buffer<B::Scalar>, B::Buffer<B::Scalar>) {
         let weights: Vec<B::Scalar> = (0..self.n_layers())
-            .map(|k| self.backend.scalar_from_f64(self.sigma.layer_thickness_sigma(k)))
+            .map(|k| {
+                self.backend.config_scalar(
+                    self.sigma.layer_thickness_sigma(k),
+                    "LayeredFlowState.depth_average_velocity.layer_thickness",
+                )
+            })
             .collect();
 
         (self.u.depth_average(&weights), self.v.depth_average(&weights))

@@ -15,7 +15,10 @@
 //! use mh_runtime::CpuBackend;
 //!
 //! let backend = CpuBackend::<f64>::new();
-//! let limiter = Venkatakrishnan::<CpuBackend<f64>>::new(backend.scalar_from_f64(5.0), backend.scalar_from_f64(mesh_scale));
+//! let limiter = Venkatakrishnan::<CpuBackend<f64>>::new(
+//!     backend.config_scalar(5.0, "limiter.doc.k"),
+//!     backend.config_scalar(mesh_scale, "limiter.doc.mesh_scale"),
+//! );
 //! let alpha = limiter.compute_limiter(&ctx);
 //! // grad_limited = grad_i * alpha
 //! ```
@@ -118,8 +121,8 @@ pub fn create_limiter<B: Backend>(
     k: f64,
     mesh_scale: f64,
 ) -> LimiterAny<B> {
-    let k_s = backend.scalar_from_f64(k);
-    let scale_s = backend.scalar_from_f64(mesh_scale);
+    let k_s = backend.config_scalar(k, "Limiter.create_limiter.k");
+    let scale_s = backend.config_scalar(mesh_scale, "Limiter.create_limiter.mesh_scale");
     
     match limiter_type {
         LimiterType::None => LimiterAny::None(NoLimiter::<B>::new()),

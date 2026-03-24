@@ -89,6 +89,48 @@ function Invoke-InformationalScan {
     }
 }
 
+function Invoke-FailingScan {
+    param(
+        [string]$Name,
+        [string[]]$Roots,
+        [string]$Pattern
+    )
+
+    $Findings = @()
+    foreach ($Root in $Roots) {
+        $AbsoluteRoot = Join-Path $ProjectRoot $Root
+        if (-not (Test-Path $AbsoluteRoot)) {
+            continue
+        }
+
+        $Files = Get-ChildItem -Path $AbsoluteRoot -Recurse -Filter "*.rs" -File
+        foreach ($File in $Files) {
+            $Matches = Select-String -Path $File.FullName -Pattern $Pattern -CaseSensitive
+            foreach ($Match in $Matches) {
+                $Findings += [pscustomobject]@{
+                    Path = $File.FullName.Replace($ProjectRoot + "\", "")
+                    Line = $Match.LineNumber
+                    Text = $Match.Line.Trim()
+                }
+            }
+        }
+    }
+
+    if ($Findings.Count -eq 0) {
+        Write-Host "[OK] $Name" -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host "[FAIL] $Name findings: $($Findings.Count)" -ForegroundColor Red
+    $Findings | Select-Object -First 10 | ForEach-Object {
+        Write-Host ("  " + $_.Path + ":" + $_.Line + ": " + $_.Text) -ForegroundColor Red
+    }
+    if ($Findings.Count -gt 10) {
+        Write-Host "  ... and $($Findings.Count - 10) more" -ForegroundColor Red
+    }
+    return $false
+}
+
 $Failed = @()
 
 Push-Location $ProjectRoot
@@ -139,9 +181,16 @@ try {
     }
 
     Write-Host ""
+    Write-Host "=== Blocking scalar conversion scan ===" -ForegroundColor Cyan
+    if (-not (Invoke-FailingScan -Name "raw scalar_from_f64 call usage" -Roots @("crates/mh_physics/src") -Pattern '(?<!try_)\bscalar_from_f64\(')) {
+        $Failed += "raw scalar_from_f64 call usage"
+    }
+
+    Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
     Invoke-InformationalScan -Name "legacy SourceTrait residue" -Roots @("crates/mh_physics") -Pattern "SourceTrait"
-    Invoke-InformationalScan -Name "scalar_from_f64 hot-path usage" -Roots @("crates/mh_physics") -Pattern "scalar_from_f64"
+    Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("
+    Invoke-InformationalScan -Name "scalar_from_f64 symbol residue" -Roots @("crates/mh_physics") -Pattern "\bscalar_from_f64\b"
     Invoke-InformationalScan -Name "T06 unimplemented residue" -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern "unimplemented!"
 }
 finally {

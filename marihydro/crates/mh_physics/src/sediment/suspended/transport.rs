@@ -63,7 +63,8 @@ where
             .with_settling_velocity(settling.ws);
         
         // 配置 tracer 求解器（默认使用常数扩散系数）
-        let diffusion = backend.scalar_from_f64(0.1);
+        let diffusion =
+            backend.config_scalar(0.1, "SuspendedTransport.new_with_backend.diffusion");
         let config: TracerTransportConfig<B::Scalar> = TracerTransportConfig::<B::Scalar> {
             advection_scheme: TracerAdvectionScheme::TvdVanLeer,
             diffusion: TracerDiffusionConfig::constant(diffusion),
