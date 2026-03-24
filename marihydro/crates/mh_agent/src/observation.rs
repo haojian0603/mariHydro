@@ -1,6 +1,9 @@
-use crate::{AiError, DefaultBackend, DenseScalarMatrix, PhysicsSnapshot, ScalarSamples};
+use crate::{
+    scalar_from_f64_or_panic, AiError, DefaultBackend, DenseScalarMatrix, PhysicsSnapshot,
+    ScalarSamples,
+};
 use bytemuck::Pod;
-use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, CellIndex, RuntimeScalar};
 
 pub trait ObservationOperator<B: Backend = DefaultBackend>: Send + Sync
@@ -67,10 +70,13 @@ where
 {
     pub fn new(wavelength: f64, calibration: ReflectanceCalibration, observation_std: f64) -> Self {
         Self {
-            wavelength: B::Scalar::from_f64(wavelength).unwrap_or(B::Scalar::ZERO),
-            log_slope: B::Scalar::from_f64(calibration.log_slope).unwrap_or(B::Scalar::ZERO),
-            intercept: B::Scalar::from_f64(calibration.intercept).unwrap_or(B::Scalar::ZERO),
-            observation_std: B::Scalar::from_f64(observation_std).unwrap_or(B::Scalar::ZERO),
+            wavelength: scalar_from_f64_or_panic::<B>(wavelength, "reflectance.wavelength"),
+            log_slope: scalar_from_f64_or_panic::<B>(calibration.log_slope, "reflectance.log_slope"),
+            intercept: scalar_from_f64_or_panic::<B>(calibration.intercept, "reflectance.intercept"),
+            observation_std: scalar_from_f64_or_panic::<B>(
+                observation_std,
+                "reflectance.observation_std",
+            ),
         }
     }
 
@@ -113,8 +119,10 @@ where
             .map(|c| {
                 c.iter()
                     .map(|&conc| {
-                        let c_safe =
-                            conc.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
+                        let c_safe = conc.max(scalar_from_f64_or_panic::<B>(
+                            1e-10,
+                            "reflectance.min_concentration",
+                        ));
                         self.log_slope * c_safe.ln() + self.intercept
                     })
                     .collect::<Vec<_>>()
@@ -149,7 +157,7 @@ where
 {
     pub fn new(incidence_angle: f64, polarization: Polarization) -> Self {
         Self {
-            incidence_angle: B::Scalar::from_f64(incidence_angle).unwrap_or(B::Scalar::ZERO),
+            incidence_angle: scalar_from_f64_or_panic::<B>(incidence_angle, "sar.incidence_angle"),
             polarization,
             wind_correction: B::Scalar::ONE,
             observation_std: B::Scalar::ONE,
@@ -168,18 +176,18 @@ where
 
     fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
         let mut result = Vec::with_capacity(snapshot.n_cells());
-        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let tiny = scalar_from_f64_or_panic::<B>(1e-6, "sar.tiny");
         for i in 0..snapshot.n_cells() {
             let speed = snapshot.u[i].hypot(snapshot.v[i]);
-            let depth =
-                snapshot.h[i].max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
+            let depth = snapshot.h[i].max(scalar_from_f64_or_panic::<B>(1e-6, "sar.min_depth"));
             let incidence_factor = self.incidence_angle.to_f64_lossy().to_radians().cos().abs();
-            let incidence_factor = B::Scalar::from_f64(incidence_factor).unwrap_or(B::Scalar::ONE);
+            let incidence_factor =
+                scalar_from_f64_or_panic::<B>(incidence_factor, "sar.incidence_factor");
             let pol_factor = match self.polarization {
                 Polarization::VV | Polarization::HH => B::Scalar::ONE,
-                _ => B::Scalar::from_f64(0.8).unwrap_or(B::Scalar::ONE),
+                _ => scalar_from_f64_or_panic::<B>(0.8, "sar.cross_pol_factor"),
             };
-            let backscatter = B::Scalar::from_f64(10.0).unwrap_or(B::Scalar::ONE)
+            let backscatter = scalar_from_f64_or_panic::<B>(10.0, "sar.log_scale")
                 * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny)
                     .ln();
             result.push(backscatter);
@@ -214,7 +222,10 @@ where
 
         Ok(Self {
             station_indices,
-            observation_std: B::Scalar::from_f64(observation_std).unwrap_or(B::Scalar::ZERO),
+            observation_std: scalar_from_f64_or_panic::<B>(
+                observation_std,
+                "water_level.observation_std",
+            ),
         })
     }
 }

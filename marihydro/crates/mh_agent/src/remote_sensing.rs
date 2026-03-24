@@ -1,5 +1,8 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
-use mh_runtime::prelude::{Float, FromPrimitive};
+use crate::{
+    scalar_from_f32_or_panic, scalar_from_f64_or_panic, AIAgent, AiError, Assimilable,
+    DefaultBackend, PhysicsSnapshot, ScalarSamples,
+};
+use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +104,7 @@ where
         self.validate_image(image)?;
         let mapped = self.interpolate_to_grid(&image.data, image, target_cells);
 
-        let cloud = B::Scalar::from_f64(image.cloud_cover as f64).unwrap_or(B::Scalar::ONE);
+        let cloud = scalar_from_f32_or_panic::<B>(image.cloud_cover, "remote_sensing.cloud_cover");
         let mut uncertainty = vec![B::Scalar::ZERO; mapped.len()];
         for item in &mut uncertainty {
             *item = cloud.min(B::Scalar::ONE);
@@ -256,7 +259,7 @@ where
             SensorType::SAR => reflectance.abs() * 5.0,
             SensorType::Hyperspectral => reflectance.max(0.0).sqrt() * 8.0,
         };
-        B::Scalar::from_f64(value).unwrap_or(B::Scalar::ZERO)
+        scalar_from_f64_or_panic::<B>(value, "remote_sensing.empirical_inversion")
     }
 
     pub fn clear_cache(&mut self) {

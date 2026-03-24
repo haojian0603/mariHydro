@@ -12,13 +12,28 @@ pub mod remote_sensing;
 pub mod surrogate;
 
 use bytemuck::Pod;
-use mh_runtime::prelude::Float;
+use mh_runtime::prelude::{Float, FromPrimitive};
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 use std::ops::Deref;
 use thiserror::Error;
 
 /// 默认后端。
 pub type DefaultBackend = CpuBackend<f64>;
+
+pub(crate) fn scalar_from_f64_or_panic<B: Backend>(value: f64, context: &'static str) -> B::Scalar
+where
+    B::Scalar: RuntimeScalar,
+{
+    B::Scalar::from_f64(value)
+        .unwrap_or_else(|| panic!("failed to convert agent scalar for {context}: {value}"))
+}
+
+pub(crate) fn scalar_from_f32_or_panic<B: Backend>(value: f32, context: &'static str) -> B::Scalar
+where
+    B::Scalar: RuntimeScalar,
+{
+    scalar_from_f64_or_panic::<B>(value as f64, context)
+}
 
 /// AI 代理错误类型。
 #[derive(Error, Debug)]

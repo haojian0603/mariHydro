@@ -1,5 +1,8 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
-use mh_runtime::prelude::{Float, FromPrimitive};
+﻿use crate::{
+    scalar_from_f64_or_panic, AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot,
+    ScalarSamples,
+};
+use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +113,10 @@ where
     B::Scalar: RuntimeScalar,
     B::Vector2D: bytemuck::Pod,
 {
+    fn unsupported_model_message(model: &'static str) -> String {
+        format!("only LinearRegression is implemented; {model} is not wired in")
+    }
+
     pub fn new(config: SurrogateConfig<B>) -> Result<Self, AiError> {
         let output_dim = config.output_features.len().max(1);
         let mut model = Self {
@@ -142,12 +149,18 @@ where
         self.denormalize_output(&mut values);
         let values: ScalarSamples<B> = values
             .into_iter()
-            .map(|v| B::Scalar::from_f64(v).unwrap_or(B::Scalar::ZERO))
+            .map(|v| scalar_from_f64_or_panic::<B>(v, "surrogate.prediction_value"))
             .collect::<Vec<_>>()
             .into();
 
         let uncertainty = if self.config.estimate_uncertainty {
-            Some(vec![B::Scalar::from_f64(0.1).unwrap_or(B::Scalar::ZERO); values.len()].into())
+            Some(
+                vec![
+                    scalar_from_f64_or_panic::<B>(0.1, "surrogate.default_uncertainty");
+                    values.len()
+                ]
+                .into(),
+            )
         } else {
             None
         };
@@ -162,7 +175,7 @@ where
             values: values.clone(),
             uncertainty: uncertainty.clone(),
             prediction_time: snapshot.time + self.config.prediction_horizon,
-            confidence: B::Scalar::from_f64(confidence).unwrap_or(B::Scalar::ZERO),
+            confidence: scalar_from_f64_or_panic::<B>(confidence, "surrogate.confidence"),
         };
 
         self.current_prediction = Some(prediction.clone());
@@ -174,13 +187,13 @@ where
         match self.config.model_type {
             SurrogateType::LinearRegression => Ok(()),
             SurrogateType::ReducedOrder => Err(AiError::UnsupportedModelType(
-                "褰撳墠浠呭疄鐜?LinearRegression锛孯educedOrder 浠嶆湭鎺ュ叆".into(),
+                Self::unsupported_model_message("ReducedOrder"),
             )),
             SurrogateType::GaussianProcess => Err(AiError::UnsupportedModelType(
-                "褰撳墠浠呭疄鐜?LinearRegression锛孏aussianProcess 浠嶆湭鎺ュ叆".into(),
+                Self::unsupported_model_message("GaussianProcess"),
             )),
             SurrogateType::PolynomialChaos => Err(AiError::UnsupportedModelType(
-                "褰撳墠浠呭疄鐜?LinearRegression锛孭olynomialChaos 浠嶆湭鎺ュ叆".into(),
+                Self::unsupported_model_message("PolynomialChaos"),
             )),
         }
     }
@@ -560,7 +573,7 @@ where
                         }
                         let new_h = (depth[i].to_f64_lossy() + delta).max(0.0);
                         applied += (new_h - depth[i].to_f64_lossy()) * area;
-                        depth[i] = B::Scalar::from_f64(new_h).unwrap_or(B::Scalar::ZERO);
+                        depth[i] = scalar_from_f64_or_panic::<B>(new_h, "surrogate.depth_correction");
                     }
                     diff -= applied;
                     iter += 1;
@@ -575,17 +588,21 @@ where
                     let h1 = depth_after[i].to_f64_lossy();
                     if h0 > 0.0 && h1 > 0.0 {
                         let scale = (h0 / h1).clamp(0.1, 10.0);
-                        u[i] = B::Scalar::from_f64(u[i].to_f64_lossy() * scale)
-                            .unwrap_or(B::Scalar::ZERO);
-                        v[i] = B::Scalar::from_f64(v[i].to_f64_lossy() * scale)
-                            .unwrap_or(B::Scalar::ZERO);
+                        u[i] = scalar_from_f64_or_panic::<B>(
+                            u[i].to_f64_lossy() * scale,
+                            "surrogate.velocity_scale_u",
+                        );
+                        v[i] = scalar_from_f64_or_panic::<B>(
+                            v[i].to_f64_lossy() * scale,
+                            "surrogate.velocity_scale_v",
+                        );
                     }
                 }
             }
 
             Ok(())
         } else {
-            Err(AiError::NotReady("浠ｇ悊棰勬祴灏氭湭鐢熸垚".into()))
+            Err(AiError::NotReady("娴狅絿鎮婃０鍕ゴ鐏忔碍婀悽鐔稿灇".into()))
         }
     }
 
@@ -597,3 +614,4 @@ where
         self.uncertainty()
     }
 }
+

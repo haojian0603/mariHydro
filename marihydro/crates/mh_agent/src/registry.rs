@@ -1,8 +1,10 @@
 //! AI 代理注册中心。
 
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use crate::{
+    scalar_from_f64_or_panic, AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot,
+};
 use bytemuck::Pod;
-use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, RuntimeScalar};
 use std::collections::HashMap;
 
@@ -35,7 +37,10 @@ where
             enabled: HashMap::new(),
             order: Vec::new(),
             conservation_check_enabled: true,
-            conservation_tolerance: B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::EPSILON),
+            conservation_tolerance: scalar_from_f64_or_panic::<B>(
+                1e-10,
+                "agent_registry.conservation_tolerance",
+            ),
         }
     }
 
@@ -110,7 +115,8 @@ where
 
     /// 应用全部启用代理。
     pub fn apply_all(&self, state: &mut dyn Assimilable<B>) -> Result<(), AiError> {
-        let volume_epsilon = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON);
+        let volume_epsilon =
+            scalar_from_f64_or_panic::<B>(1e-14, "agent_registry.volume_epsilon");
         for name in &self.order {
             if !*self.enabled.get(name).unwrap_or(&false) {
                 continue;

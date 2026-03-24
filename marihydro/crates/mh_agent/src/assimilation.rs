@@ -1,6 +1,9 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
+use crate::{
+    scalar_from_f64_or_panic, AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot,
+    ScalarSamples,
+};
 use bytemuck::Pod;
-use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, CellIndex, RuntimeScalar, Vector2D};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -25,8 +28,8 @@ where
 {
     fn default() -> Self {
         Self {
-            rate: B::Scalar::from_f64(0.2).unwrap_or(B::Scalar::ZERO),
-            max_correction: B::Scalar::from_f64(0.2).unwrap_or(B::Scalar::ZERO),
+            rate: scalar_from_f64_or_panic::<B>(0.2, "nudging.default_rate"),
+            max_correction: scalar_from_f64_or_panic::<B>(0.2, "nudging.default_max_correction"),
             smoothing_radius: None,
             temporal_decay: B::Scalar::ZERO,
         }
@@ -203,7 +206,7 @@ where
 
         let mut smoothed = vec![B::Scalar::ZERO; n];
         let radius_sq = radius * radius;
-        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let tiny = scalar_from_f64_or_panic::<B>(1e-6, "nudging.smoothing_tiny");
 
         for i in 0..n {
             let mut weighted_sum = B::Scalar::ZERO;
@@ -238,7 +241,7 @@ where
         }
 
         let mut smoothed = vec![B::Scalar::ZERO; n];
-        let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let tiny = scalar_from_f64_or_panic::<B>(1e-6, "nudging.neighbor_smoothing_tiny");
         for (i, nbrs) in neighbors.iter().enumerate() {
             let mut weighted_sum = B::Scalar::ZERO;
             let mut weight_total = B::Scalar::ZERO;
@@ -269,14 +272,14 @@ where
     }
 
     let r2 = radius * radius;
-    let cell_size = radius.max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
+    let cell_size = radius.max(scalar_from_f64_or_panic::<B>(1e-6, "nudging.grid_cell_size_min"));
     let cell_size_f64 = cell_size.to_f64_lossy();
-    let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    let mut grid: HashMap<(i32, i32), Vec<CellIndex>> = HashMap::new();
 
     for (i, c) in centers.iter().enumerate() {
         let gx = (c.x().to_f64_lossy() / cell_size_f64).floor() as i32;
         let gy = (c.y().to_f64_lossy() / cell_size_f64).floor() as i32;
-        grid.entry((gx, gy)).or_default().push(i);
+        grid.entry((gx, gy)).or_default().push(CellIndex::new(i));
     }
 
     let mut neighbors = vec![Vec::new(); n];
@@ -288,10 +291,11 @@ where
             for dy in -1..=1 {
                 if let Some(bucket) = grid.get(&(gx + dx, gy + dy)) {
                     for &j in bucket {
-                        let ddx = c.x() - centers[j].x();
-                        let ddy = c.y() - centers[j].y();
+                        let j_idx = j.get();
+                        let ddx = c.x() - centers[j_idx].x();
+                        let ddy = c.y() - centers[j_idx].y();
                         if ddx * ddx + ddy * ddy <= r2 {
-                            neighbors[i].push(CellIndex::new(j));
+                            neighbors[i].push(j);
                         }
                     }
                 }
@@ -330,7 +334,8 @@ where
         if let Some(radius) = self.config.smoothing_radius {
             let rebuild = guard.neighbor_list.is_none()
                 || guard.neighbor_radius.is_none_or(|r| {
-                    (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON)
+                    (r - radius).abs()
+                        > scalar_from_f64_or_panic::<B>(1e-12, "nudging.radius_change_epsilon")
                 })
                 || guard.cell_centers.as_ref().map(|c| c.len())
                     != guard.neighbor_list.as_ref().map(|n| n.len());

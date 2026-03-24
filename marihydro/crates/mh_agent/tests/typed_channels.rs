@@ -59,7 +59,10 @@ fn surrogate_rejects_unimplemented_model_types() {
     };
 
     match SurrogateModel::new(config) {
-        Err(AiError::UnsupportedModelType(_)) => {}
+        Err(AiError::UnsupportedModelType(message)) => {
+            assert!(message.contains("only LinearRegression is implemented"));
+            assert!(message.contains("GaussianProcess"));
+        }
         Err(other) => panic!("unexpected error: {other}"),
         Ok(_) => panic!("expected UnsupportedModelType"),
     }
