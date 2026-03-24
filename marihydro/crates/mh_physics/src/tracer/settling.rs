@@ -1,4 +1,4 @@
-﻿// crates/mh_physics/src/tracer/settling.rs
+// crates/mh_physics/src/tracer/settling.rs
 
 use crate::core::{Backend, DeviceBuffer};
 use mh_runtime::RuntimeScalar as Scalar;
@@ -40,11 +40,11 @@ impl<S: Scalar> SettlingConfig<S> {
     /// 使用后端默认值创建配置
     pub fn with_backend_defaults<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
-            settling_velocity: backend.scalar_from_f64(0.001),
+            settling_velocity: backend.config_scalar(0.001, "SettlingConfig.settling_velocity"),
             implicit: true,
-            tolerance: backend.scalar_from_f64(1e-6),
+            tolerance: backend.config_scalar(1e-6, "SettlingConfig.tolerance"),
             max_iterations: 10,
-            min_depth: backend.scalar_from_f64(0.01),
+            min_depth: backend.config_scalar(0.01, "SettlingConfig.min_depth"),
         }
     }
 }
@@ -75,19 +75,14 @@ pub struct SettlingSolver<B: Backend> {
 
 impl<B: Backend> SettlingSolver<B> {
     #[inline]
-    fn compute_implicit_coefficients(
-        &mut self,
-        depth: &B::Buffer<B::Scalar>,
-        dt: B::Scalar,
-    ) {
+    fn compute_implicit_coefficients(&mut self, depth: &B::Buffer<B::Scalar>, dt: B::Scalar) {
         let n = depth.len().min(self.coeff.len());
         let min_depth = self.config.min_depth;
         let one = B::Scalar::ONE;
 
-        if let (Some(depth_slice), Some(coeff_slice)) = (
-            depth.try_as_slice(),
-            self.coeff.try_as_slice_mut(),
-        ) {
+        if let (Some(depth_slice), Some(coeff_slice)) =
+            (depth.try_as_slice(), self.coeff.try_as_slice_mut())
+        {
             for i in 0..n {
                 let h = Float::max(depth_slice[i], min_depth);
                 coeff_slice[i] = one / (one + dt * self.config.settling_velocity / h);
@@ -123,7 +118,11 @@ impl<B: Backend> SettlingSolver<B> {
             for i in 0..n {
                 let h = Float::max(h_slice[i], min_depth);
                 let updated = Float::max(c_old[i] * coeff[i], B::Scalar::ZERO);
-                let denom = Float::max(Float::abs(c_new[i]), self.backend.scalar_from_f64(1e-12));
+                let denom = Float::max(
+                    Float::abs(c_new[i]),
+                    self.backend
+                        .config_scalar(1e-12, "SettlingSolver.relative_change_eps"),
+                );
                 let rel = Float::abs(updated - c_new[i]) / denom;
                 max_rel = Float::max(max_rel, rel);
                 settled = settled + Float::max(c_old[i] - updated, B::Scalar::ZERO) * h;
@@ -137,7 +136,11 @@ impl<B: Backend> SettlingSolver<B> {
             for i in 0..n {
                 let h = Float::max(depth_host[i], min_depth);
                 let updated = Float::max(c_old_host[i] * coeff_host[i], B::Scalar::ZERO);
-                let denom = Float::max(Float::abs(c_new_host[i]), self.backend.scalar_from_f64(1e-12));
+                let denom = Float::max(
+                    Float::abs(c_new_host[i]),
+                    self.backend
+                        .config_scalar(1e-12, "SettlingSolver.relative_change_eps"),
+                );
                 let rel = Float::abs(updated - c_new_host[i]) / denom;
                 max_rel = Float::max(max_rel, rel);
                 settled = settled + Float::max(c_old_host[i] - updated, B::Scalar::ZERO) * h;
@@ -158,11 +161,11 @@ impl<B: Backend> SettlingSolver<B> {
             backend,
         }
     }
-    
+
     /// 隐式求解沉降
-    /// 
+    ///
     /// 求解: (1 + dt * ws / h) * C^{n+1} = C^n
-    /// 
+    ///
     /// # 参数
     /// - `concentration`: 浓度场（输入/输出）
     /// - `depth`: 水深场
@@ -203,9 +206,9 @@ impl<B: Backend> SettlingSolver<B> {
 
         result
     }
-    
+
     /// 显式沉降（仅用于小时间步）
-    /// 
+    ///
     /// C^{n+1} = C^n - dt * ws * C^n / h
     pub fn apply_explicit(
         &self,
@@ -214,14 +217,16 @@ impl<B: Backend> SettlingSolver<B> {
         dt: B::Scalar,
     ) {
         let n = concentration.len().min(depth.len());
-        if let (Some(conc), Some(depth_slice)) = (
-            concentration.try_as_slice_mut(),
-            depth.try_as_slice(),
-        ) {
+        if let (Some(conc), Some(depth_slice)) =
+            (concentration.try_as_slice_mut(), depth.try_as_slice())
+        {
             for i in 0..n {
                 let h = Float::max(depth_slice[i], self.config.min_depth);
                 let c_val = conc[i];
-                conc[i] = Float::max(c_val - self.config.settling_velocity * dt * c_val / h, B::Scalar::ZERO);
+                conc[i] = Float::max(
+                    c_val - self.config.settling_velocity * dt * c_val / h,
+                    B::Scalar::ZERO,
+                );
             }
         } else {
             let mut conc_host = concentration.copy_to_vec();
@@ -229,12 +234,15 @@ impl<B: Backend> SettlingSolver<B> {
             for i in 0..n {
                 let h = Float::max(depth_host[i], self.config.min_depth);
                 let c_val = conc_host[i];
-                conc_host[i] = Float::max(c_val - self.config.settling_velocity * dt * c_val / h, B::Scalar::ZERO);
+                conc_host[i] = Float::max(
+                    c_val - self.config.settling_velocity * dt * c_val / h,
+                    B::Scalar::ZERO,
+                );
             }
             concentration.copy_from_slice(&conc_host[..n]);
         }
     }
-    
+
     /// 计算隐式系数 1 / (1 + dt * ws / h)
     #[allow(dead_code)]
     fn compute_implicit_coefficient(
@@ -244,31 +252,28 @@ impl<B: Backend> SettlingSolver<B> {
         coeff: &mut B::Buffer<B::Scalar>,
     ) {
         let n = depth.len().min(coeff.len());
-        if let (Some(depth_slice), Some(coeff_slice)) = (
-            depth.try_as_slice(),
-            coeff.try_as_slice_mut(),
-        ) {
+        if let (Some(depth_slice), Some(coeff_slice)) =
+            (depth.try_as_slice(), coeff.try_as_slice_mut())
+        {
             for i in 0..n {
                 let h = Float::max(depth_slice[i], self.config.min_depth);
-                coeff_slice[i] = B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
+                coeff_slice[i] =
+                    B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
             }
         } else {
             let depth_host = depth.copy_to_vec();
             let mut coeff_host = coeff.copy_to_vec();
             for i in 0..n {
                 let h = Float::max(depth_host[i], self.config.min_depth);
-                coeff_host[i] = B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
+                coeff_host[i] =
+                    B::Scalar::ONE / (B::Scalar::ONE + dt * self.config.settling_velocity / h);
             }
             coeff.copy_from_slice(&coeff_host[..n]);
         }
     }
-    
+
     /// 检查CFL稳定性条件
-    pub fn check_explicit_stability(
-        &self,
-        depth: &B::Buffer<B::Scalar>,
-        dt: B::Scalar,
-    ) -> bool {
+    pub fn check_explicit_stability(&self, depth: &B::Buffer<B::Scalar>, dt: B::Scalar) -> bool {
         if let Some(depth_slice) = depth.try_as_slice() {
             for &h in depth_slice {
                 if h <= self.config.min_depth {
@@ -294,12 +299,12 @@ impl<B: Backend> SettlingSolver<B> {
             true
         }
     }
-    
+
     /// 更新配置
     pub fn set_config(&mut self, config: SettlingConfig<B::Scalar>) {
         self.config = config;
     }
-    
+
     /// 获取配置
     pub fn config(&self) -> &SettlingConfig<B::Scalar> {
         &self.config

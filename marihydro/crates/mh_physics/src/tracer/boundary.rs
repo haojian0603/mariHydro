@@ -1,4 +1,4 @@
-﻿//! marihydro\crates\mh_physics\src\tracer\boundary.rs
+//! marihydro\crates\mh_physics\src\tracer\boundary.rs
 //! 示踪剂边界条件模块
 //!
 //! 提供示踪剂输运的边界条件管理，支持：
@@ -19,7 +19,7 @@
 //! let mut manager: TracerBoundaryManager<CpuBackend<f64>> = TracerBoundaryManager::new(backend.clone(), 100);
 //!
 //! // 设置入口固定浓度（35 psu）
-//! manager.set_boundary(0, TracerBoundaryCondition::dirichlet(backend.scalar_from_f64(35.0)));
+//! manager.set_boundary(0, TracerBoundaryCondition::dirichlet(backend.config_scalar(35.0, "docs.dirichlet")));
 //!
 //! // 设置出口零梯度
 //! manager.set_boundary(99, TracerBoundaryCondition::zero_gradient());
@@ -29,7 +29,7 @@
 //! manager.update_cache(time);
 //! let bc = manager.get(0, time);
 //! assert_eq!(bc.bc_type, TracerBoundaryType::Dirichlet);
-//! assert!((bc.value - backend.scalar_from_f64(35.0)).abs() < backend.scalar_from_f64(1e-10));
+//! assert!((bc.value - backend.config_scalar(35.0, "docs.dirichlet")).abs() < backend.config_scalar(1e-10, "docs.eps"));
 //! ```
 
 use crate::forcing::timeseries::TimeSeries;
@@ -70,11 +70,7 @@ pub enum TracerBoundaryConditionConfig {
     NeumannTimeSeries(Arc<TimeSeries>),
 
     /// Robin: α*c + β*∂c/∂n = γ
-    Robin {
-        alpha: f64,
-        beta: f64,
-        gamma: f64,
-    },
+    Robin { alpha: f64, beta: f64, gamma: f64 },
 
     /// 零梯度边界
     ZeroGradient,
@@ -150,18 +146,22 @@ impl TracerBoundaryConditionConfig {
     /// 转换为运行时精度
     pub fn to_precision<B: Backend>(&self, backend: &B) -> TracerBoundaryCondition<B> {
         match *self {
-            Self::Dirichlet(v) => TracerBoundaryCondition::Dirichlet(backend.scalar_from_f64(v)),
+            Self::Dirichlet(v) => TracerBoundaryCondition::Dirichlet(
+                backend.config_scalar(v, "TracerBoundaryConditionConfig.dirichlet"),
+            ),
             Self::DirichletTimeSeries(ref ts) => {
                 TracerBoundaryCondition::DirichletTimeSeries(ts.clone())
             }
-            Self::Neumann(flux) => TracerBoundaryCondition::Neumann(backend.scalar_from_f64(flux)),
+            Self::Neumann(flux) => TracerBoundaryCondition::Neumann(
+                backend.config_scalar(flux, "TracerBoundaryConditionConfig.neumann"),
+            ),
             Self::NeumannTimeSeries(ref ts) => {
                 TracerBoundaryCondition::NeumannTimeSeries(ts.clone())
             }
             Self::Robin { alpha, beta, gamma } => TracerBoundaryCondition::Robin {
-                alpha: backend.scalar_from_f64(alpha),
-                beta: backend.scalar_from_f64(beta),
-                gamma: backend.scalar_from_f64(gamma),
+                alpha: backend.config_scalar(alpha, "TracerBoundaryConditionConfig.robin.alpha"),
+                beta: backend.config_scalar(beta, "TracerBoundaryConditionConfig.robin.beta"),
+                gamma: backend.config_scalar(gamma, "TracerBoundaryConditionConfig.robin.gamma"),
             },
             Self::ZeroGradient => TracerBoundaryCondition::ZeroGradient,
         }
@@ -244,9 +244,15 @@ impl<B: Backend> TracerBoundaryCondition<B> {
     pub fn evaluate(&self, backend: &B, time: f64) -> B::Scalar {
         match self {
             Self::Dirichlet(v) => *v,
-            Self::DirichletTimeSeries(ts) => backend.scalar_from_f64(ts.get_value(time)),
+            Self::DirichletTimeSeries(ts) => backend.config_scalar(
+                ts.get_value(time),
+                "TracerBoundaryCondition.dirichlet_time_series",
+            ),
             Self::Neumann(flux) => *flux,
-            Self::NeumannTimeSeries(ts) => backend.scalar_from_f64(ts.get_value(time)),
+            Self::NeumannTimeSeries(ts) => backend.config_scalar(
+                ts.get_value(time),
+                "TracerBoundaryCondition.neumann_time_series",
+            ),
             Self::Robin { gamma, .. } => *gamma,
             Self::ZeroGradient => B::Scalar::ZERO,
         }
@@ -360,9 +366,7 @@ impl<S: Scalar> ResolvedBoundaryValue<S> {
                     self.value * Self::penalty()
                 }
             }
-            TracerBoundaryType::Dirichlet => {
-                self.value * Self::penalty()
-            }
+            TracerBoundaryType::Dirichlet => self.value * Self::penalty(),
             TracerBoundaryType::Neumann => {
                 // 通量直接加入 RHS
                 self.value * dx
@@ -374,11 +378,7 @@ impl<S: Scalar> ResolvedBoundaryValue<S> {
     /// 计算边界面浓度值
     ///
     /// 使用 Robin 公式反算边界浓度
-    pub fn compute_boundary_concentration(
-        &self,
-        c_interior: S,
-        grad_n: S,
-    ) -> S {
+    pub fn compute_boundary_concentration(&self, c_interior: S, grad_n: S) -> S {
         match self.bc_type {
             TracerBoundaryType::Dirichlet => self.value,
             TracerBoundaryType::ZeroGradient => c_interior,
@@ -455,7 +455,11 @@ impl<B: Backend> TracerBoundaryManager<B> {
     ///
     /// - `boundary_face_idx`: 边界面索引
     /// - `condition`: 边界条件
-    pub fn set_boundary(&mut self, boundary_face_idx: usize, condition: TracerBoundaryCondition<B>) {
+    pub fn set_boundary(
+        &mut self,
+        boundary_face_idx: usize,
+        condition: TracerBoundaryCondition<B>,
+    ) {
         if boundary_face_idx < self.n_boundary_faces {
             self.conditions.insert(boundary_face_idx, condition);
             self.invalidate_cache();
@@ -468,7 +472,11 @@ impl<B: Backend> TracerBoundaryManager<B> {
     ///
     /// - `face_indices`: 边界面索引列表
     /// - `condition`: 边界条件
-    pub fn set_boundaries(&mut self, face_indices: &[usize], condition: TracerBoundaryCondition<B>) {
+    pub fn set_boundaries(
+        &mut self,
+        face_indices: &[usize],
+        condition: TracerBoundaryCondition<B>,
+    ) {
         for &idx in face_indices {
             if idx < self.n_boundary_faces {
                 self.conditions.insert(idx, condition.clone());
@@ -512,11 +520,17 @@ impl<B: Backend> TracerBoundaryManager<B> {
         match cond {
             TracerBoundaryCondition::Dirichlet(v) => ResolvedBoundaryValue::dirichlet(*v),
             TracerBoundaryCondition::DirichletTimeSeries(ts) => {
-                ResolvedBoundaryValue::dirichlet(self.backend.scalar_from_f64(ts.get_value(time)))
+                ResolvedBoundaryValue::dirichlet(self.backend.config_scalar(
+                    ts.get_value(time),
+                    "TracerBoundaryManager.dirichlet_time_series",
+                ))
             }
             TracerBoundaryCondition::Neumann(flux) => ResolvedBoundaryValue::neumann(*flux),
             TracerBoundaryCondition::NeumannTimeSeries(ts) => {
-                ResolvedBoundaryValue::neumann(self.backend.scalar_from_f64(ts.get_value(time)))
+                ResolvedBoundaryValue::neumann(self.backend.config_scalar(
+                    ts.get_value(time),
+                    "TracerBoundaryManager.neumann_time_series",
+                ))
             }
             TracerBoundaryCondition::Robin { alpha, beta, gamma } => {
                 ResolvedBoundaryValue::robin(*alpha, *beta, *gamma)
@@ -622,7 +636,11 @@ impl<B: Backend> TracerBoundaryBuilder<B> {
     }
 
     /// 添加批量边界条件
-    pub fn add_many(mut self, face_indices: &[usize], condition: TracerBoundaryCondition<B>) -> Self {
+    pub fn add_many(
+        mut self,
+        face_indices: &[usize],
+        condition: TracerBoundaryCondition<B>,
+    ) -> Self {
         self.manager.set_boundaries(face_indices, condition);
         self
     }
@@ -656,7 +674,8 @@ mod tests {
 
     #[test]
     fn test_robin_boundary() {
-        let bc: TracerBoundaryCondition<CpuBackend<f64>> = TracerBoundaryCondition::robin(1.0, 0.1, 5.0);
+        let bc: TracerBoundaryCondition<CpuBackend<f64>> =
+            TracerBoundaryCondition::robin(1.0, 0.1, 5.0);
         assert_eq!(bc.boundary_type(), TracerBoundaryType::Robin);
         assert_eq!(bc.robin_coefficients(), Some((1.0, 0.1, 5.0)));
     }
@@ -673,7 +692,8 @@ mod tests {
     fn test_timeseries_dirichlet() {
         let backend = CpuBackend::<f64>::new();
         let ts = TimeSeries::from_points(vec![(0.0, 30.0), (10.0, 35.0), (20.0, 32.0)]);
-        let bc: TracerBoundaryCondition<CpuBackend<f64>> = TracerBoundaryCondition::dirichlet_timeseries(ts);
+        let bc: TracerBoundaryCondition<CpuBackend<f64>> =
+            TracerBoundaryCondition::dirichlet_timeseries(ts);
 
         assert_eq!(bc.boundary_type(), TracerBoundaryType::Dirichlet);
         assert!((bc.evaluate(&backend, 5.0) - 32.5).abs() < 1e-10);
@@ -682,7 +702,8 @@ mod tests {
     #[test]
     fn test_manager_basic() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager: TracerBoundaryManager<CpuBackend<f64>> = TracerBoundaryManager::new(backend, 10);
+        let mut manager: TracerBoundaryManager<CpuBackend<f64>> =
+            TracerBoundaryManager::new(backend, 10);
 
         manager.set_boundary(0, TracerBoundaryCondition::dirichlet(35.0));
         manager.set_boundary(9, TracerBoundaryCondition::neumann(-0.01));
@@ -703,7 +724,8 @@ mod tests {
     #[test]
     fn test_manager_cache() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager: TracerBoundaryManager<CpuBackend<f64>> = TracerBoundaryManager::new(backend, 5);
+        let mut manager: TracerBoundaryManager<CpuBackend<f64>> =
+            TracerBoundaryManager::new(backend, 5);
         manager.set_boundary(0, TracerBoundaryCondition::dirichlet(10.0));
 
         manager.update_cache(0.0);
@@ -714,11 +736,12 @@ mod tests {
     #[test]
     fn test_builder() {
         let backend = CpuBackend::<f64>::new();
-        let manager: TracerBoundaryManager<CpuBackend<f64>> = TracerBoundaryBuilder::new(backend, 10)
-            .default_condition(TracerBoundaryCondition::zero_gradient())
-            .add(0, TracerBoundaryCondition::dirichlet(35.0))
-            .add_many(&[8, 9], TracerBoundaryCondition::neumann(0.0))
-            .build();
+        let manager: TracerBoundaryManager<CpuBackend<f64>> =
+            TracerBoundaryBuilder::new(backend, 10)
+                .default_condition(TracerBoundaryCondition::zero_gradient())
+                .add(0, TracerBoundaryCondition::dirichlet(35.0))
+                .add_many(&[8, 9], TracerBoundaryCondition::neumann(0.0))
+                .build();
 
         assert_eq!(manager.n_conditions(), 3);
         assert!(manager.dirichlet_faces().contains(&0));
@@ -729,7 +752,8 @@ mod tests {
     #[test]
     fn test_time_varying_detection() {
         let backend = CpuBackend::<f64>::new();
-        let mut manager: TracerBoundaryManager<CpuBackend<f64>> = TracerBoundaryManager::new(backend, 5);
+        let mut manager: TracerBoundaryManager<CpuBackend<f64>> =
+            TracerBoundaryManager::new(backend, 5);
         assert!(!manager.has_time_varying());
 
         let ts = TimeSeries::from_points(vec![(0.0, 30.0), (10.0, 35.0)]);

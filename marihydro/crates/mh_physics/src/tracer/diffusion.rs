@@ -1,4 +1,4 @@
-﻿/*
+/*
     #[test]
     fn test_constant_coefficient() {
         let coef: DiffusionCoefficient<f64> = DiffusionCoefficient::Constant(10.0);
@@ -69,13 +69,13 @@
             min_diffusivity: 0.1,
             max_diffusivity: 100.0,
         };
-        
+
         let operator_f64 = DiffusionOperator::<f64>::new(50, 100, config.clone());
         let operator_f32 = DiffusionOperator::<f32>::new(50, 100, config);
-        
+
         // f64 版本
         assert_eq!(operator_f64.face_diffusivity().len(), 100);
-        
+
         // f32 版本
         assert_eq!(operator_f32.face_diffusivity().len(), 100);
     }
@@ -179,23 +179,41 @@ impl DiffusionCoefficientConfig {
     /// 转换为运行时精度（供算子使用）
     pub fn to_precision<B: Backend>(&self, backend: &B) -> DiffusionCoefficient<B> {
         match *self {
-            Self::Constant(d) => DiffusionCoefficient::Constant(backend.scalar_from_f64(d)),
+            Self::Constant(d) => DiffusionCoefficient::Constant(
+                backend.config_scalar(d, "DiffusionCoefficientConfig.constant"),
+            ),
             Self::Variable(ref values) => {
                 let mut buf = backend.alloc(values.len());
                 let converted: Vec<B::Scalar> = values
                     .iter()
-                    .map(|&v| backend.scalar_from_f64(v))
+                    .map(|&v| backend.config_scalar(v, "DiffusionCoefficientConfig.variable"))
                     .collect();
                 buf.copy_from_slice(&converted);
                 DiffusionCoefficient::Variable(buf)
             }
-            Self::Anisotropic { longitudinal, transverse } => DiffusionCoefficient::Anisotropic {
-                longitudinal: backend.scalar_from_f64(longitudinal),
-                transverse: backend.scalar_from_f64(transverse),
+            Self::Anisotropic {
+                longitudinal,
+                transverse,
+            } => DiffusionCoefficient::Anisotropic {
+                longitudinal: backend.config_scalar(
+                    longitudinal,
+                    "DiffusionCoefficientConfig.anisotropic.longitudinal",
+                ),
+                transverse: backend.config_scalar(
+                    transverse,
+                    "DiffusionCoefficientConfig.anisotropic.transverse",
+                ),
             },
-            Self::Turbulent { molecular, schmidt_number } => DiffusionCoefficient::Turbulent {
-                molecular: backend.scalar_from_f64(molecular),
-                schmidt_number: backend.scalar_from_f64(schmidt_number),
+            Self::Turbulent {
+                molecular,
+                schmidt_number,
+            } => DiffusionCoefficient::Turbulent {
+                molecular: backend
+                    .config_scalar(molecular, "DiffusionCoefficientConfig.turbulent.molecular"),
+                schmidt_number: backend.config_scalar(
+                    schmidt_number,
+                    "DiffusionCoefficientConfig.turbulent.schmidt_number",
+                ),
             },
         }
     }
@@ -233,11 +251,17 @@ impl<B: Backend> DiffusionCoefficient<B> {
         match *self {
             Self::Constant(d) => d,
             Self::Variable(ref values) => values.get(cell_idx).copied().unwrap_or(B::Scalar::ZERO),
-            Self::Anisotropic { longitudinal, transverse } => {
+            Self::Anisotropic {
+                longitudinal,
+                transverse,
+            } => {
                 // 几何平均作为各向同性等效
                 (longitudinal * transverse).sqrt()
             }
-            Self::Turbulent { molecular, schmidt_number } => {
+            Self::Turbulent {
+                molecular,
+                schmidt_number,
+            } => {
                 let nu_t = eddy_viscosity.unwrap_or(B::Scalar::ZERO);
                 molecular + nu_t / schmidt_number
             }
@@ -343,9 +367,15 @@ impl<B: Backend> DiffusionOperator<B> {
     pub fn new(backend: B, n_cells: usize, n_faces: usize, config: DiffusionConfig) -> Self {
         // 转换配置到运行时精度
         let coefficient = config.coefficient.to_precision(&backend);
-        let min_diffusivity = backend.scalar_from_f64(config.min_diffusivity);
-        let max_diffusivity = backend.scalar_from_f64(config.max_diffusivity);
-        
+        let min_diffusivity = backend.config_scalar(
+            config.min_diffusivity,
+            "DiffusionOperatorConfig.min_diffusivity",
+        );
+        let max_diffusivity = backend.config_scalar(
+            config.max_diffusivity,
+            "DiffusionOperatorConfig.max_diffusivity",
+        );
+
         Self {
             config,
             coefficient,
@@ -385,7 +415,10 @@ impl<B: Backend> DiffusionOperator<B> {
         }
 
         let eddy_slice = match eddy_viscosity {
-            Some(buf) => Some(buf.try_as_slice().ok_or(DiffusionError::BackendAccess("eddy_viscosity"))?),
+            Some(buf) => Some(
+                buf.try_as_slice()
+                    .ok_or(DiffusionError::BackendAccess("eddy_viscosity"))?,
+            ),
             None => None,
         };
 
@@ -408,9 +441,8 @@ impl<B: Backend> DiffusionOperator<B> {
             };
 
             // 应用限制
-            self.face_diffusivity[face_idx] = d_face
-                .max(self.min_diffusivity)
-                .min(self.max_diffusivity);
+            self.face_diffusivity[face_idx] =
+                d_face.max(self.min_diffusivity).min(self.max_diffusivity);
         }
         Ok(())
     }
@@ -445,12 +477,20 @@ impl<B: Backend> DiffusionOperator<B> {
             let neighbor = mesh.face_neighbor(face);
 
             let d = self.face_diffusivity[face_idx];
-            let length = self.backend.scalar_from_f64(mesh.face_length(face));
+            let length = self
+                .backend
+                .config_scalar(mesh.face_length(face), "DiffusionOperator.face_length");
 
             let flux = if let Some(neigh) = neighbor {
                 // 内部面：中心差分
-                let dist = self.backend.scalar_from_f64(mesh.face_dist_o2n(face));
-                if dist > self.backend.scalar_from_f64(1e-14) {
+                let dist = self
+                    .backend
+                    .config_scalar(mesh.face_dist_o2n(face), "DiffusionOperator.face_distance");
+                if dist
+                    > self
+                        .backend
+                        .config_scalar(1e-14, "DiffusionOperator.distance_eps")
+                {
                     let grad_n = (conc[neigh.get()] - conc[owner.get()]) / dist;
                     -d * grad_n * length
                 } else {
@@ -495,11 +535,17 @@ impl<B: Backend> DiffusionOperator<B> {
             let neighbor = mesh.face_neighbor(face);
             let flux = self.face_flux[face_idx];
 
-            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(owner));
+            let area_o = self.backend.config_scalar(
+                mesh.cell_area_unchecked(owner),
+                "DiffusionOperator.owner_area",
+            );
             self.cell_diffusion[owner.get()] -= flux / area_o;
 
             if let Some(neigh) = neighbor {
-                let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(neigh));
+                let area_n = self.backend.config_scalar(
+                    mesh.cell_area_unchecked(neigh),
+                    "DiffusionOperator.neighbor_area",
+                );
                 self.cell_diffusion[neigh.get()] += flux / area_n;
             }
         }
@@ -583,10 +629,20 @@ impl<B: Backend> AnisotropicDiffusionOperator<B> {
                     .expect("face_normal out of range");
                 let normal_x = normal.x();
                 let normal_y = normal.y();
-                let length = self.backend.scalar_from_f64(mesh.face_length(face));
-                let dist = self.backend.scalar_from_f64(mesh.face_dist_o2n(face));
+                let length = self.backend.config_scalar(
+                    mesh.face_length(face),
+                    "AnisotropicDiffusionOperator.face_length",
+                );
+                let dist = self.backend.config_scalar(
+                    mesh.face_dist_o2n(face),
+                    "AnisotropicDiffusionOperator.face_distance",
+                );
 
-                if dist < self.backend.scalar_from_f64(1e-14) {
+                if dist
+                    < self
+                        .backend
+                        .config_scalar(1e-14, "AnisotropicDiffusionOperator.distance_eps")
+                {
                     B::Scalar::ZERO
                 } else {
                     // 计算流向单位向量
@@ -601,7 +657,11 @@ impl<B: Backend> AnisotropicDiffusionOperator<B> {
                     let speed = (u_avg * u_avg + v_avg * v_avg).sqrt();
 
                     // 有效扩散系数（投影到面法向）
-                    let d_eff = if speed > self.backend.scalar_from_f64(1e-8) {
+                    let d_eff = if speed
+                        > self
+                            .backend
+                            .config_scalar(1e-8, "AnisotropicDiffusionOperator.speed_eps")
+                    {
                         let e_x = u_avg / speed;
                         let e_y = v_avg / speed;
 
@@ -641,7 +701,11 @@ fn harmonic_mean<S: RuntimeScalar>(a: S, b: S) -> S {
     let two = S::TWO;
     let denom = a + b;
     let mask = (a.abs() > eps) && (b.abs() > eps) && (denom.abs() > eps);
-    if mask { two * a * b / denom } else { S::ZERO }
+    if mask {
+        two * a * b / denom
+    } else {
+        S::ZERO
+    }
 }
 
 #[cfg(test)]
@@ -723,15 +787,15 @@ mod tests {
             min_diffusivity: 0.1,
             max_diffusivity: 100.0,
         };
-        
+
         let backend_f64 = CpuBackend::<f64>::new();
         let backend_f32 = CpuBackend::<f32>::new();
         let operator_f64 = DiffusionOperator::new(backend_f64, 50, 100, config.clone());
         let operator_f32 = DiffusionOperator::new(backend_f32, 50, 100, config);
-        
+
         // f64 版本
         assert_eq!(operator_f64.face_diffusivity().len(), 100);
-        
+
         // f32 版本
         assert_eq!(operator_f32.face_diffusivity().len(), 100);
     }

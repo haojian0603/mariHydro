@@ -2,8 +2,8 @@
 
 use super::PhysicsAssimilable;
 use crate::tracer::TracerType;
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
 
 /// 守恒量快照（Backend 泛型）
@@ -48,13 +48,17 @@ where
         let mut momentum_x = B::Scalar::ZERO;
         let mut momentum_y = B::Scalar::ZERO;
 
-        let rho = backend.scalar_from_f64(1000.0);
-        let g = backend.scalar_from_f64(9.81);
-        let half = backend.scalar_from_f64(0.5);
+        let rho = backend.config_scalar(1000.0, "ConservedQuantities.rho_water");
+        let g = backend.config_scalar(9.81, "ConservedQuantities.gravity");
+        let half = backend.config_scalar(0.5, "ConservedQuantities.one_half");
 
         for i in 0..n {
             let area = areas.get(i).copied().unwrap_or(B::Scalar::ONE);
-            let depth = h_vec.get(i).copied().unwrap_or(B::Scalar::ZERO).max(B::Scalar::ZERO);
+            let depth = h_vec
+                .get(i)
+                .copied()
+                .unwrap_or(B::Scalar::ZERO)
+                .max(B::Scalar::ZERO);
             let hu_val = hu_vec.get(i).copied().unwrap_or(B::Scalar::ZERO);
             let hv_val = hv_vec.get(i).copied().unwrap_or(B::Scalar::ZERO);
 
@@ -63,8 +67,16 @@ where
             total_mass = total_mass + mass;
 
             // 动量 = 质量 * 速度 = rho * h * area * (hu/h)
-            let u = if depth > B::Scalar::ZERO { hu_val / depth } else { B::Scalar::ZERO };
-            let v = if depth > B::Scalar::ZERO { hv_val / depth } else { B::Scalar::ZERO };
+            let u = if depth > B::Scalar::ZERO {
+                hu_val / depth
+            } else {
+                B::Scalar::ZERO
+            };
+            let v = if depth > B::Scalar::ZERO {
+                hv_val / depth
+            } else {
+                B::Scalar::ZERO
+            };
             momentum_x = momentum_x + mass * u;
             momentum_y = momentum_y + mass * v;
 
@@ -76,18 +88,16 @@ where
             }
         }
 
-        let total_sediment = state
-            .get_tracer_mut(TracerType::Sediment)
-            .map(|c| {
-                let mut sum = B::Scalar::ZERO;
-                let c_vec = c.copy_to_vec();
-                for (i, &conc) in c_vec.iter().enumerate() {
-                    let area = areas.get(i).copied().unwrap_or(B::Scalar::ONE);
-                    let depth = h_vec.get(i).copied().unwrap_or(B::Scalar::ZERO);
-                    sum = sum + conc * depth * area;
-                }
-                sum
-            });
+        let total_sediment = state.get_tracer_mut(TracerType::Sediment).map(|c| {
+            let mut sum = B::Scalar::ZERO;
+            let c_vec = c.copy_to_vec();
+            for (i, &conc) in c_vec.iter().enumerate() {
+                let area = areas.get(i).copied().unwrap_or(B::Scalar::ONE);
+                let depth = h_vec.get(i).copied().unwrap_or(B::Scalar::ZERO);
+                sum = sum + conc * depth * area;
+            }
+            sum
+        });
 
         Self {
             total_mass,
@@ -100,7 +110,7 @@ where
 
     /// 计算与参考值的相对误差
     pub fn relative_error(&self, backend: &B, reference: &Self) -> ConservationError<B> {
-        let eps = backend.scalar_from_f64(1e-10);
+        let eps = backend.config_scalar(1e-10, "ConservationError.relative_error_eps");
         ConservationError {
             mass_error: (self.total_mass - reference.total_mass) / reference.total_mass.max(eps),
             momentum_x_error: (self.total_momentum_x - reference.total_momentum_x)
@@ -111,7 +121,8 @@ where
                 (Some(s1), Some(s2)) => Some((*s1 - *s2) / (*s2).max(eps)),
                 _ => None,
             },
-            energy_error: (self.total_energy - reference.total_energy) / reference.total_energy.max(eps),
+            energy_error: (self.total_energy - reference.total_energy)
+                / reference.total_energy.max(eps),
         }
     }
 }
@@ -162,21 +173,30 @@ where
             history: Vec::new(),
         }
     }
-    
+
     /// 检查当前状态的守恒性
-    pub fn check(&mut self, state: &mut dyn PhysicsAssimilable<B>, time: B::Scalar) -> ConservationError<B> {
+    pub fn check(
+        &mut self,
+        state: &mut dyn PhysicsAssimilable<B>,
+        time: B::Scalar,
+    ) -> ConservationError<B> {
         let current = ConservedQuantities::compute(state);
         let backend = state.backend();
         let error = current.relative_error(backend, &self.initial);
         self.history.push((time, error.clone()));
         error
     }
-    
+
     /// 获取最大历史质量误差
     pub fn max_error(&self) -> Option<&ConservationError<B>> {
         self.history
             .iter()
-            .max_by(|a, b| a.1.mass_error.abs().partial_cmp(&b.1.mass_error.abs()).unwrap())
+            .max_by(|a, b| {
+                a.1.mass_error
+                    .abs()
+                    .partial_cmp(&b.1.mass_error.abs())
+                    .unwrap()
+            })
             .map(|(_, e)| e)
     }
 }
@@ -218,7 +238,7 @@ impl<S: RuntimeScalar> EnergyCheckResult<S> {
     pub fn is_physical(&self) -> bool {
         matches!(self, Self::Conserved { .. } | Self::Dissipated { .. })
     }
-    
+
     /// 检查是否违反能量守恒
     #[allow(dead_code)]
     pub fn is_violated(&self) -> bool {
@@ -248,18 +268,17 @@ pub fn check_energy_conservation<B: Backend>(
     before: &ConservedQuantities<B>,
     after: &ConservedQuantities<B>,
     tolerance: B::Scalar,
-) -> EnergyCheckResult<B::Scalar>
-{
+) -> EnergyCheckResult<B::Scalar> {
     let energy_before = before.total_energy;
     let energy_after = after.total_energy;
     let change = energy_after - energy_before;
-    
+
     // 避免除零
     let reference_energy = energy_before
         .abs()
         .max(B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
     let relative_change = change / reference_energy;
-    
+
     if relative_change.abs() < tolerance {
         EnergyCheckResult::Conserved {
             change,
@@ -303,13 +322,14 @@ where
 {
     match check_energy_conservation(before, after, tolerance) {
         EnergyCheckResult::Conserved { .. } | EnergyCheckResult::Dissipated { .. } => Ok(()),
-        EnergyCheckResult::Increased { increase: _, relative_rate } => {
-            Err(crate::error::PhysicsError::EnergyIncreased {
-                before: before.total_energy.to_f64_lossy(),
-                after: after.total_energy.to_f64_lossy(),
-                relative_increase: relative_rate.to_f64_lossy(),
-            })
-        }
+        EnergyCheckResult::Increased {
+            increase: _,
+            relative_rate,
+        } => Err(crate::error::PhysicsError::EnergyIncreased {
+            before: before.total_energy.to_f64_lossy(),
+            after: after.total_energy.to_f64_lossy(),
+            relative_increase: relative_rate.to_f64_lossy(),
+        }),
     }
 }
 
@@ -334,7 +354,7 @@ mod tests {
     fn test_energy_conserved() {
         let before = make_quantities(1000.0);
         let after = make_quantities(1000.001);
-        
+
         let result = check_energy_conservation::<CpuBackend<f64>>(&before, &after, 0.01);
         assert!(matches!(result, EnergyCheckResult::Conserved { .. }));
         assert!(result.is_physical());
@@ -344,7 +364,7 @@ mod tests {
     fn test_energy_dissipated() {
         let before = make_quantities(1000.0);
         let after = make_quantities(900.0);
-        
+
         let result = check_energy_conservation::<CpuBackend<f64>>(&before, &after, 0.01);
         assert!(matches!(result, EnergyCheckResult::Dissipated { .. }));
         assert!(result.is_physical());
@@ -354,7 +374,7 @@ mod tests {
     fn test_energy_increased() {
         let before = make_quantities(1000.0);
         let after = make_quantities(1100.0);
-        
+
         let result = check_energy_conservation::<CpuBackend<f64>>(&before, &after, 0.01);
         assert!(matches!(result, EnergyCheckResult::Increased { .. }));
         assert!(!result.is_physical());
@@ -366,7 +386,7 @@ mod tests {
         let before = make_quantities(1000.0);
         let after_ok = make_quantities(950.0);
         let after_bad = make_quantities(1100.0);
-        
+
         assert!(verify_energy_conservation::<CpuBackend<f64>>(&before, &after_ok, 0.01).is_ok());
         assert!(verify_energy_conservation::<CpuBackend<f64>>(&before, &after_bad, 0.01).is_err());
     }

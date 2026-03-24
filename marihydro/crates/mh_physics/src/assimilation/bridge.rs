@@ -3,8 +3,8 @@
 use super::{ConservationConstraints, PhysicsAssimilable};
 use crate::state::ShallowWaterState;
 use crate::tracer::TracerType;
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
 
 /// 状态快照（Backend 感知，SoA 打包）
@@ -83,9 +83,7 @@ where
         self.state.tracers.get_buffer_mut_by_name(name)
     }
 
-    fn get_momentum_mut(
-        &mut self,
-    ) -> (&mut B::Buffer<B::Scalar>, &mut B::Buffer<B::Scalar>) {
+    fn get_momentum_mut(&mut self) -> (&mut B::Buffer<B::Scalar>, &mut B::Buffer<B::Scalar>) {
         (&mut self.state.hu, &mut self.state.hv)
     }
 
@@ -116,7 +114,8 @@ where
         let hu_vec = self.state.hu.copy_to_vec();
         let hv_vec = self.state.hv.copy_to_vec();
         let z_vec = self.state.z.copy_to_vec();
-        self.backend.copy_interleaved(&[&h_vec, &hu_vec, &hv_vec, &z_vec], &mut buffer);
+        self.backend
+            .copy_interleaved(&[&h_vec, &hu_vec, &hv_vec, &z_vec], &mut buffer);
 
         let sediment = self
             .state
@@ -142,7 +141,11 @@ where
         super::ConservedQuantities::compute(self)
     }
 
-    fn enforce_conservation(&mut self, reference: &super::ConservedQuantities<B>, tolerance: B::Scalar) {
+    fn enforce_conservation(
+        &mut self,
+        reference: &super::ConservedQuantities<B>,
+        tolerance: B::Scalar,
+    ) {
         let current = self.compute_conserved();
 
         // 质量修正
@@ -212,7 +215,9 @@ where
             }
         }
 
-        let min_active_area = self.backend.scalar_from_f64(1e-12);
+        let min_active_area = self
+            .backend
+            .config_scalar(1e-12, "AssimilationBridge.min_active_area");
         if total_active_area <= min_active_area {
             return;
         }

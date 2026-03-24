@@ -5,11 +5,11 @@
 //! 本模块提供示踪剂对流-扩散方程的求解功能，采用Backend泛型设计，
 //! 支持f32/f64精度切换和GPU后端扩展。
 
-use mh_runtime::{Backend, RuntimeScalar};
+use super::state::{TracerField, TracerState};
 use crate::TracerError;
+use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
-use super::state::{TracerField, TracerState};
 
 /// 对流格式类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -116,8 +116,8 @@ impl<S: RuntimeScalar> TracerDiffusionConfig<S> {
         let cs_delta = cs * grid_scale;
         let k = cs_delta * cs_delta * strain_rate_magnitude;
 
-        let k_min = backend.scalar_from_f64(1e-6);
-        let k_max = backend.scalar_from_f64(1e4);
+        let k_min = backend.config_scalar(1e-6, "MixingConfig.min_diffusivity");
+        let k_max = backend.config_scalar(1e4, "MixingConfig.max_diffusivity");
         k.clamp_value(k_min, k_max)
     }
 }
@@ -209,7 +209,7 @@ impl<B: Backend> SmagorinskyData<B> {
     ) -> Self {
         let n_cells = cell_areas.len();
         let mut data = Self::new(backend, n_cells);
-        let min_scale = backend.scalar_from_f64(1e-6);
+        let min_scale = backend.config_scalar(1e-6, "StructuredGrid.min_scale");
         let four = B::Scalar::TWO + B::Scalar::TWO;
 
         for i in 0..n_cells {
@@ -219,8 +219,9 @@ impl<B: Backend> SmagorinskyData<B> {
             let s22 = dv_dy[i];
             let s12 = B::Scalar::HALF * (du_dy[i] + dv_dx[i]);
 
-            data.strain_rate_magnitudes[i] =
-                Float::sqrt(B::Scalar::TWO * s11 * s11 + B::Scalar::TWO * s22 * s22 + four * s12 * s12);
+            data.strain_rate_magnitudes[i] = Float::sqrt(
+                B::Scalar::TWO * s11 * s11 + B::Scalar::TWO * s22 * s22 + four * s12 * s12,
+            );
         }
 
         data
@@ -246,7 +247,9 @@ impl<B: Backend> SmagorinskyData<B> {
                 self.grid_scales[right],
                 self.strain_rate_magnitudes[right],
             );
-            let eps = self.backend.scalar_from_f64(1e-10);
+            let eps = self
+                .backend
+                .config_scalar(1e-10, "TracerTransport.face_diffusivity_eps");
             if k_left + k_right > eps {
                 B::Scalar::TWO * k_left * k_right / (k_left + k_right)
             } else {
@@ -293,7 +296,11 @@ impl<B: Backend> TracerTransportSolver<B> {
         un: B::Scalar,
         face_length: B::Scalar,
     ) -> B::Scalar {
-        let c_upwind = if un >= B::Scalar::ZERO { c_left } else { c_right };
+        let c_upwind = if un >= B::Scalar::ZERO {
+            c_left
+        } else {
+            c_right
+        };
         h_face * un * c_upwind * face_length
     }
 
@@ -313,7 +320,9 @@ impl<B: Backend> TracerTransportSolver<B> {
             return zero;
         }
 
-        let eps = self.backend.scalar_from_f64(1e-10);
+        let eps = self
+            .backend
+            .config_scalar(1e-10, "TracerTransport.face_gradient_eps");
         if !distance.is_finite() || distance <= zero {
             return zero;
         }
@@ -341,7 +350,13 @@ impl<B: Backend> TracerTransportSolver<B> {
         face_distances: &B::Buffer<B::Scalar>,
         smagorinsky_data: &SmagorinskyData<B>,
     ) -> Result<(), TracerError> {
-        self.compute_rhs_internal(field, flow_data, cell_volumes, face_distances, Some(smagorinsky_data))
+        self.compute_rhs_internal(
+            field,
+            flow_data,
+            cell_volumes,
+            face_distances,
+            Some(smagorinsky_data),
+        )
     }
 
     /// 内部实现：计算RHS
@@ -356,7 +371,8 @@ impl<B: Backend> TracerTransportSolver<B> {
         field.clear_rhs();
 
         if self.face_fluxes.len() < flow_data.len() {
-            self.face_fluxes.resize(flow_data.len(), TracerFaceFlux::default());
+            self.face_fluxes
+                .resize(flow_data.len(), TracerFaceFlux::default());
         }
 
         let n_cells = field.len();
@@ -386,7 +402,9 @@ impl<B: Backend> TracerTransportSolver<B> {
                 if let Some(smag) = smagorinsky_data {
                     smag.face_diffusivity(&self.config.diffusion, face.left_cell, face.right_cell)
                 } else {
-                    let min_k = self.backend.scalar_from_f64(1e-3);
+                    let min_k = self
+                        .backend
+                        .config_scalar(1e-3, "TracerTransport.minimum_horizontal_diffusivity");
                     Float::max(self.config.diffusion.horizontal_diffusivity, min_k)
                 }
             } else {
@@ -406,7 +424,10 @@ impl<B: Backend> TracerTransportSolver<B> {
                 B::Scalar::ZERO
             };
 
-            self.face_fluxes[i] = TracerFaceFlux { advective, diffusive };
+            self.face_fluxes[i] = TracerFaceFlux {
+                advective,
+                diffusive,
+            };
 
             let flux = advective + diffusive;
             let vol_left = cell_volumes[face.left_cell];
@@ -429,7 +450,11 @@ impl<B: Backend> TracerTransportSolver<B> {
     }
 
     /// 时间步进更新（显式欧拉）
-    pub fn update_forward_euler(&self, field: &mut TracerField<B>, dt: B::Scalar) -> Result<(), TracerError> {
+    pub fn update_forward_euler(
+        &self,
+        field: &mut TracerField<B>,
+        dt: B::Scalar,
+    ) -> Result<(), TracerError> {
         field.apply_euler_update(dt)
     }
 
@@ -465,10 +490,14 @@ impl<B: Backend> TracerTransportSolver<B> {
         min_cell_size: B::Scalar,
         cfl_number: B::Scalar,
     ) -> B::Scalar {
-        let eps = self.backend.scalar_from_f64(1e-10);
-        let scalar_max = self.backend.scalar_from_f64(1e20);
+        let eps = self
+            .backend
+            .config_scalar(1e-10, "TracerTransport.time_step_eps");
+        let scalar_max = self
+            .backend
+            .config_scalar(1e20, "TracerTransport.time_step_upper_bound");
         if !min_cell_size.is_finite() || min_cell_size <= B::Scalar::ZERO {
-            return self.backend.scalar_from_f64(0.0);
+            return B::Scalar::ZERO;
         }
         let dx = Float::max(min_cell_size, eps);
 
@@ -521,7 +550,14 @@ impl<B: Backend> MultiTracerSolver<B> {
         dt: B::Scalar,
     ) -> Result<(), TracerError> {
         for (_, field) in state.iter_mut() {
-            self.solver.step(field, flow_data, cell_volumes, face_distances, water_depths, dt)?;
+            self.solver.step(
+                field,
+                flow_data,
+                cell_volumes,
+                face_distances,
+                water_depths,
+                dt,
+            )?;
         }
         Ok(())
     }
@@ -538,8 +574,8 @@ impl<B: Backend> MultiTracerSolver<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tracer::state::TracerType;
     use crate::tracer::state::TracerProperties;
+    use crate::tracer::state::TracerType;
     use mh_runtime::CpuBackend;
 
     fn approx_eq(a: f64, b: f64) -> bool {
@@ -576,7 +612,10 @@ mod tests {
     #[test]
     fn test_upwind_flux_f64() {
         let backend = CpuBackend::<f64>::new();
-        let solver = TracerTransportSolver::<CpuBackend<f64>>::new_with_backend(backend, TracerTransportConfig::default());
+        let solver = TracerTransportSolver::<CpuBackend<f64>>::new_with_backend(
+            backend,
+            TracerTransportConfig::default(),
+        );
 
         let flux = solver.compute_advective_flux_upwind(10.0, 20.0, 1.0, 1.0, 1.0);
         assert!(approx_eq(flux, 10.0));
@@ -588,7 +627,10 @@ mod tests {
     #[test]
     fn test_upwind_flux_f32() {
         let backend = CpuBackend::<f32>::new();
-        let solver = TracerTransportSolver::<CpuBackend<f32>>::new_with_backend(backend, TracerTransportConfig::default());
+        let solver = TracerTransportSolver::<CpuBackend<f32>>::new_with_backend(
+            backend,
+            TracerTransportConfig::default(),
+        );
 
         let flux = solver.compute_advective_flux_upwind(10.0f32, 20.0f32, 1.0f32, 1.0f32, 1.0f32);
         assert_eq!(flux, 10.0f32);
@@ -642,11 +684,15 @@ mod tests {
     #[test]
     fn test_single_step_f64() {
         let backend = CpuBackend::<f64>::new();
-        let mut solver = TracerTransportSolver::<CpuBackend<f64>>::new_with_backend(backend, TracerTransportConfig::default());
+        let mut solver = TracerTransportSolver::<CpuBackend<f64>>::new_with_backend(
+            backend,
+            TracerTransportConfig::default(),
+        );
         let backend_field = CpuBackend::<f64>::new();
         let props = TracerProperties::<f64>::salinity(&backend_field).with_background(0.0);
-        let mut field = TracerField::<CpuBackend<f64>>::new_with_backend(backend_field.clone(), props, 3);
-        
+        let mut field =
+            TracerField::<CpuBackend<f64>>::new_with_backend(backend_field.clone(), props, 3);
+
         let concentrations = [10.0, 5.0, 0.0];
         for (i, &c) in concentrations.iter().enumerate() {
             field.concentration_slice_mut().unwrap()[i] = c;
@@ -701,7 +747,10 @@ mod tests {
             .add_tracer(TracerProperties::<f64>::temperature(&backend))
             .unwrap();
 
-        let _solver = MultiTracerSolver::<CpuBackend<f64>>::new_with_backend(backend, TracerTransportConfig::default());
+        let _solver = MultiTracerSolver::<CpuBackend<f64>>::new_with_backend(
+            backend,
+            TracerTransportConfig::default(),
+        );
 
         assert!(state.get(TracerType::Salinity).is_some());
         assert!(state.get(TracerType::Temperature).is_some());
@@ -711,11 +760,13 @@ mod tests {
     fn test_f32_backend_full() {
         let backend = CpuBackend::<f32>::new();
         let config = TracerTransportConfig::<f32>::default();
-        let mut solver = TracerTransportSolver::<CpuBackend<f32>>::new_with_backend(backend.clone(), config);
-        
+        let mut solver =
+            TracerTransportSolver::<CpuBackend<f32>>::new_with_backend(backend.clone(), config);
+
         let props = TracerProperties::<f32>::salinity(&backend);
-        let mut field = TracerField::<CpuBackend<f32>>::new_with_backend(backend.clone(), props, 100);
-        
+        let mut field =
+            TracerField::<CpuBackend<f32>>::new_with_backend(backend.clone(), props, 100);
+
         assert_eq!(field.len(), 100);
         solver
             .compute_rhs(&mut field, &[], &backend.alloc(100), &backend.alloc(0))
