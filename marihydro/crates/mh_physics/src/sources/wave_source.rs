@@ -1,187 +1,123 @@
-// crates/mh_physics/src/sources/wave_source.rs
-
-//! 波浪辐射应力源项
-//!
-//! 将波浪模块的辐射应力计算集成为源项接口�?
-//!
-//! # 物理背景
-//!
-//! 波浪辐射应力是波浪对平均流动的动量传递，表现为：
-//!
-//! ```text
-//! S_xx = E(n(cos²θ + 1) - 0.5)
-//! S_yy = E(n(sin²θ + 1) - 0.5)
-//! S_xy = E × n × sinθ × cosθ
-//! ```
-//!
-//! 动量方程源项为辐射应力梯度：
-//!
-//! ```text
-//! F_x = -1/(ρh) × (∂S_xx/∂x + ∂S_xy/∂y)
-//! F_y = -1/(ρh) × (∂S_xy/∂x + ∂S_yy/∂y)
-//! ```
-
 use crate::sources::traits::{
-    SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
+    SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
-use crate::waves::radiation_stress::{RadiationStressCalculatorGeneric, RadiationStressTensorGeneric, WaveFieldGeneric, WaveFieldError};
-use crate::core::CpuBackend;
-use mh_runtime::{Backend, DeviceBuffer};
+use crate::waves::radiation_stress::{
+    RadiationStressCalculatorGeneric, RadiationStressTensorGeneric, WaveFieldError,
+    WaveFieldGeneric, WaveParametersGeneric,
+};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use std::marker::PhantomData;
 
-/// 波浪辐射应力源项
-///
-/// 从波场计算辐射应力梯度，作为动量源项
-pub struct WaveRadiationSource {
-    /// 辐射应力计算器（预留用于未来扩展�?
+pub struct WaveRadiationSource<B: Backend> {
     #[allow(dead_code)]
-    calculator: RadiationStressCalculatorGeneric<CpuBackend<f64>>,
-    /// 波场数据
-    wave_field: WaveFieldGeneric<CpuBackend<f64>>,
-    /// 辐射应力�?
-    stress: Vec<RadiationStressTensorGeneric<f64>>,
-    /// 辐射应力梯度 (∂S_xx/∂x + ∂S_xy/∂y, ∂S_xy/∂x + ∂S_yy/∂y)
-    stress_gradient: Vec<(f64, f64)>,
-    /// 水密�?[kg/m³]
-    rho_water: f64,
-    /// 是否启用
+    calculator: RadiationStressCalculatorGeneric<B>,
+    wave_field: WaveFieldGeneric<B>,
+    stress: Vec<RadiationStressTensorGeneric<B::Scalar>>,
+    stress_gradient: Vec<(B::Scalar, B::Scalar)>,
+    rho_water: B::Scalar,
     enabled: bool,
-    /// 是否已计算梯�?
     gradient_computed: bool,
 }
 
-impl WaveRadiationSource {
-    /// 创建新的波浪辐射应力源项
-    pub fn new(n_cells: usize) -> Self {
-        let backend = CpuBackend::<f64>::new();
+impl<B: Backend> WaveRadiationSource<B> {
+    pub fn new(backend: B, n_cells: usize) -> Self {
         Self {
-            calculator: RadiationStressCalculatorGeneric::<CpuBackend<f64>>::new(backend.clone(), n_cells),
-            wave_field: WaveFieldGeneric::<CpuBackend<f64>>::new(backend, n_cells),
-            stress: vec![RadiationStressTensorGeneric::<f64>::default(); n_cells],
-            stress_gradient: vec![(0.0, 0.0); n_cells],
-            rho_water: 1025.0,
+            calculator: RadiationStressCalculatorGeneric::new(backend.clone(), n_cells),
+            wave_field: WaveFieldGeneric::new(backend.clone(), n_cells),
+            stress: vec![RadiationStressTensorGeneric::default(); n_cells],
+            stress_gradient: vec![(B::Scalar::ZERO, B::Scalar::ZERO); n_cells],
+            rho_water: backend.config_scalar(1025.0, "WaveRadiationSource.rho_water"),
             enabled: true,
             gradient_computed: false,
         }
     }
 
-    /// 设置波场数据
-    pub fn set_wave_field(&mut self, wave_field: WaveFieldGeneric<CpuBackend<f64>>) {
+    pub fn set_wave_field(&mut self, wave_field: WaveFieldGeneric<B>) {
+        let backend = wave_field.backend().clone();
+        let n_cells = wave_field.len();
         self.wave_field = wave_field;
+        self.calculator = RadiationStressCalculatorGeneric::new(backend, n_cells);
+        self.stress
+            .resize(n_cells, RadiationStressTensorGeneric::default());
+        self.stress_gradient
+            .resize(n_cells, (B::Scalar::ZERO, B::Scalar::ZERO));
         self.gradient_computed = false;
     }
 
-    /// 更新波场参数（单一均匀波浪�?
-    pub fn set_uniform_waves(&mut self, height: f64, period: f64, direction: f64, depth: &[f64]) -> Result<(), WaveFieldError> {
-        let n_cells = self.wave_field.len();
-        let height_buf = self.wave_field.height.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("height buffer not accessible".to_string())
-        })?;
-        let period_buf = self.wave_field.period.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("period buffer not accessible".to_string())
-        })?;
-        let direction_buf = self.wave_field.direction.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("direction buffer not accessible".to_string())
-        })?;
-        let wavenumber = self.wave_field.wavenumber.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("wavenumber buffer not accessible".to_string())
-        })?;
-        let group_factor = self.wave_field.group_factor.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("group_factor buffer not accessible".to_string())
-        })?;
-        let wavelength = self.wave_field.wavelength.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("wavelength buffer not accessible".to_string())
-        })?;
-        let energy = self.wave_field.energy.try_as_slice_mut().ok_or_else(|| {
-            WaveFieldError::BackendAccess("energy buffer not accessible".to_string())
-        })?;
+    pub fn set_uniform_waves(
+        &mut self,
+        height: B::Scalar,
+        period: B::Scalar,
+        direction: B::Scalar,
+        depth: &[B::Scalar],
+    ) -> Result<(), WaveFieldError> {
+        let params = WaveParametersGeneric::new(height, period, direction);
+        self.wave_field.set_uniform(&params);
 
-        let backend = CpuBackend::<f64>::new();
-        for i in 0..n_cells {
-            height_buf[i] = height;
-            period_buf[i] = period;
-            direction_buf[i] = direction;
-            
-            // 计算波数和群速度因子
-            let h = depth.get(i).copied().unwrap_or(10.0);
-            let omega = 2.0 * std::f64::consts::PI / period.max(1e-6);
-            let (k, n) = crate::waves::radiation_stress::compute_wavenumber_and_n(&backend, omega, h);
-            wavenumber[i] = k;
-            group_factor[i] = n;
-            wavelength[i] = 2.0 * std::f64::consts::PI / k;
-            
-            // 能量密度
-            let rho_g = self.rho_water * 9.81;
-            energy[i] = rho_g * height * height / 8.0;
-        }
+        let backend = self.wave_field.backend().clone();
+        let n_cells = self.wave_field.len();
+        let default_depth = backend.config_scalar(10.0, "WaveRadiationSource.default_depth");
+        let mut depth_values = vec![default_depth; n_cells];
+        let n = n_cells.min(depth.len());
+        depth_values[..n].copy_from_slice(&depth[..n]);
+
+        let mut depth_buffer = backend.alloc_init(n_cells, default_depth);
+        depth_buffer.copy_from_slice(&depth_values);
+        self.wave_field.update_dispersion(&depth_buffer)?;
         self.gradient_computed = false;
         Ok(())
     }
 
-    /// 计算辐射应力�?
-    pub fn compute_stress(&mut self) {
-        let n_cells = self.wave_field.len();
-        let energy = match self.wave_field.energy.try_as_slice() {
-            Some(v) => v,
-            None => return,
-        };
-        let group_factor = match self.wave_field.group_factor.try_as_slice() {
-            Some(v) => v,
-            None => return,
-        };
-        let direction = match self.wave_field.direction.try_as_slice() {
-            Some(v) => v,
-            None => return,
-        };
-        for i in 0..n_cells {
-            // 使用 RadiationStressTensor::compute 直接计算每个单元的辐射应�?
-            self.stress[i] = RadiationStressTensorGeneric::<f64>::compute(
-                energy[i],
-                group_factor[i],
-                direction[i],
-            );
+    pub fn compute_stress(&mut self) -> Result<(), WaveFieldError> {
+        self.calculator.compute_stress(&self.wave_field)?;
+        let (sxx, syy, sxy) = self.calculator.stress_components();
+        let sxx = sxx.try_as_slice().ok_or_else(|| {
+            WaveFieldError::BackendAccess("wave stress sxx buffer not accessible".to_string())
+        })?;
+        let syy = syy.try_as_slice().ok_or_else(|| {
+            WaveFieldError::BackendAccess("wave stress syy buffer not accessible".to_string())
+        })?;
+        let sxy = sxy.try_as_slice().ok_or_else(|| {
+            WaveFieldError::BackendAccess("wave stress sxy buffer not accessible".to_string())
+        })?;
+
+        for i in 0..self.stress.len() {
+            self.stress[i] = RadiationStressTensorGeneric {
+                sxx: sxx[i],
+                syy: syy[i],
+                sxy: sxy[i],
+            };
         }
+        Ok(())
     }
 
-    /// 计算辐射应力梯度（需要网格信息）
-    ///
-    /// 简化版本：使用相邻单元差分估计梯度
-    /// 完整版本需要网格拓扑信�?
-    ///
-    /// # 参数
-    /// - `cell_centers`: 单元中心坐标 [(x, y), ...]
-    /// - `neighbors`: 每个单元的邻居列�?
-    /// - `face_normals`: 面法向量
-    pub fn compute_gradient_simple(&mut self, _cell_sizes: &[f64]) {
-        // Explicit placeholder: without mesh topology we do not attempt an
-        // approximate gradient reconstruction.
+    pub fn compute_gradient_simple(&mut self, _cell_sizes: &[B::Scalar]) {
         for grad in &mut self.stress_gradient {
-            *grad = (0.0, 0.0);
+            *grad = (B::Scalar::ZERO, B::Scalar::ZERO);
         }
 
         self.enabled = false;
         self.gradient_computed = false;
     }
 
-    pub fn set_gradient(&mut self, gradient: &[(f64, f64)]) {
+    pub fn set_gradient(&mut self, gradient: &[(B::Scalar, B::Scalar)]) {
         let n = self.stress_gradient.len().min(gradient.len());
         self.stress_gradient[..n].copy_from_slice(&gradient[..n]);
         self.enabled = true;
         self.gradient_computed = true;
     }
 
-    /// 鑾峰彇杈愬皠搴斿姏鍦?
-    pub fn stress(&self) -> &[RadiationStressTensorGeneric<f64>] {
+    pub fn stress(&self) -> &[RadiationStressTensorGeneric<B::Scalar>] {
         &self.stress
     }
 
-    /// 鑾峰彇娉㈠満
-    pub fn wave_field(&self) -> &WaveFieldGeneric<CpuBackend<f64>> {
+    pub fn wave_field(&self) -> &WaveFieldGeneric<B> {
         &self.wave_field
     }
 }
 
-impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSource {
+impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSource<B> {
     fn name(&self) -> &'static str {
         "WaveRadiation"
     }
@@ -209,12 +145,13 @@ impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSource {
             return SourceContributionGeneric::default();
         }
 
-        let (grad_x, grad_y) = self.stress_gradient.get(cell).copied().unwrap_or((0.0, 0.0));
-        let grad_x = state.backend().config_scalar(grad_x, "WaveRadiationSource.grad_x");
-        let grad_y = state.backend().config_scalar(grad_y, "WaveRadiationSource.grad_y");
-        let rho = state.backend().config_scalar(self.rho_water, "WaveRadiationSource.rho_water");
-        let fx = -grad_x / (rho * h);
-        let fy = -grad_y / (rho * h);
+        let (grad_x, grad_y) = self
+            .stress_gradient
+            .get(cell)
+            .copied()
+            .unwrap_or((B::Scalar::ZERO, B::Scalar::ZERO));
+        let fx = -grad_x / (self.rho_water * h);
+        let fy = -grad_y / (self.rho_water * h);
 
         SourceContributionGeneric::momentum(fx, fy)
     }
@@ -244,36 +181,34 @@ impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSource {
         }
     }
 }
-pub struct WaveRadiationSourceGeneric {
-    /// 预计算的动量源项 [m/s²]
-    momentum_source: Vec<(f64, f64)>,
-    /// 是否启用
+
+pub struct WaveRadiationSourceGeneric<B: Backend> {
+    momentum_source: Vec<(B::Scalar, B::Scalar)>,
     enabled: bool,
+    _marker: PhantomData<B>,
 }
 
-impl WaveRadiationSourceGeneric {
-    /// 创建新的泛型波浪源项
+impl<B: Backend> WaveRadiationSourceGeneric<B> {
     pub fn new(n_cells: usize) -> Self {
         Self {
-            momentum_source: vec![(0.0, 0.0); n_cells],
+            momentum_source: vec![(B::Scalar::ZERO, B::Scalar::ZERO); n_cells],
             enabled: false,
+            _marker: PhantomData,
         }
     }
 
-    /// 设置动量源项（从外部计算后设置）
-    pub fn set_momentum_source(&mut self, source: &[(f64, f64)]) {
+    pub fn set_momentum_source(&mut self, source: &[(B::Scalar, B::Scalar)]) {
         let n = self.momentum_source.len().min(source.len());
         self.momentum_source[..n].copy_from_slice(&source[..n]);
         self.enabled = true;
     }
 
-    /// 启用/禁用
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 }
 
-impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSourceGeneric {
+impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSourceGeneric<B> {
     fn name(&self) -> &'static str {
         "WaveRadiation"
     }
@@ -297,9 +232,11 @@ impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSourceGeneric {
             return SourceContributionGeneric::default();
         }
 
-        let (fx, fy) = self.momentum_source.get(cell).copied().unwrap_or((0.0, 0.0));
-        let fx = state.backend().config_scalar(fx, "WaveRadiationSourceGeneric.fx");
-        let fy = state.backend().config_scalar(fy, "WaveRadiationSourceGeneric.fy");
+        let (fx, fy) = self
+            .momentum_source
+            .get(cell)
+            .copied()
+            .unwrap_or((B::Scalar::ZERO, B::Scalar::ZERO));
         SourceContributionGeneric::momentum(fx, fy)
     }
 
@@ -319,9 +256,13 @@ impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSourceGeneric {
         for cell in 0..n {
             let h = state.h[cell];
             if !ctx.is_dry(h) {
-                let (fx, fy) = self.momentum_source.get(cell).copied().unwrap_or((0.0, 0.0));
-                rhs_hu[cell] += state.backend().config_scalar(fx, "WaveRadiationSourceGeneric.fx");
-                rhs_hv[cell] += state.backend().config_scalar(fy, "WaveRadiationSourceGeneric.fy");
+                let (fx, fy) = self
+                    .momentum_source
+                    .get(cell)
+                    .copied()
+                    .unwrap_or((B::Scalar::ZERO, B::Scalar::ZERO));
+                rhs_hu[cell] += fx;
+                rhs_hv[cell] += fy;
             }
         }
     }
@@ -334,26 +275,17 @@ mod tests {
 
     #[test]
     fn test_wave_radiation_source_creation() {
-        let source = WaveRadiationSource::new(100);
-        assert_eq!(
-            <WaveRadiationSource as SourceTermGeneric<CpuBackend<f64>>>::name(&source),
-            "WaveRadiation"
-        );
-        assert!(
-            !<WaveRadiationSource as SourceTermGeneric<CpuBackend<f64>>>::is_enabled(&source)
-        ); // 未计算梯度前禁用
+        let source = WaveRadiationSource::new(CpuBackend::<f64>::new(), 100);
+        assert_eq!(source.name(), "WaveRadiation");
+        assert!(!source.is_enabled());
     }
 
     #[test]
     fn test_generic_wave_source() {
-        let mut source = WaveRadiationSourceGeneric::new(10);
-        assert!(
-            !<WaveRadiationSourceGeneric as SourceTermGeneric<CpuBackend<f64>>>::is_enabled(&source)
-        );
-        
+        let mut source = WaveRadiationSourceGeneric::<CpuBackend<f64>>::new(10);
+        assert!(!source.is_enabled());
+
         source.set_momentum_source(&[(0.1, 0.2); 10]);
-        assert!(
-            <WaveRadiationSourceGeneric as SourceTermGeneric<CpuBackend<f64>>>::is_enabled(&source)
-        );
+        assert!(source.is_enabled());
     }
 }

@@ -24,6 +24,33 @@ try {
 
     $errors = @()
 
+    # Phase 0: tracked temporary artifact guard
+    Write-Host "=== Phase 0: tracked temporary artifact guard ===" -ForegroundColor Cyan
+
+    $trackedTempFiles = @()
+    foreach ($pattern in @("tmp_*/", "marihydro/tmp_*.log")) {
+        $matches = & git ls-files $pattern 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+        foreach ($match in $matches) {
+            if (-not [string]::IsNullOrWhiteSpace($match)) {
+                $trackedTempFiles += $match.Trim()
+            }
+        }
+    }
+
+    $trackedTempFiles = $trackedTempFiles | Sort-Object -Unique
+    if ($trackedTempFiles.Count -gt 0) {
+        Write-Host "[FAIL] tracked temporary artifacts detected:" -ForegroundColor Red
+        $trackedTempFiles | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        $errors += "temporary workspace artifacts must not be tracked"
+    } else {
+        Write-Host "[OK] no tracked temporary artifacts" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 1: layer dependency checks
     Write-Host "=== Phase 1: layer dependency checks ===" -ForegroundColor Cyan
 

@@ -120,6 +120,14 @@ try {
         $Failed += "check_index_uniqueness.ps1"
     }
 
+    $TrackedTempArgs = @{}
+    if ($Verbose) {
+        $TrackedTempArgs.Verbose = $true
+    }
+    if (-not (Invoke-GuardStep -Name "check_tracked_temp_artifacts.ps1" -Path (Join-Path $ScriptDir "check_tracked_temp_artifacts.ps1") -Arguments $TrackedTempArgs)) {
+        $Failed += "check_tracked_temp_artifacts.ps1"
+    }
+
     if ($Deep) {
         $HardcodedArgs = @{}
         if ($Verbose) {

@@ -18,7 +18,9 @@
 //! ```
 //! 其中 S 为淹没修正系数
 
-use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
+use crate::sources::traits::{
+    SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
+};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
@@ -28,8 +30,7 @@ use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
 /// 堰类型
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum WeirType {
     /// 宽顶堰（Cd ≈ 0.34-0.36）
     #[default]
@@ -42,7 +43,6 @@ pub enum WeirType {
     // ALLOW_F64: Layer 4 配置参数
     Custom { cd: f64 },
 }
-
 
 impl WeirType {
     /// 获取流量系数
@@ -106,6 +106,8 @@ pub struct WeirFlow {
 }
 
 impl WeirFlow {
+    const NORMAL_EPS: f64 = 1e-10;
+
     /// 创建新的堰流源项
     pub fn new(n_cells: usize, config: WeirConfig) -> MhResult<Self> {
         let cd_default = config.weir_type.discharge_coefficient();
@@ -138,20 +140,20 @@ impl WeirFlow {
     pub fn set_weir(
         &mut self,
         cell: usize,
-        crest: f64, // ALLOW_F64: 物理参数
-        width: f64, // ALLOW_F64: 物理参数
-        cd: Option<f64>, // ALLOW_F64: 物理参数
+        crest: f64,         // ALLOW_F64: 物理参数
+        width: f64,         // ALLOW_F64: 物理参数
+        cd: Option<f64>,    // ALLOW_F64: 物理参数
         normal: (f64, f64), // ALLOW_F64: 几何参数
     ) {
         if cell < self.n_cells {
             self.crest_elevation[cell] = crest;
-            self.weir_width[cell] = width;
+            self.weir_width[cell] = width.max(0.0);
             if let Some(c) = cd {
-                self.cd_field[cell] = c;
+                self.cd_field[cell] = c.max(0.0);
             }
             // 归一化法向
             let mag = (normal.0 * normal.0 + normal.1 * normal.1).sqrt();
-            if mag > 1e-10 {
+            if mag > Self::NORMAL_EPS {
                 self.normal_x[cell] = normal.0 / mag;
                 self.normal_y[cell] = normal.1 / mag;
             }
@@ -178,7 +180,6 @@ impl WeirFlow {
         let width = self.weir_width[cell];
 
         // 自由出流：Q = Cd × B × H^1.5 × √(2g)
-        
 
         cd * width * head.powf(1.5) * (2.0 * self.constants.g).sqrt()
     }
@@ -191,9 +192,10 @@ impl WeirFlow {
     pub fn compute_discharge_submerged(
         &self,
         cell: usize,
-        h_upstream: f64, // ALLOW_F64: 源项计算
+        h_upstream: f64,   // ALLOW_F64: 源项计算
         h_downstream: f64, // ALLOW_F64: 源项计算
-    ) -> f64 { // ALLOW_F64: 源项计算
+    ) -> f64 {
+        // ALLOW_F64: 源项计算
         if h_upstream < self.config.h_min {
             return 0.0;
         }
@@ -225,7 +227,9 @@ impl WeirFlow {
     /// 设置单元面积
     pub fn set_cell_areas(&mut self, areas: &[f64]) {
         let n = self.n_cells.min(areas.len());
-        self.cell_area[..n].copy_from_slice(&areas[..n]);
+        for (dst, src) in self.cell_area[..n].iter_mut().zip(&areas[..n]) {
+            *dst = src.max(0.0);
+        }
     }
 
     fn compute_discharge_generic<B: Backend>(
@@ -256,9 +260,15 @@ impl WeirFlow {
 }
 
 impl<B: Backend> SourceTermGeneric<B> for WeirFlow {
-    fn name(&self) -> &'static str { "WeirFlow" }
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
-    fn is_enabled(&self) -> bool { self.config.enabled }
+    fn name(&self) -> &'static str {
+        "WeirFlow"
+    }
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
+    }
+    fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
 
     fn compute_cell(
         &self,
@@ -280,17 +290,35 @@ impl<B: Backend> SourceTermGeneric<B> for WeirFlow {
         if q.abs() < zero_cutoff || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
-        let area_raw = state.backend().config_scalar(self.cell_area[cell], "WeirFlow.cell_area");
-        let area = if area_raw < zero_cutoff { zero_cutoff } else { area_raw };
+        let area_raw = state
+            .backend()
+            .config_scalar(self.cell_area[cell], "WeirFlow.cell_area");
+        let area = if area_raw < zero_cutoff {
+            zero_cutoff
+        } else {
+            area_raw
+        };
         let s_h = -q / area;
-        let h_min = state.backend().config_scalar(self.config.h_min, "WeirFlow.h_min");
+        let h_min = state
+            .backend()
+            .config_scalar(self.config.h_min, "WeirFlow.h_min");
         let head_raw = water_level - crest;
         let head = if head_raw < h_min { h_min } else { head_raw };
-        let width_raw = state.backend().config_scalar(self.weir_width[cell], "WeirFlow.width");
-        let width = if width_raw < zero_cutoff { zero_cutoff } else { width_raw };
+        let width_raw = state
+            .backend()
+            .config_scalar(self.weir_width[cell], "WeirFlow.width");
+        let width = if width_raw < zero_cutoff {
+            zero_cutoff
+        } else {
+            width_raw
+        };
         let v_weir = q / (width * head);
-        let nx = state.backend().config_scalar(self.normal_x[cell], "WeirFlow.normal_x");
-        let ny = state.backend().config_scalar(self.normal_y[cell], "WeirFlow.normal_y");
+        let nx = state
+            .backend()
+            .config_scalar(self.normal_x[cell], "WeirFlow.normal_x");
+        let ny = state
+            .backend()
+            .config_scalar(self.normal_y[cell], "WeirFlow.normal_y");
         SourceContributionGeneric::new(s_h, s_h * v_weir * nx, s_h * v_weir * ny)
     }
 
@@ -302,7 +330,9 @@ impl<B: Backend> SourceTermGeneric<B> for WeirFlow {
         rhs_hv: &mut B::Buffer<B::Scalar>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.config.enabled { return; }
+        if !self.config.enabled {
+            return;
+        }
         let n = state
             .n_cells()
             .min(self.n_cells)
@@ -359,7 +389,7 @@ mod tests {
         weir.set_weir(0, 2.0, 10.0, None, (1.0, 0.0)); // 堰顶2m，宽10m
 
         let q = weir.compute_discharge(0, 3.0); // 水位3m，水头1m
-        
+
         // Q = 0.35 × 10 × 1^1.5 × √(2×9.81) ≈ 15.5 m³/s
         assert!(q > 10.0);
         assert!(q < 20.0);

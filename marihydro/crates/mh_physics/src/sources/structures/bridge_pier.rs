@@ -9,7 +9,9 @@
 //! 当网格尺寸大于桥墩直径时，无法直接解析桥墩边界。
 //! 通过亚网格参数化方法将桥墩效应作为动量源项添加。
 
-use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
+use crate::sources::traits::{
+    SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
+};
 use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
@@ -104,7 +106,9 @@ impl BridgePierDrag {
     /// 批量设置阻塞率
     pub fn set_blockage_field(&mut self, blockage: &[f64]) {
         let n = self.blockage.len().min(blockage.len());
-        self.blockage[..n].copy_from_slice(&blockage[..n]);
+        for (dst, src) in self.blockage[..n].iter_mut().zip(&blockage[..n]) {
+            *dst = src.clamp(0.0, 1.0);
+        }
     }
 
     /// 计算单元的拖曳力 [N/m²]
@@ -152,7 +156,13 @@ impl BridgePierDrag {
 
         let half = backend.config_scalar(0.5, "BridgePierDrag.factor_half");
         let rho = backend.config_scalar(self.constants.rho_water, "BridgePierDrag.rho_water");
-        let min_depth = backend.config_scalar(self.config.h_min.max(0.01), "BridgePierDrag.min_depth");
+        let configured_min_depth =
+            backend.config_scalar(self.config.h_min, "BridgePierDrag.min_depth");
+        let min_depth = if configured_min_depth > zero_cutoff {
+            configured_min_depth
+        } else {
+            zero_cutoff
+        };
         let h_safe = if h < min_depth { min_depth } else { h };
         let factor = half * rho * cd * ab * speed / h_safe;
 
@@ -161,9 +171,15 @@ impl BridgePierDrag {
 }
 
 impl<B: Backend> SourceTermGeneric<B> for BridgePierDrag {
-    fn name(&self) -> &'static str { "BridgePierDrag" }
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
-    fn is_enabled(&self) -> bool { self.config.enabled }
+    fn name(&self) -> &'static str {
+        "BridgePierDrag"
+    }
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
+    }
+    fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
 
     fn compute_cell(
         &self,
@@ -172,7 +188,9 @@ impl<B: Backend> SourceTermGeneric<B> for BridgePierDrag {
         ctx: &SourceContextGeneric<B::Scalar>,
     ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
-        let h_min = state.backend().config_scalar(self.config.h_min, "BridgePierDrag.h_min");
+        let h_min = state
+            .backend()
+            .config_scalar(self.config.h_min, "BridgePierDrag.h_min");
         if h < h_min || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
@@ -190,7 +208,9 @@ impl<B: Backend> SourceTermGeneric<B> for BridgePierDrag {
         rhs_hv: &mut B::Buffer<B::Scalar>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.config.enabled { return; }
+        if !self.config.enabled {
+            return;
+        }
         let n = state
             .n_cells()
             .min(self.blockage.len())
@@ -209,7 +229,12 @@ mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+    fn create_test_state(
+        n_cells: usize,
+        h: f64,
+        u: f64,
+        v: f64,
+    ) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
@@ -234,7 +259,7 @@ mod tests {
         let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
-        
+
         // 无桥墩 → 无阻力
         assert!((contrib.s_hu).abs() < 1e-10);
     }
@@ -249,7 +274,7 @@ mod tests {
         let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
-        
+
         // 有桥墩 → 负 x 动量源
         assert!(contrib.s_hu < 0.0);
     }

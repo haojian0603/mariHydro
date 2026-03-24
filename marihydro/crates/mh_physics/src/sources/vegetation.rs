@@ -23,14 +23,15 @@
 //! - 柔性植被（随流弯曲）
 //! - 淹没/露出植被
 
-use super::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
+use super::traits::{
+    SourceContextGeneric, SourceContributionGeneric, SourceStiffness, SourceTermGeneric,
+};
 use crate::state::ShallowWaterState;
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 
 /// 植被类型
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum VegetationType {
     /// 无植被
     #[default]
@@ -39,9 +40,9 @@ pub enum VegetationType {
     Rigid {
         /// 阻力系数
         cd: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 茎直径 [m]
+        /// 茎直�?[m]
         diameter: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 茎密度 [1/m²]
+        /// 茎密�?[1/m²]
         density: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
         height: f64, // ALLOW_F64: Layer 4 配置参数
@@ -52,7 +53,7 @@ pub enum VegetationType {
         cd_base: f64, // ALLOW_F64: Layer 4 配置参数
         /// 弯曲模量
         flex_modulus: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 叶面积指数 [m²/m²]
+        /// 叶面积指�?[m²/m²]
         lai: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
         height: f64, // ALLOW_F64: Layer 4 配置参数
@@ -65,7 +66,6 @@ pub enum VegetationType {
         height: f64, // ALLOW_F64: Layer 4 配置参数
     },
 }
-
 
 impl VegetationType {
     /// 创建刚性植被
@@ -81,12 +81,12 @@ impl VegetationType {
 
     /// 创建典型芦苇植被
     pub fn reed() -> Self {
-        Self::rigid(1.2, 0.01, 50.0, 2.0) // 直径1cm，50根/m²，高2m
+        Self::rigid(1.2, 0.01, 50.0, 2.0) // 直径1cm�?0�?m²，高2m
     }
 
     /// 创建典型红树林
     pub fn mangrove() -> Self {
-        Self::rigid(1.0, 0.05, 10.0, 3.0) // 直径5cm，10根/m²，高3m
+        Self::rigid(1.0, 0.05, 10.0, 3.0) // 直径5cm�?0�?m²，高3m
     }
 
     /// 创建柔性水草
@@ -119,7 +119,12 @@ impl VegetationType {
         }
         match *self {
             Self::None => 0.0,
-            Self::Rigid { cd, diameter, density, height } => {
+            Self::Rigid {
+                cd,
+                diameter,
+                density,
+                height,
+            } => {
                 // 植被高度可能被水深限制
                 let effective_height = height.min(water_depth);
                 if effective_height <= 0.0 {
@@ -129,7 +134,12 @@ impl VegetationType {
                 let av = diameter * density * effective_height / water_depth;
                 cd * av
             }
-            Self::Flexible { cd_base, flex_modulus, lai, height } => {
+            Self::Flexible {
+                cd_base,
+                flex_modulus,
+                lai,
+                height,
+            } => {
                 let effective_height = height.min(water_depth);
                 if effective_height <= 0.0 {
                     return 0.0;
@@ -178,24 +188,43 @@ impl VegetationType {
 
         match *self {
             Self::None => B::Scalar::ZERO,
-            Self::Rigid { cd, diameter, density, height } => {
+            Self::Rigid {
+                cd,
+                diameter,
+                density,
+                height,
+            } => {
                 let cd = backend.config_scalar(cd, "VegetationType.rigid.cd");
                 let diameter = backend.config_scalar(diameter, "VegetationType.rigid.diameter");
                 let density = backend.config_scalar(density, "VegetationType.rigid.density");
                 let height = backend.config_scalar(height, "VegetationType.rigid.height");
-                let effective_height = if height < water_depth { height } else { water_depth };
+                let effective_height = if height < water_depth {
+                    height
+                } else {
+                    water_depth
+                };
                 if effective_height <= B::Scalar::ZERO {
                     return B::Scalar::ZERO;
                 }
                 let av = diameter * density * effective_height / water_depth;
                 cd * av
             }
-            Self::Flexible { cd_base, flex_modulus, lai, height } => {
+            Self::Flexible {
+                cd_base,
+                flex_modulus,
+                lai,
+                height,
+            } => {
                 let cd_base = backend.config_scalar(cd_base, "VegetationType.flexible.cd_base");
-                let flex_modulus = backend.config_scalar(flex_modulus, "VegetationType.flexible.flex_modulus");
+                let flex_modulus =
+                    backend.config_scalar(flex_modulus, "VegetationType.flexible.flex_modulus");
                 let lai = backend.config_scalar(lai, "VegetationType.flexible.lai");
                 let height = backend.config_scalar(height, "VegetationType.flexible.height");
-                let effective_height = if height < water_depth { height } else { water_depth };
+                let effective_height = if height < water_depth {
+                    height
+                } else {
+                    water_depth
+                };
                 if effective_height <= B::Scalar::ZERO {
                     return B::Scalar::ZERO;
                 }
@@ -206,7 +235,11 @@ impl VegetationType {
             Self::Generic { av_cd, height } => {
                 let av_cd = backend.config_scalar(av_cd, "VegetationType.generic.av_cd");
                 let height = backend.config_scalar(height, "VegetationType.generic.height");
-                let effective_height = if height < water_depth { height } else { water_depth };
+                let effective_height = if height < water_depth {
+                    height
+                } else {
+                    water_depth
+                };
                 if effective_height <= B::Scalar::ZERO {
                     return B::Scalar::ZERO;
                 }
@@ -223,7 +256,7 @@ pub struct VegetationConfig {
     pub enabled: bool,
     /// 每个单元的植被类型
     pub vegetation: Vec<VegetationType>,
-    /// 水密度 [kg/m³]
+    /// 水密�?[kg/m³]
     pub rho_water: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
     pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
@@ -286,9 +319,15 @@ impl VegetationConfig {
 }
 
 impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
-    fn name(&self) -> &'static str { "Vegetation" }
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
-    fn is_enabled(&self) -> bool { self.enabled }
+    fn name(&self) -> &'static str {
+        "Vegetation"
+    }
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::LocallyImplicit
+    }
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     fn compute_cell(
         &self,
@@ -297,16 +336,26 @@ impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
         ctx: &SourceContextGeneric<B::Scalar>,
     ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
-        let h_min = state.backend().config_scalar(self.h_min, "VegetationConfig.h_min");
+        let h_min = state
+            .backend()
+            .config_scalar(self.h_min, "VegetationConfig.h_min");
         if !h.is_finite() || h < h_min || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
-        let veg = self.vegetation.get(cell).copied().unwrap_or(VegetationType::None);
-        if matches!(veg, VegetationType::None) { return SourceContributionGeneric::default(); }
+        let veg = self
+            .vegetation
+            .get(cell)
+            .copied()
+            .unwrap_or(VegetationType::None);
+        if matches!(veg, VegetationType::None) {
+            return SourceContributionGeneric::default();
+        }
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
         let vel = (u * u + v * v).safe_sqrt();
-        let vel_min = state.backend().config_scalar(self.vel_min, "VegetationConfig.vel_min");
+        let vel_min = state
+            .backend()
+            .config_scalar(self.vel_min, "VegetationConfig.vel_min");
         if !u.is_finite() || !v.is_finite() || !vel.is_finite() || vel < vel_min {
             return SourceContributionGeneric::default();
         }
@@ -314,7 +363,9 @@ impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
         if cd_av <= B::Scalar::ZERO {
             return SourceContributionGeneric::default();
         }
-        let half = state.backend().config_scalar(0.5, "VegetationConfig.drag_half");
+        let half = state
+            .backend()
+            .config_scalar(0.5, "VegetationConfig.drag_half");
         let factor = -half * cd_av * h * vel;
         SourceContributionGeneric::momentum(factor * u, factor * v)
     }
@@ -327,7 +378,9 @@ impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
         rhs_hv: &mut B::Buffer<B::Scalar>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         let n_cells = state
             .n_cells()
             .min(self.vegetation.len())
@@ -361,43 +414,51 @@ impl VegetationSource {
 ///
 /// 使用半隐式方法处理植被阻力，避免数值不稳定
 #[derive(Debug, Clone)]
-pub struct VegetationImplicit {
+pub struct VegetationImplicit<B: Backend> {
     /// 配置
     pub config: VegetationConfig,
     /// 阻力衰减因子（预计算）
-    decay_factors: Vec<f64>, // ALLOW_F64: 源项计算
+    decay_factors: B::Buffer<B::Scalar>,
+    backend: B,
 }
 
-impl VegetationImplicit {
+impl<B: Backend> VegetationImplicit<B> {
     /// 创建新实例
-    pub fn new(config: VegetationConfig) -> Self {
+    pub fn new(backend: B, config: VegetationConfig) -> Self {
         let n = config.vegetation.len();
         Self {
             config,
-            decay_factors: vec![0.0; n],
+            decay_factors: backend.alloc_init(n, B::Scalar::ONE),
+            backend,
         }
     }
 
     /// 计算衰减因子
     ///
     /// 返回 exp(-Δt * 0.5 * C_d * A_v * |u|)
-    // ALLOW_F64: 时间参数与模拟进度配合
-    pub fn compute_decay_factors(&mut self, state: &ShallowWaterState<CpuBackend<f64>>, dt: f64) {
-        if !dt.is_finite() || dt <= 0.0 {
+    pub fn compute_decay_factors(&mut self, state: &ShallowWaterState<B>, dt: B::Scalar) {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO {
             return;
         }
         let n = self.decay_factors.len().min(state.h.len());
+        let h_min = self
+            .backend
+            .config_scalar(self.config.h_min, "VegetationImplicit.h_min");
+        let one = B::Scalar::ONE;
+        let half = self
+            .backend
+            .config_scalar(0.5, "VegetationImplicit.decay_half");
 
         for i in 0..n {
             let h = state.h[i];
-            if !h.is_finite() || h < self.config.h_min {
-                self.decay_factors[i] = 1.0;
+            if !h.is_finite() || h < h_min {
+                self.decay_factors[i] = one;
                 continue;
             }
 
             let veg = self.config.vegetation[i];
             if matches!(veg, VegetationType::None) {
-                self.decay_factors[i] = 1.0;
+                self.decay_factors[i] = one;
                 continue;
             }
 
@@ -406,19 +467,19 @@ impl VegetationImplicit {
             let vel = (u * u + v * v).sqrt();
 
             if !u.is_finite() || !v.is_finite() || !vel.is_finite() {
-                self.decay_factors[i] = 1.0;
+                self.decay_factors[i] = one;
                 continue;
             }
 
-            let cd_av = veg.effective_drag(h, vel);
-            let decay_rate = 0.5 * cd_av * vel;
+            let cd_av = veg.effective_drag_scalar(&self.backend, h, vel);
+            let decay_rate = half * cd_av * vel;
 
-            self.decay_factors[i] = (-dt * decay_rate).exp().max(0.0).min(1.0);
+            self.decay_factors[i] = (-dt * decay_rate).exp().max(B::Scalar::ZERO).min(one);
         }
     }
 
     /// 应用隐式衰减
-    pub fn apply_decay(&self, state: &mut ShallowWaterState<CpuBackend<f64>>) {
+    pub fn apply_decay(&self, state: &mut ShallowWaterState<B>) {
         let n = self.decay_factors.len().min(state.h.len());
 
         for i in 0..n {
@@ -429,9 +490,11 @@ impl VegetationImplicit {
     }
 
     /// 获取衰减因子
-    // ALLOW_F64: 源项计算
-    pub fn get_decay_factor(&self, cell: usize) -> f64 {
-        self.decay_factors.get(cell).copied().unwrap_or(1.0)
+    pub fn get_decay_factor(&self, cell: usize) -> B::Scalar {
+        self.decay_factors
+            .get(cell)
+            .copied()
+            .unwrap_or(B::Scalar::ONE)
     }
 }
 
@@ -440,7 +503,12 @@ mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
+    fn create_test_state(
+        n_cells: usize,
+        h: f64,
+        u: f64,
+        v: f64,
+    ) -> ShallowWaterState<CpuBackend<f64>> {
         let backend = CpuBackend::<f64>::new();
         let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
@@ -462,7 +530,13 @@ mod tests {
     #[test]
     fn test_vegetation_type_rigid() {
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
-        if let VegetationType::Rigid { cd, diameter, density, height } = veg {
+        if let VegetationType::Rigid {
+            cd,
+            diameter,
+            density,
+            height,
+        } = veg
+        {
             assert!((cd - 1.0).abs() < 1e-10);
             assert!((diameter - 0.01).abs() < 1e-10);
             assert!((density - 100.0).abs() < 1e-10);
@@ -498,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_effective_drag_partial() {
-        // 水深0.5m，植被高度1m（部分淹没）
+        // 水深0.5m，植被高�?m（部分淹没）
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
 
         // effective_height = 0.5
@@ -511,7 +585,7 @@ mod tests {
     fn test_vegetation_is_submerged() {
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
         assert!(!veg.is_submerged(0.5)); // 未淹没
-        assert!(veg.is_submerged(1.5));  // 已淹没
+        assert!(veg.is_submerged(1.5)); // 已淹没
     }
 
     #[test]
@@ -523,8 +597,8 @@ mod tests {
 
     #[test]
     fn test_vegetation_config_uniform() {
-        let config = VegetationConfig::new(10, 1000.0)
-            .with_uniform_vegetation(VegetationType::reed());
+        let config =
+            VegetationConfig::new(10, 1000.0).with_uniform_vegetation(VegetationType::reed());
 
         for v in &config.vegetation {
             assert!((v.height() - 2.0).abs() < 1e-10);
@@ -563,8 +637,8 @@ mod tests {
 
     #[test]
     fn test_vegetation_source_dry_cell() {
-        let config = VegetationConfig::new(10, 1000.0)
-            .with_uniform_vegetation(VegetationType::reed());
+        let config =
+            VegetationConfig::new(10, 1000.0).with_uniform_vegetation(VegetationType::reed());
 
         let state = create_test_state(10, 1e-7, 0.0, 0.0);
         let backend = CpuBackend::<f64>::new();
@@ -592,19 +666,19 @@ mod tests {
     #[test]
     fn test_vegetation_implicit_creation() {
         let config = VegetationConfig::new(10, 1000.0);
-        let implicit = VegetationImplicit::new(config);
+        let implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
         assert_eq!(implicit.decay_factors.len(), 10);
     }
 
     #[test]
     fn test_vegetation_implicit_no_vegetation() {
         let config = VegetationConfig::new(10, 1000.0);
-        let mut implicit = VegetationImplicit::new(config);
+        let mut implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
         implicit.compute_decay_factors(&state, 0.1);
 
-        // 无植被时衰减因子为1
+        // 无植被时衰减因子为 1
         assert!((implicit.get_decay_factor(0) - 1.0).abs() < 1e-10);
     }
 
@@ -612,7 +686,7 @@ mod tests {
     fn test_vegetation_implicit_with_vegetation() {
         let mut config = VegetationConfig::new(10, 1000.0);
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
-        let mut implicit = VegetationImplicit::new(config);
+        let mut implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
         implicit.compute_decay_factors(&state, 0.1);
@@ -623,3 +697,4 @@ mod tests {
         assert!(factor > 0.0);
     }
 }
+
