@@ -23,7 +23,8 @@ use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
 use mh_foundation::AlignedVec;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, RuntimeScalar};
+use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
 /// 堰类型
@@ -226,9 +227,35 @@ impl WeirFlow {
         let n = self.n_cells.min(areas.len());
         self.cell_area[..n].copy_from_slice(&areas[..n]);
     }
+
+    fn compute_discharge_generic<B: Backend>(
+        &self,
+        backend: &B,
+        cell: usize,
+        water_level: B::Scalar,
+    ) -> B::Scalar {
+        if !self.crest_elevation[cell].is_finite() {
+            return B::Scalar::ZERO;
+        }
+        let crest = backend.config_scalar(self.crest_elevation[cell], "WeirFlow.crest_elevation");
+
+        let head = water_level - crest;
+        let h_min = backend.config_scalar(self.config.h_min, "WeirFlow.h_min");
+        if head < h_min {
+            return B::Scalar::ZERO;
+        }
+
+        let cd = backend.config_scalar(self.cd_field[cell], "WeirFlow.cd");
+        let width = backend.config_scalar(self.weir_width[cell], "WeirFlow.width");
+        let exponent = backend.config_scalar(1.5, "WeirFlow.head_exponent");
+        let gravity = backend.config_scalar(self.constants.g, "WeirFlow.gravity");
+        let two = backend.config_scalar(2.0, "WeirFlow.gravity_factor");
+
+        cd * width * head.safe_powf(exponent) * (two * gravity).safe_sqrt()
+    }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WeirFlow {
+impl<B: Backend> SourceTermGeneric<B> for WeirFlow {
     fn name(&self) -> &'static str { "WeirFlow" }
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
     fn is_enabled(&self) -> bool { self.config.enabled }
@@ -236,39 +263,52 @@ impl SourceTermGeneric<CpuBackend<f64>> for WeirFlow {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
-        let crest = self.crest_elevation[cell];
-        if crest.is_infinite() { return SourceContributionGeneric::default(); }
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        if !self.crest_elevation[cell].is_finite() {
+            return SourceContributionGeneric::default();
+        }
+        let crest = state
+            .backend()
+            .config_scalar(self.crest_elevation[cell], "WeirFlow.crest_elevation");
         let h = state.h[cell];
         let z = state.z[cell];
         let water_level = h + z;
-        let q = self.compute_discharge(cell, water_level);
-        if q.abs() < 1e-10 || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
-        let area = self.cell_area[cell].max(1e-10);
+        let q = self.compute_discharge_generic(state.backend(), cell, water_level);
+        let zero_cutoff = state.backend().config_scalar(1e-10, "WeirFlow.zero_cutoff");
+        if q.abs() < zero_cutoff || ctx.is_dry(h) {
+            return SourceContributionGeneric::default();
+        }
+        let area_raw = state.backend().config_scalar(self.cell_area[cell], "WeirFlow.cell_area");
+        let area = if area_raw < zero_cutoff { zero_cutoff } else { area_raw };
         let s_h = -q / area;
-        let head = (water_level - crest).max(self.config.h_min);
-        let width = self.weir_width[cell].max(1e-10);
+        let h_min = state.backend().config_scalar(self.config.h_min, "WeirFlow.h_min");
+        let head_raw = water_level - crest;
+        let head = if head_raw < h_min { h_min } else { head_raw };
+        let width_raw = state.backend().config_scalar(self.weir_width[cell], "WeirFlow.width");
+        let width = if width_raw < zero_cutoff { zero_cutoff } else { width_raw };
         let v_weir = q / (width * head);
-        let nx = self.normal_x[cell];
-        let ny = self.normal_y[cell];
+        let nx = state.backend().config_scalar(self.normal_x[cell], "WeirFlow.normal_x");
+        let ny = state.backend().config_scalar(self.normal_y[cell], "WeirFlow.normal_y");
         SourceContributionGeneric::new(s_h, s_h * v_weir * nx, s_h * v_weir * ny)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.is_enabled() { return; }
-        let n = state.n_cells().min(self.n_cells);
-        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
-        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
-        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        if !self.config.enabled { return; }
+        let n = state
+            .n_cells()
+            .min(self.n_cells)
+            .min(rhs_h.len())
+            .min(rhs_hu.len())
+            .min(rhs_hv.len());
         for cell in 0..n {
             let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
             rhs_h[cell] += contrib.s_h;

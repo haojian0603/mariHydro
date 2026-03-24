@@ -14,7 +14,7 @@ use crate::state::ShallowWaterState;
 use crate::types::PhysicalConstants;
 use mh_foundation::error::MhResult;
 use mh_foundation::AlignedVec;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, RuntimeScalar};
 use serde::{Deserialize, Serialize};
 
 // 注意：CpuBackend 已在上方导入
@@ -109,6 +109,7 @@ impl BridgePierDrag {
 
     /// 计算单元的拖曳力 [N/m²]
     // ALLOW_F64: 源项计算
+    #[allow(dead_code)]
     fn compute_drag_force(&self, cell: usize, h: f64, u: f64, v: f64) -> (f64, f64) {
         let ab = self.blockage[cell];
         if ab < 1e-10 {
@@ -128,9 +129,38 @@ impl BridgePierDrag {
 
         (-factor * u, -factor * v)
     }
+
+    fn compute_drag_force_generic<B: Backend>(
+        &self,
+        backend: &B,
+        cell: usize,
+        h: B::Scalar,
+        u: B::Scalar,
+        v: B::Scalar,
+    ) -> (B::Scalar, B::Scalar) {
+        let ab = backend.config_scalar(self.blockage[cell], "BridgePierDrag.blockage");
+        let zero_cutoff = backend.config_scalar(1e-10, "BridgePierDrag.zero_cutoff");
+        if ab < zero_cutoff {
+            return (B::Scalar::ZERO, B::Scalar::ZERO);
+        }
+
+        let cd = backend.config_scalar(self.drag_coeff[cell], "BridgePierDrag.drag_coeff");
+        let speed = (u * u + v * v).safe_sqrt();
+        if speed < zero_cutoff {
+            return (B::Scalar::ZERO, B::Scalar::ZERO);
+        }
+
+        let half = backend.config_scalar(0.5, "BridgePierDrag.factor_half");
+        let rho = backend.config_scalar(self.constants.rho_water, "BridgePierDrag.rho_water");
+        let min_depth = backend.config_scalar(self.config.h_min.max(0.01), "BridgePierDrag.min_depth");
+        let h_safe = if h < min_depth { min_depth } else { h };
+        let factor = half * rho * cd * ab * speed / h_safe;
+
+        (-factor * u, -factor * v)
+    }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for BridgePierDrag {
+impl<B: Backend> SourceTermGeneric<B> for BridgePierDrag {
     fn name(&self) -> &'static str { "BridgePierDrag" }
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
     fn is_enabled(&self) -> bool { self.config.enabled }
@@ -138,29 +168,34 @@ impl SourceTermGeneric<CpuBackend<f64>> for BridgePierDrag {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
-        if h < self.config.h_min || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
+        let h_min = state.backend().config_scalar(self.config.h_min, "BridgePierDrag.h_min");
+        if h < h_min || ctx.is_dry(h) {
+            return SourceContributionGeneric::default();
+        }
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
-        let (f_x, f_y) = self.compute_drag_force(cell, h, u, v);
+        let (f_x, f_y) = self.compute_drag_force_generic(state.backend(), cell, h, u, v);
         SourceContributionGeneric::momentum(f_x, f_y)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.is_enabled() { return; }
-        let n = state.n_cells().min(self.blockage.len());
-        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
-        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        if !self.config.enabled { return; }
+        let n = state
+            .n_cells()
+            .min(self.blockage.len())
+            .min(rhs_hu.len())
+            .min(rhs_hv.len());
         for cell in 0..n {
             let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
             rhs_hu[cell] += contrib.s_hu;
@@ -227,4 +262,3 @@ mod tests {
         assert!((pier.blockage[0] - 0.2).abs() < 1e-10);
     }
 }
-

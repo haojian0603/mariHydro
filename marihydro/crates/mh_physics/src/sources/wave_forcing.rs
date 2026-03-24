@@ -17,7 +17,7 @@
 use crate::sources::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
 use mh_foundation::AlignedVec;
-use mh_runtime::CpuBackend;
+use mh_runtime::Backend;
 use serde::{Deserialize, Serialize};
 
 /// 波浪驱动源项配置
@@ -216,7 +216,7 @@ impl WaveForcing {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WaveForcing {
+impl<B: Backend> SourceTermGeneric<B> for WaveForcing {
     fn name(&self) -> &'static str { "WaveForcing" }
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
     fn is_enabled(&self) -> bool { self.config.enabled }
@@ -224,27 +224,34 @@ impl SourceTermGeneric<CpuBackend<f64>> for WaveForcing {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
-        if ctx.is_dry(h) || h < self.config.h_min { return SourceContributionGeneric::default(); }
-        let rho = self.config.rho_water;
-        SourceContributionGeneric::momentum(-self.grad_sxx_sxy[cell] / (rho * h), -self.grad_sxy_syy[cell] / (rho * h))
+        let h_min = state.backend().config_scalar(self.config.h_min, "WaveForcing.h_min");
+        if ctx.is_dry(h) || h < h_min {
+            return SourceContributionGeneric::default();
+        }
+        let rho = state.backend().config_scalar(self.config.rho_water, "WaveForcing.rho_water");
+        let grad_x = state.backend().config_scalar(self.grad_sxx_sxy[cell], "WaveForcing.grad_x");
+        let grad_y = state.backend().config_scalar(self.grad_sxy_syy[cell], "WaveForcing.grad_y");
+        SourceContributionGeneric::momentum(-grad_x / (rho * h), -grad_y / (rho * h))
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.is_enabled() { return; }
-        let n = state.n_cells().min(self.n_cells);
-        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
-        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        if !self.config.enabled { return; }
+        let n = state
+            .n_cells()
+            .min(self.n_cells)
+            .min(rhs_hu.len())
+            .min(rhs_hv.len());
         for cell in 0..n {
             let h = state.h[cell];
             if !ctx.is_dry(h) {
@@ -320,4 +327,3 @@ mod tests {
         assert!(wf.effective_shear[0] > 1.0);
     }
 }
-

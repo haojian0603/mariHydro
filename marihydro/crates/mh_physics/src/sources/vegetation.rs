@@ -25,7 +25,8 @@
 
 use super::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use num_traits::Float;
 
 /// 植被类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -164,6 +165,55 @@ impl VegetationType {
     pub fn is_submerged(&self, water_depth: f64) -> bool {
         water_depth >= self.height()
     }
+
+    fn effective_drag_scalar<B: Backend>(
+        &self,
+        backend: &B,
+        water_depth: B::Scalar,
+        velocity: B::Scalar,
+    ) -> B::Scalar {
+        if !water_depth.is_finite() || water_depth <= B::Scalar::ZERO || !velocity.is_finite() {
+            return B::Scalar::ZERO;
+        }
+
+        match *self {
+            Self::None => B::Scalar::ZERO,
+            Self::Rigid { cd, diameter, density, height } => {
+                let cd = backend.config_scalar(cd, "VegetationType.rigid.cd");
+                let diameter = backend.config_scalar(diameter, "VegetationType.rigid.diameter");
+                let density = backend.config_scalar(density, "VegetationType.rigid.density");
+                let height = backend.config_scalar(height, "VegetationType.rigid.height");
+                let effective_height = if height < water_depth { height } else { water_depth };
+                if effective_height <= B::Scalar::ZERO {
+                    return B::Scalar::ZERO;
+                }
+                let av = diameter * density * effective_height / water_depth;
+                cd * av
+            }
+            Self::Flexible { cd_base, flex_modulus, lai, height } => {
+                let cd_base = backend.config_scalar(cd_base, "VegetationType.flexible.cd_base");
+                let flex_modulus = backend.config_scalar(flex_modulus, "VegetationType.flexible.flex_modulus");
+                let lai = backend.config_scalar(lai, "VegetationType.flexible.lai");
+                let height = backend.config_scalar(height, "VegetationType.flexible.height");
+                let effective_height = if height < water_depth { height } else { water_depth };
+                if effective_height <= B::Scalar::ZERO {
+                    return B::Scalar::ZERO;
+                }
+                let bend_factor = B::Scalar::ONE / (B::Scalar::ONE + flex_modulus * velocity.abs());
+                let av = lai * effective_height / water_depth;
+                cd_base * bend_factor * av
+            }
+            Self::Generic { av_cd, height } => {
+                let av_cd = backend.config_scalar(av_cd, "VegetationType.generic.av_cd");
+                let height = backend.config_scalar(height, "VegetationType.generic.height");
+                let effective_height = if height < water_depth { height } else { water_depth };
+                if effective_height <= B::Scalar::ZERO {
+                    return B::Scalar::ZERO;
+                }
+                av_cd * effective_height / water_depth
+            }
+        }
+    }
 }
 
 /// 植被阻力源项配置
@@ -235,7 +285,7 @@ impl VegetationConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for VegetationConfig {
+impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
     fn name(&self) -> &'static str { "Vegetation" }
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
     fn is_enabled(&self) -> bool { self.enabled }
@@ -243,36 +293,47 @@ impl SourceTermGeneric<CpuBackend<f64>> for VegetationConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
-        if !h.is_finite() || h < self.h_min || ctx.is_dry(h) { return SourceContributionGeneric::default(); }
+        let h_min = state.backend().config_scalar(self.h_min, "VegetationConfig.h_min");
+        if !h.is_finite() || h < h_min || ctx.is_dry(h) {
+            return SourceContributionGeneric::default();
+        }
         let veg = self.vegetation.get(cell).copied().unwrap_or(VegetationType::None);
         if matches!(veg, VegetationType::None) { return SourceContributionGeneric::default(); }
         let u = state.hu[cell] / h;
         let v = state.hv[cell] / h;
-        let vel = (u * u + v * v).sqrt();
-        if !u.is_finite() || !v.is_finite() || !vel.is_finite() || vel < self.vel_min { return SourceContributionGeneric::default(); }
-        let cd_av = veg.effective_drag(h, vel);
-        if cd_av <= 0.0 { return SourceContributionGeneric::default(); }
-        let factor = -0.5 * cd_av * h * vel;
+        let vel = (u * u + v * v).safe_sqrt();
+        let vel_min = state.backend().config_scalar(self.vel_min, "VegetationConfig.vel_min");
+        if !u.is_finite() || !v.is_finite() || !vel.is_finite() || vel < vel_min {
+            return SourceContributionGeneric::default();
+        }
+        let cd_av = veg.effective_drag_scalar(state.backend(), h, vel);
+        if cd_av <= B::Scalar::ZERO {
+            return SourceContributionGeneric::default();
+        }
+        let half = state.backend().config_scalar(0.5, "VegetationConfig.drag_half");
+        let factor = -half * cd_av * h * vel;
         SourceContributionGeneric::momentum(factor * u, factor * v)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled { return; }
-        let n_cells = state.n_cells().min(self.vegetation.len());
-        if rhs_h.len() < n_cells { rhs_h.resize(n_cells, 0.0); }
-        if rhs_hu.len() < n_cells { rhs_hu.resize(n_cells, 0.0); }
-        if rhs_hv.len() < n_cells { rhs_hv.resize(n_cells, 0.0); }
+        let n_cells = state
+            .n_cells()
+            .min(self.vegetation.len())
+            .min(rhs_h.len())
+            .min(rhs_hu.len())
+            .min(rhs_hv.len());
         for cell in 0..n_cells {
             let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
             rhs_hu[cell] += contrib.s_hu;
@@ -518,8 +579,14 @@ mod tests {
     #[test]
     fn test_source_term_trait() {
         let config = VegetationConfig::default_config(10);
-        assert_eq!(SourceTermGeneric::name(&config), "Vegetation");
-        assert_eq!(SourceTermGeneric::stiffness(&config), SourceStiffness::LocallyImplicit); // 使用隐式处理
+        assert_eq!(
+            <VegetationConfig as SourceTermGeneric<CpuBackend<f64>>>::name(&config),
+            "Vegetation"
+        );
+        assert_eq!(
+            <VegetationConfig as SourceTermGeneric<CpuBackend<f64>>>::stiffness(&config),
+            SourceStiffness::LocallyImplicit
+        ); // 使用隐式处理
     }
 
     #[test]

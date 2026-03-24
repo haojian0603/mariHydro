@@ -68,19 +68,19 @@ impl<S: RuntimeScalar> TurbulenceModel<S> {
     /// Smagorinsky 常数的默认值
     #[inline]
     pub fn default_smagorinsky_constant<B: Backend<Scalar = S>>(backend: &B) -> S {
-        backend.scalar_from_f64(0.15)
+        backend.config_scalar(0.15, "TurbulenceModel.default_smagorinsky_constant")
     }
 
     /// 最小涡粘性系数 [m²/s]
     #[inline]
     pub fn min_eddy_viscosity<B: Backend<Scalar = S>>(backend: &B) -> S {
-        backend.scalar_from_f64(1e-6)
+        backend.config_scalar(1e-6, "TurbulenceModel.min_eddy_viscosity")
     }
 
     /// 最大涡粘性系数 [m²/s]
     #[inline]
     pub fn max_eddy_viscosity<B: Backend<Scalar = S>>(backend: &B) -> S {
-        backend.scalar_from_f64(1e3)
+        backend.config_scalar(1e3, "TurbulenceModel.max_eddy_viscosity")
     }
 
     /// 创建禁用模式（推荐）
@@ -101,8 +101,8 @@ impl<S: RuntimeScalar> TurbulenceModel<S> {
 
     /// 创建 Smagorinsky 模型
     pub fn smagorinsky<B: Backend<Scalar = S>>(backend: &B, cs: S) -> Self {
-        let min = backend.scalar_from_f64(0.05);
-        let max = backend.scalar_from_f64(0.3);
+        let min = backend.config_scalar(0.05, "TurbulenceModel.smagorinsky.min_cs");
+        let max = backend.config_scalar(0.3, "TurbulenceModel.smagorinsky.max_cs");
         let clamped = if cs < min { min } else if cs > max { max } else { cs };
         Self::Smagorinsky { cs: clamped }
     }
@@ -135,14 +135,17 @@ pub struct SmagorinskySolver<B: Backend> {
 impl<B: Backend> SmagorinskySolver<B> {
     /// 创建新的求解器
     pub fn new(backend: B, n_cells: usize, model: TurbulenceModel<B::Scalar>) -> Self {
-        let grid_scale = backend.alloc_init(n_cells, backend.scalar_from_f64(10.0));
+        let grid_scale = backend.alloc_init(
+            n_cells,
+            backend.config_scalar(10.0, "SmagorinskySolver.default_grid_scale"),
+        );
         let eddy_viscosity = backend.alloc_init(n_cells, B::Scalar::ZERO);
         Self {
             model,
             grid_scale,
             eddy_viscosity,
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: backend.scalar_from_f64(1e-4),
+            h_min: backend.config_scalar(1e-4, "SmagorinskySolver.h_min"),
             backend,
             _marker: PhantomData,
         }
@@ -156,7 +159,9 @@ impl<B: Backend> SmagorinskySolver<B> {
         // 计算网格尺度（使用单元面积的平方根）
         for i in 0..n_cells {
             if let Some(area) = mesh.cell_area(mh_runtime::CellIndex(i)) {
-                solver.grid_scale[i] = solver.backend.scalar_from_f64(area.sqrt());
+                solver.grid_scale[i] = solver
+                    .backend
+                    .config_scalar(area.sqrt(), "SmagorinskySolver.grid_scale_from_mesh");
             }
         }
 
@@ -166,7 +171,7 @@ impl<B: Backend> SmagorinskySolver<B> {
     /// 设置网格尺度
     pub fn set_grid_scale(&mut self, i: usize, scale: B::Scalar) {
         if i < self.grid_scale.len() {
-            let min_scale = self.backend.scalar_from_f64(1e-3);
+            let min_scale = self.backend.config_scalar(1e-3, "SmagorinskySolver.min_grid_scale");
             self.grid_scale[i] = if scale < min_scale {
                 min_scale
             } else {
@@ -241,13 +246,13 @@ impl<B: Backend> SmagorinskySolver<B> {
                     let v_n = hv[neigh_idx] / h_n;
 
                     let normal = mesh
-                        .face_normal_generic::<CpuBackend<f64>>(face_id)
+                        .face_normal_generic::<B>(face_id)
                         .expect("face_normal out of range");
-                    let nx = self.backend.scalar_from_f64(normal.x());
-                    let ny = self.backend.scalar_from_f64(normal.y());
+                    let nx = normal.x();
+                    let ny = normal.y();
                     let dist = self.grid_scale[i];
 
-                    if dist > self.backend.scalar_from_f64(1e-10) {
+                    if dist > self.backend.config_scalar(1e-10, "SmagorinskySolver.gradient_distance_eps") {
                         let weight = B::Scalar::ONE / dist;
                         du_dx = du_dx + (u_n - u) * nx * weight;
                         du_dy = du_dy + (u_n - u) * ny * weight;
@@ -258,7 +263,7 @@ impl<B: Backend> SmagorinskySolver<B> {
                 }
             }
 
-            if weight_sum > self.backend.scalar_from_f64(1e-10) {
+            if weight_sum > self.backend.config_scalar(1e-10, "SmagorinskySolver.gradient_weight_eps") {
                 self.velocity_gradient[i] = VelocityGradient::new(
                     du_dx / weight_sum,
                     du_dy / weight_sum,
@@ -383,9 +388,12 @@ impl<B: Backend> TurbulenceConfig<B> {
             enabled: true,
             model,
             eddy_viscosity: backend.alloc_init(n_cells, B::Scalar::ZERO),
-            grid_scale: backend.alloc_init(n_cells, backend.scalar_from_f64(10.0)),
+            grid_scale: backend.alloc_init(
+                n_cells,
+                backend.config_scalar(10.0, "TurbulenceConfig.default_grid_scale"),
+            ),
             velocity_gradient: vec![VelocityGradient::default(); n_cells],
-            h_min: backend.scalar_from_f64(1e-4),
+            h_min: backend.config_scalar(1e-4, "TurbulenceConfig.h_min"),
             backend,
             _marker: PhantomData,
         }
@@ -420,8 +428,7 @@ impl<B: Backend> TurbulenceConfig<B> {
     }
 }
 
-// 为 CpuBackend<f64> 特化实现 SourceTermGeneric
-impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
+impl<B: Backend> SourceTermGeneric<B> for TurbulenceConfig<B> {
     fn name(&self) -> &'static str {
         "Turbulence"
     }
@@ -437,9 +444,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         let h = state.h[cell];
 
         // 干单元不计算
@@ -448,10 +455,10 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
         }
 
         let nu = match self.model {
-            TurbulenceModel::None | TurbulenceModel::Disabled => 0.0,
+            TurbulenceModel::None | TurbulenceModel::Disabled => B::Scalar::ZERO,
             TurbulenceModel::ConstantViscosity(nu) => nu,
             TurbulenceModel::Smagorinsky { cs } => {
-                let delta = self.grid_scale.get(cell).copied().unwrap_or(0.0);
+                let delta = self.grid_scale.get(cell).copied().unwrap_or(B::Scalar::ZERO);
                 let grad = self
                     .velocity_gradient
                     .get(cell)
@@ -459,12 +466,12 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
                     .unwrap_or_default();
                 let strain = grad.strain_rate_magnitude();
                 let nu_sgs = (cs * delta) * (cs * delta) * strain;
-                let min = TurbulenceModel::<f64>::min_eddy_viscosity(&self.backend);
-                let max = TurbulenceModel::<f64>::max_eddy_viscosity(&self.backend);
+                let min = TurbulenceModel::<B::Scalar>::min_eddy_viscosity(&self.backend);
+                let max = TurbulenceModel::<B::Scalar>::max_eddy_viscosity(&self.backend);
                 if nu_sgs < min { min } else if nu_sgs > max { max } else { nu_sgs }
             }
         };
-        if nu < TurbulenceModel::<f64>::min_eddy_viscosity(&self.backend) {
+        if nu < TurbulenceModel::<B::Scalar>::min_eddy_viscosity(&self.backend) {
             return SourceContributionGeneric::zero();
         }
 
@@ -475,18 +482,19 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
             .unwrap_or_default();
 
         // 粘性应力源项（简化形式）
-        let two = 2.0_f64;
+        let two = self.backend.config_scalar(2.0, "TurbulenceConfig.tensor_factor");
         let s11 = two * grad.du_dx;
         let s22 = two * grad.dv_dy;
         let s12 = grad.du_dy + grad.dv_dx;
 
-        let char_length = if h < 0.1 { 0.1 } else { h };
+        let char_length_min = self.backend.config_scalar(0.1, "TurbulenceConfig.char_length_min");
+        let char_length = if h < char_length_min { char_length_min } else { h };
 
         let s_hu = nu * h * (s11 + s12) / char_length;
         let s_hv = nu * h * (s12 + s22) / char_length;
 
         // 限制源项大小
-        let max_source = nu * h * 10.0;
+        let max_source = nu * h * self.backend.config_scalar(10.0, "TurbulenceConfig.max_source_scale");
         let s_hu_clamped = s_hu.clamp(-max_source, max_source);
         let s_hv_clamped = s_hv.clamp(-max_source, max_source);
 
@@ -495,21 +503,18 @@ impl SourceTermGeneric<CpuBackend<f64>> for TurbulenceConfig<CpuBackend<f64>> {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hu: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        rhs_hv: &mut Vec<f64>, // ALLOW_F64: 与 CpuBackend<f64> 配合
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.is_enabled() {
             return;
         }
 
         // 默认实现：逐单元计算并累加
-        let n = state.n_cells();
-        if rhs_h.len() < n || rhs_hu.len() < n || rhs_hv.len() < n {
-            return;
-        }
+        let n = state.n_cells().min(rhs_h.len()).min(rhs_hu.len()).min(rhs_hv.len());
 
         for cell in 0..n {
             let contrib = self.compute_cell(cell, state, ctx);

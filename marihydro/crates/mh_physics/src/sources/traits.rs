@@ -425,9 +425,9 @@ impl<S: Scalar> SourceContextGeneric<S> {
         Self {
             time,
             dt,
-            gravity: backend.scalar_from_f64(9.81),
-            h_dry: backend.scalar_from_f64(1e-6),
-            h_wet: backend.scalar_from_f64(1e-4),
+            gravity: backend.config_scalar(9.81, "SourceContextGeneric.gravity"),
+            h_dry: backend.config_scalar(1e-6, "SourceContextGeneric.h_dry"),
+            h_wet: backend.config_scalar(1e-4, "SourceContextGeneric.h_wet"),
         }
     }
     
