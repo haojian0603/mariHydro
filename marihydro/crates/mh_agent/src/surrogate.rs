@@ -1,4 +1,4 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use mh_runtime::prelude::{Float, FromPrimitive};
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// 代理模型类型。
 #[derive(Debug, Clone, Copy)]
 pub enum SurrogateType {
-    NeuralNetwork,
+    LinearRegression,
     ReducedOrder,
     GaussianProcess,
     PolynomialChaos,
@@ -30,8 +30,8 @@ pub struct SurrogateConfig<B: Backend = DefaultBackend> {
 /// 代理预测结果。
 #[derive(Debug, Clone)]
 pub struct SurrogatePrediction<B: Backend = DefaultBackend> {
-    pub values: Vec<B::Scalar>,
-    pub uncertainty: Option<Vec<B::Scalar>>,
+    pub values: ScalarSamples<B>,
+    pub uncertainty: Option<ScalarSamples<B>>,
     pub prediction_time: B::Scalar,
     pub confidence: B::Scalar,
 }
@@ -82,6 +82,8 @@ where
             let _ = model.load_state(&path);
         }
 
+        model.ensure_supported_model_type()?;
+
         Ok(model)
     }
 
@@ -93,13 +95,14 @@ where
 
         let mut values = self.forward_linear(&features);
         self.denormalize_output(&mut values);
-        let values: Vec<B::Scalar> = values
+        let values: ScalarSamples<B> = values
             .into_iter()
             .map(|v| B::Scalar::from_f64(v).unwrap_or(B::Scalar::ZERO))
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
 
         let uncertainty = if self.config.estimate_uncertainty {
-            Some(vec![B::Scalar::from_f64(0.1).unwrap_or(B::Scalar::ZERO); values.len()])
+            Some(vec![B::Scalar::from_f64(0.1).unwrap_or(B::Scalar::ZERO); values.len()].into())
         } else {
             None
         };
@@ -120,6 +123,21 @@ where
         self.current_prediction = Some(prediction.clone());
         self.last_update_time = snapshot.time;
         Ok(prediction)
+    }
+
+    fn ensure_supported_model_type(&self) -> Result<(), AiError> {
+        match self.config.model_type {
+            SurrogateType::LinearRegression => Ok(()),
+            SurrogateType::ReducedOrder => Err(AiError::UnsupportedModelType(
+                "当前仅实现 LinearRegression，ReducedOrder 仍未接入".into(),
+            )),
+            SurrogateType::GaussianProcess => Err(AiError::UnsupportedModelType(
+                "当前仅实现 LinearRegression，GaussianProcess 仍未接入".into(),
+            )),
+            SurrogateType::PolynomialChaos => Err(AiError::UnsupportedModelType(
+                "当前仅实现 LinearRegression，PolynomialChaos 仍未接入".into(),
+            )),
+        }
     }
 
     fn extract_features(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<f64> {
@@ -281,11 +299,10 @@ where
         Ok(())
     }
 
-    pub fn uncertainty(&self) -> Option<&[B::Scalar]> {
+    pub fn uncertainty(&self) -> Option<&ScalarSamples<B>> {
         self.current_prediction
             .as_ref()
             .and_then(|p| p.uncertainty.as_ref())
-            .map(|u| u.as_slice())
     }
 
     pub fn is_applicable(&self, _snapshot: &PhysicsSnapshot<B>) -> bool {
@@ -307,13 +324,13 @@ where
         let input_dim = self.input_dim.max(1);
         let mut out = vec![0.0; output_dim];
         if let Some(weights) = &self.weights {
-            for o in 0..output_dim {
+            for (o, out_item) in out.iter_mut().enumerate().take(output_dim) {
                 let mut sum = self.bias.get(o).copied().unwrap_or(0.0);
                 for i in 0..input_dim {
                     let idx = o * input_dim + i;
                     sum += weights[idx] * features.get(i).copied().unwrap_or(0.0);
                 }
-                out[o] = sum;
+                *out_item = sum;
             }
         }
         out
@@ -399,8 +416,8 @@ fn update_normalization(norm: &mut NormalizationParams, values: &[f64], min_std:
     if values.is_empty() {
         return;
     }
-    let mut mean = norm.mean.get(0).copied().unwrap_or(0.0);
-    let mut m2 = norm.m2.get(0).copied().unwrap_or(0.0);
+    let mut mean = norm.mean.first().copied().unwrap_or(0.0);
+    let mut m2 = norm.m2.first().copied().unwrap_or(0.0);
     let mut count = norm.count;
 
     for &x in values {
@@ -425,10 +442,11 @@ where
     B::Vector2D: bytemuck::Pod,
 {
     fn name(&self) -> &'static str {
-        "Surrogate-Model"
+        "Linear-Surrogate"
     }
 
     fn update(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<(), AiError> {
+        self.ensure_supported_model_type()?;
         let _ = self.predict(snapshot)?;
         Ok(())
     }
@@ -513,11 +531,11 @@ where
         }
     }
 
-    fn get_prediction(&self) -> Option<&[B::Scalar]> {
-        self.current_prediction.as_ref().map(|p| p.values.as_slice())
+    fn get_prediction(&self) -> Option<&ScalarSamples<B>> {
+        self.current_prediction.as_ref().map(|p| &p.values)
     }
 
-    fn get_uncertainty(&self) -> Option<&[B::Scalar]> {
+    fn get_uncertainty(&self) -> Option<&ScalarSamples<B>> {
         self.uncertainty()
     }
 }

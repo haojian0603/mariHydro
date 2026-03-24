@@ -14,6 +14,7 @@ pub mod surrogate;
 use bytemuck::Pod;
 use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 use mh_runtime::prelude::Float;
+use std::ops::Deref;
 use thiserror::Error;
 
 /// 默认后端。
@@ -46,6 +47,9 @@ pub enum AiError {
     #[error("观测无效: {0}")]
     InvalidObservation(String),
 
+    #[error("代理模型类型不受支持: {0}")]
+    UnsupportedModelType(String),
+
     /// 状态访问失败。
     #[error("状态访问错误: {0}")]
     StateAccessError(String),
@@ -55,7 +59,67 @@ pub enum AiError {
     Other(String),
 }
 
-/// AI 模块使用的物理状态快照。
+/// AI 模块公用数据序列。
+#[derive(Debug, Clone)]
+pub struct ScalarSamples<B: Backend> {
+    data: Vec<B::Scalar>,
+}
+
+impl<B: Backend> ScalarSamples<B> {
+    pub fn new(data: Vec<B::Scalar>) -> Self {
+        Self { data }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    pub fn as_slice(&self) -> &[B::Scalar] {
+        &self.data
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [B::Scalar] {
+        &mut self.data
+    }
+
+    pub fn into_vec(self) -> Vec<B::Scalar> {
+        self.data
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, B::Scalar> {
+        self.data.iter()
+    }
+}
+
+impl<B: Backend> Deref for ScalarSamples<B> {
+    type Target = [B::Scalar];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<B: Backend> From<Vec<B::Scalar>> for ScalarSamples<B> {
+    fn from(value: Vec<B::Scalar>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<B: Backend> Default for ScalarSamples<B> {
+    fn default() -> Self {
+        Self { data: Vec::new() }
+    }
+}
+
+pub type VelocityBuffersMut<'a, B> = (
+    &'a mut <B as Backend>::Buffer<<B as Backend>::Scalar>,
+    &'a mut <B as Backend>::Buffer<<B as Backend>::Scalar>,
+);
+
 #[derive(Clone)]
 pub struct PhysicsSnapshot<B: Backend = DefaultBackend>
 where
@@ -99,6 +163,7 @@ where
     }
 
     /// 校验后构造快照。
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         h: B::Buffer<B::Scalar>,
         u: B::Buffer<B::Scalar>,
@@ -193,12 +258,12 @@ where
     }
 
     /// 获取预测结果。
-    fn get_prediction(&self) -> Option<&[B::Scalar]> {
+    fn get_prediction(&self) -> Option<&ScalarSamples<B>> {
         None
     }
 
     /// 获取不确定度。
-    fn get_uncertainty(&self) -> Option<&[B::Scalar]> {
+    fn get_uncertainty(&self) -> Option<&ScalarSamples<B>> {
         None
     }
 }
@@ -215,7 +280,7 @@ where
     fn get_tracer_mut(&mut self, name: &str) -> Option<&mut B::Buffer<B::Scalar>>;
 
     /// 获取速度分量的可变缓冲区。
-    fn get_velocity_mut(&mut self) -> Option<(&mut B::Buffer<B::Scalar>, &mut B::Buffer<B::Scalar>)>;
+    fn get_velocity_mut(&mut self) -> Option<VelocityBuffersMut<'_, B>>;
 
     /// 获取水深缓冲区。
     fn get_depth(&self) -> &B::Buffer<B::Scalar>;

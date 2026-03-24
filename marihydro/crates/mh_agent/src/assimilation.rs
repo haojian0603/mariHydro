@@ -1,8 +1,9 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
 use mh_runtime::{Backend, CellIndex, RuntimeScalar, Vector2D};
 use bytemuck::Pod;
 use mh_runtime::prelude::{Float, FromPrimitive};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Mutex;
 
 /// Nudging 鍚屽寲閰嶇疆
@@ -36,11 +37,11 @@ where
 #[derive(Debug, Clone)]
 pub struct Observation<B: Backend = DefaultBackend> {
     /// 观测值
-    pub values: Vec<B::Scalar>,
+    pub values: ScalarSamples<B>,
     /// 瑙傛祴鍗曞厓绱㈠紩
     pub cell_indices: Vec<CellIndex>,
     /// 观测不确定性
-    pub uncertainty: Vec<B::Scalar>,
+    pub uncertainty: ScalarSamples<B>,
     /// 瑙傛祴鏃堕棿
     pub time: B::Scalar,
 }
@@ -51,6 +52,10 @@ where
 {
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 
     fn validate(&self) -> Result<(), AiError> {
@@ -88,13 +93,32 @@ where
 }
 
 #[derive(Clone)]
+struct NeighborGraph {
+    entries: Vec<Vec<usize>>,
+}
+
+impl NeighborGraph {
+    fn new(entries: Vec<Vec<usize>>) -> Self {
+        Self { entries }
+    }
+}
+
+impl Deref for NeighborGraph {
+    type Target = [Vec<usize>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+#[derive(Clone)]
 struct NudgingState<B: Backend> {
     last_assimilation_time: B::Scalar,
     cumulative_correction: B::Scalar,
     pending_observation: Option<Observation<B>>,
     cell_centers: Option<Vec<B::Vector2D>>,
     last_snapshot_time: B::Scalar,
-    neighbor_list: Option<Vec<Vec<usize>>>,
+    neighbor_list: Option<NeighborGraph>,
     neighbor_radius: Option<B::Scalar>,
 }
 
@@ -202,7 +226,7 @@ where
         &self,
         corrections: &mut [B::Scalar],
         cell_centers: &[B::Vector2D],
-        neighbors: &[Vec<usize>],
+        neighbors: &NeighborGraph,
     ) {
         let n = corrections.len();
         if n == 0 || cell_centers.len() != n || neighbors.len() != n {
@@ -230,13 +254,13 @@ where
     }
 }
 
-fn build_neighbors<B: Backend>(centers: &[B::Vector2D], radius: B::Scalar) -> Vec<Vec<usize>>
+fn build_neighbors<B: Backend>(centers: &[B::Vector2D], radius: B::Scalar) -> NeighborGraph
 where
     B::Scalar: RuntimeScalar,
 {
     let n = centers.len();
     if n == 0 || radius <= B::Scalar::ZERO {
-        return vec![Vec::new(); n];
+        return NeighborGraph::new(vec![Vec::new(); n]);
     }
 
     let r2 = radius * radius;
@@ -270,7 +294,7 @@ where
         }
     }
 
-    neighbors
+    NeighborGraph::new(neighbors)
 }
 
 /// 鍚屽寲缁撴灉
@@ -302,7 +326,9 @@ where
             let rebuild = guard.neighbor_list.is_none()
                 || guard
                     .neighbor_radius
-                    .map_or(true, |r| (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON))
+                    .is_none_or(|r| {
+                        (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON)
+                    })
                 || guard
                     .cell_centers
                     .as_ref()

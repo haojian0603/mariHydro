@@ -95,6 +95,9 @@ where
 
     /// 更新全部启用代理。
     pub fn update_all(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<(), AiError> {
+        if self.order.is_empty() {
+            return Ok(());
+        }
         for name in &self.order {
             if *self.enabled.get(name).unwrap_or(&false) {
                 if let Some(agent) = self.agents.get_mut(name) {
@@ -107,6 +110,7 @@ where
 
     /// 应用全部启用代理。
     pub fn apply_all(&self, state: &mut dyn Assimilable<B>) -> Result<(), AiError> {
+        let volume_epsilon = B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON);
         for name in &self.order {
             if !*self.enabled.get(name).unwrap_or(&false) {
                 continue;
@@ -126,9 +130,7 @@ where
                 if let Some(before) = volume_before {
                     let after = state.total_water_volume();
                     let diff = (after - before).abs();
-                    let relative_error = if before.abs()
-                        > B::Scalar::from_f64(1e-14).unwrap_or(B::Scalar::EPSILON)
-                    {
+                    let relative_error = if before.abs() > volume_epsilon {
                         diff / before.abs()
                     } else {
                         diff
@@ -172,7 +174,6 @@ where
 mod tests {
     use super::*;
     use crate::DefaultBackend;
-    use mh_runtime::{DeviceBuffer, RuntimeScalar};
 
     struct TestAgent {
         name: &'static str,

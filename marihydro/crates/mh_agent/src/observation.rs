@@ -1,4 +1,4 @@
-use crate::{DefaultBackend, PhysicsSnapshot};
+use crate::{DefaultBackend, PhysicsSnapshot, ScalarSamples};
 use bytemuck::Pod;
 use mh_runtime::{Backend, CellIndex, RuntimeScalar};
 use mh_runtime::prelude::{Float, FromPrimitive};
@@ -12,27 +12,28 @@ where
     fn name(&self) -> &'static str;
 
     /// 将物理状态映射到观测空间。
-    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar>;
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B>;
 
     /// 计算残差。
-    fn residual(&self, snapshot: &PhysicsSnapshot<B>, observation: &[B::Scalar]) -> Vec<B::Scalar> {
+    fn residual(&self, snapshot: &PhysicsSnapshot<B>, observation: &[B::Scalar]) -> ScalarSamples<B> {
         let simulated = self.observe(snapshot);
         simulated
             .iter()
             .zip(observation.iter())
             .map(|(s, o)| *o - *s)
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 
     /// 观测误差方差。
-    fn observation_error_variance(&self) -> Option<Vec<B::Scalar>> {
+    fn observation_error_variance(&self) -> Option<ScalarSamples<B>> {
         None
     }
 
     /// 按观测数量扩展误差方差。
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {
         self.observation_error_variance()
-            .map(|v| vec![v.first().copied().unwrap_or(B::Scalar::ZERO); n_obs])
+            .map(|v| vec![v.first().copied().unwrap_or(B::Scalar::ZERO); n_obs].into())
     }
 
     /// 线性化结果。
@@ -83,7 +84,7 @@ where
         "Reflectance"
     }
 
-    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
         let _ = self.wavelength;
         snapshot
             .sediment
@@ -92,17 +93,18 @@ where
                 c.iter()
                     .map(|&conc| {
                         let c_safe = conc.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
-                        let a = *self.calibration.get(0).unwrap_or(&B::Scalar::ONE);
+                        let a = *self.calibration.first().unwrap_or(&B::Scalar::ONE);
                         let b = *self.calibration.get(1).unwrap_or(&B::Scalar::ZERO);
                         a * c_safe.ln() + b
                     })
-                    .collect()
+                    .collect::<Vec<_>>()
+                    .into()
             })
-            .unwrap_or_else(|| vec![B::Scalar::ZERO; snapshot.n_cells()])
+            .unwrap_or_else(|| ScalarSamples::from(vec![B::Scalar::ZERO; snapshot.n_cells()]))
     }
 
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
-        Some(vec![self.observation_std * self.observation_std; n_obs])
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {
+        Some(vec![self.observation_std * self.observation_std; n_obs].into())
     }
 }
 
@@ -146,7 +148,7 @@ where
         "SAR-Backscatter"
     }
 
-    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
         let mut result = Vec::with_capacity(snapshot.n_cells());
         let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         for i in 0..snapshot.n_cells() {
@@ -162,11 +164,11 @@ where
                 * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny).ln();
             result.push(backscatter);
         }
-        result
+        result.into()
     }
 
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<Vec<B::Scalar>> {
-        Some(vec![self.observation_std * self.observation_std; n_obs])
+    fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {
+        Some(vec![self.observation_std * self.observation_std; n_obs].into())
     }
 }
 
@@ -205,14 +207,15 @@ where
         "WaterLevel"
     }
 
-    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<B::Scalar> {
+    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
         self.station_indices
             .iter()
             .map(|idx| snapshot.h[idx.get()] + snapshot.z[idx.get()])
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 
-    fn observation_error_variance(&self) -> Option<Vec<B::Scalar>> {
-        Some(vec![self.observation_std * self.observation_std; self.station_indices.len()])
+    fn observation_error_variance(&self) -> Option<ScalarSamples<B>> {
+        Some(vec![self.observation_std * self.observation_std; self.station_indices.len()].into())
     }
 }

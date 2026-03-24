@@ -1,4 +1,4 @@
-use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
+use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use mh_runtime::prelude::{Float, FromPrimitive};
 
@@ -43,16 +43,16 @@ pub enum InterpolationMethod<B: Backend = DefaultBackend> {
 /// 遥感推理结果。
 #[derive(Debug, Clone)]
 pub struct InferenceResult<B: Backend = DefaultBackend> {
-    pub concentration: Vec<B::Scalar>,
-    pub uncertainty: Vec<B::Scalar>,
+    pub concentration: ScalarSamples<B>,
+    pub uncertainty: ScalarSamples<B>,
     pub quality_flags: Vec<u8>,
 }
 
 /// 遥感代理。
 pub struct RemoteSensingAgent<B: Backend = DefaultBackend> {
     config: RemoteSensingConfig<B>,
-    predicted: Vec<B::Scalar>,
-    uncertainty: Vec<B::Scalar>,
+    predicted: ScalarSamples<B>,
+    uncertainty: ScalarSamples<B>,
     last_inference_time: f64,
     has_prediction: bool,
 }
@@ -64,8 +64,8 @@ where
     pub fn new(config: RemoteSensingConfig<B>) -> Self {
         Self {
             config,
-            predicted: Vec::new(),
-            uncertainty: Vec::new(),
+            predicted: ScalarSamples::default(),
+            uncertainty: ScalarSamples::default(),
             last_inference_time: 0.0,
             has_prediction: false,
         }
@@ -88,18 +88,18 @@ where
 
         let result = InferenceResult {
             concentration: mapped.clone(),
-            uncertainty: uncertainty.clone(),
+            uncertainty: uncertainty.clone().into(),
             quality_flags: vec![0u8; mapped.len()],
         };
 
         self.predicted = mapped;
-        self.uncertainty = uncertainty;
+        self.uncertainty = uncertainty.into();
         self.has_prediction = true;
         self.last_inference_time = image.timestamp;
         Ok(result)
     }
 
-    pub fn predicted(&self) -> Option<&[B::Scalar]> {
+    pub fn predicted(&self) -> Option<&ScalarSamples<B>> {
         if self.has_prediction {
             Some(&self.predicted)
         } else {
@@ -107,7 +107,7 @@ where
         }
     }
 
-    pub fn uncertainty(&self) -> Option<&[B::Scalar]> {
+    pub fn uncertainty(&self) -> Option<&ScalarSamples<B>> {
         if self.has_prediction {
             Some(&self.uncertainty)
         } else {
@@ -134,7 +134,7 @@ where
         data: &[f32],
         image: &SatelliteImage,
         target_cells: &[B::Vector2D],
-    ) -> Vec<B::Scalar> {
+    ) -> ScalarSamples<B> {
         let (width, height) = image.dimensions;
         let (min_x, min_y, max_x, max_y) =
             (image.bounds[0], image.bounds[1], image.bounds[2], image.bounds[3]);
@@ -150,8 +150,8 @@ where
 
             let reflectance = match self.config.interpolation {
                 InterpolationMethod::NearestNeighbor => {
-                    let ix = gx.round().clamp(0.0, width.saturating_sub(1) as f64) as usize;
-                    let iy = gy.round().clamp(0.0, height.saturating_sub(1) as f64) as usize;
+                    let ix = (gx + 0.5).floor().clamp(0.0, width.saturating_sub(1) as f64) as usize;
+                    let iy = (gy + 0.5).floor().clamp(0.0, height.saturating_sub(1) as f64) as usize;
                     let idx = iy * width + ix;
                     data.get(idx).copied().unwrap_or_default() as f64
                 }
@@ -160,8 +160,8 @@ where
                     let y0 = gy.floor().max(0.0) as usize;
                     let x1 = (x0 + 1).min(width.saturating_sub(1));
                     let y1 = (y0 + 1).min(height.saturating_sub(1));
-                    let tx = gx - x0 as f64;
-                    let ty = gy - y0 as f64;
+                    let tx = (gx - x0 as f64).clamp(0.0, 1.0);
+                    let ty = (gy - y0 as f64).clamp(0.0, 1.0);
                     let v00 = data.get(y0 * width + x0).copied().unwrap_or_default() as f64;
                     let v10 = data.get(y0 * width + x1).copied().unwrap_or_default() as f64;
                     let v01 = data.get(y1 * width + x0).copied().unwrap_or_default() as f64;
@@ -195,7 +195,7 @@ where
             let conc = self.empirical_inversion(reflectance, image.sensor);
             result.push(conc.min(self.config.max_concentration).max(B::Scalar::ZERO));
         }
-        result
+        result.into()
     }
 
     fn empirical_inversion(&self, reflectance: f64, sensor: SensorType) -> B::Scalar {
@@ -208,8 +208,8 @@ where
     }
 
     pub fn clear_cache(&mut self) {
-        self.predicted.clear();
-        self.uncertainty.clear();
+        self.predicted = ScalarSamples::default();
+        self.uncertainty = ScalarSamples::default();
         self.has_prediction = false;
     }
 }
@@ -245,11 +245,11 @@ where
         Ok(())
     }
 
-    fn get_prediction(&self) -> Option<&[B::Scalar]> {
+    fn get_prediction(&self) -> Option<&ScalarSamples<B>> {
         self.predicted()
     }
 
-    fn get_uncertainty(&self) -> Option<&[B::Scalar]> {
+    fn get_uncertainty(&self) -> Option<&ScalarSamples<B>> {
         self.uncertainty()
     }
 }
