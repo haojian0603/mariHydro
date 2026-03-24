@@ -16,6 +16,16 @@ use crate::engine::solver::{NumericalScheme, FallbackStrategy, TimeIntegrator, S
 use crate::engine::time_integrator::TimeIntegratorKind;
 use mh_runtime::RuntimeScalar;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::config_bridge] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 配置转换错误
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ConfigBridgeError {
@@ -68,17 +78,23 @@ where
     fn default() -> Self {
         Self {
             params: NumericalParams::<S>::default(),
-            gravity: S::from_config(9.81).unwrap_or(S::ZERO),
+            gravity: scalar_from_config_or_panic::<S>(9.81, "Layer3Config.default.gravity"),
             use_hydrostatic_reconstruction: true,
             parallel_threshold: 1000,
             implicit_friction: true,
-            default_manning_n: S::from_config(0.03).unwrap_or(S::ZERO),
+            default_manning_n: scalar_from_config_or_panic::<S>(
+                0.03,
+                "Layer3Config.default.default_manning_n",
+            ),
             riemann_solver: RiemannSolverType::Hllc,
             scheme: NumericalScheme::SecondOrderMuscl,
             fallback: FallbackStrategy::default(),
             stability: StabilityOptions::default(),
             max_fallback_attempts: 3,
-            timestep_reduction_factor: S::from_config(0.5).unwrap_or(S::ZERO),
+            timestep_reduction_factor: scalar_from_config_or_panic::<S>(
+                0.5,
+                "Layer3Config.default.timestep_reduction_factor",
+            ),
             integrator: TimeIntegrator::Explicit,
             time_integrator_kind: TimeIntegratorKind::SspRk3,
         }

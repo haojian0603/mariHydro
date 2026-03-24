@@ -216,7 +216,14 @@ try {
         "crates/mh_physics/src/boundary/ghost.rs",
         "crates/mh_physics/src/boundary/manager.rs",
         "crates/mh_physics/src/boundary/types.rs",
-        "crates/mh_physics/src/engine/time_integrator.rs"
+        "crates/mh_physics/src/config_bridge.rs",
+        "crates/mh_physics/src/engine/timestep.rs",
+        "crates/mh_physics/src/engine/time_integrator.rs",
+        "crates/mh_physics/src/engine/strategy/explicit.rs",
+        "crates/mh_physics/src/engine/strategy/mod.rs",
+        "crates/mh_physics/src/numerics/linear_algebra/solver.rs",
+        "crates/mh_physics/src/schemes/riemann/hllc.rs",
+        "crates/mh_physics/src/vertical/profile.rs"
     )
     $silentConfigFallbacks = @(
         Get-RustFilesFromTargets -Targets $silentConfigFallbackRoots |

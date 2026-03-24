@@ -15,6 +15,16 @@ use mh_runtime::prelude::*;
 use rayon::prelude::*;
 use std::marker::PhantomData;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::engine::timestep] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// CFL计算器
 #[derive(Clone, Debug)]
 pub struct CflCalculator<B: Backend>
@@ -174,7 +184,10 @@ where
             return B::Scalar::ZERO;
         }
 
-        B::Scalar::from_config(min_val).unwrap_or(B::Scalar::ZERO)
+        scalar_from_config_or_panic::<B::Scalar>(
+            min_val,
+            "CflCalculator.compute_min_char_length.min_val",
+        )
     }
 }
 
@@ -204,9 +217,18 @@ where
         Self {
             calculator: CflCalculator::new(g, params),
             current_dt: params.dt_max,
-            growth_factor: B::Scalar::from_config(1.1).unwrap_or(B::Scalar::ONE),
-            shrink_factor: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
-            max_growth_factor: B::Scalar::from_config(1.5).unwrap_or(B::Scalar::ONE),
+            growth_factor: scalar_from_config_or_panic::<B::Scalar>(
+                1.1,
+                "TimeStepController.new.growth_factor",
+            ),
+            shrink_factor: scalar_from_config_or_panic::<B::Scalar>(
+                0.5,
+                "TimeStepController.new.shrink_factor",
+            ),
+            max_growth_factor: scalar_from_config_or_panic::<B::Scalar>(
+                1.5,
+                "TimeStepController.new.max_growth_factor",
+            ),
             stable_steps: 0,
             stable_growth_threshold: 10,
             adaptive_growth: true,
@@ -246,7 +268,10 @@ where
             new_dt = self.calculator.dt_min;
         }
 
-        let threshold = B::Scalar::from_config(0.95).unwrap_or(B::Scalar::ONE);
+        let threshold = scalar_from_config_or_panic::<B::Scalar>(
+            0.95,
+            "TimeStepController.update.threshold",
+        );
         if new_dt >= self.current_dt * threshold {
             self.stable_steps += 1;
         } else {
@@ -276,7 +301,10 @@ where
             new_dt = self.calculator.dt_min;
         }
 
-        let threshold = B::Scalar::from_config(0.95).unwrap_or(B::Scalar::ONE);
+        let threshold = scalar_from_config_or_panic::<B::Scalar>(
+            0.95,
+            "TimeStepController.update_from_max_speed.threshold",
+        );
         if new_dt >= self.current_dt * threshold {
             self.stable_steps += 1;
         } else {
@@ -294,7 +322,10 @@ where
             self.growth_factor
         } else {
             let one = B::Scalar::ONE;
-            let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ZERO);
+            let half = scalar_from_config_or_panic::<B::Scalar>(
+                0.5,
+                "TimeStepController.compute_adaptive_growth.half",
+            );
             one + (self.growth_factor - one) * half
         }
     }
@@ -358,20 +389,39 @@ where
     }
 
     pub fn adapt_from_iterations(&mut self, iterations: usize, target_iterations: usize) -> B::Scalar {
-        let ratio = B::Scalar::from_config(iterations as f64).unwrap_or(B::Scalar::ZERO)
-            / B::Scalar::from_config(target_iterations.max(1) as f64).unwrap_or(B::Scalar::ONE);
+        let ratio = scalar_from_config_or_panic::<B::Scalar>(
+            iterations as f64,
+            "TimeStepController.adapt_from_iterations.iterations",
+        ) / scalar_from_config_or_panic::<B::Scalar>(
+            target_iterations.max(1) as f64,
+            "TimeStepController.adapt_from_iterations.target_iterations",
+        );
 
         let one = B::Scalar::ONE;
-        let two = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE);
+        let two =
+            scalar_from_config_or_panic::<B::Scalar>(2.0, "TimeStepController.adapt_from_iterations.two");
 
         if ratio < one / two {
-            let growth = (one + (one - ratio * two) * B::Scalar::from_config(0.2).unwrap_or(B::Scalar::ZERO))
+            let growth = (one
+                + (one - ratio * two)
+                    * scalar_from_config_or_panic::<B::Scalar>(
+                        0.2,
+                        "TimeStepController.adapt_from_iterations.growth_gain",
+                    ))
                 .min(self.max_growth_factor);
             self.current_dt = self.current_dt * growth;
             self.stable_steps += 1;
         } else if ratio > one + one / two {
-            let shrink = (one - (ratio - one - one / two) * B::Scalar::from_config(0.3).unwrap_or(B::Scalar::ZERO))
-                .max(B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ZERO));
+            let shrink = (one
+                - (ratio - one - one / two)
+                    * scalar_from_config_or_panic::<B::Scalar>(
+                        0.3,
+                        "TimeStepController.adapt_from_iterations.shrink_gain",
+                    ))
+            .max(scalar_from_config_or_panic::<B::Scalar>(
+                0.5,
+                "TimeStepController.adapt_from_iterations.shrink_floor",
+            ));
             self.current_dt = self.current_dt * shrink;
             self.stable_steps = 0;
         } else if ratio > one {
@@ -393,7 +443,10 @@ where
             }
         }
 
-        let threshold = B::Scalar::from_config(0.9).unwrap_or(B::Scalar::ONE);
+        let threshold = scalar_from_config_or_panic::<B::Scalar>(
+            0.9,
+            "TimeStepController.apply_source_limits.threshold",
+        );
         if min_dt < self.current_dt * threshold {
             self.stable_steps = 0;
         }
@@ -405,19 +458,37 @@ where
     }
 
     pub fn coriolis_stability_limit(&self, f: B::Scalar) -> Option<B::Scalar> {
-        if f.abs() < B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
+        if f.abs()
+            < scalar_from_config_or_panic::<B::Scalar>(
+                1e-14,
+                "TimeStepController.coriolis_stability_limit.zero_tol",
+            )
+        {
             None
         } else {
-            let pi = B::Scalar::from_config(std::f64::consts::PI).unwrap_or(B::Scalar::ONE);
+            let pi = scalar_from_config_or_panic::<B::Scalar>(
+                std::f64::consts::PI,
+                "TimeStepController.coriolis_stability_limit.pi",
+            );
             Some(pi / f.abs())
         }
     }
 
     pub fn friction_stability_limit(&self, max_cf: B::Scalar) -> Option<B::Scalar> {
-        if max_cf < B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE) {
+        if max_cf
+            < scalar_from_config_or_panic::<B::Scalar>(
+                1e-14,
+                "TimeStepController.friction_stability_limit.zero_tol",
+            )
+        {
             None
         } else {
-            Some(B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE) / max_cf)
+            Some(
+                scalar_from_config_or_panic::<B::Scalar>(
+                    2.0,
+                    "TimeStepController.friction_stability_limit.two",
+                ) / max_cf,
+            )
         }
     }
 
@@ -475,11 +546,26 @@ where
     pub fn new(g: B::Scalar) -> Self {
         Self {
             g,
-            cfl: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
-            dt_min: B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::ZERO),
-            dt_max: B::Scalar::from_config(1.0).unwrap_or(B::Scalar::ONE),
-            growth_factor: B::Scalar::from_config(1.1).unwrap_or(B::Scalar::ONE),
-            shrink_factor: B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE),
+            cfl: scalar_from_config_or_panic::<B::Scalar>(
+                0.5,
+                "TimeStepControllerBuilder.new.cfl",
+            ),
+            dt_min: scalar_from_config_or_panic::<B::Scalar>(
+                1e-6,
+                "TimeStepControllerBuilder.new.dt_min",
+            ),
+            dt_max: scalar_from_config_or_panic::<B::Scalar>(
+                1.0,
+                "TimeStepControllerBuilder.new.dt_max",
+            ),
+            growth_factor: scalar_from_config_or_panic::<B::Scalar>(
+                1.1,
+                "TimeStepControllerBuilder.new.growth_factor",
+            ),
+            shrink_factor: scalar_from_config_or_panic::<B::Scalar>(
+                0.5,
+                "TimeStepControllerBuilder.new.shrink_factor",
+            ),
             adaptive_growth: true,
             marker: PhantomData,
         }

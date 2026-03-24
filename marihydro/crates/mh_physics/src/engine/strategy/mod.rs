@@ -10,6 +10,16 @@ use mh_runtime::RuntimeScalar as Scalar;
 use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterState;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: Scalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::engine::strategy] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 // workspace 模块在下面的 pub use 中进行重导出
 
 /// 时间积分步进结果
@@ -32,8 +42,11 @@ pub struct StepResult<S: Scalar> {
 impl<S: Scalar> Default for StepResult<S> {
     fn default() -> Self {
         Self {
-            dt_used: S::from_config(0.0).unwrap_or(S::ZERO),
-            max_wave_speed: S::from_config(0.0).unwrap_or(S::ZERO),
+            dt_used: scalar_from_config_or_panic::<S>(0.0, "StepResult.default.dt_used"),
+            max_wave_speed: scalar_from_config_or_panic::<S>(
+                0.0,
+                "StepResult.default.max_wave_speed",
+            ),
             dry_cells: 0,
             limited_cells: 0,
             converged: true,
@@ -71,7 +84,7 @@ pub trait TimeIntegrationStrategy<B: Backend>: Send + Sync {
     
     /// 推荐的 CFL 数
     fn recommended_cfl(&self) -> B::Scalar {
-        B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ZERO)
+        scalar_from_config_or_panic::<B::Scalar>(0.5, "TimeIntegrationStrategy.recommended_cfl")
     }
 }
 

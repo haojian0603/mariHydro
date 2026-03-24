@@ -14,6 +14,16 @@ use crate::mesh::MeshTopology;
 use crate::state::ShallowWaterState;
 use num_traits::Float;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: Scalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::engine::strategy::explicit] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 显式时间积分策略
 /// 
 /// 使用 Godunov 格式的显式有限体积法进行时间积分。
@@ -57,9 +67,9 @@ impl<B: Backend> ExplicitStrategy<B> {
     /// 返回初始化完成的显式策略实例
     pub fn new_with_backend(backend: B, config: ExplicitConfig) -> Self {
         Self {
+            gravity: backend.config_scalar(config.gravity, "ExplicitStrategy.new_with_backend.gravity"),
+            h_dry: backend.config_scalar(config.h_dry, "ExplicitStrategy.new_with_backend.h_dry"),
             backend,
-            gravity: B::Scalar::from_config(config.gravity).unwrap_or(B::Scalar::ZERO),
-            h_dry: B::Scalar::from_config(config.h_dry).unwrap_or(B::Scalar::ZERO),
             config,
         }
     }
@@ -118,7 +128,7 @@ fn compute_hll_flux<S: Scalar>(
     h_dry: S,
 ) -> HllFlux<S> {
     let zero = S::ZERO;
-    let half = S::from_config(0.5).unwrap_or(S::HALF);
+    let half = scalar_from_config_or_panic::<S>(0.5, "compute_hll_flux.half");
 
     // 投影到法向的速度分量
     let un_l = u_l * normal[0] + v_l * normal[1];
@@ -157,7 +167,7 @@ fn compute_hll_flux<S: Scalar>(
     } else {
         // 中间状态
         let denom = s_r - s_l;
-        let eps = S::from_config(1e-14).unwrap_or(S::EPSILON);
+        let eps = scalar_from_config_or_panic::<S>(1e-14, "compute_hll_flux.eps");
         if denom.abs() < eps {
             (zero, zero, zero)
         } else {
@@ -343,8 +353,12 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
         let h_dry = self.h_dry;
         let gravity = self.gravity;
         let zero = B::Scalar::ZERO;
-        let tiny = B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE);
-        let default_dt = B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let tiny = self
+            .backend
+            .config_scalar(1e-10, "ExplicitStrategy.compute_stable_dt.tiny");
+        let default_dt = self
+            .backend
+            .config_scalar(1e-6, "ExplicitStrategy.compute_stable_dt.default_dt");
         
         let mut dt_min = B::Scalar::MAX;
         
@@ -386,8 +400,12 @@ impl<B: Backend> TimeIntegrationStrategy<B> for ExplicitStrategy<B> {
     
     /// 推荐的 CFL 数
     fn recommended_cfl(&self) -> B::Scalar {
-        let cfg_cfl = B::Scalar::from_config(self.config.cfl).unwrap_or(B::Scalar::HALF);
-        let min_cfl = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::HALF);
+        let cfg_cfl = self
+            .backend
+            .config_scalar(self.config.cfl, "ExplicitStrategy.recommended_cfl.config");
+        let min_cfl = self
+            .backend
+            .config_scalar(0.5, "ExplicitStrategy.recommended_cfl.floor");
         cfg_cfl.max(min_cfl)
     }
 }

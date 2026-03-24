@@ -373,7 +373,11 @@ mod tests {
 
     fn create_solver<B: Backend>(gravity: B::Scalar) -> HllcSolver<B> {
         let mut params = SolverParams::default();
-        params.h_dry = B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::ZERO);
+        params.h_dry = B::Scalar::from_config(1e-6).unwrap_or_else(|| {
+            panic!(
+                "[mh_physics::schemes::riemann::hllc::tests] config scalar conversion failed: context=create_solver.h_dry, value=1e-6"
+            )
+        });
         HllcSolver::new(&params, gravity)
     }
 

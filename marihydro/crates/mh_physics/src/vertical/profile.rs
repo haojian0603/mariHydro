@@ -262,12 +262,21 @@ impl<B: Backend> ProfileRestorer<B> {
         let n_cells = state.n_cells();
         let n_layers = self.n_layers;
         let sigma_levels = self.sigma.sigma_centers();
+        let h_min = self
+            .backend
+            .config_scalar(1e-6, "ProfileRestorer.restore_velocity_profile.h_min");
+        let parabolic_factor = self
+            .backend
+            .config_scalar(1.5, "ProfileRestorer.restore_velocity_profile.parabolic_factor");
+        let max_log_factor = self
+            .backend
+            .config_scalar(2.0, "ProfileRestorer.restore_velocity_profile.max_log_factor");
 
         for cell in 0..n_cells {
             let h_cell = h[cell];
             let z_bed = z[cell];
 
-            if h_cell < <B::Scalar as RuntimeScalar>::from_config(1e-6).unwrap_or(B::Scalar::ZERO) {
+            if h_cell < h_min {
                 for k in 0..n_layers {
                     let idx = cell * n_layers + k;
                     u_out[idx] = B::Scalar::ZERO;
@@ -284,7 +293,10 @@ impl<B: Backend> ProfileRestorer<B> {
             for k in 0..n_layers {
                 let idx = cell * n_layers + k;
                 let sigma = sigma_levels[k];
-                let sigma_s = <B::Scalar as RuntimeScalar>::from_config(sigma).unwrap_or(B::Scalar::ZERO);
+                let sigma_s = self.backend.config_scalar(
+                    sigma,
+                    "ProfileRestorer.restore_velocity_profile.sigma",
+                );
                 let one = B::Scalar::ONE;
                 let z_layer = z_bed + h_cell * (one + sigma_s);
                 z_out[idx] = z_layer;
@@ -293,8 +305,7 @@ impl<B: Backend> ProfileRestorer<B> {
                     ProfileMethod::Uniform => one,
                     ProfileMethod::Parabolic => {
                         let sigma_sq = sigma_s * sigma_s;
-                        let c = <B::Scalar as RuntimeScalar>::from_config(1.5).unwrap_or(one + one / (one + one));
-                        c * (one - sigma_sq)
+                        parabolic_factor * (one - sigma_sq)
                     }
                     ProfileMethod::Logarithmic => {
                         let z_rel = h_cell * (one + sigma_s);
@@ -303,7 +314,7 @@ impl<B: Backend> ProfileRestorer<B> {
                             let top = ratio.safe_ln();
                             let denom = h_cell.safe_div(z0, one).safe_ln();
                             let val = top.safe_div(denom, one);
-                            val.clamp_value(B::Scalar::ZERO, <B::Scalar as RuntimeScalar>::from_config(2.0).unwrap_or(one + one))
+                            val.clamp_value(B::Scalar::ZERO, max_log_factor)
                         } else {
                             B::Scalar::ZERO
                         }

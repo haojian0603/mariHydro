@@ -38,6 +38,11 @@ use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
+#[inline]
+fn config_scalar<B: Backend>(backend: &B, value: f64, context: &'static str) -> B::Scalar {
+    backend.config_scalar(value, context)
+}
+
 // ============================================================================
 // 配置层 (Layer 4) - 允许使用 f64
 // ============================================================================
@@ -339,10 +344,15 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
-        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
-        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
-        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
+        let rtol = config_scalar(&self.backend, self.config.rtol, "ConjugateGradient.solve.rtol");
+        let atol = config_scalar(&self.backend, self.config.atol, "ConjugateGradient.solve.atol");
+        let breakdown_tol =
+            config_scalar(&self.backend, 1e-30, "ConjugateGradient.solve.breakdown_tol");
+        let stag_tol = config_scalar(
+            &self.backend,
+            self.config.stagnation_tol,
+            "ConjugateGradient.solve.stag_tol",
+        );
 
         // r = b - A*x
         matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
@@ -525,10 +535,14 @@ impl<B: Backend> PcgSolver<B> {
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         ws.resize(&self.backend, n);
-        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
-        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
-        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
-        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
+        let rtol = config_scalar(&self.backend, self.config.rtol, "PcgSolver.solve.rtol");
+        let atol = config_scalar(&self.backend, self.config.atol, "PcgSolver.solve.atol");
+        let breakdown_tol = config_scalar(&self.backend, 1e-30, "PcgSolver.solve.breakdown_tol");
+        let stag_tol = config_scalar(
+            &self.backend,
+            self.config.stagnation_tol,
+            "PcgSolver.solve.stag_tol",
+        );
 
         // r = b - A*x
         matrix.mul_vec(x.as_slice(), ws.r.as_slice_mut());
@@ -685,10 +699,15 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
-        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
-        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
-        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
+        let rtol = config_scalar(&self.backend, self.config.rtol, "BiCgSolver.solve.rtol");
+        let atol = config_scalar(&self.backend, self.config.atol, "BiCgSolver.solve.atol");
+        let breakdown_tol =
+            config_scalar(&self.backend, 1e-30, "BiCgSolver.solve.breakdown_tol");
+        let stag_tol = config_scalar(
+            &self.backend,
+            self.config.stagnation_tol,
+            "BiCgSolver.solve.stag_tol",
+        );
 
         // r = b - A*x
         matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
@@ -907,11 +926,20 @@ where
     ) -> SolverResult<B::Scalar> {
         let n = b.len();
         self.ensure_workspace(n);
-        let rtol = B::Scalar::from_config(self.config.rtol).unwrap_or(B::Scalar::ZERO);
-        let atol = B::Scalar::from_config(self.config.atol).unwrap_or(B::Scalar::ZERO);
-        let breakdown_tol = B::Scalar::from_config(1e-30).unwrap_or(B::Scalar::ZERO);
-        let stag_tol = B::Scalar::from_config(self.config.stagnation_tol).unwrap_or(B::Scalar::ZERO);
-        let div_factor = B::Scalar::from_config(1e6).unwrap_or(B::Scalar::ZERO);
+        let rtol = config_scalar(&self.backend, self.config.rtol, "BiCgStabSolver.solve.rtol");
+        let atol = config_scalar(&self.backend, self.config.atol, "BiCgStabSolver.solve.atol");
+        let breakdown_tol = config_scalar(
+            &self.backend,
+            1e-30,
+            "BiCgStabSolver.solve.breakdown_tol",
+        );
+        let stag_tol = config_scalar(
+            &self.backend,
+            self.config.stagnation_tol,
+            "BiCgStabSolver.solve.stag_tol",
+        );
+        let div_factor =
+            config_scalar(&self.backend, 1e6, "BiCgStabSolver.solve.div_factor");
 
         // r = b - A*x
         matrix.mul_vec(x.as_slice(), self.r.as_slice_mut());
