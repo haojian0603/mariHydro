@@ -5,15 +5,15 @@
 //! - 物理状态快照
 //! - AI 代理与可同化状态的抽象接口
 
-pub mod registry;
 pub mod assimilation;
-pub mod remote_sensing;
 pub mod observation;
+pub mod registry;
+pub mod remote_sensing;
 pub mod surrogate;
 
 use bytemuck::Pod;
-use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 use mh_runtime::prelude::Float;
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
 use std::ops::Deref;
 use thiserror::Error;
 
@@ -33,7 +33,10 @@ pub enum AiError {
 
     /// 数据形状不一致。
     #[error("形状无效: 期望 {expected:?}, 实际 {actual:?}")]
-    InvalidShape { expected: Vec<usize>, actual: Vec<usize> },
+    InvalidShape {
+        expected: Vec<usize>,
+        actual: Vec<usize>,
+    },
 
     /// 尚未初始化。
     #[error("尚未初始化")]
@@ -115,6 +118,67 @@ impl<B: Backend> Default for ScalarSamples<B> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DenseScalarMatrix<B: Backend> {
+    rows: Vec<ScalarSamples<B>>,
+    ncols: usize,
+}
+
+impl<B: Backend> DenseScalarMatrix<B> {
+    pub fn empty() -> Self {
+        Self {
+            rows: Vec::new(),
+            ncols: 0,
+        }
+    }
+
+    pub fn try_new(rows: Vec<ScalarSamples<B>>) -> Result<Self, AiError> {
+        let ncols = rows.first().map(ScalarSamples::len).unwrap_or(0);
+        let mut actual = Vec::with_capacity(rows.len());
+        let mut valid = true;
+        for row in &rows {
+            let len = row.len();
+            actual.push(len);
+            if len != ncols {
+                valid = false;
+            }
+        }
+        if !valid {
+            return Err(AiError::InvalidShape {
+                expected: vec![ncols],
+                actual,
+            });
+        }
+        Ok(Self { rows, ncols })
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    pub fn row(&self, index: usize) -> Option<&ScalarSamples<B>> {
+        self.rows.get(index)
+    }
+
+    pub fn rows(&self) -> &[ScalarSamples<B>] {
+        &self.rows
+    }
+
+    pub fn iter_rows(&self) -> std::slice::Iter<'_, ScalarSamples<B>> {
+        self.rows.iter()
+    }
+}
+
+impl<B: Backend> Default for DenseScalarMatrix<B> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 pub type VelocityBuffersMut<'a, B> = (
     &'a mut <B as Backend>::Buffer<<B as Backend>::Scalar>,
     &'a mut <B as Backend>::Buffer<<B as Backend>::Scalar>,
@@ -189,7 +253,9 @@ where
         }
 
         if !time.is_finite() {
-            return Err(AiError::InvalidObservation("时间不是有限值".into()));
+            return Err(AiError::InvalidObservation(
+                "snapshot time is not finite".into(),
+            ));
         }
 
         Ok(Self {
@@ -203,7 +269,6 @@ where
             cell_areas,
         })
     }
-
 }
 
 impl<B: Backend> PhysicsSnapshot<B>
@@ -312,7 +377,15 @@ where
 
 /// 重新导出常用类型。
 pub use assimilation::{AssimilationResult, NudgingAssimilator, NudgingConfig, Observation};
-pub use observation::{ObservationOperator, Polarization, ReflectanceOperator, SAROperator, WaterLevelOperator};
+pub use observation::{
+    ObservationOperator, Polarization, ReflectanceCalibration, ReflectanceOperator, SAROperator,
+    WaterLevelOperator,
+};
 pub use registry::AgentRegistry;
-pub use remote_sensing::{InferenceResult, RemoteSensingAgent, RemoteSensingConfig, SatelliteImage, SensorType};
-pub use surrogate::{PredictionMetrics, SurrogateConfig, SurrogateModel, SurrogatePrediction, SurrogateType};
+pub use remote_sensing::{
+    ImageBounds, InferenceResult, InterpolationMethod, RemoteSensingAgent, RemoteSensingConfig,
+    SatelliteImage, SensorType,
+};
+pub use surrogate::{
+    PredictionMetrics, SurrogateConfig, SurrogateModel, SurrogatePrediction, SurrogateType,
+};

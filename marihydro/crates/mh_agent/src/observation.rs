@@ -1,21 +1,21 @@
-use crate::{DefaultBackend, PhysicsSnapshot, ScalarSamples};
+use crate::{AiError, DefaultBackend, DenseScalarMatrix, PhysicsSnapshot, ScalarSamples};
 use bytemuck::Pod;
-use mh_runtime::{Backend, CellIndex, RuntimeScalar};
 use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::{Backend, CellIndex, RuntimeScalar};
 
-/// 观测算子抽象。
 pub trait ObservationOperator<B: Backend = DefaultBackend>: Send + Sync
 where
     B::Vector2D: Pod,
 {
-    /// 观测算子名称。
     fn name(&self) -> &'static str;
 
-    /// 将物理状态映射到观测空间。
     fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B>;
 
-    /// 计算残差。
-    fn residual(&self, snapshot: &PhysicsSnapshot<B>, observation: &[B::Scalar]) -> ScalarSamples<B> {
+    fn residual(
+        &self,
+        snapshot: &PhysicsSnapshot<B>,
+        observation: &[B::Scalar],
+    ) -> ScalarSamples<B> {
         let simulated = self.observe(snapshot);
         simulated
             .iter()
@@ -25,27 +25,39 @@ where
             .into()
     }
 
-    /// 观测误差方差。
     fn observation_error_variance(&self) -> Option<ScalarSamples<B>> {
         None
     }
 
-    /// 按观测数量扩展误差方差。
     fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {
         self.observation_error_variance()
             .map(|v| vec![v.first().copied().unwrap_or(B::Scalar::ZERO); n_obs].into())
     }
 
-    /// 线性化结果。
-    fn linearize(&self, _snapshot: &PhysicsSnapshot<B>) -> Option<Vec<Vec<B::Scalar>>> {
+    fn linearize(&self, _snapshot: &PhysicsSnapshot<B>) -> Option<DenseScalarMatrix<B>> {
         None
     }
 }
 
-/// 反射率观测算子。
+#[derive(Debug, Clone, Copy)]
+pub struct ReflectanceCalibration {
+    pub log_slope: f64,
+    pub intercept: f64,
+}
+
+impl ReflectanceCalibration {
+    pub const fn new(log_slope: f64, intercept: f64) -> Self {
+        Self {
+            log_slope,
+            intercept,
+        }
+    }
+}
+
 pub struct ReflectanceOperator<B: Backend = DefaultBackend> {
     wavelength: B::Scalar,
-    calibration: Vec<B::Scalar>,
+    log_slope: B::Scalar,
+    intercept: B::Scalar,
     observation_std: B::Scalar,
 }
 
@@ -53,25 +65,34 @@ impl<B: Backend> ReflectanceOperator<B>
 where
     B::Scalar: RuntimeScalar,
 {
-    pub fn new(wavelength: f64, calibration: Vec<f64>, observation_std: f64) -> Self {
+    pub fn new(wavelength: f64, calibration: ReflectanceCalibration, observation_std: f64) -> Self {
         Self {
             wavelength: B::Scalar::from_f64(wavelength).unwrap_or(B::Scalar::ZERO),
-            calibration: calibration
-                .into_iter()
-                .map(|v| B::Scalar::from_f64(v).unwrap_or(B::Scalar::ZERO))
-                .collect(),
+            log_slope: B::Scalar::from_f64(calibration.log_slope).unwrap_or(B::Scalar::ZERO),
+            intercept: B::Scalar::from_f64(calibration.intercept).unwrap_or(B::Scalar::ZERO),
             observation_std: B::Scalar::from_f64(observation_std).unwrap_or(B::Scalar::ZERO),
         }
     }
 
-    /// MODIS 红波段默认参数。
-    pub fn modis_red_band() -> Self {
-        Self::new(645.0, vec![0.12, 0.01], 0.02)
+    pub fn from_coefficients(
+        wavelength: f64,
+        log_slope: f64,
+        intercept: f64,
+        observation_std: f64,
+    ) -> Self {
+        Self::new(
+            wavelength,
+            ReflectanceCalibration::new(log_slope, intercept),
+            observation_std,
+        )
     }
 
-    /// Sentinel-2 B4 默认参数。
+    pub fn modis_red_band() -> Self {
+        Self::from_coefficients(645.0, 0.12, 0.01, 0.02)
+    }
+
     pub fn sentinel2_b4() -> Self {
-        Self::new(665.0, vec![0.09, 0.0], 0.02)
+        Self::from_coefficients(665.0, 0.09, 0.0, 0.02)
     }
 }
 
@@ -92,10 +113,9 @@ where
             .map(|c| {
                 c.iter()
                     .map(|&conc| {
-                        let c_safe = conc.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
-                        let a = *self.calibration.first().unwrap_or(&B::Scalar::ONE);
-                        let b = *self.calibration.get(1).unwrap_or(&B::Scalar::ZERO);
-                        a * c_safe.ln() + b
+                        let c_safe =
+                            conc.max(B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
+                        self.log_slope * c_safe.ln() + self.intercept
                     })
                     .collect::<Vec<_>>()
                     .into()
@@ -108,7 +128,6 @@ where
     }
 }
 
-/// SAR 极化方式。
 #[derive(Debug, Clone, Copy)]
 pub enum Polarization {
     VV,
@@ -117,7 +136,6 @@ pub enum Polarization {
     HV,
 }
 
-/// SAR 后向散射观测算子。
 pub struct SAROperator<B: Backend = DefaultBackend> {
     incidence_angle: B::Scalar,
     polarization: Polarization,
@@ -153,7 +171,8 @@ where
         let tiny = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
         for i in 0..snapshot.n_cells() {
             let speed = snapshot.u[i].hypot(snapshot.v[i]);
-            let depth = snapshot.h[i].max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
+            let depth =
+                snapshot.h[i].max(B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE));
             let incidence_factor = self.incidence_angle.to_f64_lossy().to_radians().cos().abs();
             let incidence_factor = B::Scalar::from_f64(incidence_factor).unwrap_or(B::Scalar::ONE);
             let pol_factor = match self.polarization {
@@ -161,7 +180,8 @@ where
                 _ => B::Scalar::from_f64(0.8).unwrap_or(B::Scalar::ONE),
             };
             let backscatter = B::Scalar::from_f64(10.0).unwrap_or(B::Scalar::ONE)
-                * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny).ln();
+                * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny)
+                    .ln();
             result.push(backscatter);
         }
         result.into()
@@ -172,7 +192,6 @@ where
     }
 }
 
-/// 水位观测算子。
 pub struct WaterLevelOperator<B: Backend = DefaultBackend> {
     station_indices: Vec<CellIndex>,
     observation_std: B::Scalar,
@@ -186,9 +205,11 @@ where
         station_indices: Vec<CellIndex>,
         observation_std: f64,
         n_cells: usize,
-    ) -> Result<Self, crate::AiError> {
+    ) -> Result<Self, AiError> {
         if station_indices.iter().any(|idx| idx.get() >= n_cells) {
-            return Err(crate::AiError::InvalidObservation("观测站索引超出范围".into()));
+            return Err(AiError::InvalidObservation(
+                "station index out of bounds".into(),
+            ));
         }
 
         Ok(Self {

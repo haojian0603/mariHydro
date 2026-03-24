@@ -2,8 +2,8 @@
 
 use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot};
 use bytemuck::Pod;
-use mh_runtime::{Backend, RuntimeScalar};
 use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::{Backend, RuntimeScalar};
 use std::collections::HashMap;
 
 /// AI 代理注册中心。
@@ -117,13 +117,12 @@ where
             }
 
             if let Some(agent) = self.agents.get(name) {
-                let volume_before = if self.conservation_check_enabled
-                    && agent.requires_conservation_check()
-                {
-                    Some(state.total_water_volume())
-                } else {
-                    None
-                };
+                let volume_before =
+                    if self.conservation_check_enabled && agent.requires_conservation_check() {
+                        Some(state.total_water_volume())
+                    } else {
+                        None
+                    };
 
                 agent.apply(state)?;
 
@@ -182,7 +181,10 @@ mod tests {
 
     impl TestAgent {
         fn new(name: &'static str) -> Self {
-            Self { name, updated: false }
+            Self {
+                name,
+                updated: false,
+            }
         }
     }
 
@@ -191,10 +193,7 @@ mod tests {
             self.name
         }
 
-        fn update(
-            &mut self,
-            _snapshot: &PhysicsSnapshot<DefaultBackend>,
-        ) -> Result<(), AiError> {
+        fn update(&mut self, _snapshot: &PhysicsSnapshot<DefaultBackend>) -> Result<(), AiError> {
             self.updated = true;
             Ok(())
         }

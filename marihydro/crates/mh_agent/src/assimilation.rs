@@ -1,7 +1,7 @@
 use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
-use mh_runtime::{Backend, CellIndex, RuntimeScalar, Vector2D};
 use bytemuck::Pod;
 use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::{Backend, CellIndex, RuntimeScalar, Vector2D};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Mutex;
@@ -67,11 +67,15 @@ where
             ));
         }
         if !self.time.is_finite() {
-            return Err(AiError::InvalidObservation("observation time is not finite".into()));
+            return Err(AiError::InvalidObservation(
+                "observation time is not finite".into(),
+            ));
         }
         for (&v, &u) in self.values.iter().zip(self.uncertainty.iter()) {
             if !v.is_finite() || !u.is_finite() || u < B::Scalar::ZERO {
-                return Err(AiError::InvalidObservation("observation value or uncertainty is invalid".into()));
+                return Err(AiError::InvalidObservation(
+                    "observation value or uncertainty is invalid".into(),
+                ));
             }
         }
         Ok(())
@@ -82,7 +86,7 @@ where
         for idx in &self.cell_indices {
             if idx.get() >= n_cells {
                 return Err(AiError::InvalidObservation(format!(
-                    "瑙傛祴绱㈠紩瓒呭嚭鑼冨洿: {} >= {}",
+                    "observation cell index is out of bounds: {} >= {}",
                     idx.get(),
                     n_cells
                 )));
@@ -94,17 +98,17 @@ where
 
 #[derive(Clone)]
 struct NeighborGraph {
-    entries: Vec<Vec<usize>>,
+    entries: Vec<Vec<CellIndex>>,
 }
 
 impl NeighborGraph {
-    fn new(entries: Vec<Vec<usize>>) -> Self {
+    fn new(entries: Vec<Vec<CellIndex>>) -> Self {
         Self { entries }
     }
 }
 
 impl Deref for NeighborGraph {
-    type Target = [Vec<usize>];
+    type Target = [Vec<CellIndex>];
 
     fn deref(&self) -> &Self::Target {
         &self.entries
@@ -154,7 +158,7 @@ where
         let mut state = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
+            .map_err(|_| AiError::StateAccessError("nudging state lock poisoned".into()))?;
         state.pending_observation = Some(observation);
         Ok(())
     }
@@ -169,7 +173,7 @@ where
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
+            .map_err(|_| AiError::StateAccessError("nudging state lock poisoned".into()))?;
         self.assimilate_internal(&mut guard, state, observation, current_time)
     }
 
@@ -238,7 +242,8 @@ where
         for (i, nbrs) in neighbors.iter().enumerate() {
             let mut weighted_sum = B::Scalar::ZERO;
             let mut weight_total = B::Scalar::ZERO;
-            for &j in nbrs {
+            for &neighbor in nbrs {
+                let j = neighbor.get();
                 let dx = cell_centers[i].x() - cell_centers[j].x();
                 let dy = cell_centers[i].y() - cell_centers[j].y();
                 let w = B::Scalar::ONE / (dx.hypot(dy) + tiny);
@@ -286,7 +291,7 @@ where
                         let ddx = c.x() - centers[j].x();
                         let ddy = c.y() - centers[j].y();
                         if ddx * ddx + ddy * ddy <= r2 {
-                            neighbors[i].push(j);
+                            neighbors[i].push(CellIndex::new(j));
                         }
                     }
                 }
@@ -319,20 +324,15 @@ where
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
+            .map_err(|_| AiError::StateAccessError("nudging state lock poisoned".into()))?;
         guard.last_snapshot_time = snapshot.time;
         guard.cell_centers = Some(snapshot.cell_centers.to_vec());
         if let Some(radius) = self.config.smoothing_radius {
             let rebuild = guard.neighbor_list.is_none()
-                || guard
-                    .neighbor_radius
-                    .is_none_or(|r| {
-                        (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON)
-                    })
-                || guard
-                    .cell_centers
-                    .as_ref()
-                    .map(|c| c.len())
+                || guard.neighbor_radius.is_none_or(|r| {
+                    (r - radius).abs() > B::Scalar::from_f64(1e-12).unwrap_or(B::Scalar::EPSILON)
+                })
+                || guard.cell_centers.as_ref().map(|c| c.len())
                     != guard.neighbor_list.as_ref().map(|n| n.len());
             if rebuild {
                 guard.neighbor_list = Some(build_neighbors::<B>(&snapshot.cell_centers, radius));
@@ -346,11 +346,13 @@ where
         let mut guard = self
             .state
             .lock()
-            .map_err(|_| AiError::StateAccessError("鑾峰彇鍚屽寲鐘舵€侀攣澶辫触".into()))?;
+            .map_err(|_| AiError::StateAccessError("nudging state lock poisoned".into()))?;
         let observation = guard
             .pending_observation
             .as_ref()
-            .ok_or_else(|| AiError::InvalidObservation("缂哄皯瑙傛祴鏁版嵁".into()))?
+            .ok_or_else(|| {
+                AiError::InvalidObservation("pending observation is unavailable".into())
+            })?
             .clone();
         let current_time = if observation.time.is_finite() {
             observation.time
@@ -380,7 +382,9 @@ where
         let depth_snapshot = state.get_depth().to_vec();
         let n_cells = state.get_depth().len();
         if n_cells == 0 {
-            return Err(AiError::StateAccessError("状态为空".into()));
+            return Err(AiError::StateAccessError(
+                "nudging state lock poisoned".into(),
+            ));
         }
 
         let dt = (current_time - internal.last_assimilation_time).max(B::Scalar::ZERO);
@@ -412,15 +416,19 @@ where
             }
         }
 
-        if let (Some(_radius), Some(centers)) = (self.config.smoothing_radius, internal.cell_centers.as_ref()) {
+        if let (Some(_radius), Some(centers)) =
+            (self.config.smoothing_radius, internal.cell_centers.as_ref())
+        {
             if let Some(neighbors) = internal.neighbor_list.as_ref() {
                 self.apply_smoothing_with_neighbors(&mut corrections, centers, neighbors);
             } else {
                 self.apply_smoothing(&mut corrections, centers);
             }
-            max_corr = corrections
-                .iter()
-                .fold(B::Scalar::ZERO, |m, &c| if c.abs() > m { c.abs() } else { m });
+            max_corr =
+                corrections.iter().fold(
+                    B::Scalar::ZERO,
+                    |m, &c| if c.abs() > m { c.abs() } else { m },
+                );
             total_corr = corrections.iter().copied().sum();
         }
 
@@ -449,4 +457,3 @@ where
         })
     }
 }
-

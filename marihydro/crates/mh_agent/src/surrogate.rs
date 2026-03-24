@@ -1,9 +1,8 @@
 use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use serde::{Deserialize, Serialize};
 
-/// 代理模型类型。
 #[derive(Debug, Clone, Copy)]
 pub enum SurrogateType {
     LinearRegression,
@@ -12,7 +11,6 @@ pub enum SurrogateType {
     PolynomialChaos,
 }
 
-/// 代理模型配置。
 #[derive(Debug, Clone)]
 pub struct SurrogateConfig<B: Backend = DefaultBackend> {
     pub model_type: SurrogateType,
@@ -27,7 +25,6 @@ pub struct SurrogateConfig<B: Backend = DefaultBackend> {
     pub min_std: B::Scalar,
 }
 
-/// 代理预测结果。
 #[derive(Debug, Clone)]
 pub struct SurrogatePrediction<B: Backend = DefaultBackend> {
     pub values: ScalarSamples<B>,
@@ -36,7 +33,6 @@ pub struct SurrogatePrediction<B: Backend = DefaultBackend> {
     pub confidence: B::Scalar,
 }
 
-/// 归一化参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizationParams {
     pub mean: Vec<f64>,
@@ -45,18 +41,68 @@ pub struct NormalizationParams {
     pub m2: Vec<f64>,
 }
 
-/// 代理模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LinearRegressionCore {
+    input_dim: usize,
+    output_dim: usize,
+    weights: Vec<f64>,
+    bias: Vec<f64>,
+}
+
+impl LinearRegressionCore {
+    fn new(output_dim: usize) -> Self {
+        let output_dim = output_dim.max(1);
+        Self {
+            input_dim: 0,
+            output_dim,
+            weights: Vec::new(),
+            bias: vec![0.0; output_dim],
+        }
+    }
+
+    fn ensure_shape(&mut self, input_dim: usize, output_dim: usize) {
+        let input_dim = input_dim.max(1);
+        let output_dim = output_dim.max(1);
+        let expected_weights = input_dim * output_dim;
+        if self.input_dim == input_dim
+            && self.output_dim == output_dim
+            && self.weights.len() == expected_weights
+            && self.bias.len() == output_dim
+        {
+            return;
+        }
+        self.input_dim = input_dim;
+        self.output_dim = output_dim;
+        self.weights = vec![0.0; expected_weights];
+        self.bias = vec![0.0; output_dim];
+    }
+
+    fn predict(&self, features: &[f64]) -> Vec<f64> {
+        let output_dim = self.output_dim.max(1);
+        if self.input_dim == 0 || self.weights.is_empty() {
+            return vec![0.0; output_dim];
+        }
+        let mut out = vec![0.0; output_dim];
+        for (o, out_item) in out.iter_mut().enumerate() {
+            let mut sum = self.bias.get(o).copied().unwrap_or(0.0);
+            for i in 0..self.input_dim {
+                let idx = o * self.input_dim + i;
+                sum += self.weights[idx] * features.get(i).copied().unwrap_or(0.0);
+            }
+            *out_item = sum;
+        }
+        out
+    }
+}
+
 pub struct SurrogateModel<B: Backend = DefaultBackend> {
     config: SurrogateConfig<B>,
     current_prediction: Option<SurrogatePrediction<B>>,
     input_normalization: Option<NormalizationParams>,
     output_normalization: Option<NormalizationParams>,
     last_update_time: B::Scalar,
-    weights: Option<Vec<f64>>,
-    bias: Vec<f64>,
+    linear_core: LinearRegressionCore,
     error_ema: Option<f64>,
-    input_dim: usize,
-    output_dim: usize,
 }
 
 impl<B: Backend> SurrogateModel<B>
@@ -65,16 +111,14 @@ where
     B::Vector2D: bytemuck::Pod,
 {
     pub fn new(config: SurrogateConfig<B>) -> Result<Self, AiError> {
+        let output_dim = config.output_features.len().max(1);
         let mut model = Self {
-            input_dim: 0,
-            output_dim: config.output_features.len().max(1),
             config,
             current_prediction: None,
             input_normalization: None,
             output_normalization: None,
             last_update_time: B::Scalar::ZERO,
-            weights: None,
-            bias: Vec::new(),
+            linear_core: LinearRegressionCore::new(output_dim),
             error_ema: None,
         };
 
@@ -86,9 +130,10 @@ where
 
         Ok(model)
     }
-
-    /// 生成快速预测。
-    pub fn predict(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<SurrogatePrediction<B>, AiError> {
+    pub fn predict(
+        &mut self,
+        snapshot: &PhysicsSnapshot<B>,
+    ) -> Result<SurrogatePrediction<B>, AiError> {
         let mut features = self.extract_features(snapshot);
         self.ensure_model_initialized(features.len());
         self.normalize_input(&mut features);
@@ -129,13 +174,13 @@ where
         match self.config.model_type {
             SurrogateType::LinearRegression => Ok(()),
             SurrogateType::ReducedOrder => Err(AiError::UnsupportedModelType(
-                "当前仅实现 LinearRegression，ReducedOrder 仍未接入".into(),
+                "褰撳墠浠呭疄鐜?LinearRegression锛孯educedOrder 浠嶆湭鎺ュ叆".into(),
             )),
             SurrogateType::GaussianProcess => Err(AiError::UnsupportedModelType(
-                "当前仅实现 LinearRegression，GaussianProcess 仍未接入".into(),
+                "褰撳墠浠呭疄鐜?LinearRegression锛孏aussianProcess 浠嶆湭鎺ュ叆".into(),
             )),
             SurrogateType::PolynomialChaos => Err(AiError::UnsupportedModelType(
-                "当前仅实现 LinearRegression，PolynomialChaos 仍未接入".into(),
+                "褰撳墠浠呭疄鐜?LinearRegression锛孭olynomialChaos 浠嶆湭鎺ュ叆".into(),
             )),
         }
     }
@@ -174,7 +219,12 @@ where
             let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
             for (i, val) in features.iter_mut().enumerate() {
                 let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(min_std);
+                let std = norm
+                    .std
+                    .get(i % norm.std.len())
+                    .copied()
+                    .unwrap_or(1.0)
+                    .max(min_std);
                 *val = (*val - mean) / std;
             }
         }
@@ -185,7 +235,12 @@ where
             let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
             for (i, val) in output.iter_mut().enumerate() {
                 let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0).max(min_std);
+                let std = norm
+                    .std
+                    .get(i % norm.std.len())
+                    .copied()
+                    .unwrap_or(1.0)
+                    .max(min_std);
                 *val = (*val - mean) / std;
             }
         }
@@ -222,7 +277,11 @@ where
             corr_den += gt[i] * gt[i];
         }
         rmse = if n > 0 { (rmse / n as f64).sqrt() } else { 0.0 };
-        let correlation = if corr_den > 0.0 { corr_num / corr_den.sqrt() } else { 0.0 };
+        let correlation = if corr_den > 0.0 {
+            corr_num / corr_den.sqrt()
+        } else {
+            0.0
+        };
 
         PredictionMetrics {
             rmse,
@@ -238,16 +297,16 @@ where
         }
     }
 
-    pub fn update_model(&mut self, snapshot: &PhysicsSnapshot<B>, target: &[B::Scalar]) -> Result<(), AiError> {
+    pub fn update_model(
+        &mut self,
+        snapshot: &PhysicsSnapshot<B>,
+        target: &[B::Scalar],
+    ) -> Result<(), AiError> {
         let features_raw = self.extract_features(snapshot);
         self.ensure_model_initialized(features_raw.len());
         let output_dim = target.len().max(1);
-        if output_dim != self.output_dim {
-            self.output_dim = output_dim;
-            self.weights = None;
-            self.bias = Vec::new();
-            self.ensure_model_initialized(features_raw.len());
-        }
+        self.linear_core
+            .ensure_shape(features_raw.len(), output_dim);
 
         self.update_normalization_input(&features_raw);
         let target_raw: Vec<f64> = target.iter().map(|v| v.to_f64_lossy()).collect();
@@ -262,15 +321,15 @@ where
         let lr = self.config.learning_rate.to_f64_lossy().max(1e-8);
         let l2 = self.config.l2_reg.to_f64_lossy().max(0.0);
 
-        if let Some(weights) = &mut self.weights {
-            for o in 0..self.output_dim {
-                let err = pred.get(o).copied().unwrap_or(0.0) - target_norm.get(o).copied().unwrap_or(0.0);
-                self.bias[o] -= lr * err;
-                for i in 0..self.input_dim {
-                    let idx = o * self.input_dim + i;
-                    let grad = err * features.get(i).copied().unwrap_or(0.0) + l2 * weights[idx];
-                    weights[idx] -= lr * grad;
-                }
+        for o in 0..self.linear_core.output_dim {
+            let err =
+                pred.get(o).copied().unwrap_or(0.0) - target_norm.get(o).copied().unwrap_or(0.0);
+            self.linear_core.bias[o] -= lr * err;
+            for i in 0..self.linear_core.input_dim {
+                let idx = o * self.linear_core.input_dim + i;
+                let grad = err * features.get(i).copied().unwrap_or(0.0)
+                    + l2 * self.linear_core.weights[idx];
+                self.linear_core.weights[idx] -= lr * grad;
             }
         }
 
@@ -310,67 +369,55 @@ where
     }
 
     fn ensure_model_initialized(&mut self, input_dim: usize) {
-        if self.weights.is_some() && self.input_dim == input_dim {
-            return;
-        }
-        self.input_dim = input_dim.max(1);
-        self.output_dim = self.output_dim.max(1);
-        self.weights = Some(vec![0.0; self.input_dim * self.output_dim]);
-        self.bias = vec![0.0; self.output_dim];
+        let output_dim = self.linear_core.output_dim.max(1);
+        self.linear_core.ensure_shape(input_dim, output_dim);
     }
 
     fn forward_linear(&self, features: &[f64]) -> Vec<f64> {
-        let output_dim = self.output_dim.max(1);
-        let input_dim = self.input_dim.max(1);
-        let mut out = vec![0.0; output_dim];
-        if let Some(weights) = &self.weights {
-            for (o, out_item) in out.iter_mut().enumerate().take(output_dim) {
-                let mut sum = self.bias.get(o).copied().unwrap_or(0.0);
-                for i in 0..input_dim {
-                    let idx = o * input_dim + i;
-                    sum += weights[idx] * features.get(i).copied().unwrap_or(0.0);
-                }
-                *out_item = sum;
-            }
-        }
-        out
+        self.linear_core.predict(features)
     }
 
     fn update_normalization_input(&mut self, values: &[f64]) {
         match &mut self.input_normalization {
             Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
-            None => self.input_normalization = Some(init_normalization(values, self.config.min_std.to_f64_lossy())),
+            None => {
+                self.input_normalization = Some(init_normalization(
+                    values,
+                    self.config.min_std.to_f64_lossy(),
+                ))
+            }
         }
     }
 
     fn update_normalization_output(&mut self, values: &[f64]) {
         match &mut self.output_normalization {
             Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
-            None => self.output_normalization = Some(init_normalization(values, self.config.min_std.to_f64_lossy())),
+            None => {
+                self.output_normalization = Some(init_normalization(
+                    values,
+                    self.config.min_std.to_f64_lossy(),
+                ))
+            }
         }
     }
 
     fn save_state(&self, path: &str) -> Result<(), AiError> {
         let state = SurrogateState {
-            input_dim: self.input_dim,
-            output_dim: self.output_dim,
-            weights: self.weights.clone().unwrap_or_default(),
-            bias: self.bias.clone(),
+            linear_core: self.linear_core.clone(),
             input_normalization: self.input_normalization.clone(),
             output_normalization: self.output_normalization.clone(),
             error_ema: self.error_ema,
         };
-        let json = serde_json::to_string_pretty(&state).map_err(|e| AiError::Other(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(&state).map_err(|e| AiError::Other(e.to_string()))?;
         std::fs::write(path, json).map_err(|e| AiError::Other(e.to_string()))
     }
 
     fn load_state(&mut self, path: &str) -> Result<(), AiError> {
         let content = std::fs::read_to_string(path).map_err(|e| AiError::Other(e.to_string()))?;
-        let state: SurrogateState = serde_json::from_str(&content).map_err(|e| AiError::Other(e.to_string()))?;
-        self.input_dim = state.input_dim.max(1);
-        self.output_dim = state.output_dim.max(1);
-        self.weights = Some(state.weights);
-        self.bias = state.bias;
+        let state: SurrogateState =
+            serde_json::from_str(&content).map_err(|e| AiError::Other(e.to_string()))?;
+        self.linear_core = state.linear_core;
         self.input_normalization = state.input_normalization;
         self.output_normalization = state.output_normalization;
         self.error_ema = state.error_ema;
@@ -388,10 +435,7 @@ pub struct PredictionMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SurrogateState {
-    input_dim: usize,
-    output_dim: usize,
-    weights: Vec<f64>,
-    bias: Vec<f64>,
+    linear_core: LinearRegressionCore,
     input_normalization: Option<NormalizationParams>,
     output_normalization: Option<NormalizationParams>,
     error_ema: Option<f64>,
@@ -428,7 +472,11 @@ fn update_normalization(norm: &mut NormalizationParams, values: &[f64], min_std:
         m2 += delta * delta2;
     }
 
-    let variance = if count > 1 { m2 / (count as f64 - 1.0) } else { 0.0 };
+    let variance = if count > 1 {
+        m2 / (count as f64 - 1.0)
+    } else {
+        0.0
+    };
     let std = variance.sqrt().max(min_std);
     norm.mean = vec![mean];
     norm.std = vec![std];
@@ -486,7 +534,11 @@ where
                     let mut sum_area = 0.0f64;
                     for i in 0..n {
                         if depth[i] > B::Scalar::ZERO {
-                            sum_area += cell_areas.get(i).copied().unwrap_or(B::Scalar::ZERO).to_f64_lossy();
+                            sum_area += cell_areas
+                                .get(i)
+                                .copied()
+                                .unwrap_or(B::Scalar::ZERO)
+                                .to_f64_lossy();
                         }
                     }
                     if sum_area <= 0.0 {
@@ -498,7 +550,11 @@ where
                         if depth[i] <= B::Scalar::ZERO {
                             continue;
                         }
-                        let area = cell_areas.get(i).copied().unwrap_or(B::Scalar::ZERO).to_f64_lossy();
+                        let area = cell_areas
+                            .get(i)
+                            .copied()
+                            .unwrap_or(B::Scalar::ZERO)
+                            .to_f64_lossy();
                         if area <= 0.0 {
                             continue;
                         }
@@ -519,15 +575,17 @@ where
                     let h1 = depth_after[i].to_f64_lossy();
                     if h0 > 0.0 && h1 > 0.0 {
                         let scale = (h0 / h1).clamp(0.1, 10.0);
-                        u[i] = B::Scalar::from_f64(u[i].to_f64_lossy() * scale).unwrap_or(B::Scalar::ZERO);
-                        v[i] = B::Scalar::from_f64(v[i].to_f64_lossy() * scale).unwrap_or(B::Scalar::ZERO);
+                        u[i] = B::Scalar::from_f64(u[i].to_f64_lossy() * scale)
+                            .unwrap_or(B::Scalar::ZERO);
+                        v[i] = B::Scalar::from_f64(v[i].to_f64_lossy() * scale)
+                            .unwrap_or(B::Scalar::ZERO);
                     }
                 }
             }
 
             Ok(())
         } else {
-            Err(AiError::NotReady("代理预测尚未生成".into()))
+            Err(AiError::NotReady("浠ｇ悊棰勬祴灏氭湭鐢熸垚".into()))
         }
     }
 

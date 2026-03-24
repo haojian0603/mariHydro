@@ -1,8 +1,7 @@
 use crate::{AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot, ScalarSamples};
-use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use mh_runtime::prelude::{Float, FromPrimitive};
+use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 
-/// 传感器类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorType {
     Optical,
@@ -10,19 +9,45 @@ pub enum SensorType {
     Hyperspectral,
 }
 
-/// 卫星图像数据。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageBounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
+impl ImageBounds {
+    pub const fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
+        Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.min_x.is_finite()
+            && self.min_y.is_finite()
+            && self.max_x.is_finite()
+            && self.max_y.is_finite()
+            && self.max_x > self.min_x
+            && self.max_y > self.min_y
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SatelliteImage {
     pub data: Vec<f32>,
     pub dimensions: (usize, usize),
-    pub bounds: [f64; 4],
+    pub bounds: ImageBounds,
     pub timestamp: f64,
     pub sensor: SensorType,
     pub cloud_cover: f32,
     pub resolution: f64,
 }
 
-/// 遥感同化配置。
 #[derive(Debug, Clone)]
 pub struct RemoteSensingConfig<B: Backend = DefaultBackend> {
     pub model_path: Option<String>,
@@ -32,7 +57,6 @@ pub struct RemoteSensingConfig<B: Backend = DefaultBackend> {
     pub interpolation: InterpolationMethod<B>,
 }
 
-/// 插值方式。
 #[derive(Debug, Clone, Copy)]
 pub enum InterpolationMethod<B: Backend = DefaultBackend> {
     NearestNeighbor,
@@ -40,7 +64,6 @@ pub enum InterpolationMethod<B: Backend = DefaultBackend> {
     IDW { power: B::Scalar },
 }
 
-/// 遥感推理结果。
 #[derive(Debug, Clone)]
 pub struct InferenceResult<B: Backend = DefaultBackend> {
     pub concentration: ScalarSamples<B>,
@@ -48,7 +71,6 @@ pub struct InferenceResult<B: Backend = DefaultBackend> {
     pub quality_flags: Vec<u8>,
 }
 
-/// 遥感代理。
 pub struct RemoteSensingAgent<B: Backend = DefaultBackend> {
     config: RemoteSensingConfig<B>,
     predicted: ScalarSamples<B>,
@@ -71,7 +93,6 @@ where
         }
     }
 
-    /// 从卫星图像反演浓度。
     pub fn infer(
         &mut self,
         image: &SatelliteImage,
@@ -82,8 +103,8 @@ where
 
         let cloud = B::Scalar::from_f64(image.cloud_cover as f64).unwrap_or(B::Scalar::ONE);
         let mut uncertainty = vec![B::Scalar::ZERO; mapped.len()];
-        for u in &mut uncertainty {
-            *u = cloud.min(B::Scalar::ONE);
+        for item in &mut uncertainty {
+            *item = cloud.min(B::Scalar::ONE);
         }
 
         let result = InferenceResult {
@@ -116,15 +137,34 @@ where
     }
 
     fn validate_image(&self, image: &SatelliteImage) -> Result<(), AiError> {
-        let (w, h) = image.dimensions;
-        if w == 0 || h == 0 {
-            return Err(AiError::InvalidObservation("图像尺寸无效".into()));
+        let (width, height) = image.dimensions;
+        if width == 0 || height == 0 {
+            return Err(AiError::InvalidObservation(
+                "invalid image dimensions".into(),
+            ));
         }
-        if image.data.len() != w * h {
-            return Err(AiError::InvalidObservation("图像数据长度与尺寸不匹配".into()));
+        if image.data.len() != width * height {
+            return Err(AiError::InvalidObservation(
+                "image data length mismatch".into(),
+            ));
+        }
+        if !image.bounds.is_valid() {
+            return Err(AiError::InvalidObservation("invalid image bounds".into()));
+        }
+        if !image.timestamp.is_finite() {
+            return Err(AiError::InvalidObservation(
+                "invalid image timestamp".into(),
+            ));
+        }
+        if !image.resolution.is_finite() || image.resolution <= 0.0 {
+            return Err(AiError::InvalidObservation(
+                "invalid image resolution".into(),
+            ));
         }
         if image.cloud_cover > self.config.max_cloud_cover {
-            return Err(AiError::InvalidObservation("云覆盖率超出阈值".into()));
+            return Err(AiError::InvalidObservation(
+                "cloud cover exceeds threshold".into(),
+            ));
         }
         Ok(())
     }
@@ -136,24 +176,28 @@ where
         target_cells: &[B::Vector2D],
     ) -> ScalarSamples<B> {
         let (width, height) = image.dimensions;
-        let (min_x, min_y, max_x, max_y) =
-            (image.bounds[0], image.bounds[1], image.bounds[2], image.bounds[3]);
-        let dx = (max_x - min_x) / width.saturating_sub(1).max(1) as f64;
-        let dy = (max_y - min_y) / height.saturating_sub(1).max(1) as f64;
+        let bounds = image.bounds;
+        let dx = (bounds.max_x - bounds.min_x) / width.saturating_sub(1).max(1) as f64;
+        let dy = (bounds.max_y - bounds.min_y) / height.saturating_sub(1).max(1) as f64;
 
         let mut result = Vec::with_capacity(target_cells.len());
         for cell in target_cells {
             let x = cell.x().to_f64_lossy();
             let y = cell.y().to_f64_lossy();
-            let gx = ((x - min_x) / dx).clamp(0.0, width.saturating_sub(1) as f64);
-            let gy = ((y - min_y) / dy).clamp(0.0, height.saturating_sub(1) as f64);
+            let gx = ((x - bounds.min_x) / dx).clamp(0.0, width.saturating_sub(1) as f64);
+            let gy = ((y - bounds.min_y) / dy).clamp(0.0, height.saturating_sub(1) as f64);
 
             let reflectance = match self.config.interpolation {
                 InterpolationMethod::NearestNeighbor => {
-                    let ix = (gx + 0.5).floor().clamp(0.0, width.saturating_sub(1) as f64) as usize;
-                    let iy = (gy + 0.5).floor().clamp(0.0, height.saturating_sub(1) as f64) as usize;
-                    let idx = iy * width + ix;
-                    data.get(idx).copied().unwrap_or_default() as f64
+                    let ix = (gx + 0.5)
+                        .floor()
+                        .clamp(0.0, width.saturating_sub(1) as f64)
+                        as usize;
+                    let iy = (gy + 0.5)
+                        .floor()
+                        .clamp(0.0, height.saturating_sub(1) as f64)
+                        as usize;
+                    data.get(iy * width + ix).copied().unwrap_or_default() as f64
                 }
                 InterpolationMethod::Bilinear => {
                     let x0 = gx.floor().max(0.0) as usize;
@@ -176,33 +220,41 @@ where
                     let x1 = (x0 + 1).min(width.saturating_sub(1));
                     let y1 = (y0 + 1).min(height.saturating_sub(1));
                     let pts = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)];
-                    let mut ws = 0.0;
-                    let mut vs = 0.0;
+                    let mut weighted_sum = 0.0;
+                    let mut weight_total = 0.0;
                     let power = power.to_f64_lossy();
                     for (ix, iy) in pts {
-                        let px = min_x + ix as f64 * dx;
-                        let py = min_y + iy as f64 * dy;
-                        let d = ((x - px).powi(2) + (y - py).powi(2)).sqrt().max(1e-6);
-                        let wgt = 1.0 / d.powf(power);
-                        let val = data.get(iy * width + ix).copied().unwrap_or_default() as f64;
-                        ws += wgt;
-                        vs += wgt * val;
+                        let px = bounds.min_x + ix as f64 * dx;
+                        let py = bounds.min_y + iy as f64 * dy;
+                        let distance = ((x - px).powi(2) + (y - py).powi(2)).sqrt().max(1e-6);
+                        let weight = 1.0 / distance.powf(power);
+                        let value = data.get(iy * width + ix).copied().unwrap_or_default() as f64;
+                        weight_total += weight;
+                        weighted_sum += weight * value;
                     }
-                    if ws > 0.0 { vs / ws } else { 0.0 }
+                    if weight_total > 0.0 {
+                        weighted_sum / weight_total
+                    } else {
+                        0.0
+                    }
                 }
             };
 
-            let conc = self.empirical_inversion(reflectance, image.sensor);
-            result.push(conc.min(self.config.max_concentration).max(B::Scalar::ZERO));
+            let concentration = self.empirical_inversion(reflectance, image.sensor);
+            result.push(
+                concentration
+                    .min(self.config.max_concentration)
+                    .max(B::Scalar::ZERO),
+            );
         }
         result.into()
     }
 
     fn empirical_inversion(&self, reflectance: f64, sensor: SensorType) -> B::Scalar {
         let value = match sensor {
-            SensorType::Optical => (reflectance.max(1e-6)).ln().abs() * 10.0,
+            SensorType::Optical => reflectance.max(1e-6).ln().abs() * 10.0,
             SensorType::SAR => reflectance.abs() * 5.0,
-            SensorType::Hyperspectral => reflectance.sqrt() * 8.0,
+            SensorType::Hyperspectral => reflectance.max(0.0).sqrt() * 8.0,
         };
         B::Scalar::from_f64(value).unwrap_or(B::Scalar::ZERO)
     }
@@ -229,17 +281,18 @@ where
 
     fn apply(&self, state: &mut dyn Assimilable<B>) -> Result<(), AiError> {
         if !self.has_prediction {
-            return Err(AiError::NotReady("遥感反演结果尚未生成".into()));
+            return Err(AiError::NotReady(
+                "remote sensing prediction is not ready".into(),
+            ));
         }
 
-        let prediction = &self.predicted;
         let target = state
             .get_tracer_mut("sediment")
-            .ok_or_else(|| AiError::StateAccessError("无法获取泥沙示踪量".into()))?;
-        let n = prediction.len().min(target.len());
+            .ok_or_else(|| AiError::StateAccessError("sediment tracer is unavailable".into()))?;
+        let n = self.predicted.len().min(target.len());
         for i in 0..n {
             let blended = (B::Scalar::ONE - self.config.assimilation_rate) * target[i]
-                + self.config.assimilation_rate * prediction[i];
+                + self.config.assimilation_rate * self.predicted[i];
             target[i] = blended.min(self.config.max_concentration);
         }
         Ok(())
