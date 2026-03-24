@@ -183,7 +183,8 @@ pub trait MeshTopology<B: Backend>: MeshAccess<B> {
         let dx = c2.x - c1.x;
         let dy = c2.y - c1.y;
         let dist = (dx * dx + dy * dy).sqrt();
-        self.backend().scalar_from_f64(dist)
+        self.backend()
+            .config_scalar(dist, "MeshMetadata.cell_center_distance")
     }
 
     /// 单元中心到面中心的距离
@@ -194,7 +195,8 @@ pub trait MeshTopology<B: Backend>: MeshAccess<B> {
         let dx = fc.x - cc.x;
         let dy = fc.y - cc.y;
         let dist = (dx * dx + dy * dy).sqrt();
-        self.backend().scalar_from_f64(dist)
+        self.backend()
+            .config_scalar(dist, "MeshMetadata.face_center_distance")
     }
 
     /// 面的 owner 到 neighbor 中心距离
@@ -213,7 +215,9 @@ pub trait MeshTopology<B: Backend>: MeshAccess<B> {
         let d_neighbor = self.cell_to_face_distance(neighbor, face);
         let total = d_owner + d_neighbor;
 
-        let eps = self.backend().scalar_from_f64(1e-14);
+        let eps = self
+            .backend()
+            .config_scalar(1e-14, "MeshMetadata.interpolation_weight.eps");
         if total < eps { B::Scalar::HALF } else { d_neighbor / total }
     }
 
@@ -399,9 +403,9 @@ pub trait MeshAccessExt<B: Backend>: MeshAccess<B> {
         } else {
             report.stats.min_area = areas.iter().cloned().fold(B::Scalar::MAX, B::Scalar::min);
             report.stats.max_area = areas.iter().cloned().fold(B::Scalar::MIN, B::Scalar::max);
-            let count = backend.scalar_from_f64(areas.len() as f64);
+            let count = backend.config_scalar(areas.len() as f64, "MeshValidationReport.area_stats.count");
             report.stats.avg_area = areas.iter().cloned().fold(B::Scalar::ZERO, |acc, v| acc + v) / count;
-            let small = backend.scalar_from_f64(1e-12);
+            let small = backend.config_scalar(1e-12, "MeshValidationReport.area_stats.small_threshold");
 
             for (i, &area) in areas.iter().enumerate() {
                 if area <= B::Scalar::ZERO {

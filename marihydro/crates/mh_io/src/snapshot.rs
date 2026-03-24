@@ -408,7 +408,7 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
 
     /// 精度/标量类型转换
     pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> MeshSnapshot<T> {
-        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
+        self.map_scalar_with(|v| backend.config_scalar(v.to_f64_lossy(), "MeshSnapshot.map_scalar"))
     }
 
     /// 精度/标量类型转换（自定义映射）
@@ -718,7 +718,7 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
     ///
     /// 用于在不同运行时精度之间显式转换快照，避免隐式截断。
     pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> StateSnapshot<T> {
-        self.map_scalar_with(|v| backend.scalar_from_f64(v.to_f64_lossy()))
+        self.map_scalar_with(|v| backend.config_scalar(v.to_f64_lossy(), "StateSnapshot.map_scalar"))
     }
 
     /// 精度/标量类型转换（自定义映射）

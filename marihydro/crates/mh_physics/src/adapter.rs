@@ -290,7 +290,10 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         backend
-            .try_scalar_from_f64(self.inner.face_length[idx])
+            .try_config_scalar(
+                self.inner.face_length[idx],
+                "PhysicsMeshAdapter.face_length_scalar",
+            )
             .map_err(|err| MhError::invalid_input(format!("面长度转换失败: {err}")))
     }
 
@@ -363,7 +366,10 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         backend
-            .try_scalar_from_f64(self.inner.face_z_left[idx])
+            .try_config_scalar(
+                self.inner.face_z_left[idx],
+                "PhysicsMeshAdapter.face_z_left_scalar",
+            )
             .map_err(|err| MhError::invalid_input(format!("面左侧高程转换失败: {err}")))
     }
 
@@ -381,7 +387,10 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         backend
-            .try_scalar_from_f64(self.inner.face_z_right[idx])
+            .try_config_scalar(
+                self.inner.face_z_right[idx],
+                "PhysicsMeshAdapter.face_z_right_scalar",
+            )
             .map_err(|err| MhError::invalid_input(format!("面右侧高程转换失败: {err}")))
     }
 

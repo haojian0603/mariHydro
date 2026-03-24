@@ -89,10 +89,20 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
     #[inline]
     #[track_caller]
     fn config_scalar(&self, v: f64, context: &'static str) -> Self::Scalar {
-        self.try_scalar_from_f64(v).unwrap_or_else(|err| {
+        self.try_config_scalar(v, context).unwrap_or_else(|err| {
             panic!(
-                "[mh_runtime::backend] config scalar conversion failed: context={context}, value={v}, error={err}"
+                "[mh_runtime::backend] {err}"
             )
+        })
+    }
+
+    /// 尝试将配置值转换到标量类型，并在错误信息中附带上下文。
+    #[inline]
+    fn try_config_scalar(&self, v: f64, context: &'static str) -> RuntimeResult<Self::Scalar> {
+        self.try_scalar_from_f64(v).map_err(|err| {
+            RuntimeError::backend(format!(
+                "config scalar conversion failed: context={context}, value={v}, error={err}"
+            ))
         })
     }
 

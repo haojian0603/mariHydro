@@ -286,8 +286,8 @@ mod tests {
     const EPSILON_F64: f64 = 1e-10;
 
     /// 从f64创建Backend标量（测试专用）
-    fn scalar_from_f64<B: Backend>(v: f64) -> B::Scalar {
-        B::Scalar::from_config(v).unwrap_or(B::Scalar::ZERO)
+    fn test_scalar<B: Backend>(backend: &B, v: f64, context: &'static str) -> B::Scalar {
+        backend.config_scalar(v, context)
     }
 
     /// epsilon断言宏
@@ -350,7 +350,7 @@ mod tests {
         let mut hv = backend.alloc_init(2, 0.0);
         let areas = backend.alloc_init(2, 1.0);
         
-        let dt = scalar_from_f64::<CpuBackend<f64>>(0.1);
+        let dt = test_scalar(&backend, 0.1, "FluxAccumulator.tests.apply_to_state.dt");
 
         acc.apply_to_state(&mut h, &mut hu, &mut hv, &areas, dt);
 

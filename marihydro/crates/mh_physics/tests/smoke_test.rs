@@ -192,7 +192,7 @@ fn test_vector_ops() {
     let d = dot(&backend, &x, &y).unwrap().to_f64().unwrap();
     assert!((d - 11.0).abs() < 1e-14);
 
-    let alpha = backend.scalar_from_f64(2.0);
+    let alpha = backend.config_scalar(2.0, "smoke_test.axpy.alpha");
     axpy(&backend, alpha, &x, &mut y).unwrap();
     assert!((y[0] - 7.0).abs() < 1e-14);
     assert!((y[1] - 10.0).abs() < 1e-14);
@@ -226,7 +226,7 @@ fn test_pcg_solver_simple() {
     let result = solver.solve(&mat, &b, &mut x, &precond);
 
     assert!(result.is_converged());
-    assert!(result.relative_residual < backend.scalar_from_f64(1e-8));
+    assert!(result.relative_residual < backend.config_scalar(1e-8, "smoke_test.pcg.relative_residual"));
 }
 
 // ============================================================

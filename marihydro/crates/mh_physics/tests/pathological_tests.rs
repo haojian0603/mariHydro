@@ -733,11 +733,11 @@ fn test_convergence_criteria_edge_cases() {
     // 测试b_norm≈0时的atol/rtol处理
     let backend = test_backend().clone();
     let mut r = backend.alloc(10);
-    r.fill(backend.scalar_from_f64(1e-15));
+    r.fill(backend.config_scalar(1e-15, "pathological_tests.tiny_rhs.r"));
     let mut b_tiny = backend.alloc(10);
-    b_tiny.fill(backend.scalar_from_f64(1e-16));
+    b_tiny.fill(backend.config_scalar(1e-16, "pathological_tests.tiny_rhs.b_tiny"));
     let mut b_zero = backend.alloc(10);
-    b_zero.fill(backend.scalar_from_f64(0.0));
+    b_zero.fill(backend.config_scalar(0.0, "pathological_tests.tiny_rhs.b_zero"));
 
     let rel_res_tiny: f64 = relative_residual(&backend, &r, &b_tiny);
     let rel_res_zero: f64 = relative_residual(&backend, &r, &b_zero);
