@@ -140,9 +140,9 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
         let n_cells = mesh.n_cells();
         self.ensure_capacity(n_cells);
 
-        let gravity = self.backend.scalar_from_f64(self.config.gravity);
-        let h_min = self.backend.scalar_from_f64(self.config.h_min);
-        let theta = self.backend.scalar_from_f64(self.config.theta);
+        let gravity = self.backend.config_scalar(self.config.gravity, "semi_implicit.gravity");
+        let h_min = self.backend.config_scalar(self.config.h_min, "semi_implicit.h_min");
+        let theta = self.backend.config_scalar(self.config.theta, "semi_implicit.theta");
         let half = B::Scalar::HALF;
 
         let h: &[B::Scalar] = &state.h;
@@ -247,8 +247,8 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
 
             eta_prime.copy_from_slice(eta_buf.as_slice());
         } else {
-            let eps = self.backend.scalar_from_f64(1e-14);
-            let rtol = self.backend.scalar_from_f64(self.config.solver_rtol);
+            let eps = self.backend.config_scalar(1e-14, "semi_implicit.residual_eps");
+            let rtol = self.backend.config_scalar(self.config.solver_rtol, "semi_implicit.solver_rtol");
             for iter in 0..self.config.solver_max_iter {
                 let mut max_residual = B::Scalar::ZERO;
 

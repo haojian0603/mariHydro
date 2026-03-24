@@ -43,6 +43,25 @@ pub struct PhysicsMesh {
     inner: Arc<FrozenMesh>,
 }
 
+#[inline]
+fn convert_scalar<B: Backend>(value: f64, field: &'static str) -> Result<B::Scalar, MhError> {
+    B::Scalar::from_config(value)
+        .ok_or_else(|| MhError::invalid_input(format!("{field}转换失败: value={value}")))
+}
+
+#[inline]
+fn convert_vec2<B: Backend>(
+    x: f64,
+    y: f64,
+    x_field: &'static str,
+    y_field: &'static str,
+) -> Result<B::Vector2D, MhError> {
+    Ok(B::vec2_new(
+        convert_scalar::<B>(x, x_field)?,
+        convert_scalar::<B>(y, y_field)?,
+    ))
+}
+
 impl PhysicsMesh {
     // =========================================================================
     // 构造函数
@@ -153,11 +172,7 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Cell", idx, self.cell_count()));
         }
         let p = self.inner.cell_center[idx];
-        let x = B::Scalar::from_config(p.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
-        let y = B::Scalar::from_config(p.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
-        Ok(B::vec2_new(x, y))
+        convert_vec2::<B>(p.x as f64, p.y as f64, "cell_center.x", "cell_center.y")
     }
 
     /// 获取单元底床高程 [m]
@@ -247,11 +262,7 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let p = self.inner.face_center[idx];
-        let x = B::Scalar::from_config(p.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败：超出目标类型范围", p.x)))?;
-        let y = B::Scalar::from_config(p.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败：超出目标类型范围", p.y)))?;
-        Ok(B::vec2_new(x, y))
+        convert_vec2::<B>(p.x as f64, p.y as f64, "face_center.x", "face_center.y")
     }
 
     /// 获取面法向量 (Backend几何类型 - Layer 3强制使用)
@@ -262,11 +273,7 @@ impl PhysicsMesh {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
         }
         let n = self.inner.face_normal[idx];
-        let x = B::Scalar::from_config(n.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("法向量x={}转换失败：超出目标类型范围", n.x)))?;
-        let y = B::Scalar::from_config(n.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("法向量y={}转换失败：超出目标类型范围", n.y)))?;
-        Ok(B::vec2_new(x, y))
+        convert_vec2::<B>(n.x as f64, n.y as f64, "face_normal.x", "face_normal.y")
     }
 
     /// 获取面长度 [m]
@@ -401,11 +408,7 @@ impl PhysicsMesh {
     #[inline]
     pub fn node_xy_generic<B: Backend>(&self, node: NodeIndex) -> Result<B::Vector2D, MhError> {
         let p = self.inner.node_coords[node.get()];
-        let x = B::Scalar::from_config(p.x as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标x={}转换失败", p.x)))?;
-        let y = B::Scalar::from_config(p.y as f64)
-            .ok_or_else(|| MhError::invalid_input(format!("坐标y={}转换失败", p.y)))?;
-        Ok(B::vec2_new(x, y))
+        convert_vec2::<B>(p.x as f64, p.y as f64, "node_xy.x", "node_xy.y")
     }
 
     /// 获取节点高程 [m]

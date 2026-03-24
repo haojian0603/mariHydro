@@ -307,7 +307,8 @@ pub trait StateAccessExt: StateAccess {
         for &h in slice {
             sum = sum + h;
         }
-        let n = Self::Scalar::from_config(slice.len() as f64).unwrap_or(Self::Scalar::ONE);
+        let n = Self::Scalar::from_config(slice.len() as f64)
+            .unwrap_or_else(|| panic!("StateAccess::mean_depth conversion failed for n_cells={}", slice.len()));
         sum / n
     }
 

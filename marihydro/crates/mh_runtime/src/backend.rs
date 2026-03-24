@@ -80,14 +80,20 @@ pub trait Backend: private::Sealed + Clone + Send + Sync + 'static {
 
     /// 从配置 f64 转换到标量类型
     #[inline]
+    #[track_caller]
     fn scalar_from_f64(&self, v: f64) -> Self::Scalar {
-        match self.try_scalar_from_f64(v) {
-            Ok(val) => val,
-            Err(err) => {
-                eprintln!("[mh_runtime::backend] scalar_from_f64 fallback: {err}");
-                Self::Scalar::ZERO
-            }
-        }
+        self.config_scalar(v, "scalar_from_f64")
+    }
+
+    /// 将配置值转换到标量类型，失败时携带上下文直接终止。
+    #[inline]
+    #[track_caller]
+    fn config_scalar(&self, v: f64, context: &'static str) -> Self::Scalar {
+        self.try_scalar_from_f64(v).unwrap_or_else(|err| {
+            panic!(
+                "[mh_runtime::backend] config scalar conversion failed: context={context}, value={v}, error={err}"
+            )
+        })
     }
 
     /// 尝试从 f64 转换到标量类型（失败返回错误）

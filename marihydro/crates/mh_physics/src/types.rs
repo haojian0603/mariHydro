@@ -37,14 +37,21 @@ use std::ops::{Add, Mul, Sub};
 
 macro_rules! config_scalar {
     ($value:expr, $field:expr) => {{
-        S::from_config($value).unwrap_or_else(|| {
-            panic!(
-                "NumericalParams conversion failed for {} = {}",
-                $field,
-                $value
-            )
-        })
+        expect_config_scalar::<S>($value, $field)
     }};
+}
+
+#[inline]
+fn try_config_scalar<S: RuntimeScalar>(value: f64, field: &'static str) -> Result<S, ConfigError> {
+    S::from_config(value).ok_or(ConfigError::Conversion(field))
+}
+
+#[inline]
+#[track_caller]
+fn expect_config_scalar<S: RuntimeScalar>(value: f64, field: &'static str) -> S {
+    try_config_scalar(value, field).unwrap_or_else(|_| {
+        panic!("NumericalParams conversion failed for {} = {}", field, value)
+    })
 }
 
 // ============================================================
@@ -425,44 +432,25 @@ where
     /// - `Err(ConfigError)`: 转换失败（数值溢出或无法转换）
     pub fn from_f64_params(params_f64: &NumericalParams<f64>) -> Result<Self, ConfigError> {
         Ok(Self {
-            h_min: S::from_config(params_f64.h_min)
-                .ok_or(ConfigError::Conversion("h_min"))?,
-            h_dry: S::from_config(params_f64.h_dry)
-                .ok_or(ConfigError::Conversion("h_dry"))?,
-            h_friction: S::from_config(params_f64.h_friction)
-                .ok_or(ConfigError::Conversion("h_friction"))?,
-            h_wet: S::from_config(params_f64.h_wet)
-                .ok_or(ConfigError::Conversion("h_wet"))?,
-            flux_eps: S::from_config(params_f64.flux_eps)
-                .ok_or(ConfigError::Conversion("flux_eps"))?,
-            entropy_ratio: S::from_config(params_f64.entropy_ratio)
-                .ok_or(ConfigError::Conversion("entropy_ratio"))?,
-            min_wave_speed: S::from_config(params_f64.min_wave_speed)
-                .ok_or(ConfigError::Conversion("min_wave_speed"))?,
-            det_min: S::from_config(params_f64.det_min)
-                .ok_or(ConfigError::Conversion("det_min"))?,
-            limiter_k: S::from_config(params_f64.limiter_k)
-                .ok_or(ConfigError::Conversion("limiter_k"))?,
-            vel_min: S::from_config(params_f64.vel_min)
-                .ok_or(ConfigError::Conversion("vel_min"))?,
-            vel_max: S::from_config(params_f64.vel_max)
-                .ok_or(ConfigError::Conversion("vel_max"))?,
-            nu_min: S::from_config(params_f64.nu_min)
-                .ok_or(ConfigError::Conversion("nu_min"))?,
-            nu_max: S::from_config(params_f64.nu_max)
-                .ok_or(ConfigError::Conversion("nu_max"))?,
-            cfl: S::from_config(params_f64.cfl)
-                .ok_or(ConfigError::Conversion("cfl"))?,
-            dt_min: S::from_config(params_f64.dt_min)
-                .ok_or(ConfigError::Conversion("dt_min"))?,
-            dt_max: S::from_config(params_f64.dt_max)
-                .ok_or(ConfigError::Conversion("dt_max"))?,
-            eta_tolerance: S::from_config(params_f64.eta_tolerance)
-                .ok_or(ConfigError::Conversion("eta_tolerance"))?,
-            flux_tolerance: S::from_config(params_f64.flux_tolerance)
-                .ok_or(ConfigError::Conversion("flux_tolerance"))?,
-            conservation_tolerance: S::from_config(params_f64.conservation_tolerance)
-                .ok_or(ConfigError::Conversion("conservation_tolerance"))?,
+            h_min: try_config_scalar(params_f64.h_min, "h_min")?,
+            h_dry: try_config_scalar(params_f64.h_dry, "h_dry")?,
+            h_friction: try_config_scalar(params_f64.h_friction, "h_friction")?,
+            h_wet: try_config_scalar(params_f64.h_wet, "h_wet")?,
+            flux_eps: try_config_scalar(params_f64.flux_eps, "flux_eps")?,
+            entropy_ratio: try_config_scalar(params_f64.entropy_ratio, "entropy_ratio")?,
+            min_wave_speed: try_config_scalar(params_f64.min_wave_speed, "min_wave_speed")?,
+            det_min: try_config_scalar(params_f64.det_min, "det_min")?,
+            limiter_k: try_config_scalar(params_f64.limiter_k, "limiter_k")?,
+            vel_min: try_config_scalar(params_f64.vel_min, "vel_min")?,
+            vel_max: try_config_scalar(params_f64.vel_max, "vel_max")?,
+            nu_min: try_config_scalar(params_f64.nu_min, "nu_min")?,
+            nu_max: try_config_scalar(params_f64.nu_max, "nu_max")?,
+            cfl: try_config_scalar(params_f64.cfl, "cfl")?,
+            dt_min: try_config_scalar(params_f64.dt_min, "dt_min")?,
+            dt_max: try_config_scalar(params_f64.dt_max, "dt_max")?,
+            eta_tolerance: try_config_scalar(params_f64.eta_tolerance, "eta_tolerance")?,
+            flux_tolerance: try_config_scalar(params_f64.flux_tolerance, "flux_tolerance")?,
+            conservation_tolerance: try_config_scalar(params_f64.conservation_tolerance, "conservation_tolerance")?,
         })
     }
 

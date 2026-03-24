@@ -112,7 +112,7 @@ where
         }
 
         stats.mean_correction = stats.sum_correction
-            / self.backend.scalar_from_f64(self.n_cells as f64);
+            / self.backend.config_scalar(self.n_cells as f64, "back_sub.n_cells");
         stats
     }
 
@@ -159,7 +159,7 @@ where
             n_cells,
             grad_x: backend.alloc(n_cells),
             grad_y: backend.alloc(n_cells),
-            h_min: backend.scalar_from_f64(1e-4),
+            h_min: backend.config_scalar(1e-4, "back_sub.h_min"),
             backend,
         }
     }
@@ -192,15 +192,15 @@ where
 
             // 面通量
             let flux_x = eta_f
-                * self.backend.scalar_from_f64(face.normal.0)
-                * self.backend.scalar_from_f64(face.length);
+                * self.backend.config_scalar(face.normal.0, "back_sub.normal.x")
+                * self.backend.config_scalar(face.length, "back_sub.face.length");
             let flux_y = eta_f
-                * self.backend.scalar_from_f64(face.normal.1)
-                * self.backend.scalar_from_f64(face.length);
+                * self.backend.config_scalar(face.normal.1, "back_sub.normal.y")
+                * self.backend.config_scalar(face.length, "back_sub.face.length");
 
             // 累加到梯度
-            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)));
-            let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor)));
+            let area_o = self.backend.config_scalar(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)), "back_sub.area_owner");
+            let area_n = self.backend.config_scalar(mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor)), "back_sub.area_neighbor");
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;
@@ -217,13 +217,13 @@ where
             let eta_f = eta_prime[owner]; // 零梯度外推
 
             let flux_x = eta_f
-                * self.backend.scalar_from_f64(face.normal.0)
-                * self.backend.scalar_from_f64(face.length);
+                * self.backend.config_scalar(face.normal.0, "back_sub.boundary_normal.x")
+                * self.backend.config_scalar(face.length, "back_sub.boundary_face.length");
             let flux_y = eta_f
-                * self.backend.scalar_from_f64(face.normal.1)
-                * self.backend.scalar_from_f64(face.length);
+                * self.backend.config_scalar(face.normal.1, "back_sub.boundary_normal.y")
+                * self.backend.config_scalar(face.length, "back_sub.boundary_face.length");
 
-            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)));
+            let area_o = self.backend.config_scalar(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)), "back_sub.boundary_area_owner");
 
             self.grad_x[owner] += flux_x / area_o;
             self.grad_y[owner] += flux_y / area_o;

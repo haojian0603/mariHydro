@@ -155,9 +155,9 @@ where
     ) {
         let n = topo.n_cells();
         let coef = g * dt * dt;
-        let h_min = self.backend.scalar_from_f64(self.config.h_min);
-        let dry_factor = self.backend.scalar_from_f64(self.config.dry_factor);
-        let eps = self.backend.scalar_from_f64(1e-14);
+        let h_min = self.backend.config_scalar(self.config.h_min, "assembler.h_min");
+        let dry_factor = self.backend.config_scalar(self.config.dry_factor, "assembler.dry_factor");
+        let eps = self.backend.config_scalar(1e-14, "assembler.eps");
         let zero = B::Scalar::ZERO;
 
         // 清零
@@ -175,25 +175,25 @@ where
             let h_n = state.h[neighbor].max(h_min);
             
             // 调和平均水深（对称）
-            let two = self.backend.scalar_from_f64(2.0);
+            let two = self.backend.config_scalar(2.0, "assembler.two");
             let h_f = two * h_o * h_n / (h_o + h_n);
             
             if h_f < h_min {
                 continue;
             }
 
-            let dist = self.backend.scalar_from_f64(face.dist_o2n);
+            let dist = self.backend.config_scalar(face.dist_o2n, "assembler.face.dist_o2n");
             if dist < eps {
                 continue;
             }
 
             // 对称系数 = g * dt² * H_f * L_f / d_{ON}
-            let a_coef = coef * h_f * self.backend.scalar_from_f64(face.length) / dist;
+            let a_coef = coef * h_f * self.backend.config_scalar(face.length, "assembler.face.length") / dist;
 
             // 如果使用面积加权
             let (a_o, a_n) = if self.config.area_weighted {
-                let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(CellIndex(owner)));
-                let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(CellIndex(neighbor)));
+                let area_o = self.backend.config_scalar(mesh.cell_area_unchecked(CellIndex(owner)), "assembler.area_owner");
+                let area_n = self.backend.config_scalar(mesh.cell_area_unchecked(CellIndex(neighbor)), "assembler.area_neighbor");
                 (a_coef / area_o, a_coef / area_n)
             } else {
                 (a_coef, a_coef)
@@ -209,14 +209,14 @@ where
 
             // 床面坡度贡献到 RHS
             let dz = state.z[neighbor] - state.z[owner];
-            let bed_slope_flux = g * h_f * dz * self.backend.scalar_from_f64(face.length) / dist;
+            let bed_slope_flux = g * h_f * dz * self.backend.config_scalar(face.length, "assembler.face.length") / dist;
             let rhs_o = if self.config.area_weighted {
-                bed_slope_flux / self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)))
+                bed_slope_flux / self.backend.config_scalar(mesh.cell_area_unchecked(mh_runtime::CellIndex(owner)), "assembler.rhs_area_owner")
             } else {
                 bed_slope_flux
             };
             let rhs_n = if self.config.area_weighted {
-                bed_slope_flux / self.backend.scalar_from_f64(mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor)))
+                bed_slope_flux / self.backend.config_scalar(mesh.cell_area_unchecked(mh_runtime::CellIndex(neighbor)), "assembler.rhs_area_neighbor")
             } else {
                 bed_slope_flux
             };
@@ -274,26 +274,26 @@ where
         self.assemble(mesh, topo, state, dt, g);
 
         // 计算预测速度散度加入 RHS
-        let half = self.backend.scalar_from_f64(0.5);
+        let half = self.backend.config_scalar(0.5, "assembler.half");
         for &face_idx in topo.interior_faces() {
             let face = topo.face(face_idx);
             let owner = face.owner;
             let neighbor = face.neighbor.expect("interior face must have neighbor");
 
             let h_f = half * (state.h[owner] + state.h[neighbor]);
-            if h_f < self.backend.scalar_from_f64(self.config.h_min) {
+            if h_f < self.backend.config_scalar(self.config.h_min, "assembler.h_min") {
                 continue;
             }
 
             // 面法向通量
             let hu_f = half * (hu_star[owner] + hu_star[neighbor]);
             let hv_f = half * (hv_star[owner] + hv_star[neighbor]);
-            let flux = (self.backend.scalar_from_f64(face.normal.0) * hu_f
-                + self.backend.scalar_from_f64(face.normal.1) * hv_f)
-                * self.backend.scalar_from_f64(face.length);
+            let flux = (self.backend.config_scalar(face.normal.0, "assembler.normal.x") * hu_f
+                + self.backend.config_scalar(face.normal.1, "assembler.normal.y") * hv_f)
+                * self.backend.config_scalar(face.length, "assembler.face.length");
 
-            let area_o = self.backend.scalar_from_f64(mesh.cell_area_unchecked(CellIndex(owner)));
-            let area_n = self.backend.scalar_from_f64(mesh.cell_area_unchecked(CellIndex(neighbor)));
+            let area_o = self.backend.config_scalar(mesh.cell_area_unchecked(CellIndex(owner)), "assembler.area_owner");
+            let area_n = self.backend.config_scalar(mesh.cell_area_unchecked(CellIndex(neighbor)), "assembler.area_neighbor");
 
             self.rhs[owner] -= flux / area_o / dt;
             self.rhs[neighbor] += flux / area_n / dt;
@@ -406,7 +406,7 @@ where
         let n = topo.n_cells();
         let zero = B::Scalar::ZERO;
         let one = B::Scalar::ONE;
-        let h_min = self.backend.scalar_from_f64(self.config.h_min);
+        let h_min = self.backend.config_scalar(self.config.h_min, "assembler.friction.h_min");
 
         // 清零
         self.matrix_u.clear_values();
@@ -431,7 +431,7 @@ where
             let v = state.hv[i] / h;
 
             let speed = (u * u + v * v).sqrt();
-            let h43 = h.powf(self.backend.scalar_from_f64(4.0 / 3.0));
+            let h43 = h.powf(self.backend.config_scalar(4.0 / 3.0, "assembler.friction.exponent"));
 
             // 摩擦系数
             let cf = manning_n * manning_n * g * speed / h43;

@@ -753,7 +753,7 @@ where
         let owner = self.mesh.face_owner(face_idx);
         let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
-        let length = self.backend.scalar_from_f64(length_f64);
+        let length = self.backend.config_scalar(length_f64, "solver.boundary_pressure.length");
         let h = state.h[owner.get()].max(B::Scalar::ZERO);
         let pressure = half * g * h * h * length;
         let flux_hu = -pressure * normal.x();
@@ -820,7 +820,7 @@ where
         let normal = self.mesh.face_normal_generic::<B>(face_idx)
             .expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
-        let length = self.backend.scalar_from_f64(length_f64);
+        let length = self.backend.config_scalar(length_f64, "solver.boundary_riemann.length");
         let owner = self.mesh.face_owner(face_idx);
 
         if !forcing.eta.is_finite() || !forcing.u().is_finite() || !forcing.v().is_finite() {
@@ -838,10 +838,10 @@ where
         let z = state.z[owner.get()];
         let z_f64 = z.to_f64_lossy();
         let h_right_f64 = (forcing.eta - z_f64).max(0.0);
-        let h_right = self.backend.scalar_from_f64(h_right_f64);
+        let h_right = self.backend.config_scalar(h_right_f64, "solver.boundary_riemann.h_right");
         let vel_right = B::vec2_new(
-            self.backend.scalar_from_f64(forcing.u()),
-            self.backend.scalar_from_f64(forcing.v()),
+            self.backend.config_scalar(forcing.u(), "solver.boundary_riemann.u"),
+            self.backend.config_scalar(forcing.v(), "solver.boundary_riemann.v"),
         );
 
         let flux = self.solve_riemann_with_fallback(h_left, h_right, vel_left, vel_right, normal);
@@ -929,7 +929,7 @@ where
     ) -> (RiemannFlux<B::Scalar>, BedSlopeCorrection<B>, B::Scalar, CellIndex, Option<CellIndex>) {
         let normal = self.mesh.face_normal_generic::<B>(face_idx).expect("边界面法向量转换失败");
         let length_f64 = self.mesh.face_length(face_idx);
-        let length = self.backend.scalar_from_f64(length_f64);
+        let length = self.backend.config_scalar(length_f64, "solver.interior_riemann.length");
         let owner = self.mesh.face_owner(face_idx);
         let neighbor = self.mesh.face_neighbor(face_idx);
 
@@ -1055,7 +1055,7 @@ where
                 state.hv[idx] = B::Scalar::ZERO;
                 continue;
             }
-            let inv_area = self.backend.scalar_from_f64(1.0 / area_f64);
+            let inv_area = self.backend.config_scalar(1.0 / area_f64, "solver.update_state.inv_area");
             state.h[idx] = state.h[idx] + dt * inv_area * (self.workspace.flux_h[idx] + self.workspace.source_h[idx]);
             state.hu[idx] = state.hu[idx] + dt * inv_area * 
                 (self.workspace.flux_hu[idx] + self.workspace.source_hu[idx]);

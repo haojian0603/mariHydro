@@ -51,8 +51,8 @@ impl PcgConfig {
     /// 返回使用 Backend 标量类型的运行时配置
     pub fn to_runtime<B: Backend>(&self, backend: &B) -> PcgRuntimeConfig<B> {
         PcgRuntimeConfig {
-            rtol: backend.scalar_from_f64(self.rtol),
-            atol: backend.scalar_from_f64(self.atol),
+            rtol: backend.config_scalar(self.rtol, "pcg.rtol"),
+            atol: backend.config_scalar(self.atol, "pcg.atol"),
             max_iter: self.max_iter,
             preconditioner: self.preconditioner,
             verbose: self.verbose,
@@ -306,7 +306,7 @@ where
         B::Scalar: RuntimeScalar,
     {
         let tol = self.config.atol.max(Self::BREAKDOWN_TOL_FLOOR);
-        self.backend.scalar_from_f64(tol)
+        self.backend.config_scalar(tol, "pcg.breakdown_tolerance")
     }
 }
 
@@ -332,7 +332,7 @@ fn apply_preconditioner<B: Backend>(
         (PreconditionerType::Jacobi, Some(diag)) => {
             for i in 0..n {
                 let d = diag.diag[i];
-                let eps = backend.scalar_from_f64(1e-30);
+                let eps = backend.config_scalar(1e-30, "pcg.preconditioner_eps");
                 if d.abs() > eps {
                     z[i] = r[i] / d;
                 } else {
@@ -363,8 +363,8 @@ where
         let n = matrix.dimension();
         self.ensure_capacity(n);
         let breakdown_tol = self.breakdown_tolerance();
-        let divergence_factor = self.backend.scalar_from_f64(Self::DIVERGENCE_FACTOR);
-        let eps = self.backend.scalar_from_f64(self.config.atol);
+        let divergence_factor = self.backend.config_scalar(Self::DIVERGENCE_FACTOR, "pcg.divergence_factor");
+        let eps = self.backend.config_scalar(self.config.atol, "pcg.atol");
         let workspace = &mut self.workspace;
 
         let mut x_buf = self.backend.alloc(n);
@@ -419,7 +419,7 @@ where
 
             let r_norm = dot_product(&workspace.r.as_slice()[..n], &workspace.r.as_slice()[..n], n).sqrt();
             let relative_residual = r_norm / b_norm;
-            let rtol = self.backend.scalar_from_f64(self.config.rtol);
+            let rtol = self.backend.config_scalar(self.config.rtol, "pcg.rtol");
 
             if r_norm < eps || relative_residual < rtol {
                 x.copy_from_slice(x_buf.as_slice());
@@ -531,14 +531,14 @@ impl PoissonMatrixBuilder {
             )));
         }
 
-        let g_min = backend.scalar_from_f64(1e-6);
+        let g_min = backend.config_scalar(1e-6, "pcg.g_min");
         if gravity <= g_min {
             return Err(MhError::invalid_input(
                 "重力加速度过小，可能导致数值不稳定".to_string(),
             ));
         }
 
-        let eps = backend.scalar_from_f64(1e-30);
+        let eps = backend.config_scalar(1e-30, "pcg.theta_eps");
         let theta_safe = if theta.abs() > eps { theta } else { B::Scalar::HALF };
 
         Ok(DiagonalMatrix::from_fn(backend.clone(), self.n_cells, |i| {
