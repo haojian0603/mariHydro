@@ -87,7 +87,9 @@ pub struct SmithMcLean<S: RuntimeScalar> {
 impl<S: RuntimeScalar> SmithMcLean<S> {
     /// 创建新实例
     pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
-        Self { gamma0: backend.scalar_from_f64(0.0024) }
+        Self {
+            gamma0: backend.config_scalar(0.0024, "SmithMcLean.gamma0"),
+        }
     }
     
     /// 设置再悬浮系数
@@ -148,7 +150,9 @@ pub struct GarciaParker<S: RuntimeScalar> {
 impl<S: RuntimeScalar> GarciaParker<S> {
     /// 创建新实例
     pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
-        Self { coefficient_a: backend.scalar_from_f64(1.3e-7) }
+        Self {
+            coefficient_a: backend.config_scalar(1.3e-7, "GarciaParker.coefficient_a"),
+        }
     }
 }
 
@@ -168,26 +172,27 @@ impl<S: RuntimeScalar> ErosionFormula<S> for GarciaParker<S> {
         if tau_b <= tau_cr {
             return S::ZERO;
         }
+        let cfg = |v| backend.config_scalar(v, "GarciaParker.erosion_rate");
         
         // 剪切速度
-        let rho_water = backend.scalar_from_f64(physics.rho_water);
+        let rho_water = cfg(physics.rho_water);
         let u_star = (tau_b / rho_water).sqrt();
         
         // 颗粒雷诺数
         let d50 = props.d50;
-        let nu_water = backend.scalar_from_f64(physics.nu_water);
+        let nu_water = cfg(physics.nu_water);
         let re_p = d50 * u_star / nu_water;
         
         // 沉降速度（确保不为零）
-        let ws = props.settling_velocity.max(backend.scalar_from_f64(1e-10));
+        let ws = props.settling_velocity.max(cfg(1e-10));
         
         // Z 参数
-        let z = u_star * re_p.powf(backend.scalar_from_f64(0.6)) / ws;
+        let z = u_star * re_p.powf(cfg(0.6)) / ws;
         
         // 近底浓度
         let z5 = z.powi(5);
         let c_b = self.coefficient_a * z5
-            / (S::ONE + self.coefficient_a / backend.scalar_from_f64(0.3) * z5);
+            / (S::ONE + self.coefficient_a / cfg(0.3) * z5);
         
         // 侵蚀率
         let rho_s = props.rho_s;
@@ -252,7 +257,11 @@ impl<B: Backend, F: ErosionFormula<B::Scalar>> ResuspensionSourceGeneric<B, F> {
         water_depth: B::Scalar,
         physics: &PhysicalConstants,
     ) -> B::Scalar {
-        if water_depth < self.backend.scalar_from_f64(1e-6) {
+        if water_depth
+            < self
+                .backend
+                .config_scalar(1e-6, "ResuspensionSourceGeneric.compute_source.min_depth")
+        {
             return B::Scalar::ZERO;
         }
         

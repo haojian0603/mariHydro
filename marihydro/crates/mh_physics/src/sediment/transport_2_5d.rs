@@ -59,8 +59,8 @@ impl<S: RuntimeScalar> Transport2_5DConfig<S> {
         Self {
             recover_profile: true,
             profile_method: ConcentrationProfileMethod::Exponential,
-            min_depth: backend.scalar_from_f64(1e-6),
-            min_diffusivity: backend.scalar_from_f64(1e-6),
+            min_depth: backend.config_scalar(1e-6, "Transport2_5DConfig.min_depth"),
+            min_diffusivity: backend.config_scalar(1e-6, "Transport2_5DConfig.min_diffusivity"),
         }
     }
 }
@@ -151,7 +151,8 @@ where
         let ws = self.settling_velocity.abs();
         let min_depth = self.config.min_depth;
         let min_diff = self.config.min_diffusivity;
-        let eps = self.backend.scalar_from_f64(1e-12);
+        let cfg = |v| self.backend.config_scalar(v, "Transport2_5D.recover_concentration_profile");
+        let eps = cfg(1e-12);
 
         for cell in 0..n_cells {
             let h_cell = h[cell];
@@ -172,14 +173,14 @@ where
                 continue;
             }
 
-            let dz = h_cell / self.backend.scalar_from_f64(n_layers as f64);
+            let dz = h_cell / cfg(n_layers as f64);
             let kv = self.diffusion_coeff.max(min_diff);
 
             let mut weights = vec![B::Scalar::ZERO; n_layers];
             let mut sum_w = B::Scalar::ZERO;
 
             for k in 0..n_layers {
-                let z = dz * (self.backend.scalar_from_f64(k as f64 + 0.5));
+                let z = dz * cfg(k as f64 + 0.5);
                 let w = match self.config.profile_method {
                     ConcentrationProfileMethod::Uniform => B::Scalar::ONE,
                     ConcentrationProfileMethod::Exponential => {
@@ -196,7 +197,7 @@ where
             }
 
             let scale = if sum_w > eps {
-                c_avg * self.backend.scalar_from_f64(n_layers as f64) / sum_w
+                c_avg * cfg(n_layers as f64) / sum_w
             } else {
                 c_avg
             };
@@ -230,7 +231,7 @@ where
                 continue;
             }
 
-            let dz = h_cell / self.backend.scalar_from_f64(n_layers as f64);
+            let dz = h_cell / self.backend.config_scalar(n_layers as f64, "Transport2_5D.compute_vertical_transport.layer_height");
 
             let mut flux = vec![B::Scalar::ZERO; n_layers + 1];
 
@@ -272,7 +273,7 @@ where
             sum += self.concentration[idx];
         }
 
-        sum / self.backend.scalar_from_f64(n_layers as f64)
+        sum / self.backend.config_scalar(n_layers as f64, "Transport2_5D.depth_averaged_concentration.layer_count")
     }
 
     /// 设置浓度

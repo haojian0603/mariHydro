@@ -79,17 +79,18 @@ impl<B: Backend> ShearStressCalculator<B> {
     pub fn with_backend(backend: B) -> Self {
         let physics = PhysicalConstants::seawater();
         Self {
-            h_min: backend.scalar_from_f64(0.01),
-            rho_water: backend.scalar_from_f64(physics.rho_water),
-            g: backend.scalar_from_f64(physics.g),
+            h_min: backend.config_scalar(0.01, "ShearStressCalculator.with_backend.h_min"),
+            rho_water: backend.config_scalar(physics.rho_water, "ShearStressCalculator.with_backend.rho_water"),
+            g: backend.config_scalar(physics.g, "ShearStressCalculator.with_backend.g"),
             backend,
         }
     }
 
     /// 从物理常数创建
     pub fn from_physics(backend: B, physics: &PhysicalConstants, h_min: B::Scalar) -> Self {
-        let rho_water = backend.scalar_from_f64(physics.rho_water);
-        let g = backend.scalar_from_f64(physics.g);
+        let rho_water =
+            backend.config_scalar(physics.rho_water, "ShearStressCalculator.from_physics.rho_water");
+        let g = backend.config_scalar(physics.g, "ShearStressCalculator.from_physics.g");
         Self {
             h_min,
             rho_water,
@@ -110,10 +111,11 @@ impl<B: Backend> ShearStressCalculator<B> {
             return ShearStress::default();
         }
 
+        let cfg = |v| self.backend.config_scalar(v, "ShearStressCalculator.manning");
         let speed_sq = u * u + v * v;
-        let eps = self.backend.scalar_from_f64(1e-12);
+        let eps = cfg(1e-12);
         let speed = (speed_sq + eps).sqrt();
-        let h_pow = h.powf(self.backend.scalar_from_f64(1.0 / 3.0));
+        let h_pow = h.powf(cfg(1.0 / 3.0));
 
         let magnitude = self.rho_water * self.g * manning_n * manning_n * speed_sq / h_pow;
         let tau_x = magnitude * u / speed;
@@ -137,12 +139,13 @@ impl<B: Backend> ShearStressCalculator<B> {
         v: B::Scalar,
         chezy_c: B::Scalar,
     ) -> ShearStress<B::Scalar> {
-        if h < self.h_min || chezy_c < self.backend.scalar_from_f64(1e-6) {
+        let cfg = |v| self.backend.config_scalar(v, "ShearStressCalculator.chezy");
+        if h < self.h_min || chezy_c < cfg(1e-6) {
             return ShearStress::default();
         }
 
         let speed_sq = u * u + v * v;
-        let eps = self.backend.scalar_from_f64(1e-12);
+        let eps = cfg(1e-12);
         let speed = (speed_sq + eps).sqrt();
         let magnitude = self.rho_water * self.g * speed_sq / (chezy_c * chezy_c);
         let tau_x = magnitude * u / speed;

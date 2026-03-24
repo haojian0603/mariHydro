@@ -113,6 +113,7 @@ impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
         let d50 = d50_mm * 1e-3;  // mm -> m
         let rho_s = 2650.0;       // 典型石英密度
         let s = rho_s / physics.rho_water;
+        let cfg = |v| backend.config_scalar(v, "SedimentPropertiesGeneric.from_d50_mm_with_physics");
         
         // 无量纲粒径
         let d_star = Self::compute_dimensionless_diameter_f64(d50, s, physics);
@@ -127,15 +128,15 @@ impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50: backend.scalar_from_f64(d50),
-            rho_s: backend.scalar_from_f64(rho_s),
-            relative_density: backend.scalar_from_f64(s),
-            settling_velocity: backend.scalar_from_f64(ws),
-            critical_shear_stress: backend.scalar_from_f64(tau_cr),
-            critical_shields: backend.scalar_from_f64(theta_cr),
-            porosity: backend.scalar_from_f64(0.4),
-            angle_of_repose: backend.scalar_from_f64(32.0),
-            dimensionless_diameter: backend.scalar_from_f64(d_star),
+            d50: cfg(d50),
+            rho_s: cfg(rho_s),
+            relative_density: cfg(s),
+            settling_velocity: cfg(ws),
+            critical_shear_stress: cfg(tau_cr),
+            critical_shields: cfg(theta_cr),
+            porosity: cfg(0.4),
+            angle_of_repose: cfg(32.0),
+            dimensionless_diameter: cfg(d_star),
         }
     }
 
@@ -152,21 +153,22 @@ impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
         physics: &PhysicalConstants,
     ) -> Self {
         let s = rho_s / physics.rho_water;
+        let cfg = |v| backend.config_scalar(v, "SedimentPropertiesGeneric.custom_with_physics");
         let d_star = Self::compute_dimensionless_diameter_f64(d50, s, physics);
         let ws = Self::compute_settling_velocity_f64(d50, s, d_star, physics);
         let theta_cr = Self::compute_critical_shields_f64(d_star);
         let tau_cr = theta_cr * (rho_s - physics.rho_water) * physics.g * d50;
         
         Self {
-            d50: backend.scalar_from_f64(d50),
-            rho_s: backend.scalar_from_f64(rho_s),
-            relative_density: backend.scalar_from_f64(s),
-            settling_velocity: backend.scalar_from_f64(ws),
-            critical_shear_stress: backend.scalar_from_f64(tau_cr),
-            critical_shields: backend.scalar_from_f64(theta_cr),
-            porosity: backend.scalar_from_f64(0.4),
-            angle_of_repose: backend.scalar_from_f64(32.0),
-            dimensionless_diameter: backend.scalar_from_f64(d_star),
+            d50: cfg(d50),
+            rho_s: cfg(rho_s),
+            relative_density: cfg(s),
+            settling_velocity: cfg(ws),
+            critical_shear_stress: cfg(tau_cr),
+            critical_shields: cfg(theta_cr),
+            porosity: cfg(0.4),
+            angle_of_repose: cfg(32.0),
+            dimensionless_diameter: cfg(d_star),
         }
     }
 
@@ -213,8 +215,8 @@ impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
         tau_b: S,
         physics: &PhysicalConstants,
     ) -> S {
-        let rho_w = backend.scalar_from_f64(physics.rho_water);
-        let g = backend.scalar_from_f64(physics.g);
+        let rho_w = backend.config_scalar(physics.rho_water, "SedimentPropertiesGeneric.shields_number.rho_water");
+        let g = backend.config_scalar(physics.g, "SedimentPropertiesGeneric.shields_number.g");
         let denom = (self.rho_s - rho_w) * g * self.d50;
         if denom.abs() < S::MIN_POSITIVE {
             return S::ZERO;
@@ -285,7 +287,7 @@ impl<S: RuntimeScalar> SedimentClassGeneric<S> {
                 .map(|&d| SedimentPropertiesGeneric::from_d50_mm(backend, d))
                 .collect(),
             fractions: fractions.iter()
-                .map(|&f| backend.scalar_from_f64(f / sum))
+                .map(|&f| backend.config_scalar(f / sum, "SedimentClassGeneric.graded.fraction"))
                 .collect(),
         }
     }

@@ -51,7 +51,7 @@ impl<S: RuntimeScalar> SettlingVelocity<S> {
         backend: &B,
         value: S,
     ) -> S {
-        let min_d_star = backend.scalar_from_f64(1e-12);
+        let min_d_star = backend.config_scalar(1e-12, "SettlingVelocity.normalized_d_star");
         if value.is_finite() && value > min_d_star {
             value
         } else {
@@ -67,8 +67,8 @@ impl<S: RuntimeScalar> SettlingVelocity<S> {
     ) -> Self {
         // 根据无量纲粒径选择公式
         let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
-        let one = S::from_config(1.0).unwrap_or(S::ONE);
-        let hundred = S::from_config(100.0).unwrap_or(S::MAX);
+        let one = backend.config_scalar(1.0, "SettlingVelocity.auto.one");
+        let hundred = backend.config_scalar(100.0, "SettlingVelocity.auto.hundred");
         
         if d_star < one {
             // 细颗粒使用 Stokes
@@ -151,9 +151,10 @@ impl<S: RuntimeScalar> SettlingFormula<S> for StokesSettling<S> {
     ) -> S {
         let s = props.relative_density;
         let d = props.d50;
-        let nu = backend.scalar_from_f64(physics.nu_water);
-        let g = backend.scalar_from_f64(physics.g);
-        let eighteen = backend.scalar_from_f64(18.0);
+        let cfg = |v| backend.config_scalar(v, "StokesSettling.compute");
+        let nu = cfg(physics.nu_water);
+        let g = cfg(physics.g);
+        let eighteen = cfg(18.0);
         let one = S::ONE;
         
         (s - one) * g * d * d / (eighteen * nu)
@@ -194,27 +195,28 @@ impl<S: RuntimeScalar> SettlingFormula<S> for VanRijnSettling<S> {
         let s = props.relative_density;
         let d = props.d50;
         let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
-        let nu = backend.scalar_from_f64(physics.nu_water);
-        let g = backend.scalar_from_f64(physics.g);
+        let cfg = |v| backend.config_scalar(v, "VanRijnSettling.compute");
+        let nu = cfg(physics.nu_water);
+        let g = cfg(physics.g);
         let one = S::ONE;
-        let d_star_1 = backend.scalar_from_f64(1.0);
-        let d_star_100 = backend.scalar_from_f64(100.0);
+        let d_star_1 = cfg(1.0);
+        let d_star_100 = cfg(100.0);
         
         if d_star < d_star_1 {
             // Stokes 区
-            let eighteen = backend.scalar_from_f64(18.0);
+            let eighteen = cfg(18.0);
             (s - one) * g * d * d / (eighteen * nu)
         } else if d_star <= d_star_100 {
             // 过渡区
-            let eighteen = backend.scalar_from_f64(18.0);
+            let eighteen = cfg(18.0);
             let ws_stokes = (s - one) * g * d * d / (eighteen * nu);
-            let ws_newton = backend.scalar_from_f64(1.1) * ((s - one) * g * d).sqrt();
+            let ws_newton = cfg(1.1) * ((s - one) * g * d).sqrt();
             // 线性插值
-            let f = (d_star - d_star_1) / backend.scalar_from_f64(99.0);
+            let f = (d_star - d_star_1) / cfg(99.0);
             ws_stokes * (one - f) + ws_newton * f
         } else {
             // Newton 区
-            backend.scalar_from_f64(1.1) * ((s - one) * g * d).sqrt()
+            cfg(1.1) * ((s - one) * g * d).sqrt()
         }
     }
 }
@@ -252,17 +254,18 @@ impl<S: RuntimeScalar> SettlingFormula<S> for DietrichSettling<S> {
     ) -> S {
         let s = props.relative_density;
         let d = props.d50;
-        let nu = backend.scalar_from_f64(physics.nu_water);
-        let g = backend.scalar_from_f64(physics.g);
+        let cfg = |v| backend.config_scalar(v, "DietrichSettling.compute");
+        let nu = cfg(physics.nu_water);
+        let g = cfg(physics.g);
         let one = S::ONE;
         
         // 无量纲粒径
         let d_star = SettlingVelocity::normalized_d_star(
             backend,
-            d * ((s - one) * g / (nu * nu)).powf(one / backend.scalar_from_f64(3.0)),
+            d * ((s - one) * g / (nu * nu)).powf(one / cfg(3.0)),
         );
         if !d_star.is_finite() {
-            return backend.scalar_from_f64(0.0);
+            return cfg(0.0);
         }
         
         // Dietrich 公式
@@ -271,23 +274,23 @@ impl<S: RuntimeScalar> SettlingFormula<S> for DietrichSettling<S> {
         let ln_d_star_cubed = ln_d_star_sq * ln_d_star;
         let ln_d_star_fourth = ln_d_star_cubed * ln_d_star;
         
-        let r1 = backend.scalar_from_f64(-3.76715)
-            + backend.scalar_from_f64(1.92944) * ln_d_star
-            - backend.scalar_from_f64(0.09815) * ln_d_star_sq
-            - backend.scalar_from_f64(0.00575) * ln_d_star_cubed
-            + backend.scalar_from_f64(0.00056) * ln_d_star_fourth;
+        let r1 = cfg(-3.76715)
+            + cfg(1.92944) * ln_d_star
+            - cfg(0.09815) * ln_d_star_sq
+            - cfg(0.00575) * ln_d_star_cubed
+            + cfg(0.00056) * ln_d_star_fourth;
         let r2 = (ln_d_star - r1).exp();
         
         // 形状因子修正（球形）
-        let csf = backend.scalar_from_f64(1.0); // 球形 Corey 形状因子
-        let tanh_arg = one - (backend.scalar_from_f64(-0.2) * d_star).exp();
-        let r3 = backend.scalar_from_f64(0.65) - csf / backend.scalar_from_f64(2.83) * tanh_arg.tanh();
+        let csf = cfg(1.0); // 球形 Corey 形状因子
+        let tanh_arg = one - (cfg(-0.2) * d_star).exp();
+        let r3 = cfg(0.65) - csf / cfg(2.83) * tanh_arg.tanh();
         
         // 修正的 W*
-        let w_star = r2 * backend.scalar_from_f64(10.0).powf(-r3);
+        let w_star = r2 * cfg(10.0).powf(-r3);
         
         // 转换为有量纲速度
-        let ws = w_star * ((s - one) * g * nu).powf(one / backend.scalar_from_f64(3.0));
+        let ws = w_star * ((s - one) * g * nu).powf(one / cfg(3.0));
         
         ws
     }

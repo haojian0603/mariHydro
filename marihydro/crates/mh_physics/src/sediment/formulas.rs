@@ -80,7 +80,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
 
         let d = props.d50;
         let s = props.relative_density;
-        let g = backend.scalar_from_f64(physics.g);
+        let g = backend.config_scalar(physics.g, "TransportFormula.compute_dimensional.g");
         let scale = ((s - S::ONE) * g * d * d * d).sqrt();
         phi * scale
     }
@@ -92,8 +92,9 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> S {
-        let rho_w = backend.scalar_from_f64(physics.rho_water);
-        let g = backend.scalar_from_f64(physics.g);
+        let rho_w =
+            backend.config_scalar(physics.rho_water, "TransportFormula.compute_from_shear_stress.rho_water");
+        let g = backend.config_scalar(physics.g, "TransportFormula.compute_from_shear_stress.g");
         let rho_s = props.rho_s;
         let d50 = props.d50;
         let denom = (rho_s - rho_w) * g * d50;
@@ -116,7 +117,7 @@ pub trait TransportFormula<S: Scalar>: Send + Sync {
         physics: &PhysicalConstants,
     ) -> (S, S) {
         let tau_b = (tau_bx * tau_bx + tau_by * tau_by).sqrt();
-        if tau_b < backend.scalar_from_f64(1e-14) {
+        if tau_b < backend.config_scalar(1e-14, "TransportFormula.compute_transport_vector.min_tau_b") {
             return (S::ZERO, S::ZERO);
         }
 
@@ -207,8 +208,8 @@ impl<S: Scalar> MeyerPeterMullerFormula<S> {
     /// 创建默认参数的 MPM 公式
     pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
-            coefficient: backend.scalar_from_f64(8.0),
-            exponent: backend.scalar_from_f64(1.5),
+            coefficient: backend.config_scalar(8.0, "MeyerPeterMullerFormula.coefficient"),
+            exponent: backend.config_scalar(1.5, "MeyerPeterMullerFormula.exponent"),
         }
     }
 
@@ -229,8 +230,8 @@ impl<S: Scalar> MeyerPeterMullerFormula<S> {
     /// A = 4.93, n = 1.6，适用于均匀沙
     pub fn wong_parker<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
-            coefficient: backend.scalar_from_f64(4.93),
-            exponent: backend.scalar_from_f64(1.6),
+            coefficient: backend.config_scalar(4.93, "MeyerPeterMullerFormula.wong_parker.coefficient"),
+            exponent: backend.config_scalar(1.6, "MeyerPeterMullerFormula.wong_parker.exponent"),
         }
     }
 }
@@ -279,7 +280,9 @@ pub struct VanRijn1984Formula<S: Scalar> {
 impl<S: Scalar> VanRijn1984Formula<S> {
     /// 创建默认参数的 Van Rijn 公式
     pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
-        Self { coefficient: backend.scalar_from_f64(0.053) }
+        Self {
+            coefficient: backend.config_scalar(0.053, "VanRijn1984Formula.coefficient"),
+        }
     }
 
     /// 设置系数
@@ -305,9 +308,10 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         theta_cr: S,
         props: &SedimentPropertiesGeneric<S>,
     ) -> S {
+        let cfg = |v| backend.config_scalar(v, "VanRijn1984Formula.compute_phi");
         // 临界 Shields 参数保护：防止除零
         // 使用 1e-10 作为最小值，确保数值稳定性
-        let min_theta_cr = backend.scalar_from_f64(1e-10);
+        let min_theta_cr = cfg(1e-10);
         let theta_cr_safe = if theta_cr > min_theta_cr { theta_cr } else { min_theta_cr };
         
         if theta <= theta_cr_safe {
@@ -318,17 +322,17 @@ impl<S: Scalar> TransportFormula<S> for VanRijn1984Formula<S> {
         let t_param = (theta - theta_cr_safe) / theta_cr_safe;
         
         // 限制 T 参数范围，防止极端值导致溢出
-        let max_t = backend.scalar_from_f64(100.0);
+        let max_t = cfg(100.0);
         let t_param_clamped = if t_param < max_t { t_param } else { max_t };
 
         // 无量纲粒径 D* 保护：防止 D*^(-0.3) 溢出
-        let min_d_star = backend.scalar_from_f64(0.1);
+        let min_d_star = cfg(0.1);
         let d_star_raw = props.dimensionless_diameter;
         let d_star = if d_star_raw > min_d_star { d_star_raw } else { min_d_star };
 
         // Φ = A × T^2.1 × D*^(-0.3)
-        let exp_t = backend.scalar_from_f64(2.1);
-        let exp_d = backend.scalar_from_f64(-0.3);
+        let exp_t = cfg(2.1);
+        let exp_d = cfg(-0.3);
         
         self.coefficient * t_param_clamped.powf(exp_t) * d_star.powf(exp_d)
     }
@@ -386,24 +390,25 @@ impl<S: Scalar> EinsteinFormula<S> {
     /// 使用 8 阶 Chebyshev 多项式近似 Φ*(ψ) 关系，拟合区间 ψ ∈ [0.5, 40]，
     /// 最大相对误差约 1e-4。
     fn chebyshev_approximation<B: Backend<Scalar = S>>(backend: &B, psi: S) -> S {
+        let cfg = |v| backend.config_scalar(v, "EinsteinFormula.chebyshev_approximation");
         // Chebyshev 系数（预计算）
         // 在 ψ ∈ [0.5, 40] 区间拟合
         let coeffs = [
-            backend.scalar_from_f64(0.4893), backend.scalar_from_f64(-0.7812), backend.scalar_from_f64(0.3421), backend.scalar_from_f64(-0.1234),
-            backend.scalar_from_f64(0.0423), backend.scalar_from_f64(-0.0134), backend.scalar_from_f64(0.0038), backend.scalar_from_f64(-0.0009)
+            cfg(0.4893), cfg(-0.7812), cfg(0.3421), cfg(-0.1234),
+            cfg(0.0423), cfg(-0.0134), cfg(0.0038), cfg(-0.0009)
         ];
 
         // 归一化到 [-1, 1]
-        let psi_min = backend.scalar_from_f64(0.5);
-        let psi_max = backend.scalar_from_f64(40.0);
+        let psi_min = cfg(0.5);
+        let psi_max = cfg(40.0);
         let psi_clamped = psi.min(psi_max).max(psi_min);
-        let x = backend.scalar_from_f64(2.0) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
+        let x = cfg(2.0) * (psi_clamped - psi_min) / (psi_max - psi_min) - S::ONE;
 
         // Clenshaw 递归计算
         let mut b1 = S::ZERO;
         let mut b2 = S::ZERO;
         for &c in coeffs.iter().rev() {
-            let b0 = c + backend.scalar_from_f64(2.0) * x * b1 - b2;
+            let b0 = c + cfg(2.0) * x * b1 - b2;
             b2 = b1;
             b1 = b0;
         }
@@ -414,10 +419,11 @@ impl<S: Scalar> EinsteinFormula<S> {
 
     /// 简化近似（原始实现）
     fn simple_approximation<B: Backend<Scalar = S>>(backend: &B, psi: S) -> S {
-        if psi < backend.scalar_from_f64(2.0) {
-            backend.scalar_from_f64(40.0) * (backend.scalar_from_f64(-0.39) * psi).exp()
+        let cfg = |v| backend.config_scalar(v, "EinsteinFormula.simple_approximation");
+        if psi < cfg(2.0) {
+            cfg(40.0) * (cfg(-0.39) * psi).exp()
         } else {
-            backend.scalar_from_f64(0.465) * psi.powf(backend.scalar_from_f64(-2.5))
+            cfg(0.465) * psi.powf(cfg(-2.5))
         }
     }
 }
@@ -438,15 +444,16 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
         _theta_cr: S,
         _props: &SedimentPropertiesGeneric<S>,
     ) -> S {
+        let cfg = |v| backend.config_scalar(v, "EinsteinFormula.compute_phi");
         // 防止除零和溢出
-        if theta < backend.scalar_from_f64(1e-14) {
+        if theta < cfg(1e-14) {
             return S::ZERO;
         }
 
         // Einstein 参数 ψ = 1/θ，带溢出保护
-        let psi = (S::ONE / theta).min(backend.scalar_from_f64(1e6));
+        let psi = (S::ONE / theta).min(cfg(1e6));
 
-        if psi > backend.scalar_from_f64(40.0) {
+        if psi > cfg(40.0) {
             return S::ZERO; // 无输沙
         }
 
@@ -457,7 +464,7 @@ impl<S: Scalar> TransportFormula<S> for EinsteinFormula<S> {
         };
 
         // 结果限制
-        phi.min(backend.scalar_from_f64(1e3)).max(S::ZERO)
+        phi.min(cfg(1e3)).max(S::ZERO)
     }
 
     fn uses_slope_effect(&self) -> bool {
@@ -486,7 +493,7 @@ impl<S: Scalar> EngelundHansenFormula<S> {
     /// 创建 Engelund-Hansen 公式
     pub fn new<B: Backend<Scalar = S>>(backend: &B) -> Self {
         Self {
-            friction_factor: backend.scalar_from_f64(0.05),
+            friction_factor: backend.config_scalar(0.05, "EngelundHansenFormula.friction_factor"),
         }
     }
 
@@ -513,11 +520,12 @@ impl<S: Scalar> TransportFormula<S> for EngelundHansenFormula<S> {
         _theta_cr: S,
         _props: &SedimentPropertiesGeneric<S>,
     ) -> S {
-        if theta < backend.scalar_from_f64(1e-14) {
+        let cfg = |v| backend.config_scalar(v, "EngelundHansenFormula.compute_phi");
+        if theta < cfg(1e-14) {
             return S::ZERO;
         }
-        backend.scalar_from_f64(0.05)
-            * theta.powf(backend.scalar_from_f64(2.5))
+        cfg(0.05)
+            * theta.powf(cfg(2.5))
             / self.friction_factor
     }
 }
