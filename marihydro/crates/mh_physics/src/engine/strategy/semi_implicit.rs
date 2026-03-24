@@ -354,8 +354,12 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
         let hu: &[B::Scalar] = &state.hu;
         let hv: &[B::Scalar] = &state.hv;
 
-        let h_min = B::Scalar::from_f64(self.config.h_min).unwrap_or(B::Scalar::ZERO);
-        let gravity = B::Scalar::from_f64(self.config.gravity).unwrap_or(B::Scalar::ZERO);
+        let h_min = self
+            .backend
+            .config_scalar(self.config.h_min, "SemiImplicitStrategy.compute_stable_dt.h_min");
+        let gravity = self
+            .backend
+            .config_scalar(self.config.gravity, "SemiImplicitStrategy.compute_stable_dt.gravity");
 
         let mut dt_min = B::Scalar::MAX;
 
@@ -369,7 +373,9 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
             let c = (gravity * h[i]).sqrt();
             let speed = (u * u + v * v).sqrt() + c;
 
-            let speed_eps = B::Scalar::from_f64(1e-10).unwrap_or(B::Scalar::EPSILON);
+            let speed_eps = self
+                .backend
+                .config_scalar(1e-10, "SemiImplicitStrategy.compute_stable_dt.speed_eps");
             if speed > speed_eps {
                 let area = mesh.cell_area(i);
                 if !area.is_finite() || area <= B::Scalar::ZERO {
@@ -384,10 +390,14 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
         }
 
         if dt_min == B::Scalar::MAX {
-            dt_min = B::Scalar::from_f64(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE);
+            dt_min = self
+                .backend
+                .config_scalar(1e-6, "SemiImplicitStrategy.compute_stable_dt.dt_min");
         }
 
-        let two = B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO);
+        let two = self
+            .backend
+            .config_scalar(2.0, "SemiImplicitStrategy.compute_stable_dt.two");
         dt_min * two
     }
 
@@ -396,11 +406,16 @@ impl<B: Backend + Clone> TimeIntegrationStrategy<B> for SemiImplicitStrategyGene
     }
 
     fn recommended_cfl(&self) -> B::Scalar {
-        B::Scalar::from_f64(2.0).unwrap_or(B::Scalar::TWO)
+        self.backend
+            .config_scalar(2.0, "SemiImplicitStrategy.recommended_cfl")
     }
 }
 
 #[inline]
 fn eps_zero<S: mh_runtime::RuntimeScalar>() -> S {
-    S::from_f64(1e-14).unwrap_or(S::MIN_POSITIVE)
+    S::from_f64(1e-14).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::engine::strategy::semi_implicit] scalar conversion failed: context=eps_zero, value=1e-14"
+        )
+    })
 }

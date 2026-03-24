@@ -33,6 +33,11 @@
 use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value)
+        .unwrap_or_else(|| panic!("{context}: failed to convert {value} into runtime scalar"))
+}
+
 // ============================================================================
 // 单元干湿状态枚举
 // ============================================================================
@@ -112,9 +117,9 @@ impl<S: RuntimeScalar> Default for WettingDryingConfig<S> {
     /// 默认配置，使用标准物理默认值
     fn default() -> Self {
         Self {
-            h_dry: S::from_f64(1e-4).unwrap_or(S::ZERO),
-            h_wet: S::from_f64(1e-3).unwrap_or(S::ZERO),
-            h_min: S::from_f64(1e-6).unwrap_or(S::ZERO),
+            h_dry: scalar_from_f64_or_panic(1e-4, "WettingDryingConfig::default.h_dry"),
+            h_wet: scalar_from_f64_or_panic(1e-3, "WettingDryingConfig::default.h_wet"),
+            h_min: scalar_from_f64_or_panic(1e-6, "WettingDryingConfig::default.h_min"),
             fix_negative_depth: true,
             momentum_decay: S::ZERO,
         }

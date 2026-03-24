@@ -220,7 +220,11 @@ impl<S: RuntimeScalar> CoriolisConfigGeneric<S> {
     /// 从纬度创建配置（需要 f64 输入）
     pub fn from_latitude(lat_deg: f64) -> Self {
         let f_f64 = 2.0 * EARTH_ANGULAR_VELOCITY * (lat_deg * PI / 180.0).sin();
-        Self::new(S::from_f64(f_f64).unwrap_or(S::ZERO))
+        Self::new(S::from_f64(f_f64).unwrap_or_else(|| {
+            panic!(
+                "CoriolisConfigGeneric::from_latitude: failed to convert {f_f64} into runtime scalar"
+            )
+        }))
     }
 
     /// 禁用精确旋转

@@ -34,6 +34,16 @@ use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+#[inline]
+#[track_caller]
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::engine::parallel] scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 生命周期绑定的可发送裸指针封装
 #[derive(Clone, Copy)]
 struct SendPtr<'a, T: ?Sized> {
@@ -100,7 +110,7 @@ impl<S: RuntimeScalar> Default for ParallelFluxConfig<S> {
     fn default() -> Self {
         Self {
             params: NumericalParams::<S>::default(),
-            g: S::from_f64(9.81).unwrap_or(S::ZERO),
+            g: scalar_from_f64_or_panic::<S>(9.81, "ParallelFluxConfig.default.g"),
             min_parallel_size: 1000,
             strategy: ParallelStrategy::Auto,
             use_hydrostatic_reconstruction: true,
@@ -126,7 +136,7 @@ impl<S: RuntimeScalar> Default for ParallelFluxConfigBuilder<S> {
         Self {
             config: ParallelFluxConfig {
                 params: NumericalParams::default(),
-                g: S::from_f64(9.81).unwrap_or(S::ZERO),
+                g: scalar_from_f64_or_panic::<S>(9.81, "ParallelFluxConfigBuilder.default.g"),
                 min_parallel_size: 1000,
                 strategy: ParallelStrategy::Auto,
                 use_hydrostatic_reconstruction: true,

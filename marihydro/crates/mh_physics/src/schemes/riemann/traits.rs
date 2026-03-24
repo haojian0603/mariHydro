@@ -7,6 +7,11 @@
 use mh_runtime::{Backend, RuntimeScalar};
 use mh_runtime::Vector2D;
 
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value)
+        .unwrap_or_else(|| panic!("{context}: failed to convert {value} into runtime scalar"))
+}
+
 /// 黎曼求解结果通量（泛型化）
 #[derive(Debug, Clone, Copy)]
 pub struct RiemannFlux<S: RuntimeScalar> {
@@ -130,11 +135,14 @@ pub struct SolverParams<S: RuntimeScalar> {
 impl<S: RuntimeScalar> Default for SolverParams<S> {
     fn default() -> Self {
         Self {
-            gravity: S::from_f64(9.81).unwrap_or(S::ZERO),
-            h_dry: S::from_f64(1e-6).unwrap_or(S::ZERO),
-            h_min: S::from_f64(1e-9).unwrap_or(S::ZERO),
-            flux_eps: S::from_f64(1e-14).unwrap_or(S::ZERO),
-            entropy_ratio: S::from_f64(0.1).unwrap_or(S::ZERO),
+            gravity: scalar_from_f64_or_panic(9.81, "SolverParams::default.gravity"),
+            h_dry: scalar_from_f64_or_panic(1e-6, "SolverParams::default.h_dry"),
+            h_min: scalar_from_f64_or_panic(1e-9, "SolverParams::default.h_min"),
+            flux_eps: scalar_from_f64_or_panic(1e-14, "SolverParams::default.flux_eps"),
+            entropy_ratio: scalar_from_f64_or_panic(
+                0.1,
+                "SolverParams::default.entropy_ratio",
+            ),
         }
     }
 }

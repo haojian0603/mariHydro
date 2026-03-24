@@ -10,6 +10,16 @@ use crate::builder::config::Precision;
 use mh_runtime::{RuntimeScalar, Tolerance};
 use std::time::Instant;
 
+#[inline]
+#[track_caller]
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::builder::solver_builder] scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 构建错误
 #[derive(Debug)]
 pub enum BuildError {
@@ -370,7 +380,10 @@ where
 
     /// 执行一个时间步（简化版本）
     fn step_internal(&mut self, dt: S) -> (S, S, S) {
-        let g = S::from_f64(self.config.gravity).unwrap_or(S::ZERO);
+        let g = scalar_from_f64_or_panic::<S>(
+            self.config.gravity,
+            "SimpleSolver.step_internal.gravity",
+        );
         let dt_actual = dt;
 
         // 简化的更新逻辑（实际求解器会使用完整的有限体积法）
@@ -401,7 +414,7 @@ where
     Tolerance<S>: Default,
 {
     fn step_dyn(&mut self, dt: f64) -> DynStepResult {
-        let dt_s = S::from_f64(dt).unwrap_or(S::ZERO);
+        let dt_s = scalar_from_f64_or_panic::<S>(dt, "SimpleSolver.step_dyn.dt");
         let (dt_actual, max_cfl, mass_error) = self.step_internal(dt_s);
         
         // 更新统计

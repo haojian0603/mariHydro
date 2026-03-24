@@ -11,6 +11,11 @@ use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
 
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value)
+        .unwrap_or_else(|| panic!("{context}: failed to convert {value} into runtime scalar"))
+}
+
 /// 对流格式类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,8 +71,14 @@ impl<S: RuntimeScalar> Default for TracerDiffusionConfig<S> {
     fn default() -> Self {
         Self {
             enabled: true,
-            horizontal_diffusivity: S::from_f64(10.0).unwrap_or(S::ZERO),
-            smagorinsky_coefficient: S::from_f64(0.2).unwrap_or(S::ZERO),
+            horizontal_diffusivity: scalar_from_f64_or_panic(
+                10.0,
+                "TracerDiffusionConfig::default.horizontal_diffusivity",
+            ),
+            smagorinsky_coefficient: scalar_from_f64_or_panic(
+                0.2,
+                "TracerDiffusionConfig::default.smagorinsky_coefficient",
+            ),
             use_smagorinsky: false,
         }
     }
@@ -144,7 +155,7 @@ impl<S: RuntimeScalar> Default for TracerTransportConfig<S> {
         Self {
             advection_scheme: TracerAdvectionScheme::default(),
             diffusion: TracerDiffusionConfig::default(),
-            h_min: S::from_f64(1e-6).unwrap_or(S::MIN_POSITIVE),
+            h_min: scalar_from_f64_or_panic(1e-6, "TracerTransportConfig::default.h_min"),
             enable_clipping: true,
             c_min: S::ZERO,
             c_max: None,

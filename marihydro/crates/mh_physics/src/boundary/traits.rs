@@ -34,6 +34,16 @@ use mh_runtime::RuntimeScalar;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[inline]
+#[track_caller]
+fn scalar_from_f64_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_f64(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::boundary::traits] scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 // ============================================================
 // 核心类型
 // ============================================================
@@ -196,8 +206,10 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for Reflective {
         // 反射: u_ghost = u - 2*u_n*n
         CellState {
             h: interior.h,
-            u: interior.u - S::from_f64(2.0).unwrap_or(S::one() + S::one()) * un * normal[0],
-            v: interior.v - S::from_f64(2.0).unwrap_or(S::one() + S::one()) * un * normal[1],
+            u: interior.u
+                - scalar_from_f64_or_panic::<S>(2.0, "Reflective.apply.two") * un * normal[0],
+            v: interior.v
+                - scalar_from_f64_or_panic::<S>(2.0, "Reflective.apply.two") * un * normal[1],
         }
     }
 }
@@ -258,7 +270,7 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for SlipWall {
 
     fn apply(&self, interior: &CellState<S>, normal: [S; 2], _time: S) -> CellState<S> {
         let un = interior.u * normal[0] + interior.v * normal[1];
-        let two = S::from_f64(2.0).unwrap_or(S::one() + S::one());
+        let two = scalar_from_f64_or_panic::<S>(2.0, "SlipWall.apply.two");
         CellState {
             h: interior.h,
             u: interior.u - two * un * normal[0],
@@ -439,8 +451,8 @@ impl<S: RuntimeScalar> BoundaryConditionTrait<S> for TidalLevel<S> {
     fn apply(&self, interior: &CellState<S>, _normal: [S; 2], time: S) -> CellState<S> {
         // η(t) = base + amplitude * sin(2π*t/T + φ)
         // 使用 std::f64::consts::PI，对于 f32 和 f64 转换始终成功
-        let pi = S::from_f64(std::f64::consts::PI).unwrap_or(S::one());
-        let two = S::from_f64(2.0).unwrap_or(S::one() + S::one());
+        let pi = scalar_from_f64_or_panic::<S>(std::f64::consts::PI, "TidalLevel.apply.pi");
+        let two = scalar_from_f64_or_panic::<S>(2.0, "TidalLevel.apply.two");
         let period_safe = if self.period > S::epsilon() { self.period } else { S::one() };
         
         let omega = two * pi / period_safe;
@@ -652,9 +664,9 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
             let v = config.get("v").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             Ok(Arc::new(Inflow::new(
-                S::from_f64(h).unwrap_or(S::one()),
-                S::from_f64(u).unwrap_or(S::zero()),
-                S::from_f64(v).unwrap_or(S::zero()),
+                scalar_from_f64_or_panic::<S>(h, "BoundaryConditionRegistry.inflow.h"),
+                scalar_from_f64_or_panic::<S>(u, "BoundaryConditionRegistry.inflow.u"),
+                scalar_from_f64_or_panic::<S>(v, "BoundaryConditionRegistry.inflow.v"),
             )))
         });
 
@@ -667,8 +679,14 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
             let bed_level = config.get("bed_level").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             Ok(Arc::new(FixedLevelOutflow::new(
-                S::from_f64(level).unwrap_or(S::one()),
-                S::from_f64(bed_level).unwrap_or(S::zero()),
+                scalar_from_f64_or_panic::<S>(
+                    level,
+                    "BoundaryConditionRegistry.fixed_level_outflow.level",
+                ),
+                scalar_from_f64_or_panic::<S>(
+                    bed_level,
+                    "BoundaryConditionRegistry.fixed_level_outflow.bed_level",
+                ),
             )))
         });
 
@@ -691,15 +709,30 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
             let h_dry = config.get("h_dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             let mut tidal = TidalLevel::try_new(
-                S::from_f64(base_level).unwrap_or(S::one()),
-                S::from_f64(amplitude).unwrap_or(S::one()),
-                S::from_f64(period).unwrap_or(S::one()),
-                S::from_f64(bed_level).unwrap_or(S::zero()),
+                scalar_from_f64_or_panic::<S>(
+                    base_level,
+                    "BoundaryConditionRegistry.tidal.base_level",
+                ),
+                scalar_from_f64_or_panic::<S>(
+                    amplitude,
+                    "BoundaryConditionRegistry.tidal.amplitude",
+                ),
+                scalar_from_f64_or_panic::<S>(period, "BoundaryConditionRegistry.tidal.period"),
+                scalar_from_f64_or_panic::<S>(
+                    bed_level,
+                    "BoundaryConditionRegistry.tidal.bed_level",
+                ),
             )?
-            .with_phase(S::from_f64(phase).unwrap_or(S::zero()));
+            .with_phase(scalar_from_f64_or_panic::<S>(
+                phase,
+                "BoundaryConditionRegistry.tidal.phase",
+            ));
 
             if h_dry > 0.0 {
-                tidal = tidal.with_h_dry(S::from_f64(h_dry).unwrap_or(S::epsilon()));
+                tidal = tidal.with_h_dry(scalar_from_f64_or_panic::<S>(
+                    h_dry,
+                    "BoundaryConditionRegistry.tidal.h_dry",
+                ));
             }
 
             Ok(Arc::new(tidal))
@@ -716,13 +749,25 @@ impl<S: RuntimeScalar + 'static> BoundaryRegistry<S> {
             let h_dry = config.get("h_dry").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             let mut flather = FlatherBoundary::try_new(
-                S::from_f64(external_level).unwrap_or(S::one()),
-                S::from_f64(gravity).unwrap_or(S::from_f64(9.81).unwrap_or(S::one())),
-                S::from_f64(bed_level).unwrap_or(S::zero()),
+                scalar_from_f64_or_panic::<S>(
+                    external_level,
+                    "BoundaryConditionRegistry.flather.external_level",
+                ),
+                scalar_from_f64_or_panic::<S>(
+                    gravity,
+                    "BoundaryConditionRegistry.flather.gravity",
+                ),
+                scalar_from_f64_or_panic::<S>(
+                    bed_level,
+                    "BoundaryConditionRegistry.flather.bed_level",
+                ),
             )?;
 
             if h_dry > 0.0 {
-                flather = flather.with_h_dry(S::from_f64(h_dry).unwrap_or(S::epsilon()));
+                flather = flather.with_h_dry(scalar_from_f64_or_panic::<S>(
+                    h_dry,
+                    "BoundaryConditionRegistry.flather.h_dry",
+                ));
             }
 
             Ok(Arc::new(flather))

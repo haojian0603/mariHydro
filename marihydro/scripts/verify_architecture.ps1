@@ -223,7 +223,15 @@ try {
         "crates/mh_physics/src/engine/strategy/mod.rs",
         "crates/mh_physics/src/numerics/linear_algebra/solver.rs",
         "crates/mh_physics/src/schemes/riemann/hllc.rs",
-        "crates/mh_physics/src/vertical/profile.rs"
+        "crates/mh_physics/src/vertical/profile.rs",
+        "crates/mh_physics/src/boundary/traits.rs",
+        "crates/mh_physics/src/builder/solver_builder.rs",
+        "crates/mh_physics/src/engine/parallel.rs",
+        "crates/mh_physics/src/engine/strategy/semi_implicit.rs",
+        "crates/mh_physics/src/schemes/riemann/traits.rs",
+        "crates/mh_physics/src/schemes/wetting_drying/handler.rs",
+        "crates/mh_physics/src/sources/coriolis.rs",
+        "crates/mh_physics/src/tracer/transport.rs"
     )
     $silentConfigFallbacks = @(
         Get-RustFilesFromTargets -Targets $silentConfigFallbackRoots |
@@ -240,6 +248,23 @@ try {
         $errors += "silent from_config(...).unwrap_or(...) fallbacks must be removed from the guarded mh_physics conversion roots"
     } else {
         Write-Host "[OK] no silent from_config(...).unwrap_or(...) fallbacks in guarded mh_physics conversion roots" -ForegroundColor Green
+    }
+
+    $silentScalarFallbacks = @(
+        Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
+            Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive
+    )
+    if ($silentScalarFallbacks) {
+        Write-Host "[FAIL] silent from_f64/from_f32(...).unwrap_or(...) fallbacks exist in mh_physics/src:" -ForegroundColor Red
+        $silentScalarFallbacks | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($silentScalarFallbacks.Count -gt 10) {
+            Write-Host "  ... and $($silentScalarFallbacks.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "silent from_f64/from_f32(...).unwrap_or(...) fallbacks must be removed from mh_physics/src"
+    } else {
+        Write-Host "[OK] no silent from_f64/from_f32(...).unwrap_or(...) fallbacks in mh_physics/src" -ForegroundColor Green
     }
 
     # Phase 6: compile check
