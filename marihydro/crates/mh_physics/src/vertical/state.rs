@@ -135,8 +135,10 @@ impl<B: Backend> LayeredScalar<B> {
             }
         }
 
-        let eps = <B::Scalar as RuntimeScalar>::from_config(1e-10)
-            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
+        let eps = <B::Scalar as RuntimeScalar>::from_config_or_panic(
+            1e-10,
+            "LayeredField3D::average_over_layers.eps",
+        );
         if total_weight > eps {
             for cell in 0..self.n_cells {
                 avg[cell] /= total_weight;

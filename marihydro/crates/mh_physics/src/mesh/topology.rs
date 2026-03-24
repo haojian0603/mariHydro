@@ -44,8 +44,7 @@ pub enum MeshKind {
 
 #[inline]
 fn scalar_from_config_or_panic<S: Scalar>(value: f64, context: &'static str) -> S {
-    S::from_config(value)
-        .unwrap_or_else(|| panic!("failed to convert mesh scalar for {context}: {value}"))
+    S::from_config_or_panic(value, context)
 }
 
 /// 面信息

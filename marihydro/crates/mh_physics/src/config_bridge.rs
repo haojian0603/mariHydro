@@ -137,17 +137,13 @@ where
 
     /// 设置 CFL 数
     pub fn cfl(mut self, cfl: f64) -> Self {
-        if let Some(cfl_s) = S::from_config(cfl) {
-            self.config.params.cfl = cfl_s;
-        }
+        self.config.params.cfl = scalar_from_config_or_panic(cfl, "ConfigBridge::cfl");
         self
     }
 
     /// 设置重力加速度
     pub fn gravity(mut self, g: f64) -> Self {
-        if let Some(g_s) = S::from_config(g) {
-            self.config.gravity = g_s;
-        }
+        self.config.gravity = scalar_from_config_or_panic(g, "ConfigBridge::gravity");
         self
     }
 

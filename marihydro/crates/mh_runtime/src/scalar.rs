@@ -238,9 +238,13 @@ pub trait RuntimeScalar:
         if !self.is_finite() {
             return Self::ZERO;
         }
-        let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
+        let threshold = Self::from_config_or_panic(1e15, "RuntimeScalar::sin_safe.threshold");
         if self.abs() > threshold {
-            let reduced = self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX);
+            let reduced = self
+                % Self::from_config_or_panic(
+                    2.0 * std::f64::consts::PI,
+                    "RuntimeScalar::sin_safe.period",
+                );
             reduced.sin()
         } else {
             self.sin()
@@ -253,9 +257,13 @@ pub trait RuntimeScalar:
         if !self.is_finite() {
             return Self::ONE;
         }
-        let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
+        let threshold = Self::from_config_or_panic(1e15, "RuntimeScalar::cos_safe.threshold");
         if self.abs() > threshold {
-            let reduced = self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX);
+            let reduced = self
+                % Self::from_config_or_panic(
+                    2.0 * std::f64::consts::PI,
+                    "RuntimeScalar::cos_safe.period",
+                );
             reduced.cos()
         } else {
             self.cos()
@@ -268,9 +276,13 @@ pub trait RuntimeScalar:
         if !self.is_finite() {
             return (Self::ZERO, Self::ONE);
         }
-        let threshold = Self::from_f64(1e15).unwrap_or(Self::MAX);
+        let threshold =
+            Self::from_config_or_panic(1e15, "RuntimeScalar::sin_cos_safe.threshold");
         let reduced = if self.abs() > threshold {
-            self % Self::from_f64(2.0 * std::f64::consts::PI).unwrap_or(Self::MAX)
+            self % Self::from_config_or_panic(
+                2.0 * std::f64::consts::PI,
+                "RuntimeScalar::sin_cos_safe.period",
+            )
         } else {
             self
         };
@@ -301,6 +313,15 @@ pub trait RuntimeScalar:
     #[inline]
     fn from_config(value: f64) -> Option<Self> {
         Self::from_f64(value)
+    }
+
+    /// 从配置值转换，失败时直接 panic，并携带调用上下文。
+    #[inline]
+    #[track_caller]
+    fn from_config_or_panic(value: f64, context: &'static str) -> Self {
+        Self::from_config(value).unwrap_or_else(|| {
+            panic!("[mh_runtime::scalar] config scalar conversion failed: context={context}, value={value}")
+        })
     }
 
     /// 批量验证切片中所有值是否有限

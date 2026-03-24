@@ -222,6 +222,7 @@ try {
         "crates/mh_physics/src/engine/strategy/explicit.rs",
         "crates/mh_physics/src/engine/strategy/mod.rs",
         "crates/mh_physics/src/numerics/linear_algebra/solver.rs",
+        "crates/mh_physics/src/numerics/linear_algebra/csr.rs",
         "crates/mh_physics/src/schemes/riemann/hllc.rs",
         "crates/mh_physics/src/vertical/profile.rs",
         "crates/mh_physics/src/boundary/traits.rs",
@@ -250,6 +251,23 @@ try {
         Write-Host "[OK] no silent from_config(...).unwrap_or(...) fallbacks in guarded mh_physics conversion roots" -ForegroundColor Green
     }
 
+    $rawIfLetConfigOptions = @(
+        Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
+            Select-String -Pattern 'if let Some\([^\)]*\) = .*::from_config\(' -CaseSensitive
+    )
+    if ($rawIfLetConfigOptions) {
+        Write-Host "[FAIL] raw if-let from_config option handling exists in mh_physics/src:" -ForegroundColor Red
+        $rawIfLetConfigOptions | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($rawIfLetConfigOptions.Count -gt 10) {
+            Write-Host "  ... and $($rawIfLetConfigOptions.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "raw if-let from_config option handling must be removed from mh_physics/src"
+    } else {
+        Write-Host "[OK] no raw if-let from_config option handling in mh_physics/src" -ForegroundColor Green
+    }
+
     $silentScalarFallbacks = @(
         Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
             Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive
@@ -265,6 +283,23 @@ try {
         $errors += "silent from_f64/from_f32(...).unwrap_or(...) fallbacks must be removed from mh_physics/src"
     } else {
         Write-Host "[OK] no silent from_f64/from_f32(...).unwrap_or(...) fallbacks in mh_physics/src" -ForegroundColor Green
+    }
+
+    $runtimeSilentScalarFallbacks = @(
+        Get-RustFilesFromTargets -Targets @("crates/mh_runtime/src") |
+            Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive
+    )
+    if ($runtimeSilentScalarFallbacks) {
+        Write-Host "[FAIL] silent from_f64/from_f32(...).unwrap_or(...) fallbacks exist in mh_runtime/src:" -ForegroundColor Red
+        $runtimeSilentScalarFallbacks | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($runtimeSilentScalarFallbacks.Count -gt 10) {
+            Write-Host "  ... and $($runtimeSilentScalarFallbacks.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "silent from_f64/from_f32(...).unwrap_or(...) fallbacks must be removed from mh_runtime/src"
+    } else {
+        Write-Host "[OK] no silent from_f64/from_f32(...).unwrap_or(...) fallbacks in mh_runtime/src" -ForegroundColor Green
     }
 
     # Phase 6: compile check
