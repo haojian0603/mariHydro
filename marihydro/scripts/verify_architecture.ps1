@@ -16,6 +16,29 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 
 Push-Location $ProjectRoot
 try {
+    function Get-RustFilesFromTargets {
+        param(
+            [string[]]$Targets
+        )
+
+        $files = @()
+        foreach ($target in $Targets) {
+            $absoluteTarget = Join-Path $ProjectRoot $target
+            if (-not (Test-Path $absoluteTarget)) {
+                continue
+            }
+
+            $item = Get-Item $absoluteTarget
+            if ($item.PSIsContainer) {
+                $files += Get-ChildItem -Path $item.FullName -Recurse -Filter "*.rs" -File
+            } elseif ($item.Extension -eq ".rs") {
+                $files += $item
+            }
+        }
+
+        return $files | Sort-Object FullName -Unique
+    }
+
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host " MariHydro architecture verification" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
@@ -182,21 +205,34 @@ try {
         Write-Host "[OK] no raw scalar_from_f64 call sites in mh_physics/src" -ForegroundColor Green
     }
 
+    $silentConfigFallbackRoots = @(
+        "crates/mh_physics/src/numerics/gradient",
+        "crates/mh_physics/src/numerics/limiter",
+        "crates/mh_physics/src/numerics/reconstruction",
+        "crates/mh_physics/src/mesh",
+        "crates/mh_physics/src/assimilation/bridge.rs",
+        "crates/mh_physics/src/assimilation/conservation.rs",
+        "crates/mh_physics/src/assimilation/mod.rs",
+        "crates/mh_physics/src/boundary/ghost.rs",
+        "crates/mh_physics/src/boundary/manager.rs",
+        "crates/mh_physics/src/boundary/types.rs",
+        "crates/mh_physics/src/engine/time_integrator.rs"
+    )
     $silentConfigFallbacks = @(
-        Get-ChildItem -Path "crates/mh_physics/src/numerics/gradient", "crates/mh_physics/src/numerics/limiter", "crates/mh_physics/src/numerics/reconstruction", "crates/mh_physics/src/mesh" -Recurse -Filter "*.rs" -File |
+        Get-RustFilesFromTargets -Targets $silentConfigFallbackRoots |
             Select-String -Pattern '\bfrom_config\(.*\)\.unwrap_or\(' -CaseSensitive
     )
     if ($silentConfigFallbacks) {
-        Write-Host "[FAIL] silent from_config(...).unwrap_or(...) fallbacks exist in numerics gradient/limiter/reconstruction or mesh:" -ForegroundColor Red
+        Write-Host "[FAIL] silent from_config(...).unwrap_or(...) fallbacks exist in guarded mh_physics roots:" -ForegroundColor Red
         $silentConfigFallbacks | Select-Object -First 10 | ForEach-Object {
             Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
         }
         if ($silentConfigFallbacks.Count -gt 10) {
             Write-Host "  ... and $($silentConfigFallbacks.Count - 10) more" -ForegroundColor Red
         }
-        $errors += "silent from_config(...).unwrap_or(...) fallbacks must be removed from mh_physics/src/numerics/{gradient,limiter,reconstruction} and mh_physics/src/mesh"
+        $errors += "silent from_config(...).unwrap_or(...) fallbacks must be removed from the guarded mh_physics conversion roots"
     } else {
-        Write-Host "[OK] no silent from_config(...).unwrap_or(...) fallbacks in mh_physics/src/numerics/{gradient,limiter,reconstruction} and mh_physics/src/mesh" -ForegroundColor Green
+        Write-Host "[OK] no silent from_config(...).unwrap_or(...) fallbacks in guarded mh_physics conversion roots" -ForegroundColor Green
     }
 
     # Phase 6: compile check

@@ -6,6 +6,16 @@ use bytemuck::Pod;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use num_traits::Float;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::assimilation::conservation] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 守恒量快照（Backend 泛型）
 #[derive(Debug, Clone)]
 pub struct ConservedQuantities<B: Backend> {
@@ -274,9 +284,10 @@ pub fn check_energy_conservation<B: Backend>(
     let change = energy_after - energy_before;
 
     // 避免除零
-    let reference_energy = energy_before
-        .abs()
-        .max(B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::MIN_POSITIVE));
+    let reference_energy = energy_before.abs().max(scalar_from_config_or_panic::<B::Scalar>(
+        1e-10,
+        "check_energy_conservation.reference_energy_floor",
+    ));
     let relative_change = change / reference_energy;
 
     if relative_change.abs() < tolerance {

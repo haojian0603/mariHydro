@@ -8,7 +8,6 @@
 use crate::state::{RhsBuffers, ShallowWaterState};
 use crate::Backend;
 use mh_foundation::{MhError, MhResult};
-use mh_runtime::RuntimeScalar;
 use num_traits::Float;
 
 /// RHS计算器trait（Backend泛型版本）
@@ -161,7 +160,7 @@ where
         dt: B::Scalar,
         rhs_computer: &mut R,
     ) -> MhResult<B::Scalar> {
-        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
+        let half = state.backend().config_scalar(0.5, "SspRk2.advance.half");
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
@@ -257,11 +256,21 @@ where
         dt: B::Scalar,
         rhs_computer: &mut R,
     ) -> MhResult<B::Scalar> {
-        let coef_075 = B::Scalar::from_config(0.75).unwrap_or(B::Scalar::ONE);
-        let coef_025 = B::Scalar::from_config(0.25).unwrap_or(B::Scalar::ZERO);
-        let coef_one_third = B::Scalar::from_config(1.0 / 3.0).unwrap_or(B::Scalar::ZERO);
-        let coef_two_thirds = B::Scalar::from_config(2.0 / 3.0).unwrap_or(B::Scalar::ONE);
-        let coef_050 = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
+        let coef_075 = state
+            .backend()
+            .config_scalar(0.75, "SspRk3.advance.coef_075");
+        let coef_025 = state
+            .backend()
+            .config_scalar(0.25, "SspRk3.advance.coef_025");
+        let coef_one_third = state
+            .backend()
+            .config_scalar(1.0 / 3.0, "SspRk3.advance.coef_one_third");
+        let coef_two_thirds = state
+            .backend()
+            .config_scalar(2.0 / 3.0, "SspRk3.advance.coef_two_thirds");
+        let coef_050 = state
+            .backend()
+            .config_scalar(0.5, "SspRk3.advance.coef_050");
 
         self.rhs_1.reset();
         let max_wave_speed_1 = rhs_computer.compute_rhs(state, time, &mut self.rhs_1)?;
@@ -402,7 +411,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use mh_runtime::{CpuBackend, RuntimeScalar};
 
     struct TestRhs;
 
@@ -414,8 +423,11 @@ mod tests {
             output: &mut RhsBuffers<B>,
         ) -> MhResult<B::Scalar> {
             let n = state.n_cells();
+            let decay = state
+                .backend()
+                .config_scalar(-0.1, "TimeIntegrator.tests.TestRhs.decay");
             for i in 0..n {
-                output.dh_dt[i] = state.h[i] * B::Scalar::from_config(-0.1).unwrap_or(B::Scalar::ZERO);
+                output.dh_dt[i] = state.h[i] * decay;
             }
             Ok(B::Scalar::ONE)
         }

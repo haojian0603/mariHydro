@@ -13,6 +13,16 @@ use crate::types::NumericalParams;
 use mh_runtime::{Backend, RuntimeScalar, Vector2D};
 use num_traits::Float;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::boundary::ghost] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 // ============================================================
 // 动量镜像模式
 // ============================================================
@@ -138,7 +148,10 @@ impl GhostStateCalculator {
     where
         B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h_min = scalar_from_config_or_panic::<B::Scalar>(
+            self.params.h_min,
+            "GhostStateCalculator.compute_wall_ghost.h_min",
+        );
         let h = interior.h.max(h_min);
 
         let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
@@ -183,8 +196,14 @@ impl GhostStateCalculator {
     where
         B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
-        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ONE);
+        let h_min = scalar_from_config_or_panic::<B::Scalar>(
+            self.params.h_min,
+            "GhostStateCalculator.compute_open_sea_ghost.h_min",
+        );
+        let g = scalar_from_config_or_panic::<B::Scalar>(
+            self.params.gravity,
+            "GhostStateCalculator.compute_open_sea_ghost.gravity",
+        );
 
         let h_int = interior.h.max(h_min);
         if h_int <= h_min {
@@ -197,11 +216,20 @@ impl GhostStateCalculator {
         let ny = normal.y();
         let un_int = u_int * nx + v_int * ny;
 
-        let u_ext = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO);
-        let v_ext = B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        let u_ext = scalar_from_config_or_panic::<B::Scalar>(
+            external.velocity.0,
+            "GhostStateCalculator.compute_open_sea_ghost.external_u",
+        );
+        let v_ext = scalar_from_config_or_panic::<B::Scalar>(
+            external.velocity.1,
+            "GhostStateCalculator.compute_open_sea_ghost.external_v",
+        );
         let un_ext = u_ext * nx + v_ext * ny;
 
-        let eta_ext = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO);
+        let eta_ext = scalar_from_config_or_panic::<B::Scalar>(
+            external.eta,
+            "GhostStateCalculator.compute_open_sea_ghost.external_eta",
+        );
         let h_ext = (eta_ext - z_bed).max(h_min);
         let c_int = (g * h_int).sqrt();
         let _c_ext = (g * h_ext).sqrt();
@@ -248,10 +276,23 @@ impl GhostStateCalculator {
     where
         B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
-        let h = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO).max(h_min);
-        let u = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO);
-        let v = B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO);
+        let h_min = scalar_from_config_or_panic::<B::Scalar>(
+            self.params.h_min,
+            "GhostStateCalculator.compute_inflow_ghost.h_min",
+        );
+        let h = scalar_from_config_or_panic::<B::Scalar>(
+            external.eta,
+            "GhostStateCalculator.compute_inflow_ghost.external_eta",
+        )
+        .max(h_min);
+        let u = scalar_from_config_or_panic::<B::Scalar>(
+            external.velocity.0,
+            "GhostStateCalculator.compute_inflow_ghost.external_u",
+        );
+        let v = scalar_from_config_or_panic::<B::Scalar>(
+            external.velocity.1,
+            "GhostStateCalculator.compute_inflow_ghost.external_v",
+        );
         ConservedState { h, hu: h * u, hv: h * v }
     }
 
@@ -265,7 +306,10 @@ impl GhostStateCalculator {
     where
         B::Scalar: RuntimeScalar,
     {
-        let h_min = B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO);
+        let h_min = scalar_from_config_or_panic::<B::Scalar>(
+            self.params.h_min,
+            "GhostStateCalculator.compute_ghost_with_mode.h_min",
+        );
         let h = interior.h.max(h_min);
         let u = if h > B::Scalar::ZERO { interior.hu / h } else { B::Scalar::ZERO };
         let v = if h > B::Scalar::ZERO { interior.hv / h } else { B::Scalar::ZERO };
@@ -279,7 +323,10 @@ impl GhostStateCalculator {
         let (ghost_u, ghost_v) = match mode {
             GhostMomentumMode::FullReflect => (ut_x - nx * un, ut_y - ny * un),
             GhostMomentumMode::FreeSlip => {
-                let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::HALF);
+                let half = scalar_from_config_or_panic::<B::Scalar>(
+                    0.5,
+                    "GhostStateCalculator.compute_ghost_with_mode.half",
+                );
                 (ut_x - nx * (un * half), ut_y - ny * (un * half))
             }
             GhostMomentumMode::NoReflect => (u, v),
@@ -357,7 +404,7 @@ where
 {
     let nx = normal.x();
     let ny = normal.y();
-    let two = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE + B::Scalar::ONE);
+    let two = scalar_from_config_or_panic::<B::Scalar>(2.0, "reflect_velocity.two");
     let un = velocity.0 * nx + velocity.1 * ny;
     (velocity.0 - two * un * nx, velocity.1 - two * un * ny)
 }

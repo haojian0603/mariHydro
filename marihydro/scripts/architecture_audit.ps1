@@ -56,14 +56,7 @@ function Invoke-InformationalScan {
     )
 
     $Findings = @()
-    foreach ($Root in $Roots) {
-        $AbsoluteRoot = Join-Path $ProjectRoot $Root
-        if (-not (Test-Path $AbsoluteRoot)) {
-            continue
-        }
-
-        $Files = Get-ChildItem -Path $AbsoluteRoot -Recurse -Filter "*.rs" -File
-        foreach ($File in $Files) {
+    foreach ($File in (Get-RustFilesFromTargets -Targets $Roots)) {
             $Matches = Select-String -Path $File.FullName -Pattern $Pattern -CaseSensitive:$false
             foreach ($Match in $Matches) {
                 $Findings += [pscustomobject]@{
@@ -72,7 +65,6 @@ function Invoke-InformationalScan {
                     Text = $Match.Line.Trim()
                 }
             }
-        }
     }
 
     if ($Findings.Count -eq 0) {
@@ -97,14 +89,7 @@ function Invoke-FailingScan {
     )
 
     $Findings = @()
-    foreach ($Root in $Roots) {
-        $AbsoluteRoot = Join-Path $ProjectRoot $Root
-        if (-not (Test-Path $AbsoluteRoot)) {
-            continue
-        }
-
-        $Files = Get-ChildItem -Path $AbsoluteRoot -Recurse -Filter "*.rs" -File
-        foreach ($File in $Files) {
+    foreach ($File in (Get-RustFilesFromTargets -Targets $Roots)) {
             $Matches = Select-String -Path $File.FullName -Pattern $Pattern -CaseSensitive
             foreach ($Match in $Matches) {
                 $Findings += [pscustomobject]@{
@@ -113,7 +98,6 @@ function Invoke-FailingScan {
                     Text = $Match.Line.Trim()
                 }
             }
-        }
     }
 
     if ($Findings.Count -eq 0) {
@@ -129,6 +113,29 @@ function Invoke-FailingScan {
         Write-Host "  ... and $($Findings.Count - 10) more" -ForegroundColor Red
     }
     return $false
+}
+
+function Get-RustFilesFromTargets {
+    param(
+        [string[]]$Targets
+    )
+
+    $Files = @()
+    foreach ($Target in $Targets) {
+        $AbsoluteTarget = Join-Path $ProjectRoot $Target
+        if (-not (Test-Path $AbsoluteTarget)) {
+            continue
+        }
+
+        $Item = Get-Item $AbsoluteTarget
+        if ($Item.PSIsContainer) {
+            $Files += Get-ChildItem -Path $Item.FullName -Recurse -Filter "*.rs" -File
+        } elseif ($Item.Extension -eq ".rs") {
+            $Files += $Item
+        }
+    }
+
+    return $Files | Sort-Object FullName -Unique
 }
 
 $Failed = @()
@@ -185,8 +192,8 @@ try {
     if (-not (Invoke-FailingScan -Name "raw scalar_from_f64 call usage" -Roots @("crates/mh_physics/src") -Pattern '(?<!try_)\bscalar_from_f64\(')) {
         $Failed += "raw scalar_from_f64 call usage"
     }
-    if (-not (Invoke-FailingScan -Name "silent from_config unwrap_or usage (gradient/limiter/reconstruction/mesh)" -Roots @("crates/mh_physics/src/numerics/gradient", "crates/mh_physics/src/numerics/limiter", "crates/mh_physics/src/numerics/reconstruction", "crates/mh_physics/src/mesh") -Pattern '\bfrom_config\(.*\)\.unwrap_or\(')) {
-        $Failed += "silent from_config unwrap_or usage (gradient/limiter/reconstruction/mesh)"
+    if (-not (Invoke-FailingScan -Name "silent from_config unwrap_or usage (guarded conversion roots)" -Roots @("crates/mh_physics/src/numerics/gradient", "crates/mh_physics/src/numerics/limiter", "crates/mh_physics/src/numerics/reconstruction", "crates/mh_physics/src/mesh", "crates/mh_physics/src/assimilation/bridge.rs", "crates/mh_physics/src/assimilation/conservation.rs", "crates/mh_physics/src/assimilation/mod.rs", "crates/mh_physics/src/boundary/ghost.rs", "crates/mh_physics/src/boundary/manager.rs", "crates/mh_physics/src/boundary/types.rs", "crates/mh_physics/src/engine/time_integrator.rs") -Pattern '\bfrom_config\(.*\)\.unwrap_or\(')) {
+        $Failed += "silent from_config unwrap_or usage (guarded conversion roots)"
     }
 
     Write-Host ""

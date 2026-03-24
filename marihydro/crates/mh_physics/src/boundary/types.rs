@@ -14,6 +14,16 @@ use mh_runtime::RuntimeScalar;
 
 use crate::types::NumericalParams;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::boundary::types] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 // ============================================================
 // 边界类型枚举
 // ============================================================
@@ -378,9 +388,18 @@ impl<S: RuntimeScalar> GenericExternalForcing<S> {
 
     pub fn from_f64_forcing(forcing: &ExternalForcing) -> Self {
         Self {
-            eta: S::from_config(forcing.eta).unwrap_or(S::ZERO),
-            u: S::from_config(forcing.velocity.0).unwrap_or(S::ZERO),
-            v: S::from_config(forcing.velocity.1).unwrap_or(S::ZERO),
+            eta: scalar_from_config_or_panic::<S>(
+                forcing.eta,
+                "GenericExternalForcing.from_f64_forcing.eta",
+            ),
+            u: scalar_from_config_or_panic::<S>(
+                forcing.velocity.0,
+                "GenericExternalForcing.from_f64_forcing.u",
+            ),
+            v: scalar_from_config_or_panic::<S>(
+                forcing.velocity.1,
+                "GenericExternalForcing.from_f64_forcing.v",
+            ),
             discharge: None,
             tracer: None,
         }

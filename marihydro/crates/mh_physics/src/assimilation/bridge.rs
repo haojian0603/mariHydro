@@ -147,6 +147,9 @@ where
         tolerance: B::Scalar,
     ) {
         let current = self.compute_conserved();
+        let min_total = self
+            .backend
+            .config_scalar(1e-12, "AssimilationBridge.enforce_conservation.min_total");
 
         // 质量修正
         let mass_error = current.total_mass - reference.total_mass;
@@ -154,7 +157,7 @@ where
             let correction = reference.total_mass
                 / current
                     .total_mass
-                    .max(B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE));
+                    .max(min_total);
             let h_slice = self.state.h.try_as_slice_mut().unwrap_or(&mut []);
             for h in h_slice {
                 *h = *h * correction;
@@ -167,7 +170,7 @@ where
             let scale = reference.total_momentum_x
                 / current
                     .total_momentum_x
-                    .max(B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE));
+                    .max(min_total);
             let u_slice = u_buf.try_as_slice_mut().unwrap_or(&mut []);
             for u in u_slice {
                 *u = *u * scale;
@@ -177,7 +180,7 @@ where
             let scale = reference.total_momentum_y
                 / current
                     .total_momentum_y
-                    .max(B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE));
+                    .max(min_total);
             let v_slice = v_buf.try_as_slice_mut().unwrap_or(&mut []);
             for v in v_slice {
                 *v = *v * scale;
@@ -227,7 +230,10 @@ where
         // 质量修正（分布式）
         let mass_error = current.total_mass - reference.total_mass;
         if mass_error.abs() > tolerance {
-            let rho = B::Scalar::from_config(1000.0).unwrap_or(B::Scalar::ZERO);
+            let rho = self.backend.config_scalar(
+                1000.0,
+                "AssimilationBridge.enforce_conservation_constrained.rho_water",
+            );
             let h_correction_per_area = mass_error / (rho * total_active_area);
             let min_h = constraints.min_depth;
 
@@ -242,6 +248,10 @@ where
         }
 
         // 动量修正（按水深加权分布）
+        let min_weight = self.backend.config_scalar(
+            1e-12,
+            "AssimilationBridge.enforce_conservation_constrained.min_weight",
+        );
         let h_snapshot: Vec<B::Scalar> = self.get_depth_mut().copy_to_vec();
         let (hu_buf, hv_buf) = self.get_momentum_mut();
         let hu_slice = hu_buf.try_as_slice_mut().unwrap_or(&mut []);
@@ -256,8 +266,6 @@ where
                 total_weighted = total_weighted + h_snapshot[i] * areas[i];
             }
         }
-
-        let min_weight = B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE);
         let min_depth = constraints.min_depth;
         let max_vel = constraints.max_velocity;
         if total_weighted > min_weight {

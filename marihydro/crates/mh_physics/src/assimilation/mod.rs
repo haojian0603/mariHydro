@@ -14,6 +14,16 @@ use crate::tracer::TracerType;
 use mh_runtime::{Backend, CellIndex, DeviceBuffer, RuntimeScalar};
 use bytemuck::Pod;
 
+#[inline]
+#[track_caller]
+fn scalar_from_config_or_panic<S: RuntimeScalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value).unwrap_or_else(|| {
+        panic!(
+            "[mh_physics::assimilation] config scalar conversion failed: context={context}, value={value}"
+        )
+    })
+}
+
 /// 可同化状态接口（Backend-first）
 ///
 /// 彻底移除 f64 硬编码，所有字段均以 `B::Scalar`/`B::Vector2D` 表示。
@@ -89,8 +99,14 @@ where
         Self {
             dry_cells: Vec::new(),
             boundary_cells: Vec::new(),
-            max_velocity: B::Scalar::from_config(50.0).unwrap_or(B::Scalar::MAX),
-            min_depth: B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::MIN_POSITIVE),
+            max_velocity: scalar_from_config_or_panic::<B::Scalar>(
+                50.0,
+                "ConservationConstraints.default.max_velocity",
+            ),
+            min_depth: scalar_from_config_or_panic::<B::Scalar>(
+                1e-6,
+                "ConservationConstraints.default.min_depth",
+            ),
         }
     }
 }

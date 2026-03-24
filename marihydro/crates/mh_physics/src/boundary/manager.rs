@@ -329,7 +329,9 @@ where
         let mass_flux = B::Scalar::ZERO;
 
         // 动量通量仅有压力项
-        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let g = self
+            .backend
+            .config_scalar(self.params.gravity, "BoundaryManager.compute_wall_flux.gravity");
         let pressure = B::Scalar::HALF * g * h_interior * h_interior;
         let momentum_flux = B::vec2_scale(&normal, pressure);
 
@@ -344,8 +346,13 @@ where
         external: &ExternalForcing,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
-        let h = interior.h.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let g = self
+            .backend
+            .config_scalar(self.params.gravity, "BoundaryManager.compute_flather_flux.gravity");
+        let h_min = self
+            .backend
+            .config_scalar(self.params.h_min, "BoundaryManager.compute_flather_flux.h_min");
+        let h = interior.h.max(h_min);
 
         // 内部速度
         let u = interior.hu / h;
@@ -354,12 +361,19 @@ where
 
         // 法向速度 (dot product)
         let un_int = B::vec2_dot(&vel_int, &normal);
-        let un_ext = B::Scalar::from_config(external.velocity.0).unwrap_or(B::Scalar::ZERO) * normal.x()
-            + B::Scalar::from_config(external.velocity.1).unwrap_or(B::Scalar::ZERO) * normal.y();
+        let external_u = self
+            .backend
+            .config_scalar(external.velocity.0, "BoundaryManager.compute_flather_flux.external_u");
+        let external_v = self
+            .backend
+            .config_scalar(external.velocity.1, "BoundaryManager.compute_flather_flux.external_v");
+        let un_ext = external_u * normal.x() + external_v * normal.y();
 
         // 内部水位
         let eta_int = h + z_interior;
-        let eta_ext = B::Scalar::from_config(external.eta).unwrap_or(B::Scalar::ZERO);
+        let eta_ext = self
+            .backend
+            .config_scalar(external.eta, "BoundaryManager.compute_flather_flux.external_eta");
 
         // Flather 条件: un* = un_ext + (c/h)(eta_int - eta_ext)
         let c = (g * h).sqrt();
@@ -380,8 +394,13 @@ where
         interior: ConservedState<B::Scalar>,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
-        let h = interior.h.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let g = self
+            .backend
+            .config_scalar(self.params.gravity, "BoundaryManager.compute_outflow_flux.gravity");
+        let h_min = self
+            .backend
+            .config_scalar(self.params.h_min, "BoundaryManager.compute_outflow_flux.h_min");
+        let h = interior.h.max(h_min);
         let u = interior.hu / h;
         let v = interior.hv / h;
         let vel = B::vec2_new(u, v);
@@ -404,13 +423,21 @@ where
         face_length: B::Scalar,
         normal: B::Vector2D,
     ) -> (B::Scalar, B::Vector2D) {
-        let g = B::Scalar::from_config(self.params.gravity).unwrap_or(B::Scalar::ZERO);
+        let g = self
+            .backend
+            .config_scalar(self.params.gravity, "BoundaryManager.compute_inflow_flux.gravity");
+        let face_length_eps = self
+            .backend
+            .config_scalar(1e-10, "BoundaryManager.compute_inflow_flux.face_length_eps");
+        let h_min = self
+            .backend
+            .config_scalar(self.params.h_min, "BoundaryManager.compute_inflow_flux.h_min");
         
         // 入流流量（负号因为入流方向与法向相反）
-        let qn = -discharge / face_length.max(B::Scalar::from_config(1e-10).unwrap_or(B::Scalar::ZERO));
+        let qn = -discharge / face_length.max(face_length_eps);
 
         let pressure = B::Scalar::HALF * g * h_interior * h_interior;
-        let u_in = qn / h_interior.max(B::Scalar::from_config(self.params.h_min).unwrap_or(B::Scalar::ZERO));
+        let u_in = qn / h_interior.max(h_min);
         let momentum_dot = qn * u_in + pressure;
         let momentum_flux = B::vec2_scale(&normal, momentum_dot);
 
@@ -491,7 +518,9 @@ where
             // 检查法向量是否单位化
             let mag_sq = B::vec2_dot(&face.normal, &face.normal);
             let one = B::Scalar::ONE;
-            let eps = B::Scalar::from_config(1e-6).unwrap_or(B::Scalar::ZERO);
+            let eps = self
+                .backend
+                .config_scalar(1e-6, "BoundaryManager.validate.normal_eps");
             if (mag_sq - one).abs() > eps {
                 return Err(BoundaryError::InvalidNormal {
                     face_id: face.face_id,
