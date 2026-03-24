@@ -94,7 +94,11 @@ impl ManningFrictionConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for ManningFrictionConfig {
+impl<B> SourceTermGeneric<B> for ManningFrictionConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "ManningFriction" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
@@ -104,15 +108,16 @@ impl SourceTermGeneric<CpuBackend<f64>> for ManningFrictionConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
 
-        if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO || !h.is_finite() {
             return SourceContributionGeneric::default();
         }
 
@@ -121,41 +126,44 @@ impl SourceTermGeneric<CpuBackend<f64>> for ManningFrictionConfig {
         }
 
         let speed_sq = (hu * hu + hv * hv) / (h * h);
-        if speed_sq < 1e-20 {
+        if speed_sq < backend.config_scalar(1e-20, "ManningFrictionConfig.speed_sq_floor") {
             return SourceContributionGeneric::default();
         }
 
-        let cf = self.compute_cf(h, cell);
+        let cf = backend.config_scalar(
+            self.compute_cf(h.to_f64_lossy(), cell),
+            "ManningFrictionConfig.cf",
+        );
         let speed = speed_sq.sqrt();
-        let decay = 1.0 / (1.0 + dt * cf * speed);
-        let factor = (decay - 1.0) / dt;
+        let decay = B::Scalar::ONE / (B::Scalar::ONE + dt * cf * speed);
+        let factor = (decay - B::Scalar::ONE) / dt;
 
         SourceContributionGeneric::momentum(hu * factor, hv * factor)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
         }
 
         let dt = ctx.dt;
-        if !dt.is_finite() || dt <= 0.0 {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO {
             return;
         }
 
         let n_cells = state.h.len();
         if rhs_hu.len() < n_cells {
-            rhs_hu.resize(n_cells, 0.0);
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n_cells {
-            rhs_hv.resize(n_cells, 0.0);
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
         }
 
         for i in 0..n_cells {
@@ -195,7 +203,11 @@ impl ChezyFrictionConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionConfig {
+impl<B> SourceTermGeneric<B> for ChezyFrictionConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "ChezyFriction" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
@@ -205,15 +217,16 @@ impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
 
-        if !dt.is_finite() || dt <= 0.0 || !h.is_finite() {
+        if !dt.is_finite() || dt <= B::Scalar::ZERO || !h.is_finite() {
             return SourceContributionGeneric::default();
         }
 
@@ -222,24 +235,25 @@ impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionConfig {
         }
 
         let speed_sq = (hu * hu + hv * hv) / (h * h);
-        if speed_sq < 1e-20 {
+        if speed_sq < backend.config_scalar(1e-20, "ChezyFrictionConfig.speed_sq_floor") {
             return SourceContributionGeneric::default();
         }
 
         let speed = speed_sq.sqrt();
-        let decay = 1.0 / (1.0 + dt * self.cf * speed);
-        let factor = (decay - 1.0) / dt;
+        let cf = backend.config_scalar(self.cf, "ChezyFrictionConfig.cf");
+        let decay = B::Scalar::ONE / (B::Scalar::ONE + dt * cf * speed);
+        let factor = (decay - B::Scalar::ONE) / dt;
 
         SourceContributionGeneric::momentum(hu * factor, hv * factor)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
@@ -247,10 +261,10 @@ impl SourceTermGeneric<CpuBackend<f64>> for ChezyFrictionConfig {
 
         let n_cells = state.h.len();
         if rhs_hu.len() < n_cells {
-            rhs_hu.resize(n_cells, 0.0);
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n_cells {
-            rhs_hv.resize(n_cells, 0.0);
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
         }
 
         for i in 0..n_cells {
@@ -375,10 +389,10 @@ impl<B: Backend> ManningFrictionConfigGeneric<B> {
     /// 创建均匀 Manning 系数配置
     pub fn uniform(backend: &B, n_cells: usize, manning_n: B::Scalar) -> Self {
         Self {
-            gravity: backend.scalar_from_f64(9.81),
+            gravity: backend.config_scalar(9.81, "ManningFrictionConfigGeneric.gravity"),
             manning_n: backend.alloc_init(n_cells, manning_n),
-            min_depth: backend.scalar_from_f64(1e-6),
-            max_cf: backend.scalar_from_f64(100.0),
+            min_depth: backend.config_scalar(1e-6, "ManningFrictionConfigGeneric.min_depth"),
+            max_cf: backend.config_scalar(100.0, "ManningFrictionConfigGeneric.max_cf"),
         }
     }
 
@@ -387,10 +401,10 @@ impl<B: Backend> ManningFrictionConfigGeneric<B> {
         let mut buffer = backend.alloc_init(manning_n.len(), B::Scalar::ZERO);
         buffer.as_slice_mut().copy_from_slice(manning_n);
         Self {
-            gravity: backend.scalar_from_f64(9.81),
+            gravity: backend.config_scalar(9.81, "ManningFrictionConfigGeneric.gravity"),
             manning_n: buffer,
-            min_depth: backend.scalar_from_f64(1e-6),
-            max_cf: backend.scalar_from_f64(100.0),
+            min_depth: backend.config_scalar(1e-6, "ManningFrictionConfigGeneric.min_depth"),
+            max_cf: backend.config_scalar(100.0, "ManningFrictionConfigGeneric.max_cf"),
         }
     }
 }
@@ -432,88 +446,96 @@ impl<B: Backend> ManningFrictionGeneric<B> {
 }
 
 // =============================================================================
-// 使用宏生成 f32/f64 的 SourceTermGeneric 实现
+// generic main-path implementation
 // =============================================================================
 
-macro_rules! impl_manning_friction_generic {
-    ($scalar:ty) => {
-        impl SourceTermGeneric<CpuBackend<$scalar>> for ManningFrictionGeneric<CpuBackend<$scalar>> {
-            fn name(&self) -> &'static str { "Manning 摩擦" }
+impl<B> SourceTermGeneric<B> for ManningFrictionGeneric<B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
+    fn name(&self) -> &'static str { "ManningFriction" }
 
-            fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
 
-            fn is_enabled(&self) -> bool { self.enabled }
+    fn is_enabled(&self) -> bool { self.enabled }
 
-            fn compute_cell(
-                &self,
-                cell: usize,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) -> SourceContributionGeneric<$scalar> {
-                let h = state.h[cell];
-                let hu = state.hu[cell];
-                let hv = state.hv[cell];
+    fn compute_cell(
+        &self,
+        cell: usize,
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let h = state.h[cell];
+        let hu = state.hu[cell];
+        let hv = state.hv[cell];
 
-                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) {
-                    return SourceContributionGeneric::default();
-                }
-
-                if h < self.config.min_depth {
-                    return SourceContributionGeneric::default();
-                }
-
-                let n = self.config.manning_n.get(cell).copied().unwrap_or(0.03 as $scalar);
-                let g = self.config.gravity;
-
-                let u = hu / h;
-                let v = hv / h;
-                let speed = (u * u + v * v).sqrt();
-                if speed < (1e-10 as $scalar) {
-                    return SourceContributionGeneric::default();
-                }
-
-                // c_f = g n² / h^(1/3)
-                let h_pow = h.powf(1.0 / 3.0);
-                let cf = (g * n * n / h_pow).min(self.config.max_cf);
-
-                // γ = c_f * |u| / h
-                let gamma = cf * speed / h;
-                let decay = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
-                let factor = (decay - (1.0 as $scalar)) / ctx.dt;
-
-                SourceContributionGeneric { 
-                    s_h: 0.0 as $scalar, 
-                    s_hu: hu * factor, 
-                    s_hv: hv * factor 
-                }
-            }
-
-            fn accumulate(
-                &self,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                rhs_h: &mut Vec<$scalar>,
-                rhs_hu: &mut Vec<$scalar>,
-                rhs_hv: &mut Vec<$scalar>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) {
-                if !self.enabled {
-                    return;
-                }
-
-                let n_cells = state.n_cells();
-                for cell in 0..n_cells {
-                    let contrib = self.compute_cell(cell, state, ctx);
-                    rhs_h[cell] += contrib.s_h;
-                    rhs_hu[cell] += contrib.s_hu;
-                    rhs_hv[cell] += contrib.s_hv;
-                }
-            }
+        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= B::Scalar::ZERO {
+            return SourceContributionGeneric::default();
         }
-    };
-}
 
-impl_manning_friction_generic!(f32);
-impl_manning_friction_generic!(f64);
+        if h < self.config.min_depth {
+            return SourceContributionGeneric::default();
+        }
+
+        let n = self
+            .config
+            .manning_n
+            .get(cell)
+            .copied()
+            .unwrap_or_else(|| state.backend().config_scalar(0.03, "ManningFrictionGeneric.default_n"));
+        let g = self.config.gravity;
+
+        let u = hu / h;
+        let v = hv / h;
+        let speed = (u * u + v * v).sqrt();
+        if speed < state.backend().config_scalar(1e-10, "ManningFrictionGeneric.min_speed") {
+            return SourceContributionGeneric::default();
+        }
+
+        let h_pow = h.powf(state.backend().config_scalar(1.0 / 3.0, "ManningFrictionGeneric.one_third"));
+        let cf = (g * n * n / h_pow).min(self.config.max_cf);
+        let gamma = cf * speed / h;
+        let decay = B::Scalar::ONE / (B::Scalar::ONE + ctx.dt * gamma);
+        let factor = (decay - B::Scalar::ONE) / ctx.dt;
+
+        SourceContributionGeneric {
+            s_h: B::Scalar::ZERO,
+            s_hu: hu * factor,
+            s_hv: hv * factor,
+        }
+    }
+
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n_cells = state.n_cells();
+        if rhs_h.len() < n_cells {
+            rhs_h.resize(n_cells, B::Scalar::ZERO);
+        }
+        if rhs_hu.len() < n_cells {
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
+        }
+        if rhs_hv.len() < n_cells {
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
+        }
+        for cell in 0..n_cells {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
+    }
+}
 
 /// Chezy 摩擦配置（泛型）
 #[derive(Debug, Clone)]
@@ -530,9 +552,9 @@ impl<B: Backend> ChezyFrictionConfigGeneric<B> {
     /// 创建均匀 Chezy 系数配置
     pub fn uniform(backend: &B, n_cells: usize, chezy_c: B::Scalar) -> Self {
         Self {
-            gravity: backend.scalar_from_f64(9.81),
+            gravity: backend.config_scalar(9.81, "ChezyFrictionConfigGeneric.gravity"),
             chezy_c: backend.alloc_init(n_cells, chezy_c),
-            min_depth: backend.scalar_from_f64(1e-6),
+            min_depth: backend.config_scalar(1e-6, "ChezyFrictionConfigGeneric.min_depth"),
         }
     }
 }
@@ -557,84 +579,95 @@ impl<B: Backend> ChezyFrictionGeneric<B> {
 }
 
 // =============================================================================
-// 使用宏生成 Chezy f32/f64 的 SourceTermGeneric 实现
+// generic main-path implementation
 // =============================================================================
 
-macro_rules! impl_chezy_friction_generic {
-    ($scalar:ty) => {
-        impl SourceTermGeneric<CpuBackend<$scalar>> for ChezyFrictionGeneric<CpuBackend<$scalar>> {
-            fn name(&self) -> &'static str { "Chezy 摩擦" }
+impl<B> SourceTermGeneric<B> for ChezyFrictionGeneric<B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
+    fn name(&self) -> &'static str { "ChezyFriction" }
 
-            fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::LocallyImplicit }
 
-            fn is_enabled(&self) -> bool { self.enabled }
+    fn is_enabled(&self) -> bool { self.enabled }
 
-            fn compute_cell(
-                &self,
-                cell: usize,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) -> SourceContributionGeneric<$scalar> {
-                let h = state.h[cell];
-                let hu = state.hu[cell];
-                let hv = state.hv[cell];
+    fn compute_cell(
+        &self,
+        cell: usize,
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let h = state.h[cell];
+        let hu = state.hu[cell];
+        let hv = state.hv[cell];
 
-                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) {
-                    return SourceContributionGeneric::default();
-                }
-
-                if h < self.config.min_depth {
-                    return SourceContributionGeneric::default();
-                }
-
-                let c = self.config.chezy_c.get(cell).copied().unwrap_or(50.0 as $scalar);
-                let g = self.config.gravity;
-
-                let u = hu / h;
-                let v = hv / h;
-                let speed = (u * u + v * v).sqrt();
-                if speed < (1e-10 as $scalar) {
-                    return SourceContributionGeneric::default();
-                }
-
-                let cf = g / (c * c);
-                let gamma = cf * speed / h;
-                let decay = (1.0 as $scalar) / ((1.0 as $scalar) + ctx.dt * gamma);
-                let factor = (decay - (1.0 as $scalar)) / ctx.dt;
-
-                SourceContributionGeneric { 
-                    s_h: 0.0 as $scalar, 
-                    s_hu: hu * factor, 
-                    s_hv: hv * factor 
-                }
-            }
-
-            fn accumulate(
-                &self,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                rhs_h: &mut Vec<$scalar>,
-                rhs_hu: &mut Vec<$scalar>,
-                rhs_hv: &mut Vec<$scalar>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) {
-                if !self.enabled {
-                    return;
-                }
-
-                let n_cells = state.n_cells();
-                for cell in 0..n_cells {
-                    let contrib = self.compute_cell(cell, state, ctx);
-                    rhs_h[cell] += contrib.s_h;
-                    rhs_hu[cell] += contrib.s_hu;
-                    rhs_hv[cell] += contrib.s_hv;
-                }
-            }
+        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= B::Scalar::ZERO {
+            return SourceContributionGeneric::default();
         }
-    };
-}
 
-impl_chezy_friction_generic!(f32);
-impl_chezy_friction_generic!(f64);
+        if h < self.config.min_depth {
+            return SourceContributionGeneric::default();
+        }
+
+        let c = self
+            .config
+            .chezy_c
+            .get(cell)
+            .copied()
+            .unwrap_or_else(|| state.backend().config_scalar(50.0, "ChezyFrictionGeneric.default_c"));
+        let g = self.config.gravity;
+
+        let u = hu / h;
+        let v = hv / h;
+        let speed = (u * u + v * v).sqrt();
+        if speed < state.backend().config_scalar(1e-10, "ChezyFrictionGeneric.min_speed") {
+            return SourceContributionGeneric::default();
+        }
+
+        let cf = g / (c * c);
+        let gamma = cf * speed / h;
+        let decay = B::Scalar::ONE / (B::Scalar::ONE + ctx.dt * gamma);
+        let factor = (decay - B::Scalar::ONE) / ctx.dt;
+
+        SourceContributionGeneric {
+            s_h: B::Scalar::ZERO,
+            s_hu: hu * factor,
+            s_hv: hv * factor,
+        }
+    }
+
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) {
+        if !self.enabled {
+            return;
+        }
+
+        let n_cells = state.n_cells();
+        if rhs_h.len() < n_cells {
+            rhs_h.resize(n_cells, B::Scalar::ZERO);
+        }
+        if rhs_hu.len() < n_cells {
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
+        }
+        if rhs_hv.len() < n_cells {
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
+        }
+        for cell in 0..n_cells {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_h[cell] += contrib.s_h;
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -789,9 +822,18 @@ mod tests {
         let manning = ManningFrictionConfig::new(9.81, 10, 0.03);
         let chezy = ChezyFrictionConfig::new(9.81, 50.0);
 
-        assert_eq!(manning.name(), "ManningFriction");
-        assert_eq!(chezy.name(), "ChezyFriction");
-        assert_eq!(manning.stiffness(), SourceStiffness::LocallyImplicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&manning),
+            "ManningFriction"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&chezy),
+            "ChezyFriction"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&manning),
+            SourceStiffness::LocallyImplicit
+        );
     }
 
     #[test]

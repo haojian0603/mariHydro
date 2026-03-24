@@ -26,7 +26,7 @@ use crate::sources::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 
 /// 风场强迫适配器
 ///
@@ -104,7 +104,11 @@ impl WindForcingAdapter {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapter {
+impl<B> SourceTermGeneric<B> for WindForcingAdapter
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str {
         "WindForcing"
     }
@@ -120,9 +124,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapter {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         if !self.enabled {
             return SourceContributionGeneric::default();
         }
@@ -134,16 +138,20 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapter {
 
         let (wind_u, wind_v) = self.cached_wind;
         let (tau_x, tau_y) = self.compute_stress(wind_u, wind_v);
-        SourceContributionGeneric::momentum(tau_x / self.rho_water, tau_y / self.rho_water)
+        let backend = state.backend();
+        SourceContributionGeneric::momentum(
+            backend.config_scalar(tau_x / self.rho_water, "WindForcingAdapter.tau_x"),
+            backend.config_scalar(tau_y / self.rho_water, "WindForcingAdapter.tau_y"),
+        )
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
@@ -151,19 +159,22 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapter {
 
         let n = state.n_cells();
         if rhs_hu.len() < n {
-            rhs_hu.resize(n, 0.0);
+            rhs_hu.resize(n, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n {
-            rhs_hv.resize(n, 0.0);
+            rhs_hv.resize(n, B::Scalar::ZERO);
         }
 
         let (wind_u, wind_v) = self.cached_wind;
         let (tau_x, tau_y) = self.compute_stress(wind_u, wind_v);
+        let backend = state.backend();
+        let tau_x = backend.config_scalar(tau_x / self.rho_water, "WindForcingAdapter.tau_x");
+        let tau_y = backend.config_scalar(tau_y / self.rho_water, "WindForcingAdapter.tau_y");
         for cell in 0..n {
             let h = state.h[cell];
             if !ctx.is_dry(h) {
-                rhs_hu[cell] += tau_x / self.rho_water;
-                rhs_hv[cell] += tau_y / self.rho_water;
+                rhs_hu[cell] += tau_x;
+                rhs_hv[cell] += tau_y;
             }
         }
     }
@@ -175,27 +186,31 @@ pub struct WindForcingAdapterGeneric<S> {
     enabled: bool,
 }
 
-impl WindForcingAdapterGeneric<f64> {
+impl<S: RuntimeScalar> WindForcingAdapterGeneric<S> {
     /// 创建并设置风应力
-    pub fn new(tau_x: f64, tau_y: f64) -> Self {
+    pub fn new(tau_x: S, tau_y: S) -> Self {
         Self {
             cached_stress: (tau_x, tau_y),
             enabled: true,
         }
     }
 
-    /// 更新风应力（从外部计算后设置）
-    pub fn set_stress(&mut self, tau_x: f64, tau_y: f64) {
+    /// update cached stress from external forcing
+    pub fn set_stress(&mut self, tau_x: S, tau_y: S) {
         self.cached_stress = (tau_x, tau_y);
     }
 
-    /// 启用/禁用风场强迫
+    /// toggle forcing state
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
+impl<B> SourceTermGeneric<B> for WindForcingAdapterGeneric<B::Scalar>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str {
         "WindForcing"
     }
@@ -211,9 +226,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         if !self.enabled {
             return SourceContributionGeneric::default();
         }
@@ -228,14 +243,22 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
+        }
+
+        let n = state.n_cells();
+        if rhs_hu.len() < n {
+            rhs_hu.resize(n, B::Scalar::ZERO);
+        }
+        if rhs_hv.len() < n {
+            rhs_hv.resize(n, B::Scalar::ZERO);
         }
 
         let (tau_x, tau_y) = self.cached_stress;
@@ -253,12 +276,16 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindForcingAdapterGeneric<f64> {
 mod tests {
     use super::*;
     use crate::sources::atmosphere::DragCoefficientMethod;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_wind_forcing_adapter() {
         let adapter = WindForcingAdapter::constant(10.0, 180.0, DragCoefficientMethod::Wu1982);
         
-        assert_eq!(adapter.name(), "WindForcing");
-        assert!(adapter.is_enabled());
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&adapter),
+            "WindForcing"
+        );
+        assert!(SourceTermGeneric::<CpuBackend<f64>>::is_enabled(&adapter));
     }
 }

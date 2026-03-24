@@ -27,7 +27,7 @@ use super::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use std::sync::{Arc, RwLock};
 
 // 注意：CpuBackend 已在上方导入
@@ -227,7 +227,11 @@ impl WindStressConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WindStressConfig {
+impl<B> SourceTermGeneric<B> for WindStressConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str {
         "WindStress"
     }
@@ -243,11 +247,13 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindStressConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
-        if h < self.h_min || ctx.is_dry(h) {
+        let h_min = backend.config_scalar(self.h_min, "WindStressConfig.h_min");
+        if h < h_min || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
         if !self.rho_water.is_finite() || self.rho_water <= 0.0 {
@@ -265,36 +271,41 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindStressConfig {
         }
 
         let cd = self.drag_method.compute(wind_speed);
-        let factor = self.density_ratio() * cd * wind_speed;
+        let factor = backend.config_scalar(
+            self.density_ratio() * cd * wind_speed,
+            "WindStressConfig.factor",
+        );
+        let wu = backend.config_scalar(wu, "WindStressConfig.wind_u");
+        let wv = backend.config_scalar(wv, "WindStressConfig.wind_v");
 
         SourceContributionGeneric::momentum(factor * wu, factor * wv)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !SourceTermGeneric::is_enabled(self) {
+        if !SourceTermGeneric::<B>::is_enabled(self) {
             return;
         }
 
         let n_cells = state.n_cells();
         if rhs_h.len() < n_cells {
-            rhs_h.resize(n_cells, 0.0);
+            rhs_h.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hu.len() < n_cells {
-            rhs_hu.resize(n_cells, 0.0);
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n_cells {
-            rhs_hv.resize(n_cells, 0.0);
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
         }
 
         for cell in 0..n_cells {
-            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            let contrib = SourceTermGeneric::<B>::compute_cell(self, cell, state, ctx);
             rhs_h[cell] += contrib.s_h;
             rhs_hu[cell] += contrib.s_hu;
             rhs_hv[cell] += contrib.s_hv;
@@ -318,7 +329,11 @@ impl WindStressRuntimeSource {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for WindStressRuntimeSource {
+impl<B> SourceTermGeneric<B> for WindStressRuntimeSource
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str {
         "WindStress"
     }
@@ -334,9 +349,9 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindStressRuntimeSource {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
         let guard = match self.config.read() {
             Ok(cfg) => cfg,
             Err(_) => return SourceContributionGeneric::default(),
@@ -346,11 +361,11 @@ impl SourceTermGeneric<CpuBackend<f64>> for WindStressRuntimeSource {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         let guard = match self.config.read() {
             Ok(cfg) => cfg,
@@ -407,7 +422,11 @@ impl PressureGradientConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for PressureGradientConfig {
+impl<B> SourceTermGeneric<B> for PressureGradientConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str {
         "PressureGradient"
     }
@@ -423,12 +442,14 @@ impl SourceTermGeneric<CpuBackend<f64>> for PressureGradientConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
+        let h_min = backend.config_scalar(self.h_min, "PressureGradientConfig.h_min");
 
-        if h < self.h_min || ctx.is_dry(h) {
+        if h < h_min || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
         if !self.rho_water.is_finite() || self.rho_water <= 0.0 {
@@ -441,35 +462,41 @@ impl SourceTermGeneric<CpuBackend<f64>> for PressureGradientConfig {
             return SourceContributionGeneric::default();
         }
 
-        let factor = -h / self.rho_water;
+        let rho_water = backend.config_scalar(
+            self.rho_water,
+            "PressureGradientConfig.rho_water",
+        );
+        let dpdx = backend.config_scalar(dpdx, "PressureGradientConfig.dpdx");
+        let dpdy = backend.config_scalar(dpdy, "PressureGradientConfig.dpdy");
+        let factor = -h / rho_water;
         SourceContributionGeneric::momentum(factor * dpdx, factor * dpdy)
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !SourceTermGeneric::is_enabled(self) {
+        if !SourceTermGeneric::<B>::is_enabled(self) {
             return;
         }
 
         let n_cells = state.n_cells();
         if rhs_h.len() < n_cells {
-            rhs_h.resize(n_cells, 0.0);
+            rhs_h.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hu.len() < n_cells {
-            rhs_hu.resize(n_cells, 0.0);
+            rhs_hu.resize(n_cells, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n_cells {
-            rhs_hv.resize(n_cells, 0.0);
+            rhs_hv.resize(n_cells, B::Scalar::ZERO);
         }
 
         for cell in 0..n_cells {
-            let contrib = SourceTermGeneric::compute_cell(self, cell, state, ctx);
+            let contrib = SourceTermGeneric::<B>::compute_cell(self, cell, state, ctx);
             rhs_h[cell] += contrib.s_h;
             rhs_hu[cell] += contrib.s_hu;
             rhs_hv[cell] += contrib.s_hv;
@@ -646,14 +673,26 @@ mod tests {
     #[test]
     fn test_source_term_trait_wind() {
         let config = WindStressConfig::default_config(10);
-        assert_eq!(SourceTermGeneric::name(&config), "WindStress");
-        assert_eq!(SourceTermGeneric::stiffness(&config), SourceStiffness::Explicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
+            "WindStress"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&config),
+            SourceStiffness::Explicit
+        );
     }
 
     #[test]
     fn test_source_term_trait_pressure() {
         let config = PressureGradientConfig::default_config(10);
-        assert_eq!(SourceTermGeneric::name(&config), "PressureGradient");
-        assert_eq!(SourceTermGeneric::stiffness(&config), SourceStiffness::Explicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
+            "PressureGradient"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&config),
+            SourceStiffness::Explicit
+        );
     }
 }

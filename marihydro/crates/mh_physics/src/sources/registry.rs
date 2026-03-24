@@ -102,13 +102,6 @@ impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistry<B, S> {
         self.sources.iter().filter(|s| s.stiffness() == stiffness).collect()
     }
 
-    fn is_enabled(&self, name: &str) -> bool {
-        self.name_index
-            .get(name)
-            .and_then(|&idx| self.enabled.get(idx).copied())
-            .unwrap_or(false)
-    }
-
     fn ensure_scratch(&self, n_cells: usize) -> std::cell::RefMut<'_, Vec<SourceContributionGeneric<B::Scalar>>> {
         let mut scratch = self.contributions.borrow_mut();
         if scratch.len() < n_cells {
@@ -124,11 +117,14 @@ impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistry<B, S> {
         ctx: &SourceContextGeneric<B::Scalar>,
         stiffness_filter: Option<SourceStiffness>,
     ) {
+        if self.sources.is_empty() {
+            return;
+        }
         let n = state.n_cells().min(workspace.n_cells());
         let mut scratch = self.ensure_scratch(n);
 
-        for source in &self.sources {
-            if !self.is_enabled(source.name()) {
+        for (idx, source) in self.sources.iter().enumerate() {
+            if !self.enabled.get(idx).copied().unwrap_or(false) {
                 continue;
             }
             if let Some(filter) = stiffness_filter {

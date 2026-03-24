@@ -27,7 +27,7 @@ use super::traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric,
 };
 use crate::state::ShallowWaterState;
-use mh_runtime::CpuBackend;
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 
 // 注意：CpuBackend 已在上方导入
 
@@ -194,7 +194,11 @@ impl InflowConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
+impl<B> SourceTermGeneric<B> for InflowConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "Inflow" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
@@ -204,9 +208,10 @@ impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        _ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let inflow = self.inflow_type.get(cell).copied().unwrap_or(InflowType::None);
 
         match inflow {
@@ -220,10 +225,22 @@ impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
                 }
 
                 let s_h = q / area;
-                let h = state.h[cell].max(self.h_min);
-                let v_in = q / (area * h).max(1e-10);
-                let s_hu = s_h * v_in * direction.cos();
-                let s_hv = s_h * v_in * direction.sin();
+                let h_min = backend.config_scalar(self.h_min, "InflowConfig.h_min");
+                let h = if state.h[cell] > h_min {
+                    state.h[cell]
+                } else {
+                    h_min
+                };
+                let v_in = q / (area * h.to_f64_lossy()).max(1e-10);
+                let s_h = backend.config_scalar(s_h, "InflowConfig.mass_source");
+                let s_hu = backend.config_scalar(
+                    s_h.to_f64_lossy() * v_in * direction.cos(),
+                    "InflowConfig.momentum_x",
+                );
+                let s_hv = backend.config_scalar(
+                    s_h.to_f64_lossy() * v_in * direction.sin(),
+                    "InflowConfig.momentum_y",
+                );
                 SourceContributionGeneric::new(s_h, s_hu, s_hv)
             }
             InflowType::ConstantVelocity { velocity, direction } => {
@@ -231,14 +248,25 @@ impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
                     return SourceContributionGeneric::default();
                 }
                 let h = state.h[cell];
-                if h < self.h_min {
+                if h < backend.config_scalar(self.h_min, "InflowConfig.h_min") {
                     return SourceContributionGeneric::default();
                 }
-                SourceContributionGeneric::momentum(velocity * direction.cos(), velocity * direction.sin())
+                SourceContributionGeneric::momentum(
+                    backend.config_scalar(
+                        velocity * direction.cos(),
+                        "InflowConfig.velocity_x",
+                    ),
+                    backend.config_scalar(
+                        velocity * direction.sin(),
+                        "InflowConfig.velocity_y",
+                    ),
+                )
             }
             InflowType::UniformFlux(flux) => {
                 if flux.is_finite() {
-                    SourceContributionGeneric::mass(flux)
+                    SourceContributionGeneric::mass(
+                        backend.config_scalar(flux, "InflowConfig.uniform_flux"),
+                    )
                 } else {
                     SourceContributionGeneric::default()
                 }
@@ -253,10 +281,22 @@ impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
                 }
 
                 let s_h = q / area;
-                let h = state.h[cell].max(self.h_min);
-                let v_in = q / (area * h).max(1e-10);
-                let s_hu = s_h * v_in * direction.cos();
-                let s_hv = s_h * v_in * direction.sin();
+                let h_min = backend.config_scalar(self.h_min, "InflowConfig.h_min");
+                let h = if state.h[cell] > h_min {
+                    state.h[cell]
+                } else {
+                    h_min
+                };
+                let v_in = q / (area * h.to_f64_lossy()).max(1e-10);
+                let s_h = backend.config_scalar(s_h, "InflowConfig.timevarying_mass_source");
+                let s_hu = backend.config_scalar(
+                    s_h.to_f64_lossy() * v_in * direction.cos(),
+                    "InflowConfig.timevarying_momentum_x",
+                );
+                let s_hv = backend.config_scalar(
+                    s_h.to_f64_lossy() * v_in * direction.sin(),
+                    "InflowConfig.timevarying_momentum_y",
+                );
                 SourceContributionGeneric::new(s_h, s_hu, s_hv)
             }
         }
@@ -264,20 +304,20 @@ impl SourceTermGeneric<CpuBackend<f64>> for InflowConfig {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
         }
 
         let n = state.n_cells();
-        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
-        if rhs_hu.len() < n { rhs_hu.resize(n, 0.0); }
-        if rhs_hv.len() < n { rhs_hv.resize(n, 0.0); }
+        if rhs_h.len() < n { rhs_h.resize(n, B::Scalar::ZERO); }
+        if rhs_hu.len() < n { rhs_hu.resize(n, B::Scalar::ZERO); }
+        if rhs_hv.len() < n { rhs_hv.resize(n, B::Scalar::ZERO); }
 
         for cell in 0..n {
             let contrib = self.compute_cell(cell, state, ctx);
@@ -353,7 +393,11 @@ impl RainfallConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for RainfallConfig {
+impl<B> SourceTermGeneric<B> for RainfallConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "Rainfall" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
@@ -363,26 +407,30 @@ impl SourceTermGeneric<CpuBackend<f64>> for RainfallConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        _state: &ShallowWaterState<CpuBackend<f64>>,
-        _ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
-        SourceContributionGeneric::mass(self.net_intensity(cell))
+        state: &ShallowWaterState<B>,
+        _ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        SourceContributionGeneric::mass(
+            state
+                .backend()
+                .config_scalar(self.net_intensity(cell), "RainfallConfig.net_intensity"),
+        )
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        _rhs_hu: &mut Vec<f64>,
-        _rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        _rhs_hu: &mut B::Buffer<B::Scalar>,
+        _rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
         }
 
         let n = state.n_cells();
-        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        if rhs_h.len() < n { rhs_h.resize(n, B::Scalar::ZERO); }
         for cell in 0..n {
             let contrib = self.compute_cell(cell, state, ctx);
             rhs_h[cell] += contrib.s_h;
@@ -425,7 +473,11 @@ impl EvaporationConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for EvaporationConfig {
+impl<B> SourceTermGeneric<B> for EvaporationConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "Evaporation" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
@@ -435,11 +487,12 @@ impl SourceTermGeneric<CpuBackend<f64>> for EvaporationConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
-        if h < self.h_min || ctx.is_dry(h) {
+        if h < backend.config_scalar(self.h_min, "EvaporationConfig.h_min") || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
 
@@ -448,23 +501,25 @@ impl SourceTermGeneric<CpuBackend<f64>> for EvaporationConfig {
             return SourceContributionGeneric::default();
         }
 
-        SourceContributionGeneric::mass(-rate)
+        SourceContributionGeneric::mass(
+            backend.config_scalar(-rate, "EvaporationConfig.rate"),
+        )
     }
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        rhs_h: &mut Vec<f64>,
-        _rhs_hu: &mut Vec<f64>,
-        _rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        rhs_h: &mut B::Buffer<B::Scalar>,
+        _rhs_hu: &mut B::Buffer<B::Scalar>,
+        _rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
         }
 
         let n = state.n_cells();
-        if rhs_h.len() < n { rhs_h.resize(n, 0.0); }
+        if rhs_h.len() < n { rhs_h.resize(n, B::Scalar::ZERO); }
         for cell in 0..n {
             let contrib = self.compute_cell(cell, state, ctx);
             rhs_h[cell] += contrib.s_h;
@@ -634,7 +689,10 @@ mod tests {
         let contrib = config.compute_cell(0, &state, &ctx);
 
         assert!((contrib.s_h - 1e-5).abs() < 1e-10);
-        assert_eq!(config.name(), "Rainfall");
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
+            "Rainfall"
+        );
     }
 
     #[test]
@@ -658,7 +716,10 @@ mod tests {
 
         // 蒸发为负值
         assert!((contrib.s_h - (-1e-6)).abs() < 1e-12);
-        assert_eq!(config.name(), "Evaporation");
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
+            "Evaporation"
+        );
     }
 
     #[test]
@@ -679,15 +740,33 @@ mod tests {
     #[test]
     fn test_source_term_traits() {
         let inflow = InflowConfig::new(10);
-        assert_eq!(inflow.name(), "Inflow");
-        assert_eq!(inflow.stiffness(), SourceStiffness::Explicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&inflow),
+            "Inflow"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&inflow),
+            SourceStiffness::Explicit
+        );
 
         let rainfall = RainfallConfig::new(10);
-        assert_eq!(rainfall.name(), "Rainfall");
-        assert_eq!(rainfall.stiffness(), SourceStiffness::Explicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&rainfall),
+            "Rainfall"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&rainfall),
+            SourceStiffness::Explicit
+        );
 
         let evap = EvaporationConfig::new(10);
-        assert_eq!(evap.name(), "Evaporation");
-        assert_eq!(evap.stiffness(), SourceStiffness::Explicit);
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::name(&evap),
+            "Evaporation"
+        );
+        assert_eq!(
+            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&evap),
+            SourceStiffness::Explicit
+        );
     }
 }

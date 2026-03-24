@@ -115,7 +115,7 @@ pub use friction::{
 
 // ==================== 科氏力导出 ====================
 pub use coriolis::{
-    CoriolisConfig, CoriolisSource, EARTH_ANGULAR_VELOCITY,
+    CoriolisConfig, CoriolisConfigGeneric, CoriolisGeneric, CoriolisSource, EARTH_ANGULAR_VELOCITY,
 };
 
 // ==================== 隐式处理导出 ====================

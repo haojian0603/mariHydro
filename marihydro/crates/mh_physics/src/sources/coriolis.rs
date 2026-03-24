@@ -23,6 +23,7 @@
 use super::traits::{SourceContributionGeneric, SourceContextGeneric, SourceStiffness, SourceTermGeneric};
 use crate::prelude::*;
 use std::f64::consts::PI;
+use mh_runtime::DeviceBuffer;
 
 // 注意：CpuBackend 已在上方导入
 
@@ -85,7 +86,11 @@ impl Default for CoriolisConfig {
     }
 }
 
-impl SourceTermGeneric<CpuBackend<f64>> for CoriolisConfig {
+impl<B> SourceTermGeneric<B> for CoriolisConfig
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
     fn name(&self) -> &'static str { "Coriolis" }
 
     fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
@@ -95,33 +100,42 @@ impl SourceTermGeneric<CpuBackend<f64>> for CoriolisConfig {
     fn compute_cell(
         &self,
         cell: usize,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        ctx: &SourceContextGeneric<f64>,
-    ) -> SourceContributionGeneric<f64> {
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let backend = state.backend();
         let h = state.h[cell];
-        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= 0.0 || ctx.is_dry(h) {
+        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= B::Scalar::ZERO || ctx.is_dry(h) {
             return SourceContributionGeneric::default();
         }
 
         let hu = state.hu[cell];
         let hv = state.hv[cell];
         let dt = ctx.dt;
+        let f = backend.config_scalar(self.f, "CoriolisConfig.f");
 
         let (hu_new, hv_new) = if self.use_exact_rotation {
-            let theta = self.f * dt;
-            let (sin_t, cos_t) = if theta.abs() < 1e-3 {
+            let theta = f * dt;
+            let (sin_t, cos_t) = if theta.abs()
+                < backend.config_scalar(1e-3, "CoriolisConfig.small_angle")
+            {
                 let t2 = theta * theta;
                 let t4 = t2 * t2;
-                let sin_t = theta * (1.0 - t2 / 6.0 + t4 / 120.0);
-                let cos_t = 1.0 - t2 * 0.5 + t4 / 24.0;
+                let sin_t = theta
+                    * (B::Scalar::ONE
+                        - t2 / backend.config_scalar(6.0, "CoriolisConfig.sin_series_6")
+                        + t4 / backend.config_scalar(120.0, "CoriolisConfig.sin_series_120"));
+                let cos_t = B::Scalar::ONE
+                    - t2 * backend.config_scalar(0.5, "CoriolisConfig.cos_series_0_5")
+                    + t4 / backend.config_scalar(24.0, "CoriolisConfig.cos_series_24");
                 (sin_t, cos_t)
             } else {
-                theta.sin_cos()
+                (theta.sin(), theta.cos())
             };
             (hu * cos_t + hv * sin_t, -hu * sin_t + hv * cos_t)
         } else {
-            let dhu = self.f * hv * dt;
-            let dhv = -self.f * hu * dt;
+            let dhu = f * hv * dt;
+            let dhv = -f * hu * dt;
             (hu + dhu, hv + dhv)
         };
 
@@ -130,11 +144,11 @@ impl SourceTermGeneric<CpuBackend<f64>> for CoriolisConfig {
 
     fn accumulate(
         &self,
-        state: &ShallowWaterState<CpuBackend<f64>>,
-        _rhs_h: &mut Vec<f64>,
-        rhs_hu: &mut Vec<f64>,
-        rhs_hv: &mut Vec<f64>,
-        ctx: &SourceContextGeneric<f64>,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         if !self.enabled {
             return;
@@ -142,10 +156,10 @@ impl SourceTermGeneric<CpuBackend<f64>> for CoriolisConfig {
 
         let n = state.n_cells();
         if rhs_hu.len() < n {
-            rhs_hu.resize(n, 0.0);
+            rhs_hu.resize(n, B::Scalar::ZERO);
         }
         if rhs_hv.len() < n {
-            rhs_hv.resize(n, 0.0);
+            rhs_hv.resize(n, B::Scalar::ZERO);
         }
 
         for cell in 0..n {
@@ -230,93 +244,101 @@ pub struct CoriolisGeneric<B: Backend> {
 }
 
 impl<B: Backend> CoriolisGeneric<B> {
-    /// 创建新的泛型科氏力源项
+    /// create a typed coriolis source
     pub fn new(backend: B, config: CoriolisConfigGeneric<B::Scalar>) -> Self {
         Self { config, backend }
     }
 
-    /// 从纬度创建
+    /// build typed config from latitude
     pub fn from_latitude(backend: B, lat_deg: f64) -> Self {
         Self::new(backend, CoriolisConfigGeneric::from_latitude(lat_deg))
     }
 }
 
-// 使用宏生成 f32/f64 实现
-macro_rules! impl_coriolis_generic {
-    ($scalar:ty) => {
-        impl SourceTermGeneric<CpuBackend<$scalar>> for CoriolisGeneric<CpuBackend<$scalar>> {
-            fn name(&self) -> &'static str { "Coriolis" }
+impl<B> SourceTermGeneric<B> for CoriolisGeneric<B>
+where
+    B: Backend,
+    B::Scalar: RuntimeScalar,
+{
+    fn name(&self) -> &'static str { "Coriolis" }
 
-            fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
 
-            fn is_enabled(&self) -> bool { self.config.enabled }
+    fn is_enabled(&self) -> bool { self.config.enabled }
 
-            fn compute_cell(
-                &self,
-                cell: usize,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) -> SourceContributionGeneric<$scalar> {
-                let h = state.h[cell];
-                if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= (0.0 as $scalar) || ctx.is_dry(h) {
-                    return SourceContributionGeneric::default();
-                }
-
-                let hu = state.hu[cell];
-                let hv = state.hv[cell];
-                let dt = ctx.dt;
-                let f = self.config.f;
-
-                let (hu_new, hv_new) = if self.config.use_exact_rotation {
-                    let theta = f * dt;
-                    // 🔥 增强小角度优化（6阶泰勒展开）
-                    let (sin_t, cos_t) = if theta.abs() < (1e-3 as $scalar) {
-                        let t2 = theta * theta;
-                        let t4 = t2 * t2;
-                        // sin(x) ≈ x - x³/6 + x⁵/120
-                        // cos(x) ≈ 1 - x²/2 + x⁴/24
-                        (theta * ((1.0 as $scalar) - t2 / (6.0 as $scalar) + t4 / (120.0 as $scalar)), 
-                         (1.0 as $scalar) - t2 * (0.5 as $scalar) + t4 / (24.0 as $scalar))
-                    } else {
-                        (theta.sin(), theta.cos())
-                    };
-                    (hu * cos_t + hv * sin_t, -hu * sin_t + hv * cos_t)
-                } else {
-                    let dhu = f * hv * dt;
-                    let dhv = -f * hu * dt;
-                    (hu + dhu, hv + dhv)
-                };
-
-                SourceContributionGeneric::momentum(
-                    (hu_new - hu) / dt,
-                    (hv_new - hv) / dt,
-                )
-            }
-
-            fn accumulate(
-                &self,
-                state: &ShallowWaterState<CpuBackend<$scalar>>,
-                _rhs_h: &mut Vec<$scalar>,
-                rhs_hu: &mut Vec<$scalar>,
-                rhs_hv: &mut Vec<$scalar>,
-                ctx: &SourceContextGeneric<$scalar>,
-            ) {
-                if !self.config.enabled {
-                    return;
-                }
-
-                for cell in 0..state.n_cells() {
-                    let contrib = self.compute_cell(cell, state, ctx);
-                    rhs_hu[cell] += contrib.s_hu;
-                    rhs_hv[cell] += contrib.s_hv;
-                }
-            }
+    fn compute_cell(
+        &self,
+        cell: usize,
+        state: &ShallowWaterState<B>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) -> SourceContributionGeneric<B::Scalar> {
+        let h = state.h[cell];
+        if !h.is_finite() || !ctx.dt.is_finite() || ctx.dt <= B::Scalar::ZERO || ctx.is_dry(h) {
+            return SourceContributionGeneric::default();
         }
-    };
-}
 
-impl_coriolis_generic!(f32);
-impl_coriolis_generic!(f64);
+        let hu = state.hu[cell];
+        let hv = state.hv[cell];
+        let dt = ctx.dt;
+        let f = self.config.f;
+        let backend = state.backend();
+
+        let (hu_new, hv_new) = if self.config.use_exact_rotation {
+            let theta = f * dt;
+            let (sin_t, cos_t) = if theta.abs()
+                < backend.config_scalar(1e-3, "CoriolisGeneric.small_angle")
+            {
+                let t2 = theta * theta;
+                let t4 = t2 * t2;
+                (
+                    theta
+                        * (B::Scalar::ONE
+                            - t2 / backend.config_scalar(6.0, "CoriolisGeneric.sin_series_6")
+                            + t4 / backend.config_scalar(120.0, "CoriolisGeneric.sin_series_120")),
+                    B::Scalar::ONE
+                        - t2 * backend.config_scalar(0.5, "CoriolisGeneric.cos_series_0_5")
+                        + t4 / backend.config_scalar(24.0, "CoriolisGeneric.cos_series_24"),
+                )
+            } else {
+                (theta.sin(), theta.cos())
+            };
+            (hu * cos_t + hv * sin_t, -hu * sin_t + hv * cos_t)
+        } else {
+            let dhu = f * hv * dt;
+            let dhv = -f * hu * dt;
+            (hu + dhu, hv + dhv)
+        };
+
+        SourceContributionGeneric::momentum((hu_new - hu) / dt, (hv_new - hv) / dt)
+    }
+
+    fn accumulate(
+        &self,
+        state: &ShallowWaterState<B>,
+        _rhs_h: &mut B::Buffer<B::Scalar>,
+        rhs_hu: &mut B::Buffer<B::Scalar>,
+        rhs_hv: &mut B::Buffer<B::Scalar>,
+        ctx: &SourceContextGeneric<B::Scalar>,
+    ) {
+        if !self.config.enabled {
+            return;
+        }
+
+        let n = state.n_cells();
+        if rhs_hu.len() < n {
+            rhs_hu.resize(n, B::Scalar::ZERO);
+        }
+        if rhs_hv.len() < n {
+            rhs_hv.resize(n, B::Scalar::ZERO);
+        }
+
+        for cell in 0..state.n_cells() {
+            let contrib = self.compute_cell(cell, state, ctx);
+            rhs_hu[cell] += contrib.s_hu;
+            rhs_hv[cell] += contrib.s_hv;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
