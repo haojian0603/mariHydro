@@ -104,12 +104,12 @@ impl DiffusionBC<f64> {
     pub fn to_backend<B: Backend>(&self, backend: &B) -> DiffusionBC<B::Scalar> {
         match *self {
             DiffusionBC::ZeroFlux => DiffusionBC::ZeroFlux,
-            DiffusionBC::FixedValue(v) => DiffusionBC::FixedValue(backend.scalar_from_f64(v)),
+            DiffusionBC::FixedValue(v) => DiffusionBC::FixedValue(backend.config_scalar(v, "diffusion_bc.fixed_value")),
             DiffusionBC::Radiation { alpha, phi_inf } => DiffusionBC::Radiation {
-                alpha: backend.scalar_from_f64(alpha),
-                phi_inf: backend.scalar_from_f64(phi_inf),
+                alpha: backend.config_scalar(alpha, "diffusion_bc.radiation.alpha"),
+                phi_inf: backend.config_scalar(phi_inf, "diffusion_bc.radiation.phi_inf"),
             },
-            DiffusionBC::SpecifiedFlux(f) => DiffusionBC::SpecifiedFlux(backend.scalar_from_f64(f)),
+            DiffusionBC::SpecifiedFlux(f) => DiffusionBC::SpecifiedFlux(backend.config_scalar(f, "diffusion_bc.specified_flux")),
         }
     }
 }
@@ -173,13 +173,13 @@ impl DiffusionConfig<f64> {
     /// 将 f64 配置转换为后端标量配置
     pub fn to_backend<B: Backend>(&self, backend: &B) -> DiffusionConfig<B::Scalar> {
         DiffusionConfig {
-            nu: backend.scalar_from_f64(self.nu),
+            nu: backend.config_scalar(self.nu, "diffusion_config.nu"),
             boundary_conditions: self
                 .boundary_conditions
                 .iter()
                 .map(|bc| bc.to_backend(backend))
                 .collect(),
-            cfl_safety: backend.scalar_from_f64(self.cfl_safety),
+            cfl_safety: backend.config_scalar(self.cfl_safety, "diffusion_config.cfl_safety"),
         }
     }
 }
@@ -216,11 +216,11 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
     fn compute_min_dist_sq(mesh: &PhysicsMesh, backend: &B) -> B::Scalar {
         let n_faces = mesh.face_count();
         let mut min_sq = B::Scalar::MAX;
-        let eps = backend.scalar_from_f64(1e-14);
+        let eps = backend.config_scalar(1e-14, "diffusion.min_dist_sq.eps");
 
         for face in 0..n_faces {
             if let Some(dist) = mesh.face_distance(FaceIndex(face)) {
-                let dist_s = backend.scalar_from_f64(dist);
+                let dist_s = backend.config_scalar(dist, "diffusion.min_dist_sq.dist");
                 if dist_s > eps {
                     min_sq = min_sq.min(dist_s * dist_s);
                 }
@@ -234,7 +234,7 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
     ///
     /// 对于显式扩散，CFL 条件: dt < α * d_min² / ν
     pub fn estimate_stable_dt(&self) -> B::Scalar {
-        let eps = self.backend.scalar_from_f64(1e-14);
+        let eps = self.backend.config_scalar(1e-14, "diffusion.estimate_stable_dt.eps");
         if self.config.nu < eps {
             return B::Scalar::MAX;
         }
@@ -275,7 +275,7 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
         let nu = self.config.nu;
 
         let mut flux_sum = self.backend.alloc_init(n_cells, B::Scalar::ZERO);
-        let eps = self.backend.scalar_from_f64(1e-14);
+        let eps = self.backend.config_scalar(1e-14, "diffusion.compute_fluxes.eps");
 
         // 内部面
         for face in 0..n_faces {
@@ -287,13 +287,13 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
                 let dist = self
                     .mesh
                     .face_distance(FaceIndex(face))
-                    .map(|d| self.backend.scalar_from_f64(d))
+                    .map(|d| self.backend.config_scalar(d, "diffusion.compute_fluxes.dist"))
                     .unwrap_or(eps);
                 if dist < eps {
                     continue;
                 }
 
-                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
+                let length = self.backend.config_scalar(self.mesh.face_length(FaceIndex(face)), "diffusion.compute_fluxes.length");
                 let phi_o = field[owner.get()];
                 let phi_n = field[neighbor.get()];
 
@@ -308,10 +308,10 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
                 let dist = self
                     .mesh
                     .face_distance(FaceIndex(face))
-                    .map(|d| self.backend.scalar_from_f64(d))
+                    .map(|d| self.backend.config_scalar(d, "diffusion.compute_fluxes.boundary_dist"))
                     .unwrap_or(eps)
                     .max(eps);
-                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
+                let length = self.backend.config_scalar(self.mesh.face_length(FaceIndex(face)), "diffusion.compute_fluxes.boundary_length");
                 let phi_cell = field[owner.get()];
 
                 let flux = bc.compute_flux(phi_cell, nu, dist, length);
@@ -373,7 +373,7 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
 
         let flux_sum = self.compute_fluxes(field.as_slice());
 
-        let eps = self.backend.scalar_from_f64(1e-14);
+        let eps = self.backend.config_scalar(1e-14, "diffusion.apply_explicit.eps");
 
         field_out
             .as_slice_mut()
@@ -383,7 +383,7 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
                 let area = self
                     .mesh
                     .cell_area(CellIndex(i))
-                    .map(|a| self.backend.scalar_from_f64(a))
+                    .map(|a| self.backend.config_scalar(a, "diffusion.apply_explicit.area"))
                     .unwrap_or(B::Scalar::ONE);
                 if area > eps {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
@@ -418,7 +418,7 @@ impl<'a, B: Backend> DiffusionSolver<'a, B> {
             return Ok(());
         }
 
-        let sub_dt = dt / self.backend.scalar_from_f64(n_substeps as f64);
+        let sub_dt = dt / self.backend.config_scalar(n_substeps as f64, "diffusion.substeps.count");
         let mut buffer = self.backend.alloc(field.len());
 
         for step in 0..n_substeps {
@@ -521,7 +521,7 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
         }
 
         let mut flux_sum = self.backend.alloc_init(n_cells, B::Scalar::ZERO);
-        let eps = self.backend.scalar_from_f64(1e-14);
+        let eps = self.backend.config_scalar(1e-14, "diffusion.variable_nu.eps");
 
         for face in 0..n_faces {
             let owner = self.mesh.face_owner(FaceIndex(face));
@@ -531,13 +531,13 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
                 let dist = self
                     .mesh
                     .face_distance(FaceIndex(face))
-                    .map(|d| self.backend.scalar_from_f64(d))
+                    .map(|d| self.backend.config_scalar(d, "diffusion.variable_nu.dist"))
                     .unwrap_or(eps);
                 if dist < eps {
                     continue;
                 }
 
-                let length = self.backend.scalar_from_f64(self.mesh.face_length(FaceIndex(face)));
+                let length = self.backend.config_scalar(self.mesh.face_length(FaceIndex(face)), "diffusion.variable_nu.length");
 
                 // 调和平均扩散系数 (保证正定性)
                 let nu_o = nu[owner.get()];
@@ -569,7 +569,7 @@ impl<'a, B: Backend> VariableDiffusionSolver<'a, B> {
                 let area = self
                     .mesh
                     .cell_area(CellIndex(i))
-                    .map(|a| self.backend.scalar_from_f64(a))
+                    .map(|a| self.backend.config_scalar(a, "diffusion.variable_nu.area"))
                     .unwrap_or(B::Scalar::ONE);
                 if area > eps {
                     *phi_out = field[i] + dt * flux_sum[i] / area;
@@ -635,16 +635,16 @@ where
 
 /// 估计稳定时间步长
 pub fn estimate_stable_dt<B: Backend + Clone>(mesh: &PhysicsMesh, backend: &B, nu: f64) -> B::Scalar {
-    let config = DiffusionConfig::new(backend.scalar_from_f64(nu));
+    let config = DiffusionConfig::new(backend.config_scalar(nu, "diffusion.estimate_stable_dt.nu"));
     let solver = DiffusionSolver::new(mesh, backend.clone(), config);
     solver.estimate_stable_dt()
 }
 
 /// 计算所需子步数
 pub fn required_substeps<B: Backend + Clone>(mesh: &PhysicsMesh, backend: &B, nu: f64, dt: f64) -> usize {
-    let config = DiffusionConfig::new(backend.scalar_from_f64(nu));
+    let config = DiffusionConfig::new(backend.config_scalar(nu, "diffusion.required_substeps.nu"));
     let solver = DiffusionSolver::new(mesh, backend.clone(), config);
-    solver.required_substeps(backend.scalar_from_f64(dt))
+    solver.required_substeps(backend.config_scalar(dt, "diffusion.required_substeps.dt"))
 }
 
 #[cfg(test)]

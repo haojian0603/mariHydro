@@ -129,8 +129,8 @@ impl<B: Backend> WenoReconstructor<B> {
 
     #[inline]
     fn weno2_one_side(&self, v_far: B::Scalar, v_near: B::Scalar, v_center: B::Scalar, eps: B::Scalar) -> B::Scalar {
-        let d0 = self.backend.scalar_from_f64(1.0 / 3.0);
-        let d1 = self.backend.scalar_from_f64(2.0 / 3.0);
+        let d0 = self.backend.config_scalar(1.0 / 3.0, "weno.weight.d0");
+        let d1 = self.backend.config_scalar(2.0 / 3.0, "weno.weight.d1");
 
         let half = B::Scalar::HALF;
         let p0 = v_near + half * (v_near - v_far);
@@ -170,7 +170,7 @@ impl<B: Backend> Reconstructor<B> for WenoReconstructor<B> {
             return ReconstructedState::from_values(values_slice[owner], values_slice[neighbor]);
         }
 
-        let eps = self.backend.scalar_from_f64(self.config.epsilon);
+        let eps = self.backend.config_scalar(self.config.epsilon, "weno.epsilon");
         let v_l = values_slice[owner];
         let v_r = values_slice[neighbor];
 

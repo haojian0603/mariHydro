@@ -535,7 +535,7 @@ mod tests {
     fn test_cfl_calculator_f64() {
         let params = NumericalParams::<f64>::default();
         let backend = CpuBackend::<f64>::new();
-        let g = backend.scalar_from_f64(9.81);
+        let g = backend.config_scalar(9.81, "timestep.test.gravity");
         let calc = CflCalculator::<CpuBackend<f64>>::new(g, &params);
         assert!(calc.cached_dx_min.is_none());
     }
@@ -544,9 +544,9 @@ mod tests {
     fn test_controller_f32() {
         let params = NumericalParams::<f32>::default();
         let backend = CpuBackend::<f32>::new();
-        let g = backend.scalar_from_f64(9.81);
+        let g = backend.config_scalar(9.81, "timestep.test.gravity");
         let mut controller = TimeStepController::<CpuBackend<f32>>::new(g, &params);
-        controller.set_dt(backend.scalar_from_f64(0.5));
+        controller.set_dt(backend.config_scalar(0.5, "timestep.test.dt"));
         assert!((controller.current_dt().to_f64().unwrap() - 0.5).abs() < 1e-10f64);
     }
 
@@ -554,10 +554,10 @@ mod tests {
     fn test_coriolis_limit() {
         let params = NumericalParams::<f64>::default();
         let backend = CpuBackend::<f64>::new();
-        let g = backend.scalar_from_f64(9.81);
+        let g = backend.config_scalar(9.81, "timestep.test.gravity");
         let controller = TimeStepController::<CpuBackend<f64>>::new(g, &params);
 
-        let limit = controller.coriolis_stability_limit(backend.scalar_from_f64(1e-4));
+        let limit = controller.coriolis_stability_limit(backend.config_scalar(1e-4, "timestep.test.coriolis"));
         assert!(limit.is_some());
         assert!(limit.unwrap().to_f64().unwrap() > 0.0);
     }

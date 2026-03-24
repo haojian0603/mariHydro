@@ -193,7 +193,7 @@ impl GreenGaussGradient {
             let normal = mesh
                 .face_normal_generic::<B>(face)
                 .expect("face_normal out of range");
-            let length = backend.scalar_from_f64(mesh.face_length(face));
+            let length = backend.config_scalar(mesh.face_length(face), "green_gauss.face_length");
             let sign = if is_owner { B::Scalar::ONE } else { -B::Scalar::ONE };
             let ds_x = normal.x() * length * sign;
             let ds_y = normal.y() * length * sign;

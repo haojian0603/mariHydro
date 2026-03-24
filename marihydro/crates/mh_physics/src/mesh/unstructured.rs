@@ -72,7 +72,7 @@ where
             if !area.is_finite() || area <= 0.0 {
                 return Err(MeshValidationError::InvalidCellArea { cell: i, area });
             }
-            let scalar = backend.scalar_from_f64(area);
+            let scalar = backend.config_scalar(area, "unstructured_mesh.cell_area");
             cell_areas_vec.push(scalar);
         }
         let cell_areas = {
@@ -88,7 +88,7 @@ where
             if !length.is_finite() || length <= 0.0 {
                 return Err(MeshValidationError::InvalidFaceLength { face: i, length });
             }
-            let scalar = backend.scalar_from_f64(length);
+            let scalar = backend.config_scalar(length, "unstructured_mesh.face_length");
             face_lengths_vec.push(scalar);
         }
         let face_lengths = {

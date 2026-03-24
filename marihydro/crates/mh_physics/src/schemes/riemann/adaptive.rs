@@ -295,7 +295,7 @@ impl<B: Backend + Clone + Default> AdaptiveSolver<B> {
         if depth_jump > self.config.depth_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(depth_jump, self.config.depth_jump_threshold);
-                if weight < self.backend.scalar_from_f64(0.01) {
+                if weight < self.backend.config_scalar(0.01, "adaptive_riemann.min_weight") {
                     return (SolverChoice::Rusanov, AdaptiveReason::DepthJump);
                 }
                 return (
@@ -316,12 +316,12 @@ impl<B: Backend + Clone + Default> AdaptiveSolver<B> {
         let vel_avg_x = (vel_l_x + vel_r_x) * B::Scalar::HALF;
         let vel_avg_y = (vel_l_y + vel_r_y) * B::Scalar::HALF;
         let vel_avg_len = num_traits::Float::sqrt(vel_avg_x * vel_avg_x + vel_avg_y * vel_avg_y);
-        let froude = vel_avg_len / num_traits::Float::max(c_avg, self.backend.scalar_from_f64(1e-10));
+        let froude = vel_avg_len / num_traits::Float::max(c_avg, self.backend.config_scalar(1e-10, "adaptive_riemann.froude_eps"));
 
         if froude > self.config.froude_critical {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(froude, self.config.froude_critical);
-                if weight < self.backend.scalar_from_f64(0.01) {
+                if weight < self.backend.config_scalar(0.01, "adaptive_riemann.min_weight") {
                     return (SolverChoice::Rusanov, AdaptiveReason::Supercritical);
                 }
                 return (
@@ -339,7 +339,7 @@ impl<B: Backend + Clone + Default> AdaptiveSolver<B> {
         if vel_jump > self.config.velocity_jump_threshold {
             if self.config.enable_blending {
                 let weight = self.compute_blend_weight(vel_jump, self.config.velocity_jump_threshold);
-                if weight < self.backend.scalar_from_f64(0.01) {
+                if weight < self.backend.config_scalar(0.01, "adaptive_riemann.min_weight") {
                     return (SolverChoice::Rusanov, AdaptiveReason::VelocityJump);
                 }
                 return (
@@ -360,7 +360,7 @@ impl<B: Backend + Clone + Default> AdaptiveSolver<B> {
         }
 
         let width = threshold * self.config.transition_width;
-        let tiny = self.backend.scalar_from_f64(1e-10);
+        let tiny = self.backend.config_scalar(1e-10, "adaptive_riemann.transition_tiny");
         if width < tiny {
             return B::Scalar::ZERO;
         }

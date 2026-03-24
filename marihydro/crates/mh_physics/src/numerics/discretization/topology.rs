@@ -394,19 +394,19 @@ impl CellFaceTopology {
     pub fn face_normal_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> (B::Scalar, B::Scalar) {
         let n = self.face_info[face_idx].normal;
         (
-            backend.scalar_from_f64(n.0),
-            backend.scalar_from_f64(n.1),
+            backend.config_scalar(n.0, "topology.face_normal.x"),
+            backend.config_scalar(n.1, "topology.face_normal.y"),
         )
     }
 
     /// 将面长度转换为后端标量类型
     pub fn face_length_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> B::Scalar {
-        backend.scalar_from_f64(self.face_info[face_idx].length)
+        backend.config_scalar(self.face_info[face_idx].length, "topology.face_length")
     }
 
     /// 将面距转换为后端标量类型
     pub fn face_dist_o2n_generic<B: Backend>(&self, face_idx: usize, backend: &B) -> B::Scalar {
-        backend.scalar_from_f64(self.face_info[face_idx].dist_o2n)
+        backend.config_scalar(self.face_info[face_idx].dist_o2n, "topology.face_dist_o2n")
     }
 }
 

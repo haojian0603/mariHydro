@@ -371,7 +371,7 @@ impl<B: Backend> SsorPreconditioner<B> {
         let mut temp = backend.alloc(n);
         temp.fill(B::Scalar::ZERO);
 
-        let omega = backend.scalar_from_f64(params.omega);
+        let omega = backend.config_scalar(params.omega, "ssor.omega");
 
         Ok(Self {
             matrix,

@@ -96,8 +96,8 @@ where
             });
         }
 
-        let dx = backend.scalar_from_f64(dx);
-        let dy = backend.scalar_from_f64(dy);
+        let dx = backend.config_scalar(dx, "structured_mesh.dx");
+        let dy = backend.config_scalar(dy, "structured_mesh.dy");
 
         let n_cells = nx * ny;
         let n_faces = Self::compute_n_faces(nx, ny);
