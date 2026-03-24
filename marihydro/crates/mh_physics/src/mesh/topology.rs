@@ -42,6 +42,12 @@ pub enum MeshKind {
     Structured { nx: usize, ny: usize },
 }
 
+#[inline]
+fn scalar_from_config_or_panic<S: Scalar>(value: f64, context: &'static str) -> S {
+    S::from_config(value)
+        .unwrap_or_else(|| panic!("failed to convert mesh scalar for {context}: {value}"))
+}
+
 /// 面信息
 #[derive(Debug, Clone, Copy)]
 pub struct FaceInfo<S: Scalar> {
@@ -290,7 +296,7 @@ impl MeshGeometry {
     /// 三角形面积（始终为正值）
     #[inline]
     pub fn triangle_area<S: Scalar>(p1: [S; 2], p2: [S; 2], p3: [S; 2]) -> S {
-        let half = S::from_config(0.5).unwrap_or(S::ONE);
+        let half = scalar_from_config_or_panic(0.5, "mesh_topology.triangle_area.half");
         let cross = (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p2[1] - p1[1]) * (p3[0] - p1[0]);
         cross.abs() * half
     }
@@ -315,7 +321,7 @@ impl MeshGeometry {
             sum = sum - vertices[j][0] * vertices[i][1];
         }
         
-        let half = S::from_config(0.5).unwrap_or(S::ONE);
+        let half = scalar_from_config_or_panic(0.5, "mesh_topology.polygon_area.half");
         sum.abs() * half
     }
     
@@ -349,7 +355,8 @@ impl MeshGeometry {
             return None;
         }
         
-        let factor = S::ONE / (S::from_config(3.0).unwrap_or(S::ONE) * area_sum);
+        let factor = S::ONE
+            / (scalar_from_config_or_panic::<S>(3.0, "mesh_topology.polygon_centroid.factor") * area_sum);
         Some([cx * factor, cy * factor])
     }
 }

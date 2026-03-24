@@ -144,7 +144,7 @@ impl LeastSquaresGradient {
     /// 计算单个单元的梯度 - 泛型版本
     fn compute_cell_gradient<B: Backend>(
         &self,
-        _backend: &B,
+        backend: &B,
         cell: usize,
         field: &B::Buffer<B::Scalar>,
         mesh: &PhysicsMesh,
@@ -188,7 +188,7 @@ impl LeastSquaresGradient {
                 let dphi = field[other.get()] - phi_c;
 
                 let dist_sq = dx * dx + dy * dy;
-                let dist_sq_min = B::Scalar::from_config(1e-20).unwrap_or(B::Scalar::MIN_POSITIVE);
+                let dist_sq_min = backend.config_scalar(1e-20, "least_squares.dist_sq_min");
                 if dist_sq < dist_sq_min {
                     continue;
                 }
@@ -215,7 +215,7 @@ impl LeastSquaresGradient {
                 let to_face_y = face_center.y() - cell_center_y;
                 let dist_to_face = to_face_x * normal.x() + to_face_y * normal.y();
 
-                let dist_to_face_min = B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+                let dist_to_face_min = backend.config_scalar(1e-14, "least_squares.dist_to_face_min");
                 if dist_to_face.abs() < dist_to_face_min {
                     continue;
                 }
@@ -227,7 +227,7 @@ impl LeastSquaresGradient {
                 let dx = ghost_x - cell_center_x;
                 let dy = ghost_y - cell_center_y;
                 let dist_sq = dx * dx + dy * dy;
-                let dist_sq_min = B::Scalar::from_config(1e-20).unwrap_or(B::Scalar::MIN_POSITIVE);
+                let dist_sq_min = backend.config_scalar(1e-20, "least_squares.boundary_dist_sq_min");
 
                 if dist_sq < dist_sq_min {
                     continue;
@@ -248,7 +248,7 @@ impl LeastSquaresGradient {
             return Some((B::Scalar::ZERO, B::Scalar::ZERO));
         }
 
-        let det_min = B::Scalar::from_config(self.config.det_min).unwrap_or(B::Scalar::MIN_POSITIVE);
+        let det_min = backend.config_scalar(self.config.det_min, "least_squares.det_min");
         Self::solve_2x2::<B>(a11, a12, a22, b1, b2, det_min)
     }
 }

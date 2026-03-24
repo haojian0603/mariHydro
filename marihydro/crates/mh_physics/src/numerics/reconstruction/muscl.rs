@@ -301,11 +301,11 @@ impl<B: Backend> MusclReconstructor<B> {
             
             if reconstructed < B::Scalar::ZERO {
                 let denominator = grad_x * dx + grad_y * dy;
-                let eps = B::Scalar::from_config(1e-12).unwrap_or(B::Scalar::MIN_POSITIVE);
+                let eps = self.backend.config_scalar(1e-12, "muscl.positivity_epsilon");
                 if denominator.abs() > eps {
                     let alpha_safe = (-cell_value / denominator).abs();
                     let alpha_safe = if alpha_safe < B::Scalar::ONE { alpha_safe } else { B::Scalar::ONE };
-                    let shrink = B::Scalar::from_config(0.9).unwrap_or(B::Scalar::ONE);
+                    let shrink = self.backend.config_scalar(0.9, "muscl.positivity_shrink");
                     let new_limiter = limiters[cell_id] * shrink;
                     limiters[cell_id] = if alpha_safe < new_limiter { alpha_safe } else { new_limiter };
                 } else {

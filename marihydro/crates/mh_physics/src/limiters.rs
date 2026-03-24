@@ -26,9 +26,8 @@
 // ============================================================================
 
 /// 限制器类型
-#[deprecated(note = "Use crate::types::LimiterType for configuration and crate::numerics::limiter for the engine path.")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LimiterType {
+pub enum LegacyLimiterType {
     /// 无限制（一阶迎风）
     None,
     /// Minmod 限制器（最耗散）
@@ -49,7 +48,10 @@ pub enum LimiterType {
     BarthJespersen,
 }
 
-impl Default for LimiterType {
+#[deprecated(note = "Use crate::types::LimiterType for configuration and crate::numerics::limiter for the engine path.")]
+pub use LegacyLimiterType as LimiterType;
+
+impl Default for LegacyLimiterType {
     fn default() -> Self {
         Self::VanLeer
     }
@@ -155,16 +157,16 @@ pub fn limiter_mc(r: f64) -> f64 {
 
 /// 根据类型选择限制器
 #[inline]
-pub fn apply_limiter(limiter_type: LimiterType, r: f64) -> f64 {
+pub fn apply_limiter(limiter_type: LegacyLimiterType, r: f64) -> f64 {
     match limiter_type {
-        LimiterType::None => 1.0,
-        LimiterType::Minmod => limiter_minmod(r),
-        LimiterType::Superbee => limiter_superbee(r),
-        LimiterType::VanLeer => limiter_van_leer(r),
-        LimiterType::VanAlbada => limiter_van_albada(r),
-        LimiterType::Koren => limiter_koren(r),
-        LimiterType::Mc => limiter_mc(r),
-        LimiterType::Venkatakrishnan | LimiterType::BarthJespersen => {
+        LegacyLimiterType::None => 1.0,
+        LegacyLimiterType::Minmod => limiter_minmod(r),
+        LegacyLimiterType::Superbee => limiter_superbee(r),
+        LegacyLimiterType::VanLeer => limiter_van_leer(r),
+        LegacyLimiterType::VanAlbada => limiter_van_albada(r),
+        LegacyLimiterType::Koren => limiter_koren(r),
+        LegacyLimiterType::Mc => limiter_mc(r),
+        LegacyLimiterType::Venkatakrishnan | LegacyLimiterType::BarthJespersen => {
             // 这些需要额外参数，使用默认 Van Leer
             limiter_van_leer(r)
         }
@@ -207,12 +209,12 @@ impl Default for LimiterContext {
 
 /// 带上下文的限制器（支持 Venkatakrishnan / Barth-Jespersen）
 pub fn apply_limiter_with_context(
-    limiter_type: LimiterType,
+    limiter_type: LegacyLimiterType,
     r: f64,
     ctx: Option<&LimiterContext>,
 ) -> f64 {
     match limiter_type {
-        LimiterType::Venkatakrishnan => {
+        LegacyLimiterType::Venkatakrishnan => {
             if let Some(ctx) = ctx {
                 let limiter = VenkatakrishnanLimiter::new(ctx.venkat_k, ctx.length_scale);
                 let delta_minus = ctx.q_min - ctx.q_center;
@@ -223,7 +225,7 @@ pub fn apply_limiter_with_context(
                 limiter_van_leer(r)
             }
         }
-        LimiterType::BarthJespersen => {
+        LegacyLimiterType::BarthJespersen => {
             if let Some(ctx) = ctx {
                 BarthJespersenLimiter::compute(ctx.q_center, ctx.q_min, ctx.q_max, ctx.q_face)
             } else {
@@ -236,12 +238,12 @@ pub fn apply_limiter_with_context(
 
 /// 非结构网格梯度限制器应用器
 pub struct UnstructuredLimiterApplicator {
-    limiter_type: LimiterType,
+    limiter_type: LegacyLimiterType,
     venkat_k: f64,
 }
 
 impl UnstructuredLimiterApplicator {
-    pub fn new(limiter_type: LimiterType) -> Self {
+    pub fn new(limiter_type: LegacyLimiterType) -> Self {
         Self {
             limiter_type,
             venkat_k: 5.0,
@@ -450,21 +452,23 @@ impl BarthJespersenLimiter {
 // ============================================================================
 
 /// MUSCL 重构配置
-#[deprecated(note = "Use crate::numerics::reconstruction::MusclConfig on the main engine path.")]
 #[derive(Debug, Clone)]
-pub struct MusclConfig {
+pub struct LegacyMusclConfig {
     /// 限制器类型
-    pub limiter: LimiterType,
+    pub limiter: LegacyLimiterType,
     /// kappa 参数（-1 = 完全迎风，0 = Fromm，1/3 = 三阶，1 = 中心）
     pub kappa: f64,
     /// 是否使用特征变量
     pub characteristic_decomposition: bool,
 }
 
-impl Default for MusclConfig {
+#[deprecated(note = "Use crate::numerics::reconstruction::MusclConfig on the main engine path.")]
+pub use LegacyMusclConfig as MusclConfig;
+
+impl Default for LegacyMusclConfig {
     fn default() -> Self {
         Self {
-            limiter: LimiterType::VanLeer,
+            limiter: LegacyLimiterType::VanLeer,
             kappa: 1.0 / 3.0, // 三阶
             characteristic_decomposition: false,
         }
@@ -472,14 +476,16 @@ impl Default for MusclConfig {
 }
 
 /// MUSCL 重构器
-#[deprecated(note = "Use crate::numerics::reconstruction::MusclReconstructor on the main engine path.")]
-pub struct MusclReconstructor {
-    config: MusclConfig,
+pub struct LegacyMusclReconstructor {
+    config: LegacyMusclConfig,
 }
 
-impl MusclReconstructor {
+#[deprecated(note = "Use crate::numerics::reconstruction::MusclReconstructor on the main engine path.")]
+pub use LegacyMusclReconstructor as MusclReconstructor;
+
+impl LegacyMusclReconstructor {
     /// 创建重构器
-    pub fn new(config: MusclConfig) -> Self {
+    pub fn new(config: LegacyMusclConfig) -> Self {
         Self { config }
     }
 
@@ -624,12 +630,12 @@ mod tests {
 
     #[test]
     fn test_muscl_reconstruct() {
-        let config = MusclConfig {
-            limiter: LimiterType::Minmod,
+        let config = LegacyMusclConfig {
+            limiter: LegacyLimiterType::Minmod,
             kappa: 0.0, // Fromm
             ..Default::default()
         };
-        let reconstructor = MusclReconstructor::new(config);
+        let reconstructor = LegacyMusclReconstructor::new(config);
 
         // 线性场
         let (q_l, q_r) = reconstructor.reconstruct(0.0, 1.0, 2.0);
@@ -641,8 +647,8 @@ mod tests {
 
     #[test]
     fn test_muscl_constant_field() {
-        let config = MusclConfig::default();
-        let reconstructor = MusclReconstructor::new(config);
+        let config = LegacyMusclConfig::default();
+        let reconstructor = LegacyMusclReconstructor::new(config);
 
         // 常数场
         let (q_l, q_r) = reconstructor.reconstruct(1.0, 1.0, 1.0);
@@ -661,7 +667,7 @@ mod tests {
             length_scale: 1.0,
             venkat_k: 5.0,
         };
-        let phi = apply_limiter_with_context(LimiterType::Venkatakrishnan, 0.0, Some(&ctx));
+        let phi = apply_limiter_with_context(LegacyLimiterType::Venkatakrishnan, 0.0, Some(&ctx));
         assert!((0.0..=1.0).contains(&phi));
     }
 
@@ -675,7 +681,7 @@ mod tests {
             length_scale: 1.0,
             venkat_k: 5.0,
         };
-        let phi = apply_limiter_with_context(LimiterType::BarthJespersen, 0.0, Some(&ctx));
+        let phi = apply_limiter_with_context(LegacyLimiterType::BarthJespersen, 0.0, Some(&ctx));
         assert!((0.0..=1.0).contains(&phi));
     }
 

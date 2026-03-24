@@ -185,6 +185,9 @@ try {
     if (-not (Invoke-FailingScan -Name "raw scalar_from_f64 call usage" -Roots @("crates/mh_physics/src") -Pattern '(?<!try_)\bscalar_from_f64\(')) {
         $Failed += "raw scalar_from_f64 call usage"
     }
+    if (-not (Invoke-FailingScan -Name "silent from_config unwrap_or usage (gradient/limiter/reconstruction/mesh)" -Roots @("crates/mh_physics/src/numerics/gradient", "crates/mh_physics/src/numerics/limiter", "crates/mh_physics/src/numerics/reconstruction", "crates/mh_physics/src/mesh") -Pattern '\bfrom_config\(.*\)\.unwrap_or\(')) {
+        $Failed += "silent from_config unwrap_or usage (gradient/limiter/reconstruction/mesh)"
+    }
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan

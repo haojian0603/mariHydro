@@ -182,6 +182,23 @@ try {
         Write-Host "[OK] no raw scalar_from_f64 call sites in mh_physics/src" -ForegroundColor Green
     }
 
+    $silentConfigFallbacks = @(
+        Get-ChildItem -Path "crates/mh_physics/src/numerics/gradient", "crates/mh_physics/src/numerics/limiter", "crates/mh_physics/src/numerics/reconstruction", "crates/mh_physics/src/mesh" -Recurse -Filter "*.rs" -File |
+            Select-String -Pattern '\bfrom_config\(.*\)\.unwrap_or\(' -CaseSensitive
+    )
+    if ($silentConfigFallbacks) {
+        Write-Host "[FAIL] silent from_config(...).unwrap_or(...) fallbacks exist in numerics gradient/limiter/reconstruction or mesh:" -ForegroundColor Red
+        $silentConfigFallbacks | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($silentConfigFallbacks.Count -gt 10) {
+            Write-Host "  ... and $($silentConfigFallbacks.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "silent from_config(...).unwrap_or(...) fallbacks must be removed from mh_physics/src/numerics/{gradient,limiter,reconstruction} and mh_physics/src/mesh"
+    } else {
+        Write-Host "[OK] no silent from_config(...).unwrap_or(...) fallbacks in mh_physics/src/numerics/{gradient,limiter,reconstruction} and mh_physics/src/mesh" -ForegroundColor Green
+    }
+
     # Phase 6: compile check
     Write-Host ""
     Write-Host "=== Phase 6: compile check ===" -ForegroundColor Cyan

@@ -1,23 +1,23 @@
-// crates/mh_physics/src/numerics/limiter/venkatakrishnan.rs
+﻿// crates/mh_physics/src/numerics/limiter/venkatakrishnan.rs
 
-//! Venkatakrishnan 限制器 - 泛型实现
+//! Venkatakrishnan 闄愬埗鍣?- 娉涘瀷瀹炵幇
 //!
-//! 光滑的梯度限制器，避免 Barth-Jespersen 的梯度突变问题。
-//! 使用光滑函数替代 min 操作，提供二阶精度并保持数值稳定性。
+//! 鍏夋粦鐨勬搴﹂檺鍒跺櫒锛岄伩鍏?Barth-Jespersen 鐨勬搴︾獊鍙橀棶棰樸€?
+//! 浣跨敤鍏夋粦鍑芥暟鏇夸唬 min 鎿嶄綔锛屾彁渚涗簩闃剁簿搴﹀苟淇濇寔鏁板€肩ǔ瀹氭€с€?
 //!
-//! # 类型参数
-//! - `S: RuntimeScalar` - 支持 f32/f64 精度
+//! # 绫诲瀷鍙傛暟
+//! - `S: RuntimeScalar` - 鏀寔 f32/f64 绮惧害
 //!
-//! # K 参数选择
-//! - 0.1-0.3: 强限制，适用于激波/溃坝
-//! - 0.3-1.0: 中等限制，通用场景（默认）
-//! - 1.0-5.0: 弱限制，适用于光滑流动
+//! # K 鍙傛暟閫夋嫨
+//! - 0.1-0.3: 寮洪檺鍒讹紝閫傜敤浜庢縺娉?婧冨潩
+//! - 0.3-1.0: 涓瓑闄愬埗锛岄€氱敤鍦烘櫙锛堥粯璁わ級
+//! - 1.0-5.0: 寮遍檺鍒讹紝閫傜敤浜庡厜婊戞祦鍔?
 //!
-//! # 注意事项
-//! 默认构造器使用 `mesh_scale=1.0`，实际使用时必须调用 `update_mesh_scale()`
-//! 根据真实网格尺度更新，否则限制效果可能不符合预期。
+//! # 娉ㄦ剰浜嬮」
+//! 榛樿鏋勯€犲櫒浣跨敤 `mesh_scale=1.0`锛屽疄闄呬娇鐢ㄦ椂蹇呴』璋冪敤 `update_mesh_scale()`
+//! 鏍规嵁鐪熷疄缃戞牸灏哄害鏇存柊锛屽惁鍒欓檺鍒舵晥鏋滃彲鑳戒笉绗﹀悎棰勬湡銆?
 //!
-//! # 参考文献
+//! # 鍙傝€冩枃鐚?
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and convergence to steady state solutions".
 //! AIAA Paper 93-0880.
 
@@ -25,7 +25,7 @@ use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
 use super::traits::{LimiterContext, SlopeLimiter};
 
-/// Venkatakrishnan 限制器
+/// Venkatakrishnan 闄愬埗鍣?
 #[derive(Clone, Copy)]
 pub struct Venkatakrishnan<B: Backend> {
     k: B::Scalar,
@@ -44,11 +44,17 @@ impl<B: Backend> std::fmt::Debug for Venkatakrishnan<B> {
 }
 
 impl<B: Backend> Venkatakrishnan<B> {
-    /// 创建新的限制器
+    #[inline]
+    fn preset_k(value: f64, context: &'static str) -> B::Scalar {
+        B::Scalar::from_config(value).unwrap_or_else(|| {
+            panic!("failed to convert preset limiter parameter for {context}: {value}")
+        })
+    }
+    /// 鍒涘缓鏂扮殑闄愬埗鍣?
     ///
-    /// # 参数
-    /// - `k`: K 参数，控制限制强度
-    /// - `mesh_scale`: 网格特征尺度
+    /// # 鍙傛暟
+    /// - `k`: K 鍙傛暟锛屾帶鍒堕檺鍒跺己搴?
+    /// - `mesh_scale`: 缃戞牸鐗瑰緛灏哄害
     #[inline]
     pub fn new(k: B::Scalar, mesh_scale: B::Scalar) -> Self {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -66,7 +72,7 @@ impl<B: Backend> Venkatakrishnan<B> {
         }
     }
 
-    /// 创建具有自定义容差的限制器
+    /// 鍒涘缓鍏锋湁鑷畾涔夊宸殑闄愬埗鍣?
     #[inline]
     pub fn with_tolerance(k: B::Scalar, mesh_scale: B::Scalar, tol: B::Scalar) -> Self {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -84,43 +90,43 @@ impl<B: Backend> Venkatakrishnan<B> {
         }
     }
 
-        /// 预设：激波/强间断
+        /// 棰勮锛氭縺娉?寮洪棿鏂?
         pub fn for_shock_capturing(mesh_scale: B::Scalar) -> Self {
-            let k = B::Scalar::from_config(0.1).unwrap_or(B::Scalar::ONE);
+            let k = Self::preset_k(0.1, "venkatakrishnan.shock_capturing");
             Self::new(k, mesh_scale)
         }
 
-        /// 预设：干湿交界
+        /// 棰勮锛氬共婀夸氦鐣?
         pub fn for_wetting_drying(mesh_scale: B::Scalar) -> Self {
-            let k = B::Scalar::from_config(0.3).unwrap_or(B::Scalar::ONE);
+            let k = Self::preset_k(0.3, "venkatakrishnan.wetting_drying");
             Self::new(k, mesh_scale)
         }
 
-        /// 预设：光滑流动
+        /// 棰勮锛氬厜婊戞祦鍔?
         pub fn for_smooth_flow(mesh_scale: B::Scalar) -> Self {
-            let k = B::Scalar::from_config(2.0).unwrap_or(B::Scalar::ONE);
+            let k = Self::preset_k(2.0, "venkatakrishnan.smooth_flow");
             Self::new(k, mesh_scale)
         }
 
-        /// 预设：最小限制
+        /// 棰勮锛氭渶灏忛檺鍒?
         pub fn minimal_limiting(mesh_scale: B::Scalar) -> Self {
-            let k = B::Scalar::from_config(5.0).unwrap_or(B::Scalar::ONE);
+            let k = Self::preset_k(5.0, "venkatakrishnan.minimal_limiting");
             Self::new(k, mesh_scale)
         }
 
-    /// 获取 K 参数
+    /// 鑾峰彇 K 鍙傛暟
     #[inline]
     pub fn k(&self) -> B::Scalar {
         self.k
     }
 
-    /// 获取 ε² 值
+    /// 鑾峰彇 蔚虏 鍊?
     #[inline]
     pub fn eps_squared(&self) -> B::Scalar {
         self.eps_squared
     }
 
-    /// 更新网格尺度
+    /// 鏇存柊缃戞牸灏哄害
     #[inline]
     pub fn update_mesh_scale(&mut self, mesh_scale: B::Scalar) {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -132,7 +138,7 @@ impl<B: Backend> Venkatakrishnan<B> {
         self.eps_squared = kh * kh * kh;
     }
 
-    /// 计算光滑限制函数
+    /// 璁＄畻鍏夋粦闄愬埗鍑芥暟
     #[inline]
     fn phi(&self, x: B::Scalar, y: B::Scalar) -> B::Scalar {
         let x2 = x * x;

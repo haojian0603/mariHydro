@@ -1,45 +1,45 @@
-//! 结构化网格实现
+﻿//! 缁撴瀯鍖栫綉鏍煎疄鐜?
 //!
-//! 提供完整的结构化网格拓扑与几何计算。
+//! 鎻愪緵瀹屾暣鐨勭粨鏋勫寲缃戞牸鎷撴墤涓庡嚑浣曡绠椼€?
 //!
-//! # 设计说明
+//! # 璁捐璇存槑
 //!
-//! - 存储 Backend 实例以支持动态缓冲区分配
-//! - 移除冗余的 PhantomData（Backend 已通过字段使用）
-//! - 所有构造函数必须接收 Backend 参数
+//! - 瀛樺偍 Backend 瀹炰緥浠ユ敮鎸佸姩鎬佺紦鍐插尯鍒嗛厤
+//! - 绉婚櫎鍐椾綑鐨?PhantomData锛圔ackend 宸查€氳繃瀛楁浣跨敤锛?
+//! - 鎵€鏈夋瀯閫犲嚱鏁板繀椤绘帴鏀?Backend 鍙傛暟
 
 use crate::core::Backend;
 use mh_runtime::{DeviceBuffer, RuntimeScalar};
 use super::topology::{MeshKind, MeshTopology, MeshValidationError};
 
-/// 结构化网格
+/// 缁撴瀯鍖栫綉鏍?
 ///
-/// 规则矩形网格，支持高效的索引计算和 SIMD 优化。
+/// 瑙勫垯鐭╁舰缃戞牸锛屾敮鎸侀珮鏁堢殑绱㈠紩璁＄畻鍜?SIMD 浼樺寲銆?
 ///
-/// # 类型参数
+/// # 绫诲瀷鍙傛暟
 ///
-/// - `B`: 计算后端类型（无默认值）
+/// - `B`: 璁＄畻鍚庣绫诲瀷锛堟棤榛樿鍊硷級
 #[allow(dead_code)]
 pub struct StructuredMesh<B: Backend> {
-    /// 计算后端实例
+    /// 璁＄畻鍚庣瀹炰緥
     backend: B,
-    /// x 方向单元数
+    /// x 鏂瑰悜鍗曞厓鏁?
     nx: usize,
-    /// y 方向单元数
+    /// y 鏂瑰悜鍗曞厓鏁?
     ny: usize,
-    /// x 方向网格间距
+    /// x 鏂瑰悜缃戞牸闂磋窛
     dx: B::Scalar,
-    /// y 方向网格间距
+    /// y 鏂瑰悜缃戞牸闂磋窛
     dy: B::Scalar,
-    /// 单元面积缓冲区
+    /// 鍗曞厓闈㈢Н缂撳啿鍖?
     cell_areas: B::Buffer<B::Scalar>,
-    /// 面长度缓冲区
+    /// 闈㈤暱搴︾紦鍐插尯
     face_lengths: B::Buffer<B::Scalar>,
-    /// 边界面索引缓存
+    /// 杈圭晫闈㈢储寮曠紦瀛?
     boundary_faces_cache: Vec<usize>,
-    /// 内部面索引缓存
+    /// 鍐呴儴闈㈢储寮曠紦瀛?
     interior_faces_cache: Vec<usize>,
-    /// 单元-面映射缓存
+    /// 鍗曞厓-闈㈡槧灏勭紦瀛?
     cell_faces_cache: Vec<Vec<usize>>,
 }
 
@@ -48,17 +48,26 @@ where
     B: Backend + Clone,
     B::Scalar: RuntimeScalar,
 {
-    /// 使用 Backend 创建结构化网格
+    #[inline]
+    fn config_scalar(&self, value: f64, context: &'static str) -> B::Scalar {
+        self.backend.config_scalar(value, context)
+    }
+
+    #[inline]
+    fn config_index(&self, value: usize, context: &'static str) -> B::Scalar {
+        self.backend.config_scalar(value as f64, context)
+    }
+    /// 浣跨敤 Backend 鍒涘缓缁撴瀯鍖栫綉鏍?
     ///
-    /// # 参数
+    /// # 鍙傛暟
     ///
-    /// - `backend`: 计算后端实例
-    /// - `nx`: x 方向单元数
-    /// - `ny`: y 方向单元数
-    /// - `dx`: x 方向网格间距
-    /// - `dy`: y 方向网格间距
+    /// - `backend`: 璁＄畻鍚庣瀹炰緥
+    /// - `nx`: x 鏂瑰悜鍗曞厓鏁?
+    /// - `ny`: y 鏂瑰悜鍗曞厓鏁?
+    /// - `dx`: x 鏂瑰悜缃戞牸闂磋窛
+    /// - `dy`: y 鏂瑰悜缃戞牸闂磋窛
     ///
-    /// # 示例
+    /// # 绀轰緥
     ///
     /// ```ignore
     /// use mh_physics::mesh::StructuredMesh;
@@ -102,7 +111,7 @@ where
         let n_cells = nx * ny;
         let n_faces = Self::compute_n_faces(nx, ny);
         
-        // 使用 Backend 分配缓冲区
+        // 浣跨敤 Backend 鍒嗛厤缂撳啿鍖?
         let cell_area = dx * dy;
         let cell_areas = backend.alloc_init(n_cells, cell_area);
         let mut face_lengths = backend.alloc(n_faces);
@@ -119,7 +128,7 @@ where
                 lengths[f] = dx;
             }
 
-            // 边界面：下、上、左、右
+            // 杈圭晫闈細涓嬨€佷笂銆佸乏銆佸彸
             let bottom_start = boundary_start;
             let top_start = bottom_start + nx;
             let left_start = top_start + nx;
@@ -139,11 +148,11 @@ where
             }
         }
         
-        // 构建面索引缓存
+        // 鏋勫缓闈㈢储寮曠紦瀛?
         let (boundary_faces_cache, interior_faces_cache) = 
             Self::build_face_caches(nx, ny);
         
-        // 构建单元-面映射
+        // 鏋勫缓鍗曞厓-闈㈡槧灏?
         let cell_faces_cache = Self::build_cell_face_map(nx, ny);
         
         let mesh = Self {
@@ -164,14 +173,14 @@ where
         Ok(mesh)
     }
     
-    /// 计算总面数
+    /// 璁＄畻鎬婚潰鏁?
     #[inline]
     fn compute_n_faces(nx: usize, ny: usize) -> usize {
-        // 水平内部面 + 垂直内部面 + 边界面
+        // 姘村钩鍐呴儴闈?+ 鍨傜洿鍐呴儴闈?+ 杈圭晫闈?
         (nx - 1) * ny + nx * (ny - 1) + 2 * (nx + ny)
     }
     
-    /// 构建边界和内部面缓存
+    /// 鏋勫缓杈圭晫鍜屽唴閮ㄩ潰缂撳瓨
     fn build_face_caches(nx: usize, ny: usize) -> (Vec<usize>, Vec<usize>) {
         let mut boundary = Vec::new();
         let mut interior = Vec::new();
@@ -189,7 +198,7 @@ where
         (boundary, interior)
     }
     
-    /// 构建单元-面映射
+    /// 鏋勫缓鍗曞厓-闈㈡槧灏?
     fn build_cell_face_map(nx: usize, ny: usize) -> Vec<Vec<usize>> {
         let n_cells = nx * ny;
         let n_h_interior = (nx - 1) * ny;
@@ -231,31 +240,31 @@ where
         map
     }
     
-    /// 获取后端引用
+    /// 鑾峰彇鍚庣寮曠敤
     #[inline]
     pub fn backend(&self) -> &B {
         &self.backend
     }
     
-    /// 获取 x 方向单元数
+    /// 鑾峰彇 x 鏂瑰悜鍗曞厓鏁?
     #[inline]
     pub fn nx(&self) -> usize {
         self.nx
     }
     
-    /// 获取 y 方向单元数
+    /// 鑾峰彇 y 鏂瑰悜鍗曞厓鏁?
     #[inline]
     pub fn ny(&self) -> usize {
         self.ny
     }
     
-    /// 将 (i, j) 索引转换为单元索引
+    /// 灏?(i, j) 绱㈠紩杞崲涓哄崟鍏冪储寮?
     #[inline]
     pub fn cell_index(&self, i: usize, j: usize) -> usize {
         j * self.nx + i
     }
     
-    /// 将单元索引转换为 (i, j) 索引
+    /// 灏嗗崟鍏冪储寮曡浆鎹负 (i, j) 绱㈠紩
     #[inline]
     pub fn cell_ij(&self, cell: usize) -> (usize, usize) {
         (cell % self.nx, cell / self.nx)
@@ -285,9 +294,9 @@ where
     
     fn cell_center(&self, cell: usize) -> [B::Scalar; 2] {
         let (i, j) = self.cell_ij(cell);
-        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::ONE);
-        let x = self.dx * B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + self.dx * half;
-        let y = self.dy * B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + self.dy * half;
+        let half = self.config_scalar(0.5, "structured_mesh.cell_center.half");
+        let x = self.dx * self.config_index(i, "structured_mesh.cell_center.i") + self.dx * half;
+        let y = self.dy * self.config_index(j, "structured_mesh.cell_center.j") + self.dy * half;
         [x, y]
     }
     
@@ -326,40 +335,40 @@ where
         let n_h_interior = (self.nx - 1) * self.ny;
         let n_v_interior = self.nx * (self.ny - 1);
         let boundary_start = n_h_interior + n_v_interior;
-        let half = B::Scalar::from_config(0.5).unwrap_or(B::Scalar::HALF);
+        let half = self.config_scalar(0.5, "structured_mesh.face_center.half");
 
         if _face < n_h_interior {
             let i = _face % (self.nx - 1);
             let j = _face / (self.nx - 1);
-            let x = self.dx * B::Scalar::from_config((i + 1) as f64).unwrap_or(B::Scalar::ZERO);
-            let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
+            let x = self.dx * self.config_index(i + 1, "structured_mesh.face_center.horizontal.i_plus_1");
+            let y = self.dy * (self.config_index(j, "structured_mesh.face_center.horizontal.j") + half);
             [x, y]
         } else if _face < boundary_start {
             let local = _face - n_h_interior;
             let i = local % self.nx;
             let j = local / self.nx;
-            let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
-            let y = self.dy * B::Scalar::from_config((j + 1) as f64).unwrap_or(B::Scalar::ZERO);
+            let x = self.dx * (self.config_index(i, "structured_mesh.face_center.vertical.i") + half);
+            let y = self.dy * self.config_index(j + 1, "structured_mesh.face_center.vertical.j_plus_1");
             [x, y]
         } else {
             let boundary_idx = _face - boundary_start;
             if boundary_idx < self.nx {
                 let i = boundary_idx;
-                let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
+                let x = self.dx * (self.config_index(i, "structured_mesh.face_center.bottom.i") + half);
                 [x, B::Scalar::ZERO]
             } else if boundary_idx < 2 * self.nx {
                 let i = boundary_idx - self.nx;
-                let x = self.dx * (B::Scalar::from_config(i as f64).unwrap_or(B::Scalar::ZERO) + half);
-                let y = self.dy * B::Scalar::from_config(self.ny as f64).unwrap_or(B::Scalar::ZERO);
+                let x = self.dx * (self.config_index(i, "structured_mesh.face_center.top.i") + half);
+                let y = self.dy * self.config_index(self.ny, "structured_mesh.face_center.top.ny");
                 [x, y]
             } else if boundary_idx < 2 * self.nx + self.ny {
                 let j = boundary_idx - 2 * self.nx;
-                let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
+                let y = self.dy * (self.config_index(j, "structured_mesh.face_center.left.j") + half);
                 [B::Scalar::ZERO, y]
             } else {
                 let j = boundary_idx - 2 * self.nx - self.ny;
-                let x = self.dx * B::Scalar::from_config(self.nx as f64).unwrap_or(B::Scalar::ZERO);
-                let y = self.dy * (B::Scalar::from_config(j as f64).unwrap_or(B::Scalar::ZERO) + half);
+                let x = self.dx * self.config_index(self.nx, "structured_mesh.face_center.right.nx");
+                let y = self.dy * (self.config_index(j, "structured_mesh.face_center.right.j") + half);
                 [x, y]
             }
         }
@@ -486,11 +495,11 @@ mod tests {
         let backend = test_backend();
         let mesh = StructuredMesh::new_with_backend(&backend, 5, 5, 1.0, 1.0).unwrap();
         
-        // 角落单元
+        // 瑙掕惤鍗曞厓
         let neighbors = mesh.cell_neighbors(0);
         assert_eq!(neighbors.len(), 2);
         
-        // 中心单元
+        // 涓績鍗曞厓
         let neighbors = mesh.cell_neighbors(12); // (2, 2)
         assert_eq!(neighbors.len(), 4);
     }
@@ -505,3 +514,4 @@ mod tests {
         assert!((center[1] - 0.5).abs() < 1e-10);
     }
 }
+

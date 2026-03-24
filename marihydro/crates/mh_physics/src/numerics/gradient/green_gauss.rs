@@ -222,7 +222,7 @@ impl GreenGaussGradient {
                         let dy_other = face_center.y() - other_center.y();
                         let d_other = (dx_other * dx_other + dy_other * dy_other).sqrt();
 
-                        let eps = B::Scalar::from_config(1e-14).unwrap_or(B::Scalar::MIN_POSITIVE);
+                        let eps = backend.config_scalar(1e-14, "green_gauss.distance_weight_epsilon");
                         Self::distance_weighted_interpolate::<B>(
                             phi_c,
                             field[other.get()],
@@ -240,7 +240,7 @@ impl GreenGaussGradient {
             grad_y = grad_y + ds_y * phi_face;
         }
 
-        let area = B::Scalar::from_config(area_f64).unwrap_or(B::Scalar::ZERO);
+        let area = backend.config_scalar(area_f64, "green_gauss.cell_area");
         (grad_x / area, grad_y / area)
     }
 
