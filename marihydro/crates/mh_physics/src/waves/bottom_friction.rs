@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use crate::prelude::*;
 
 fn scalar_const<B: Backend>(backend: &B, v: f64) -> B::Scalar {
-    backend.scalar_from_f64(v)
+    backend.config_scalar(v, "WaveBottomFriction.scalar_const")
 }
 
 fn scalar_pi<B: Backend>(backend: &B) -> B::Scalar {
-    backend.scalar_from_f64(std::f64::consts::PI)
+    backend.config_scalar(std::f64::consts::PI, "WaveBottomFriction.scalar_pi")
 }
 
 /// 波浪底摩擦模型

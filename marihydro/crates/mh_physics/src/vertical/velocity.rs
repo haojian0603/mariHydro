@@ -53,8 +53,9 @@ impl<B: Backend> VerticalVelocity<B> {
         state: &ShallowWaterState<B>,
     ) {
         let n_layers = self.sigma.n_layers();
-        let eps = <B::Scalar as RuntimeScalar>::from_config(1e-6)
-            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
+        let eps = self
+            .backend
+            .config_scalar(1e-6, "VerticalVelocity.compute_from_divergence.eps");
         let zero = <B::Scalar as RuntimeScalar>::ZERO;
 
         for cell in 0..self.n_cells.min(div_hu.len()) {
@@ -73,10 +74,10 @@ impl<B: Backend> VerticalVelocity<B> {
             // 从底部向上积分
             // w(k) = w(k+1) - div_hu * Δσ
             for k in (0..n_layers).rev() {
-                let d_sigma = <B::Scalar as RuntimeScalar>::from_config(
+                let d_sigma = self.backend.config_scalar(
                     self.sigma.layer_thickness_sigma(k),
-                )
-                .unwrap_or(zero);
+                    "VerticalVelocity.compute_from_divergence.layer_thickness",
+                );
                 self.w[k][cell] = self.w[k + 1][cell] - div_hu[cell] * d_sigma;
             }
 
@@ -97,8 +98,9 @@ impl<B: Backend> VerticalVelocity<B> {
         state: &ShallowWaterState<B>,
     ) {
         let n_layers = self.sigma.n_layers();
-        let eps = <B::Scalar as RuntimeScalar>::from_config(1e-6)
-            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
+        let eps = self
+            .backend
+            .config_scalar(1e-6, "VerticalVelocity.compute_from_layered_velocity.eps");
         let zero = <B::Scalar as RuntimeScalar>::ZERO;
 
         for cell in 0..self.n_cells {
@@ -115,10 +117,10 @@ impl<B: Backend> VerticalVelocity<B> {
 
             // 逐层积分
             for k in (0..n_layers).rev() {
-                let d_sigma = <B::Scalar as RuntimeScalar>::from_config(
+                let d_sigma = self.backend.config_scalar(
                     self.sigma.layer_thickness_sigma(k),
-                )
-                .unwrap_or(zero);
+                    "VerticalVelocity.compute_from_layered_velocity.layer_thickness",
+                );
                 let layer_h = d_sigma * h;
 
                 // 水平散度（若提供）
@@ -179,7 +181,7 @@ mod tests {
         h: f64,
     ) -> ShallowWaterState<CpuBackend<f64>> {
         let mut state = ShallowWaterState::new_with_backend(backend.clone(), n_cells);
-        let h_val = backend.scalar_from_f64(h);
+        let h_val = backend.config_scalar(h, "VerticalVelocity.tests.create_test_state.h");
         for i in 0..n_cells {
             state.h[i] = h_val;
         }
@@ -203,7 +205,10 @@ mod tests {
         let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
         let state = create_test_state(backend.clone(), 10, 2.0);
         let mut div_hu = backend.alloc(10);
-        div_hu.fill(backend.scalar_from_f64(0.0));
+        div_hu.fill(backend.config_scalar(
+            0.0,
+            "VerticalVelocity.tests.zero_divergence.value",
+        ));
 
         vv.compute_from_divergence(&div_hu, &state);
 
@@ -222,7 +227,10 @@ mod tests {
         let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
         let state = create_test_state(backend.clone(), 10, 2.0);
         let mut div_hu = backend.alloc(10);
-        div_hu.fill(backend.scalar_from_f64(0.1));
+        div_hu.fill(backend.config_scalar(
+            0.1,
+            "VerticalVelocity.tests.constant_divergence.value",
+        ));
 
         vv.compute_from_divergence(&div_hu, &state);
 
@@ -244,7 +252,10 @@ mod tests {
         let mut vv = VerticalVelocity::new_with_backend(backend.clone(), 10, sigma);
         let state = create_test_state(backend.clone(), 10, 1e-8); // 干单元
         let mut div_hu = backend.alloc(10);
-        div_hu.fill(backend.scalar_from_f64(1.0));
+        div_hu.fill(backend.config_scalar(
+            1.0,
+            "VerticalVelocity.tests.dry_cell.value",
+        ));
 
         vv.compute_from_divergence(&div_hu, &state);
 

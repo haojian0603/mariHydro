@@ -105,16 +105,18 @@ impl<B: Backend> VerticalMixing<B> {
     fn initialize(&mut self) {
         match self.model {
             VerticalMixingModel::Constant { nu_v, kappa_v } => {
-                let nu_v = self.backend.scalar_from_f64(nu_v);
-                let kappa_v = self.backend.scalar_from_f64(kappa_v);
+                let cfg = |v| self.backend.config_scalar(v, "VerticalMixing.initialize.constant");
+                let nu_v = cfg(nu_v);
+                let kappa_v = cfg(kappa_v);
                 for k in 0..self.sigma.n_layers() {
                     self.nu_v[k].fill(nu_v);
                     self.kappa_v[k].fill(kappa_v);
                 }
             }
             VerticalMixingModel::PacanowskiPhilander { nu_0, .. } => {
-                let nu_0 = self.backend.scalar_from_f64(nu_0);
-                let kappa_0 = self.backend.scalar_from_f64(0.1) * nu_0;
+                let cfg = |v| self.backend.config_scalar(v, "VerticalMixing.initialize.pacanowski_philander");
+                let nu_0 = cfg(nu_0);
+                let kappa_0 = cfg(0.1) * nu_0;
                 // 初始化为背景值
                 for k in 0..self.sigma.n_layers() {
                     self.nu_v[k].fill(nu_0);
@@ -151,17 +153,18 @@ impl<B: Backend> VerticalMixing<B> {
         g: f64,
     ) {
         if let VerticalMixingModel::PacanowskiPhilander { nu_0, nu_max, alpha, n } = self.model {
-            let rho_0 = self.backend.scalar_from_f64(rho_0);
-            let g = self.backend.scalar_from_f64(g);
-            let nu_0 = self.backend.scalar_from_f64(nu_0);
-            let nu_max = self.backend.scalar_from_f64(nu_max);
-            let alpha = self.backend.scalar_from_f64(alpha);
-            let n = self.backend.scalar_from_f64(n);
+            let cfg = |v| self.backend.config_scalar(v, "VerticalMixing.update_pp");
+            let rho_0 = cfg(rho_0);
+            let g = cfg(g);
+            let nu_0 = cfg(nu_0);
+            let nu_max = cfg(nu_max);
+            let alpha = cfg(alpha);
+            let n = cfg(n);
             let zero = <B::Scalar as RuntimeScalar>::ZERO;
             let one = <B::Scalar as RuntimeScalar>::ONE;
-            let min_shear = <B::Scalar as RuntimeScalar>::from_config(1e-10).unwrap_or(zero);
-            let pr = self.backend.scalar_from_f64(0.75);
-            let kappa_0 = self.backend.scalar_from_f64(0.1) * nu_0;
+            let min_shear = cfg(1e-10);
+            let pr = cfg(0.75);
+            let kappa_0 = cfg(0.1) * nu_0;
             let n_layers = self.sigma.n_layers();
 
             for k in 0..n_layers.min(drho_dz.len()).min(du_dz.len()) {
@@ -214,12 +217,12 @@ impl<B: Backend> VerticalMixing<B> {
         epsilon_field: &[&B::Buffer<B::Scalar>],
         c_mu: f64,
     ) {
-        let c_mu = self.backend.scalar_from_f64(c_mu);
-        let min_val = <B::Scalar as RuntimeScalar>::from_config(1e-12)
-            .unwrap_or(<B::Scalar as RuntimeScalar>::ZERO);
-        let min_nu = self.backend.scalar_from_f64(1e-7);
-        let max_nu = self.backend.scalar_from_f64(1.0);
-        let pr_t = self.backend.scalar_from_f64(0.9);
+        let cfg = |v| self.backend.config_scalar(v, "VerticalMixing.update_from_k_epsilon");
+        let c_mu = cfg(c_mu);
+        let min_val = cfg(1e-12);
+        let min_nu = cfg(1e-7);
+        let max_nu = cfg(1.0);
+        let pr_t = cfg(0.9);
         let n_layers = self.sigma.n_layers();
 
         for layer in 0..n_layers.min(k_field.len()).min(epsilon_field.len()) {

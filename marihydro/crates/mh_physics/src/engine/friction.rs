@@ -90,12 +90,12 @@ where
     /// - `g`: 重力加速度 [m/s²]
     /// - `config`: 摩擦计算配置
     pub fn with_config(backend: B, g: f64, config: FrictionConfig) -> Self {
-        let h_min = backend.scalar_from_f64(config.h_min);
+        let h_min = backend.config_scalar(config.h_min, "ManningFriction.with_config.h_min");
         Self {
-            g: backend.scalar_from_f64(g),
+            g: backend.config_scalar(g, "ManningFriction.with_config.g"),
             h_min,
-            four_thirds: backend.scalar_from_f64(4.0 / 3.0),
-            pow_guard: backend.scalar_from_f64(1e-12),
+            four_thirds: backend.config_scalar(4.0 / 3.0, "ManningFriction.with_config.four_thirds"),
+            pow_guard: backend.config_scalar(1e-12, "ManningFriction.with_config.pow_guard"),
             config,
             backend,
         }
@@ -103,7 +103,7 @@ where
 
     /// 设置配置
     pub fn set_config(&mut self, config: FrictionConfig) {
-        self.h_min = self.backend.scalar_from_f64(config.h_min);
+        self.h_min = self.backend.config_scalar(config.h_min, "ManningFriction.set_config.h_min");
         self.config = config;
     }
 

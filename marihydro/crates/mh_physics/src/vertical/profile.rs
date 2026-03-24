@@ -104,9 +104,10 @@ impl ConcentrationProfile {
             return backend.alloc_init(n_layers, B::Scalar::ZERO);
         }
 
-        let n_layers_s = backend.scalar_from_f64(n_layers as f64);
+        let cfg = |v| backend.config_scalar(v, "ConcentrationProfile.recover");
+        let n_layers_s = cfg(n_layers as f64);
         let dz = h / n_layers_s;
-        let kv = diffusivity.max(backend.scalar_from_f64(1e-12));
+        let kv = diffusivity.max(cfg(1e-12));
         let ws = settling_velocity.abs();
 
         let mut weights = backend.alloc_init(n_layers, B::Scalar::ZERO);
@@ -116,7 +117,7 @@ impl ConcentrationProfile {
         let mut sum_w = B::Scalar::ZERO;
 
         for k in 0..n_layers {
-            let z = dz * backend.scalar_from_f64(k as f64 + 0.5);
+            let z = dz * cfg(k as f64 + 0.5);
             let w = match method {
                 ConcentrationProfileMethod::Uniform => B::Scalar::ONE,
                 ConcentrationProfileMethod::Exponential => {
@@ -179,10 +180,13 @@ impl<B: Backend> ProfileRestorer<B> {
     pub fn new_with_backend(backend: B, n_cells: usize, n_layers: usize, method: ProfileMethod) -> Self {
         Self {
             sigma: SigmaCoordinate::uniform(n_layers),
-            roughness: backend.alloc_init(n_cells, backend.scalar_from_f64(0.01)), // 默认糙率
+            roughness: backend.alloc_init(
+                n_cells,
+                backend.config_scalar(0.01, "ProfileRestorer.default_roughness"),
+            ), // 默认糙率
             n_layers,
             method,
-            von_karman: backend.scalar_from_f64(VON_KARMAN),
+            von_karman: backend.config_scalar(VON_KARMAN, "ProfileRestorer.von_karman"),
             backend,
         }
     }

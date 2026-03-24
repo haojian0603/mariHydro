@@ -270,8 +270,10 @@ impl SpectralWaveSolver {
             let hs = hs_raw.min(self.config.breaking_gamma * h).max(0.0);
             let dir = self.params.dir[i];
             let omega = 2.0 * PI / tp.max(1e-6);
-            let omega_s = backend.scalar_from_f64(omega);
-            let h_s = backend.scalar_from_f64(h);
+            let omega_s =
+                backend.config_scalar(omega, "SpectralWaveSolver.compute_radiation_stress.omega");
+            let h_s =
+                backend.config_scalar(h, "SpectralWaveSolver.compute_radiation_stress.depth");
             let (_k, n) = compute_wavenumber_and_n(backend, omega_s, h_s);
             let energy = rho * g * hs * hs / 8.0;
             let stress = RadiationStressTensorGeneric::<f64>::compute(energy, n.to_f64_lossy(), dir);
