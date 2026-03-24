@@ -65,6 +65,8 @@ CLAUDE.md
 *.temp
 *.swp
 *.swo
+tmp_*/
+marihydro/tmp_*.log
 
 # 如果使用本地依赖缓存
 vendor/
