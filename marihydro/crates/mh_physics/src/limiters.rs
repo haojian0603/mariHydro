@@ -5,9 +5,9 @@
 //   `crate::numerics::reconstruction`.
 // - This module remains only as a scalar compatibility shim for older callers.
 // - New engine work should not add fresh dependencies on this module.
-// - `crate::types::LimiterType` is the configuration入口；root-level
-//   `crate::limiters::{LimiterType, MusclConfig, MusclReconstructor}` are
-//   retained only for compatibility.
+// - `crate::types::LimiterType` is the configuration entry, and
+//   `crate::legacy_limiters::{LimiterType, MusclConfig, MusclReconstructor}`
+//   is the only supported compatibility namespace for old scalar callers.
 
 //! 斜率限制器与重构方法
 //!

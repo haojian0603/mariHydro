@@ -324,6 +324,25 @@ try {
         Write-Host "[OK] sources::legacy namespace is present" -ForegroundColor Green
     }
 
+    $publicLegacyLimiterRoot = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod limiters;' -CaseSensitive
+    if ($publicLegacyLimiterRoot) {
+        Write-Host "[FAIL] public root-level limiters shim is still exposed from lib.rs" -ForegroundColor Red
+        $publicLegacyLimiterRoot | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        $errors += "public root-level crate::limiters shim must be removed from crates/mh_physics/src/lib.rs"
+    } else {
+        Write-Host "[OK] public root-level limiters shim is removed" -ForegroundColor Green
+    }
+
+    $legacyLimitersNamespace = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod legacy_limiters \{' -CaseSensitive
+    if (-not $legacyLimitersNamespace) {
+        Write-Host "[FAIL] legacy_limiters namespace is missing" -ForegroundColor Red
+        $errors += "crates/mh_physics/src/lib.rs must expose an explicit legacy_limiters namespace"
+    } else {
+        Write-Host "[OK] legacy_limiters namespace is present" -ForegroundColor Green
+    }
+
     $legacyLimiterImports = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
         Where-Object {
             $_.FullName -notlike "*\mh_physics\src\limiters.rs" -and
@@ -331,16 +350,16 @@ try {
         } |
         Select-String -Pattern 'crate::limiters|limiters::LimiterType|limiters::MusclConfig|limiters::MusclReconstructor' -CaseSensitive
     if ($legacyLimiterImports) {
-        Write-Host "[FAIL] legacy root limiters shim is referenced outside the allowed bridge files:" -ForegroundColor Red
+        Write-Host "[FAIL] legacy limiters bridge is referenced outside the allowed bridge files:" -ForegroundColor Red
         $legacyLimiterImports | Select-Object -First 10 | ForEach-Object {
             Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
         }
         if ($legacyLimiterImports.Count -gt 10) {
             Write-Host "  ... and $($legacyLimiterImports.Count - 10) more" -ForegroundColor Red
         }
-        $errors += "legacy crate::limiters shim must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/limiters.rs"
+        $errors += "legacy limiters bridge must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/limiters.rs"
     } else {
-        Write-Host "[OK] legacy root limiters shim is confined to the allowed bridge files" -ForegroundColor Green
+        Write-Host "[OK] legacy limiters bridge is confined to the allowed bridge files" -ForegroundColor Green
     }
 
     $silentScalarFallbacks = @(
