@@ -1,6 +1,6 @@
 use mh_agent::{
     AIAgent, AiError, Assimilable, ImageBounds, InterpolationMethod, RemoteSensingAgent,
-    RemoteSensingConfig, SatelliteImage, SensorType,
+    RemoteSensingConfig, SatelliteImage, SensorType, InversionModel,
 };
 use mh_runtime::{Backend, CpuBackend};
 
@@ -82,11 +82,11 @@ impl Assimilable<CpuBackend<f64>> for DummyState {
 
 fn make_config() -> RemoteSensingConfig<CpuBackend<f64>> {
     RemoteSensingConfig {
-        model_path: None,
         assimilation_rate: 0.5,
         max_concentration: 100.0,
         max_cloud_cover: 0.5,
         interpolation: InterpolationMethod::NearestNeighbor,
+        inversion: InversionModel::linear(10.0, 0.0),
     }
 }
 

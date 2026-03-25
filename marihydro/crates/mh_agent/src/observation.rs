@@ -68,6 +68,10 @@ impl<B: Backend> ReflectanceOperator<B>
 where
     B::Scalar: RuntimeScalar,
 {
+    /// 创建显式标定的反射率观测算子。
+    ///
+    /// 本仓库不再提供内置传感器默认系数；调用方必须提供经过场景、
+    /// 波段和悬沙标定得到的对数线性系数。
     pub fn new(wavelength: f64, calibration: ReflectanceCalibration, observation_std: f64) -> Self {
         Self {
             wavelength: scalar_from_f64_or_panic::<B>(wavelength, "reflectance.wavelength"),
@@ -91,14 +95,6 @@ where
             ReflectanceCalibration::new(log_slope, intercept),
             observation_std,
         )
-    }
-
-    pub fn modis_red_band() -> Self {
-        Self::from_coefficients(645.0, 0.12, 0.01, 0.02)
-    }
-
-    pub fn sentinel2_b4() -> Self {
-        Self::from_coefficients(665.0, 0.09, 0.0, 0.02)
     }
 }
 
@@ -129,70 +125,6 @@ where
                     .into()
             })
             .unwrap_or_else(|| ScalarSamples::from(vec![B::Scalar::ZERO; snapshot.n_cells()]))
-    }
-
-    fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {
-        Some(vec![self.observation_std * self.observation_std; n_obs].into())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Polarization {
-    VV,
-    VH,
-    HH,
-    HV,
-}
-
-pub struct SAROperator<B: Backend = DefaultBackend> {
-    incidence_angle: B::Scalar,
-    polarization: Polarization,
-    wind_correction: B::Scalar,
-    observation_std: B::Scalar,
-}
-
-impl<B: Backend> SAROperator<B>
-where
-    B::Scalar: RuntimeScalar,
-{
-    pub fn new(incidence_angle: f64, polarization: Polarization) -> Self {
-        Self {
-            incidence_angle: scalar_from_f64_or_panic::<B>(incidence_angle, "sar.incidence_angle"),
-            polarization,
-            wind_correction: B::Scalar::ONE,
-            observation_std: B::Scalar::ONE,
-        }
-    }
-}
-
-impl<B: Backend> ObservationOperator<B> for SAROperator<B>
-where
-    B::Scalar: RuntimeScalar,
-    B::Vector2D: Pod,
-{
-    fn name(&self) -> &'static str {
-        "SAR-Backscatter"
-    }
-
-    fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
-        let mut result = Vec::with_capacity(snapshot.n_cells());
-        let tiny = scalar_from_f64_or_panic::<B>(1e-6, "sar.tiny");
-        for i in 0..snapshot.n_cells() {
-            let speed = snapshot.u[i].hypot(snapshot.v[i]);
-            let depth = snapshot.h[i].max(scalar_from_f64_or_panic::<B>(1e-6, "sar.min_depth"));
-            let incidence_factor = self.incidence_angle.to_f64_lossy().to_radians().cos().abs();
-            let incidence_factor =
-                scalar_from_f64_or_panic::<B>(incidence_factor, "sar.incidence_factor");
-            let pol_factor = match self.polarization {
-                Polarization::VV | Polarization::HH => B::Scalar::ONE,
-                _ => scalar_from_f64_or_panic::<B>(0.8, "sar.cross_pol_factor"),
-            };
-            let backscatter = scalar_from_f64_or_panic::<B>(10.0, "sar.log_scale")
-                * ((speed / depth) * incidence_factor * pol_factor * self.wind_correction + tiny)
-                    .ln();
-            result.push(backscatter);
-        }
-        result.into()
     }
 
     fn observation_error_variance_for(&self, n_obs: usize) -> Option<ScalarSamples<B>> {

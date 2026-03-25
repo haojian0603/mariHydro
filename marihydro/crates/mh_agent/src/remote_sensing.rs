@@ -53,11 +53,11 @@ pub struct SatelliteImage {
 
 #[derive(Debug, Clone)]
 pub struct RemoteSensingConfig<B: Backend = DefaultBackend> {
-    pub model_path: Option<String>,
     pub assimilation_rate: B::Scalar,
     pub max_concentration: B::Scalar,
     pub max_cloud_cover: f32,
     pub interpolation: InterpolationMethod<B>,
+    pub inversion: InversionModel<B>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,6 +65,67 @@ pub enum InterpolationMethod<B: Backend = DefaultBackend> {
     NearestNeighbor,
     Bilinear,
     IDW { power: B::Scalar },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum InversionModel<B: Backend = DefaultBackend> {
+    Linear {
+        slope: B::Scalar,
+        intercept: B::Scalar,
+    },
+    LogLinear {
+        slope: B::Scalar,
+        intercept: B::Scalar,
+        min_signal: B::Scalar,
+    },
+}
+
+impl<B: Backend> InversionModel<B>
+where
+    B::Scalar: RuntimeScalar,
+{
+    pub fn linear(slope: f64, intercept: f64) -> Self {
+        Self::Linear {
+            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.inversion.linear.slope"),
+            intercept: scalar_from_f64_or_panic::<B>(
+                intercept,
+                "remote_sensing.inversion.linear.intercept",
+            ),
+        }
+    }
+
+    pub fn log_linear(slope: f64, intercept: f64, min_signal: f64) -> Self {
+        Self::LogLinear {
+            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.inversion.log.slope"),
+            intercept: scalar_from_f64_or_panic::<B>(
+                intercept,
+                "remote_sensing.inversion.log.intercept",
+            ),
+            min_signal: scalar_from_f64_or_panic::<B>(
+                min_signal,
+                "remote_sensing.inversion.log.min_signal",
+            ),
+        }
+    }
+
+    fn apply(&self, signal: f64) -> B::Scalar {
+        match *self {
+            Self::Linear { slope, intercept } => {
+                slope * scalar_from_f64_or_panic::<B>(signal, "remote_sensing.signal") + intercept
+            }
+            Self::LogLinear {
+                slope,
+                intercept,
+                min_signal,
+            } => {
+                let safe_signal = scalar_from_f64_or_panic::<B>(
+                    signal.max(min_signal.to_f64_lossy()),
+                    "remote_sensing.log_signal",
+                );
+                slope * safe_signal.ln() + intercept
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +212,11 @@ where
                 "image data length mismatch".into(),
             ));
         }
+        if image.data.iter().any(|value| !value.is_finite()) {
+            return Err(AiError::InvalidObservation(
+                "image contains non-finite samples".into(),
+            ));
+        }
         if !image.bounds.is_valid() {
             return Err(AiError::InvalidObservation("invalid image bounds".into()));
         }
@@ -190,7 +256,7 @@ where
             let gx = ((x - bounds.min_x) / dx).clamp(0.0, width.saturating_sub(1) as f64);
             let gy = ((y - bounds.min_y) / dy).clamp(0.0, height.saturating_sub(1) as f64);
 
-            let reflectance = match self.config.interpolation {
+            let signal = match self.config.interpolation {
                 InterpolationMethod::NearestNeighbor => {
                     let ix = (gx + 0.5)
                         .floor()
@@ -243,7 +309,7 @@ where
                 }
             };
 
-            let concentration = self.empirical_inversion(reflectance, image.sensor);
+            let concentration = self.config.inversion.apply(signal);
             result.push(
                 concentration
                     .min(self.config.max_concentration)
@@ -251,15 +317,6 @@ where
             );
         }
         result.into()
-    }
-
-    fn empirical_inversion(&self, reflectance: f64, sensor: SensorType) -> B::Scalar {
-        let value = match sensor {
-            SensorType::Optical => reflectance.max(1e-6).ln().abs() * 10.0,
-            SensorType::SAR => reflectance.abs() * 5.0,
-            SensorType::Hyperspectral => reflectance.max(0.0).sqrt() * 8.0,
-        };
-        scalar_from_f64_or_panic::<B>(value, "remote_sensing.empirical_inversion")
     }
 
     pub fn clear_cache(&mut self) {

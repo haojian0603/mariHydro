@@ -1,6 +1,6 @@
 use mh_agent::{
-    ObservationOperator, PhysicsSnapshot, Polarization, ReflectanceCalibration,
-    ReflectanceOperator, SAROperator, WaterLevelOperator,
+    ObservationOperator, PhysicsSnapshot, ReflectanceCalibration, ReflectanceOperator,
+    WaterLevelOperator,
 };
 use mh_runtime::{CellIndex, CpuBackend};
 
@@ -43,9 +43,13 @@ fn water_level_operator_validates_indices() {
 }
 
 #[test]
-fn sar_operator_reports_one_variance_per_observation() {
+fn reflectance_operator_reports_one_variance_per_observation() {
     let snapshot = snapshot_with_sediment();
-    let op = SAROperator::<CpuBackend<f64>>::new(35.0, Polarization::VV);
+    let op = ReflectanceOperator::<CpuBackend<f64>>::new(
+        645.0,
+        ReflectanceCalibration::new(1.0, 0.5),
+        0.2,
+    );
 
     let observed = op.observe(&snapshot);
     let variance = op

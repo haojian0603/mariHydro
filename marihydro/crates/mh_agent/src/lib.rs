@@ -393,13 +393,12 @@ where
 /// 重新导出常用类型。
 pub use assimilation::{AssimilationResult, NudgingAssimilator, NudgingConfig, Observation};
 pub use observation::{
-    ObservationOperator, Polarization, ReflectanceCalibration, ReflectanceOperator, SAROperator,
-    WaterLevelOperator,
+    ObservationOperator, ReflectanceCalibration, ReflectanceOperator, WaterLevelOperator,
 };
 pub use registry::AgentRegistry;
 pub use remote_sensing::{
-    ImageBounds, InferenceResult, InterpolationMethod, RemoteSensingAgent, RemoteSensingConfig,
-    SatelliteImage, SensorType,
+    ImageBounds, InferenceResult, InterpolationMethod, InversionModel, RemoteSensingAgent,
+    RemoteSensingConfig, SatelliteImage, SensorType,
 };
 pub use surrogate::{
     PredictionMetrics, SurrogateConfig, SurrogateModel, SurrogatePrediction, SurrogateType,
