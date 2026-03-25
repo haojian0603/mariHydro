@@ -6,6 +6,9 @@
 //! - 单个 TPXO/ATLAS 规则网格水位分潮文件（`hRe`/`hIm`）
 //! - FES2014 按分潮拆分的规则网格文件目录（`amplitude`/`phase` 或 `Ha`/`Hg`）
 //!
+//! IO_SOURCE: TPXO/ATLAS 单分潮 NetCDF 布局约定（`hRe`/`hIm` 复数分量），以及 FES2014 分潮拆分文件约定（`amplitude`/`phase`、`Ha`/`Hg`、`Ua`/`Ug`、`Va`/`Vg`）。
+//! IO_SCOPE: 仅支持规则经纬网格的单分潮 TPXO/ATLAS 文件与按分潮拆分的 FES2014 目录；布局、变量或坐标不符时显式报错，不回退为默认网格、模拟潮汐常数或零值分潮。
+//!
 //! # 支持的格式
 //!
 //! - TPXO9/ATLAS 单分潮 NetCDF 文件
@@ -929,6 +932,37 @@ mod tests {
         let (amp, phase) = complex_components_to_amplitude_phase(0.0, -2.0);
         assert!((amp - 2.0).abs() < 1.0e-12);
         assert!((phase - 90.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn test_open_tidal_data_rejects_unknown_layout() {
+        let err = match open_tidal_data(Path::new("unknown_layout.bin")) {
+            Ok(_) => panic!("unknown layout should not open successfully"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, TidalIoError::Unsupported(_)));
+    }
+
+    #[test]
+    fn test_tpxo_velocity_reader_fails_explicitly() {
+        let reader = TpxoReader {
+            path: PathBuf::from("unused.nc"),
+            model_type: TidalModel::Tpxo9,
+            grid: TidalGrid {
+                lon_range: (0.0, 360.0),
+                lat_range: (-90.0, 90.0),
+                lon_resolution: 1.0,
+                lat_resolution: 1.0,
+                n_lon: 361,
+                n_lat: 181,
+            },
+            constituents: vec!["m2".to_string()],
+        };
+
+        let err = reader
+            .read_velocity_constituent("m2", 120.0, 30.0)
+            .unwrap_err();
+        assert!(matches!(err, TidalIoError::Unsupported(_)));
     }
 
     #[test]

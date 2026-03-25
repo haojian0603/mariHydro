@@ -1,6 +1,9 @@
 // crates/mh_io/src/drivers/gdal/driver.rs
 
 //! GDAL 栅格驱动实现
+//!
+//! IO_SOURCE: GDAL 官方文档中的 `gdalinfo -json` 元数据输出约定，以及 `gdal_translate -of AAIGrid`
+//! IO_SCOPE: 当前 CLI 回退路径只接受数值可解析的 AAIGrid 头和栅格载荷；NoData、尺寸和栅格值任一字段解析失败时直接报错，不静默丢弃也不合成默认值。
 
 use super::error::GdalError;
 use serde_json;
@@ -353,6 +356,11 @@ fn cli_read_band(
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
+    parse_ascii_grid_band(&text, meta)
+}
+
+#[cfg(not(feature = "gdal"))]
+fn parse_ascii_grid_band(text: &str, meta: &RasterMetadata) -> Result<RasterBand, GdalError> {
     let mut ncols = 0usize;
     let mut nrows = 0usize;
     let mut nodata = None;
@@ -376,7 +384,12 @@ fn cli_read_band(
                 .parse()
                 .map_err(|_| GdalError::ReadFailed(format!("AAIGrid nrows 无法解析: {raw}")))?;
         } else if line.to_lowercase().starts_with("nodata_value") {
-            nodata = line.split_whitespace().nth(1).and_then(|v| v.parse().ok());
+            let raw = line.split_whitespace().nth(1).ok_or_else(|| {
+                GdalError::ReadFailed("AAIGrid 头缺少 nodata_value 值".to_string())
+            })?;
+            nodata = Some(raw.parse().map_err(|_| {
+                GdalError::ReadFailed(format!("AAIGrid nodata_value 无法解析: {raw}"))
+            })?);
         } else if !line.is_empty() {
             data_start = idx;
             break;
@@ -391,9 +404,10 @@ fn cli_read_band(
     let mut data = Vec::with_capacity(ncols * nrows);
     for line in text.lines().skip(data_start) {
         for token in line.split_whitespace() {
-            if let Ok(v) = token.parse::<f64>() {
-                data.push(v);
-            }
+            let value = token.parse::<f64>().map_err(|_| {
+                GdalError::ReadFailed(format!("AAIGrid 栅格值无法解析: {token}"))
+            })?;
+            data.push(value);
         }
     }
 
@@ -464,5 +478,35 @@ mod tests {
             "geoTransform": [0.0, 1.0, "bad", 100.0, 0.0, -1.0]
         });
         assert!(parse_gdalinfo_metadata(&value).is_err());
+    }
+
+    #[cfg(not(feature = "gdal"))]
+    #[test]
+    fn test_parse_ascii_grid_rejects_invalid_nodata_value() {
+        let meta = RasterMetadata {
+            width: 2,
+            height: 2,
+            band_count: 1,
+            geo_transform: [0.0, 1.0, 0.0, 2.0, 0.0, -1.0],
+            projection: None,
+            nodata: None,
+        };
+        let text = "ncols 2\nnrows 2\nNODATA_value bad\n1 2\n3 4\n";
+        assert!(parse_ascii_grid_band(text, &meta).is_err());
+    }
+
+    #[cfg(not(feature = "gdal"))]
+    #[test]
+    fn test_parse_ascii_grid_rejects_invalid_data_token() {
+        let meta = RasterMetadata {
+            width: 2,
+            height: 2,
+            band_count: 1,
+            geo_transform: [0.0, 1.0, 0.0, 2.0, 0.0, -1.0],
+            projection: None,
+            nodata: None,
+        };
+        let text = "ncols 2\nnrows 2\n1 2\n3 bad\n";
+        assert!(parse_ascii_grid_band(text, &meta).is_err());
     }
 }

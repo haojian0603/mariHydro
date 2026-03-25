@@ -181,6 +181,10 @@ try {
         $Failed += "check_repo_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_external_data_contracts.ps1" -Path (Join-Path $ScriptDir "check_external_data_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_external_data_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_physics_provenance.ps1" -Path (Join-Path $ScriptDir "check_physics_provenance.ps1") -Arguments @{})) {
         $Failed += "check_physics_provenance.ps1"
     }
