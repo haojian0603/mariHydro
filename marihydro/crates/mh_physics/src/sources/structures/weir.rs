@@ -5,6 +5,9 @@
 //! - 锐缘堰
 //! - 实用堰
 //!
+//! PHYSICS_SOURCE: U.S. Bureau of Reclamation (2001), Water Measurement Manual, broad-crested and sharp-crested weir chapters; Villemonte (1947), "Submerged Weir Discharge Studies", Engineering News-Record.
+//! PHYSICS_SCOPE: Uses the rectangular-weir discharge form Q = Cd * B * H^(3/2) * sqrt(2g) with an explicit Villemonte submergence correction. The default coefficients are engineering seed values for the chosen crest type, not a substitute for structure-specific calibration or detailed contraction modeling.
+//!
 //! # 堰流公式
 //!
 //! ## 自由出流

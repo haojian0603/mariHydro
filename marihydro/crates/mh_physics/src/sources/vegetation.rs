@@ -4,6 +4,9 @@
 //!
 //! 实现浅水方程中的植被阻力效应。
 //!
+//! PHYSICS_SOURCE: Baptist et al. (2007), Journal of Hydraulic Research, "On inducing equations for vegetation resistance"; Nepf (2012), Annual Review of Fluid Mechanics, "Flow and Transport in Regions with Aquatic Vegetation".
+//! PHYSICS_SCOPE: Implements a depth-averaged rigid-vegetation drag closure using projected frontal-area density. The current module covers rigid stems and generic bulk drag only; flexible reconfiguration, canopy-scale turbulence closure and wave-current interaction remain outside this implementation.
+//!
 //! # 植被阻力模型
 //!
 //! 植被对水流的阻力使用阻力公式：

@@ -9,16 +9,16 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Mutex;
 
-/// Nudging 鍚屽寲閰嶇疆
+/// Nudging 同化配置
 #[derive(Debug, Clone)]
 pub struct NudgingConfig<B: Backend = DefaultBackend> {
     /// 同化率
     pub rate: B::Scalar,
-    /// 鏈€澶т慨姝ｉ噺
+    /// 最大修正量
     pub max_correction: B::Scalar,
-    /// 绌洪棿骞虫粦鍗婂緞
+    /// 空间平滑半径
     pub smoothing_radius: Option<B::Scalar>,
-    /// 鏃堕棿琛板噺绯绘暟
+    /// 时间衰减系数
     pub temporal_decay: B::Scalar,
 }
 
@@ -36,16 +36,16 @@ where
     }
 }
 
-/// 瑙傛祴鏁版嵁
+/// 观测数据
 #[derive(Debug, Clone)]
 pub struct Observation<B: Backend = DefaultBackend> {
     /// 观测值
     pub values: ScalarSamples<B>,
-    /// 瑙傛祴鍗曞厓绱㈠紩
+    /// 观测对应的网格索引
     pub cell_indices: Vec<CellIndex>,
     /// 观测不确定性
     pub uncertainty: ScalarSamples<B>,
-    /// 瑙傛祴鏃堕棿
+    /// 观测时间戳
     pub time: B::Scalar,
 }
 

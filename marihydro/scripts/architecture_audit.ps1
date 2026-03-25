@@ -223,6 +223,10 @@ try {
         $Failed += "question-mark text corruption residue"
     }
 
+    if (-not (Invoke-FailingScan -Name "mixed-script text corruption residue" -Roots @("crates", "apps") -Pattern '[\u0400-\u04FF\u20AC\u3220-\u3229\uFF21-\uFF3A\uFF41-\uFF5A]')) {
+        $Failed += "mixed-script text corruption residue"
+    }
+
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
     Invoke-InformationalScan -Name 'placeholder wording residue' -Roots @("crates", "apps") -Pattern '\bplaceholder\b|\bfake implementation\b|\bstub\b'

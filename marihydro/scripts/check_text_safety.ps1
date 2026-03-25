@@ -73,6 +73,23 @@ try {
         Write-Host "[OK] no obvious question-mark text corruption" -ForegroundColor Green
     }
 
+    $mixedScriptMatches = @(
+        & git grep -n -I -P '[\x{0400}-\x{04FF}\x{20AC}\x{3220}-\x{3229}\x{FF21}-\x{FF3A}\x{FF41}-\x{FF5A}]' -- '*.rs' '*.ps1' '*.toml' '*.json' '*.yml' '*.yaml' 'AGENTS.md' 2>$null
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($mixedScriptMatches.Count -gt 0) {
+        Write-Host "[FAIL] suspicious mixed-script text corruption detected:" -ForegroundColor Red
+        $mixedScriptMatches | Select-Object -First 10 | ForEach-Object {
+            Write-Host "  $_" -ForegroundColor Red
+        }
+        if ($mixedScriptMatches.Count -gt 10) {
+            Write-Host "  ... and $($mixedScriptMatches.Count - 10) more" -ForegroundColor Red
+        }
+        $failed = $true
+    } else {
+        Write-Host "[OK] no suspicious mixed-script corruption" -ForegroundColor Green
+    }
+
     $stagedFiles = @(
         & git diff --cached --name-only --diff-filter=ACMR 2>$null
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
