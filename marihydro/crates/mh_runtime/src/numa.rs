@@ -71,12 +71,10 @@ impl NumaTopology {
     /// 检测系统 NUMA 拓扑
     pub fn detect() -> Result<Self, NumaError> {
         // 获取逻辑核心数
-        let logical_cores = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1);
+        let logical_cores = Self::available_parallelism()?;
 
         // 先估算物理核心数，后续再结合平台特定信息修正
-        let physical_cores = Self::detect_physical_cores(logical_cores);
+        let physical_cores = Self::detect_physical_cores(logical_cores)?;
         let hyperthreading = logical_cores > physical_cores;
 
         // 尝试检测 NUMA 节点
@@ -100,31 +98,61 @@ impl NumaTopology {
     }
 
     /// 检测物理核心数
-    fn detect_physical_cores(logical: usize) -> usize {
+    fn available_parallelism() -> Result<usize, NumaError> {
+        let parallelism = std::thread::available_parallelism()
+            .map_err(|e| NumaError::DetectionFailed(format!("failed to query parallelism: {e}")))?
+            .get();
+        if parallelism == 0 {
+            return Err(NumaError::DetectionFailed(
+                "available_parallelism returned zero".to_string(),
+            ));
+        }
+        Ok(parallelism)
+    }
+
+    fn detect_physical_cores(logical: usize) -> Result<usize, NumaError> {
         // Windows: 通过 WMI 或 GetLogicalProcessorInformation
         // Linux: 通过 /proc/cpuinfo
         // 简化：假设 2x 超线程
         #[cfg(target_os = "linux")]
         {
             if let Ok(content) = std::fs::read_to_string("/proc/cpuinfo") {
-                let physical_ids: std::collections::HashSet<_> = content
-                    .lines()
-                    .filter(|l| l.starts_with("physical id"))
-                    .collect();
-                let cores_per_socket: usize = content
-                    .lines()
-                    .find(|l| l.starts_with("cpu cores"))
-                    .and_then(|l| l.split(':').nth(1))
-                    .and_then(|s| s.trim().parse().ok())
-                    .unwrap_or(1);
-
-                let sockets = physical_ids.len().max(1);
-                return sockets * cores_per_socket;
+                if let Some(count) = Self::parse_linux_physical_cores(&content)? {
+                    return Ok(count);
+                }
             }
         }
 
         // 默认假设：超线程系统有一半是物理核心
-        std::cmp::max(1, logical / 2)
+        Ok(std::cmp::max(1, logical / 2))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn parse_linux_physical_cores(cpuinfo: &str) -> Result<Option<usize>, NumaError> {
+        let physical_ids: std::collections::HashSet<_> = cpuinfo
+            .lines()
+            .filter(|line| line.starts_with("physical id"))
+            .collect();
+        let Some(raw_cores_per_socket) = cpuinfo
+            .lines()
+            .find(|line| line.starts_with("cpu cores"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(str::trim)
+        else {
+            return Ok(None);
+        };
+
+        if physical_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let cores_per_socket = raw_cores_per_socket.parse::<usize>().map_err(|e| {
+            NumaError::DetectionFailed(format!(
+                "invalid '/proc/cpuinfo' cpu cores value '{raw_cores_per_socket}': {e}"
+            ))
+        })?;
+        let sockets = physical_ids.len().max(1);
+        Ok(Some(sockets * cores_per_socket))
     }
 
     /// 检测 NUMA 节点
@@ -417,9 +445,7 @@ pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
         use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
 
         if core
-            >= std::thread::available_parallelism()
-                .map(|v| v.get())
-                .unwrap_or(1)
+            >= NumaTopology::available_parallelism()?
         {
             return Err(NumaError::InvalidCoreSet);
         }
@@ -568,9 +594,7 @@ pub fn unbind_thread() -> Result<(), NumaError> {
     #[cfg(target_os = "linux")]
     {
         use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
-        let total = std::thread::available_parallelism()
-            .map(|v| v.get())
-            .unwrap_or(1);
+        let total = NumaTopology::available_parallelism()?;
         let mut set: cpu_set_t = unsafe { std::mem::zeroed() };
         unsafe { CPU_ZERO(&mut set) };
         for core in 0..total {
@@ -588,9 +612,7 @@ pub fn unbind_thread() -> Result<(), NumaError> {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
-        let total = std::thread::available_parallelism()
-            .map(|v| v.get())
-            .unwrap_or(1);
+        let total = NumaTopology::available_parallelism()?;
         let mask = if total >= 64 {
             usize::MAX
         } else {
@@ -833,6 +855,15 @@ mod tests {
     fn test_parse_meminfo_rejects_invalid_numeric_value() {
         let err = NumaTopology::parse_meminfo("Node 0 MemTotal: abc kB\nNode 0 MemFree: 10 kB")
             .expect_err("invalid meminfo must fail explicitly");
+        assert!(matches!(err, NumaError::DetectionFailed(_)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_linux_physical_cores_rejects_invalid_cpu_cores_value() {
+        let err =
+            NumaTopology::parse_linux_physical_cores("physical id\t: 0\ncpu cores\t: abc\n")
+                .expect_err("invalid cpu cores field must fail explicitly");
         assert!(matches!(err, NumaError::DetectionFailed(_)));
     }
 }
