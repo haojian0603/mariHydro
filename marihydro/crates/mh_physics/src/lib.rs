@@ -55,7 +55,6 @@ pub mod conservation;
 pub mod waves;
 
 pub mod fields;
-pub mod gpu;
 pub mod config_bridge;
 pub mod error;
 

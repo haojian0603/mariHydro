@@ -26,7 +26,9 @@ try {
         "crates/mh_physics/src/legacy_limiters",
         "crates/mh_terrain/src/interpolation/natural_neighbor.rs",
         "crates/mh_physics/src/builder/solver_builder.rs",
-        "crates/mh_mesh/src/compat.rs"
+        "crates/mh_mesh/src/compat.rs",
+        "crates/mh_physics/src/core/gpu.rs",
+        "crates/mh_physics/src/gpu"
     )
 
     foreach ($relativePath in $forbiddenPaths) {
@@ -44,6 +46,8 @@ try {
         @{ Name = "terrain natural neighbor export"; Path = "crates/mh_terrain/src/interpolation/mod.rs"; Pattern = '^\s*pub mod natural_neighbor;|NaturalNeighborConfig|NaturalNeighborInterpolator'; Message = "fake Natural Neighbor exports must stay removed" },
         @{ Name = "friction fake White-Colebrook"; Path = "crates/mh_physics/src/friction.rs"; Pattern = '\bWhiteColebrook\b'; Message = "WhiteColebrook must not exist until a verified formula is implemented" },
         @{ Name = "builder fake solver export"; Path = "crates/mh_physics/src/builder/mod.rs"; Pattern = '\bSolverBuilder\b|\bSolverHandle\b|\bBuildError\b|solver_builder'; Message = "builder fake solver surface must stay removed" },
+        @{ Name = "physics fake gpu surface"; Path = "crates/mh_physics/src/lib.rs"; Pattern = '^\s*pub mod gpu;'; Message = "mh_physics root must not expose a fake gpu module on ungpu" },
+        @{ Name = "physics core fake gpu exports"; Path = "crates/mh_physics/src/core/mod.rs"; Pattern = '^\s*pub mod gpu;|CudaError|GpuDeviceInfo|available_gpus|has_cuda'; Message = "physics core must not export fake gpu runtime types on ungpu" },
         @{ Name = "cli dyn-solver promise"; Path = "apps/mh_cli/src/main.rs"; Pattern = 'Box<dyn DynSolver>|SolverBuilder'; Message = "mh_cli main docs must not promise a dyn-solver or SolverBuilder path" },
         @{ Name = "cli run fake builder path"; Path = "apps/mh_cli/src/commands/run.rs"; Pattern = 'Box<dyn DynSolver>|\bSolverBuilder\b'; Message = "run command must use the real solver path" },
         @{ Name = "config dyn-solver false promise"; Path = "crates/mh_config/src/lib.rs"; Pattern = 'impl DynSolver for|Box<dyn DynSolver>'; Message = "mh_config docs must not claim a DynSolver implementation that is absent" },

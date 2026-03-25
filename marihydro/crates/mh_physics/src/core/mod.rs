@@ -7,12 +7,11 @@
 //! - [`buffer`]: AlignedVec 的 DeviceBuffer 实现（扩展 mh_runtime）
 //! - [`dimension`]: 维度标记 (2D/3D)
 //! - [`kernel`]: GPU Kernel 接口规范
-//! - [`gpu`]: GPU 后端模拟实现
 //!
 //! # 设计原则
 //!
 //! 所有核心抽象（Backend, DeviceBuffer, RuntimeScalar）统一定义在 mh_runtime，
-//! 本模块仅提供维度标记、GPU扩展、AlignedVec支持等 physics 层专用类型。
+//! 本模块仅提供维度标记、Kernel 契约与 AlignedVec 支持等 physics 层专用类型。
 //!
 //! # 使用示例
 //!
@@ -34,7 +33,6 @@
 pub mod buffer;
 pub mod dimension;
 pub mod kernel;
-pub mod gpu;
 
 // 从 mh_runtime 重导出核心抽象（Single Source of Truth）
 pub use mh_runtime::DeviceBuffer;
@@ -46,4 +44,3 @@ pub use buffer::AlignedBuffer;
 // 本模块专有类型
 pub use dimension::{Dimension, D2, D3};
 pub use kernel::{KernelSpec, KernelPriority, TransferPolicy, CORE_KERNELS};
-pub use gpu::{CudaError, GpuDeviceInfo, available_gpus, has_cuda};
