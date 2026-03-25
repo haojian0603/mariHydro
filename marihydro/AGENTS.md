@@ -50,6 +50,7 @@
 - 可以保留测试后端，但要尽量集中到共享测试支撑中，不要每个文件各写一套。
 - `mh_agent` 继续收敛裸 `Vec<f64>`、裸索引和裸几何数组；配置层和纯统计层可以暂时保留，但 apply/update 主链路不再扩大使用面。
 - legacy source bridge 统一收口到 `mh_physics::sources::legacy`；不要再从 `mh_physics` 根级或 `mh_physics::sources` 顶层直接暴露 `SourceTerm`、`SourceContext`、`SourceContribution`、`SourceHelpers`。
+- legacy source bridge 的实体实现只允许留在 `crates/mh_physics/src/sources/legacy.rs`；`traits.rs` 只保留泛型主链接口和共享测试支撑。
 
 ## 6. 规范记录
 

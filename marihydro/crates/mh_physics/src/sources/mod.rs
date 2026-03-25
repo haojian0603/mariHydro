@@ -30,7 +30,8 @@
 //!
 //! ```text
 //! sources/
-//! ├── traits.rs           # `SourceTermGeneric` 主链接口 + legacy `SourceTerm` 桥接
+//! ├── traits.rs           # `SourceTermGeneric` 主链接口
+//! ├── legacy.rs           # legacy `SourceTerm` CPU/f64 桥接
 //! ├── friction.rs         # 摩擦源项
 //! ├── coriolis.rs         # 科氏力
 //! ├── implicit.rs         # 隐式处理
@@ -82,6 +83,7 @@ pub mod friction;
 pub mod coriolis;
 pub mod implicit;
 pub mod inflow;
+pub mod legacy;
 
 // ==================== 2D 专用源项 ====================
 pub mod atmosphere;
@@ -103,13 +105,6 @@ pub use traits::{
     SourceContributionGeneric, SourceContextGeneric, SourceTermGeneric,
     SourceStiffness, SourceRegistryGeneric, NoSource,
 };
-
-// ==================== Legacy CPU/f64 桥接命名空间 ====================
-pub mod legacy {
-    pub use super::traits::legacy::{
-        SourceContribution, SourceContext, SourceHelpers, SourceTerm,
-    };
-}
 
 pub use registry::SourceRegistry;
 

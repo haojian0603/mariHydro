@@ -127,7 +127,8 @@ pub use types::{
     BoundaryValueProvider, ConstantBoundaryProvider, ZeroBoundaryProvider,
 };
 
-// 重导出源项类型
+// 重导出源项类型。
+// legacy CPU/f64 源项桥接只允许通过 `mh_physics::sources::legacy` 访问。
 pub use sources::{
     CoriolisConfig, CoriolisSource, NoSource, SourceContributionGeneric,
     SourceContextGeneric, SourceRegistry, SourceStiffness, SourceTermGeneric,

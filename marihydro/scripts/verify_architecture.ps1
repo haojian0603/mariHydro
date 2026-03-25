@@ -269,7 +269,7 @@ try {
     }
 
     $legacySourceImpls = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
-        Where-Object { $_.FullName -notlike "*\sources\traits.rs" } |
+        Where-Object { $_.FullName -notlike "*\sources\legacy.rs" } |
         Select-String -Pattern '\bimpl\s+SourceTerm\s+for\b' -CaseSensitive
     if ($legacySourceImpls) {
         Write-Host "[FAIL] legacy SourceTerm implementations exist outside the bridge definition:" -ForegroundColor Red
@@ -279,14 +279,14 @@ try {
         if ($legacySourceImpls.Count -gt 10) {
             Write-Host "  ... and $($legacySourceImpls.Count - 10) more" -ForegroundColor Red
         }
-        $errors += "legacy SourceTerm implementations must not be added outside crates/mh_physics/src/sources/traits.rs"
+        $errors += "legacy SourceTerm implementations must not be added outside crates/mh_physics/src/sources/legacy.rs"
     } else {
         Write-Host "[OK] no legacy SourceTerm implementations outside the bridge definition" -ForegroundColor Green
     }
 
     $legacyBridgeLeaks = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
         Where-Object {
-            $_.FullName -notlike "*\sources\traits.rs" -and
+            $_.FullName -notlike "*\sources\legacy.rs" -and
             $_.FullName -notlike "*\sources\mod.rs"
         } |
         Select-String -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b' -CaseSensitive
@@ -298,7 +298,7 @@ try {
         if ($legacyBridgeLeaks.Count -gt 10) {
             Write-Host "  ... and $($legacyBridgeLeaks.Count - 10) more" -ForegroundColor Red
         }
-        $errors += "legacy SourceTerm/SourceContext/SourceContribution symbols must remain confined to sources/traits.rs and sources/mod.rs"
+        $errors += "legacy SourceTerm/SourceContext/SourceContribution symbols must remain confined to sources/legacy.rs and sources/mod.rs"
     } else {
         Write-Host "[OK] legacy source bridge symbols are confined to the allowed bridge files" -ForegroundColor Green
     }
@@ -316,12 +316,30 @@ try {
         Write-Host "[OK] legacy source bridge exports are confined to mh_physics::sources::legacy" -ForegroundColor Green
     }
 
-    $legacySourceNamespace = Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern '^\s*pub mod legacy \{' -CaseSensitive
+    $legacySourceNamespace = Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern '^\s*pub mod legacy;' -CaseSensitive
     if (-not $legacySourceNamespace) {
         Write-Host "[FAIL] sources::legacy namespace is missing" -ForegroundColor Red
         $errors += "crates/mh_physics/src/sources/mod.rs must expose an explicit legacy namespace"
     } else {
         Write-Host "[OK] sources::legacy namespace is present" -ForegroundColor Green
+    }
+
+    $sourceCpuBackendLeakage = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
+        Where-Object {
+            $_.FullName -notlike "*\sources\legacy.rs"
+        } |
+        Select-String -Pattern 'ShallowWaterState<CpuBackend<f64>>|SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend' -CaseSensitive
+    if ($sourceCpuBackendLeakage) {
+        Write-Host "[FAIL] CpuBackend<f64> source residue leaked outside sources/legacy.rs:" -ForegroundColor Red
+        $sourceCpuBackendLeakage | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($sourceCpuBackendLeakage.Count -gt 10) {
+            Write-Host "  ... and $($sourceCpuBackendLeakage.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "CpuBackend<f64> source residue must remain confined to crates/mh_physics/src/sources/legacy.rs"
+    } else {
+        Write-Host "[OK] CpuBackend<f64> source residue is confined to sources/legacy.rs" -ForegroundColor Green
     }
 
     $publicLegacyLimiterRoot = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod limiters;' -CaseSensitive
