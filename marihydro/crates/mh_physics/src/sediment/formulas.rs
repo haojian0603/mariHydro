@@ -28,6 +28,8 @@
 //! let phi = formula.compute_phi(&backend, theta, props.critical_shields, &props);
 //! ```
 
+//! PHYSICS_SOURCE: Meyer-Peter and Mueller (1948), Formulas for Bed-Load Transport; Einstein (1950), The Bed-Load Function for Sediment Transportation in Open Channel Flows; Engelund and Hansen (1967), A Monograph on Sediment Transport in Alluvial Streams; van Rijn (1984), Sediment Transport, Part I: Bed Load Transport, doi:10.1061/(ASCE)0733-9429(1984)110:10(1431).
+//! PHYSICS_SCOPE: This module implements named bed-load transport formulae as separate empirical relations; each branch keeps its own calibration envelope and must not be treated as a universal transport law outside the cited assumptions.
 use super::properties::SedimentPropertiesGeneric;
 use crate::types::PhysicalConstants;
 use mh_runtime::{Backend, RuntimeScalar as Scalar};

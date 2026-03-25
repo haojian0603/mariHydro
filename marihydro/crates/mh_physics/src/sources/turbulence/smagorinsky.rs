@@ -36,6 +36,9 @@
 //! - 使用 `TurbulenceModel::None` 或 `TurbulenceModel::Disabled`
 //! - 如需水平扩散，使用 `TurbulenceModel::ConstantViscosity(0.1~10.0)`
 
+//!
+//! PHYSICS_SOURCE: Smagorinsky (1963), General Circulation Experiments with the Primitive Equations: I. The Basic Experiment, Monthly Weather Review, 91(3), 99-164, doi:10.1175/1520-0493(1963)091<0099:GCEWTP>2.3.CO;2.
+//! PHYSICS_SCOPE: This file only implements a depth-averaged horizontal eddy-viscosity closure using the Smagorinsky mixing-length form; it is not presented as a full 3D LES turbulence model.
 use super::traits::{TurbulenceClosure, VelocityGradient};
 use crate::adapter::PhysicsMesh;
 use crate::prelude::*;

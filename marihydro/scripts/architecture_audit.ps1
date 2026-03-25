@@ -181,6 +181,10 @@ try {
         $Failed += "check_repo_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_physics_provenance.ps1" -Path (Join-Path $ScriptDir "check_physics_provenance.ps1") -Arguments @{})) {
+        $Failed += "check_physics_provenance.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_real_implementation_contracts.ps1" -Path (Join-Path $ScriptDir "check_real_implementation_contracts.ps1") -Arguments @{})) {
         $Failed += "check_real_implementation_contracts.ps1"
     }
@@ -218,7 +222,7 @@ try {
     Invoke-InformationalScan -Name "placeholder wording residue" -Roots @("crates", "apps") -Pattern "\bplaceholder\b|\bfake implementation\b|\bstub\b"
     Invoke-InformationalScan -Name "compatibility residue" -Roots @("crates", "apps") -Pattern "\blegacy_limiters\b|\bsources::legacy\b|\bcompatibility shim\b|\bcompatibility namespace\b|\bhistorical compatibility\b"
     Invoke-InformationalScan -Name "fake model naming residue" -Roots @("crates", "apps") -Pattern "\bWhiteColebrook\b|\bNaturalNeighborInterpolator\b|\bNaturalNeighborConfig\b|\bSolverBuilder\b|\bSimpleSolver\b|Box<dyn DynSolver>"
-    Invoke-InformationalScan -Name "physical formula risk wording" -Roots @("crates/mh_physics", "crates/mh_agent", "apps") -Pattern "\bempirical\b|\bsimplified\b|\bapproximate\b|\bexperimental\b|\buncalibrated\b|\bunverified\b|\btemporary\b"
+    Invoke-InformationalScan -Name "physical formula risk wording" -Roots @("crates/mh_physics", "crates/mh_agent", "apps") -Pattern "^(?!.*PHYSICS_(?:SOURCE|SCOPE):).*\b(?:empirical|simplified|approximate|experimental|uncalibrated|unverified|temporary)\b"
     Invoke-InformationalScan -Name "remote sensing hardcoded calibration residue" -Roots @("crates/mh_agent") -Pattern "modis_red_band|sentinel2_b4|empirical_inversion|SensorType::Optical => .*10\.0|SensorType::SAR => .*5\.0|SensorType::Hyperspectral => .*8\.0"
     Invoke-InformationalScan -Name "surrogate fake model surface residue" -Roots @("crates/mh_agent") -Pattern "\bSurrogateType\b|\bReducedOrder\b|\bGaussianProcess\b|\bPolynomialChaos\b|\bUnsupportedModelType\b|only LinearRegression is implemented"
     Invoke-InformationalScan -Name "gpu placeholder surface residue" -Roots @("crates/mh_physics") -Pattern "\bCudaBackendPlaceholder\b|\bGpuStatus\b|\bGpuCapabilities\b|pub mod gpu;|\bhas_cuda\b|\bavailable_gpus\b"

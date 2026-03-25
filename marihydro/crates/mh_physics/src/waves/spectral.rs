@@ -9,6 +9,8 @@
 //!
 //! 不把这两者的组合冒充成“完整方向 JONSWAP 谱”。
 
+//! PHYSICS_SOURCE: Hasselmann et al. (1973), Measurements of Wind-Wave Growth and Swell Decay during the Joint North Sea Wave Project (JONSWAP), Deutsches Hydrographisches Institut.
+//! PHYSICS_SCOPE: Implements the JONSWAP frequency spectrum with an explicit cosine-power directional spread; it is not presented as a fully coupled directional JONSWAP closure.
 use std::f64::consts::PI;
 use crate::waves::radiation_stress::{compute_wavenumber_and_n, RadiationStressTensorGeneric};
 use crate::prelude::*;

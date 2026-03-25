@@ -43,6 +43,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_repo_contracts.ps1"
     }
 
+    Invoke-Step -Name "physics provenance" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_physics_provenance.ps1"
+    }
+
     Invoke-Step -Name "real implementation contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_real_implementation_contracts.ps1"
     }
