@@ -185,6 +185,10 @@ try {
         $Failed += "check_external_data_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_runtime_probe_contracts.ps1" -Path (Join-Path $ScriptDir "check_runtime_probe_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_runtime_probe_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_physics_provenance.ps1" -Path (Join-Path $ScriptDir "check_physics_provenance.ps1") -Arguments @{})) {
         $Failed += "check_physics_provenance.ps1"
     }
@@ -241,6 +245,7 @@ try {
     Invoke-InformationalScan -Name 'silent numeric fallback residue' -Roots @("crates/mh_geo", "crates/mh_io/src/drivers") -Pattern 'unwrap_or\(0\.0\)|unwrap_or\(0\)|unwrap_or\(Self::ZERO\)|compute_convergence_angle_checked\(x, y\)\.unwrap_or\(0\.0\)'
     Invoke-InformationalScan -Name 'geo projection sentinel residue' -Roots @("crates/mh_geo/src/projection") -Pattern 'unwrap_or\(f64::NAN\)|pub fn utm_scale_factor\(.*\) -> f64|pub fn utm_convergence_angle\(.*\) -> f64|unwrap_or\(\(0\.0, 0\.0\)\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('
+    Invoke-InformationalScan -Name 'external shape fallback residue' -Roots @("crates/mh_io/src") -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1'
     Invoke-InformationalScan -Name 'external data filename heuristic residue' -Roots @("crates/mh_io/src") -Pattern 'let model = TidalModel::detect\(path\)'
     Invoke-InformationalScan -Name 'public tolerant parser residue' -Roots @("crates/mh_io/src") -Pattern 'pub fn parse_calendar_or_default\(|pub fn detect\(path: &Path\)'
     Invoke-InformationalScan -Name 'remote sensing hardcoded calibration residue' -Roots @("crates/mh_agent") -Pattern 'modis_red_band|sentinel2_b4|empirical_inversion|SensorType::Optical => .*10\.0|SensorType::SAR => .*5\.0|SensorType::Hyperspectral => .*8\.0'
@@ -249,6 +254,7 @@ try {
     Invoke-InformationalScan -Name 'source hydraulic preset residue' -Roots @("crates/mh_physics/src/sources") -Pattern '\bFlexible\b|\breed\(\)|\bmangrove\(\)|with_reed_zone|with_mangrove_zone|update_from_radiation_stress|compute_effective_shear\(|compute_gradient_simple'
     Invoke-InformationalScan -Name 'wave bottom friction preset residue' -Roots @("crates/mh_physics/src/waves/bottom_friction.rs") -Pattern '\bJonswap\b|\bjonswap\('
     Invoke-InformationalScan -Name 'spectral misleading naming residue' -Roots @("crates/mh_physics/src/waves/spectral.rs") -Pattern '\bfrom_jonswap\(|JONSWAP 谱初始化'
+    Invoke-InformationalScan -Name 'runtime probe fallback residue' -Roots @("crates/mh_runtime/src") -Pattern 'read_to_string\(&cpulist_path\)\.unwrap_or_default\(\)|read_to_string\(&meminfo_path\)\.unwrap_or_default\(\)|parse\(\)\.unwrap_or\(0\)|parse::<u64>\(\)\.unwrap_or\(0\)|8 \* 1024 \* 1024 \* 1024|4 \* 1024 \* 1024 \* 1024'
     Invoke-InformationalScan -Name 'try_scalar_from_f64 explicit-path usage' -Roots @("crates/mh_physics") -Pattern '\btry_scalar_from_f64\('
     Invoke-InformationalScan -Name 'scalar_from_f64 symbol residue' -Roots @("crates/mh_physics") -Pattern '\bscalar_from_f64\b'
     Invoke-InformationalScan -Name 'T06 unimplemented residue' -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern 'unimplemented!'

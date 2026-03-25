@@ -55,6 +55,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_real_implementation_contracts.ps1"
     }
 
+    Invoke-Step -Name "runtime probe contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"
+    }
+
     Invoke-Step -Name "architecture verification" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/verify_architecture.ps1"
     }

@@ -85,6 +85,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.6: runtime probe contract guard
+    Write-Host "=== Phase 0.6: runtime probe contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "runtime probe contracts must pass"
+    } else {
+        Write-Host "[OK] runtime probe contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 1: layer dependency checks
     Write-Host "=== Phase 1: layer dependency checks ===" -ForegroundColor Cyan
 

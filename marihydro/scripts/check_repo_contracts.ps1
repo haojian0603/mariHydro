@@ -26,6 +26,7 @@ try {
         "scripts/check_external_data_contracts.ps1",
         "scripts/check_physics_provenance.ps1",
         "scripts/check_real_implementation_contracts.ps1",
+        "scripts/check_runtime_probe_contracts.ps1",
         "scripts/run_fast_gates.ps1",
         "scripts/run_required_gates.ps1",
         "scripts/setup_git_hooks.ps1"
@@ -54,7 +55,9 @@ try {
             "[RULE_NO_TOLERANT_PUBLIC_PARSERS]",
             "[RULE_NO_PUBLIC_HEURISTIC_DETECTORS]",
             "[RULE_EXTERNAL_METADATA_STRUCTURE_REQUIRED]",
+            "[RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT]",
             "[RULE_GEO_PROJECTION_ERRORS_EXPLICIT]",
+            "[RULE_RUNTIME_SYSTEM_PROBES_EXPLICIT]",
             "[RULE_NO_SILENT_NUMERIC_FALLBACK]",
             "[RULE_NO_TEXT_CORRUPTION]",
             "[RULE_NO_MIXED_SCRIPT_GARBAGE]",

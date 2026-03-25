@@ -30,6 +30,11 @@
 
 use std::collections::HashMap;
 
+#[cfg(unix)]
+use libc::{sysconf, _SC_AVPHYS_PAGES, _SC_PAGE_SIZE, _SC_PHYS_PAGES};
+#[cfg(windows)]
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
 // ============================================================================
 // NUMA 拓扑
 // ============================================================================
@@ -145,9 +150,14 @@ impl NumaTopology {
                         // 读取 CPU 列表
                         let cpulist_path = node_path.join("cpulist");
                         let cpus = if cpulist_path.exists() {
-                            Self::parse_cpu_list(
-                                &std::fs::read_to_string(&cpulist_path).unwrap_or_default(),
-                            )
+                            let cpu_list_text =
+                                std::fs::read_to_string(&cpulist_path).map_err(|e| {
+                                    NumaError::DetectionFailed(format!(
+                                        "failed to read {}: {e}",
+                                        cpulist_path.display()
+                                    ))
+                                })?;
+                            Self::parse_cpu_list(&cpu_list_text)
                         } else {
                             Vec::new()
                         };
@@ -155,9 +165,14 @@ impl NumaTopology {
                         // 读取内存信息
                         let meminfo_path = node_path.join("meminfo");
                         let (total, free) = if meminfo_path.exists() {
-                            Self::parse_meminfo(
-                                &std::fs::read_to_string(&meminfo_path).unwrap_or_default(),
-                            )
+                            let meminfo_text =
+                                std::fs::read_to_string(&meminfo_path).map_err(|e| {
+                                    NumaError::DetectionFailed(format!(
+                                        "failed to read {}: {e}",
+                                        meminfo_path.display()
+                                    ))
+                                })?;
+                            Self::parse_meminfo(&meminfo_text)?
                         } else {
                             (0, 0)
                         };
@@ -175,11 +190,12 @@ impl NumaTopology {
 
         // 如果没有检测到 NUMA 节点，创建单节点拓扑
         if nodes.is_empty() {
+            let (total_memory, free_memory) = Self::query_system_memory()?;
             nodes.push(NumaNode {
                 id: 0,
                 cpus: (0..logical_cores).collect(),
-                total_memory: Self::get_system_memory(),
-                free_memory: Self::get_free_memory(),
+                total_memory,
+                free_memory,
             });
         }
 
@@ -212,61 +228,93 @@ impl NumaTopology {
 
     /// 解析内存信息
     #[allow(dead_code)]
-    fn parse_meminfo(s: &str) -> (u64, u64) {
-        let mut total = 0u64;
-        let mut free = 0u64;
+    fn parse_meminfo(s: &str) -> Result<(u64, u64), NumaError> {
+        let mut total = None;
+        let mut free = None;
 
         for line in s.lines() {
-            if line.contains("MemTotal:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    total = val.parse().unwrap_or(0) * 1024; // kB to bytes
-                }
+            if let Some(value_part) = line.split_once("MemTotal:").map(|(_, rhs)| rhs.trim()) {
+                let val = value_part
+                    .split_whitespace()
+                    .next()
+                    .ok_or_else(|| {
+                        NumaError::DetectionFailed(
+                            "meminfo MemTotal field is missing numeric value".to_string(),
+                        )
+                    })?;
+                let parsed = val.parse::<u64>().map_err(|e| {
+                    NumaError::DetectionFailed(format!("invalid MemTotal value '{val}': {e}"))
+                })?;
+                total = Some(parsed * 1024); // kB to bytes
             }
-            if line.contains("MemFree:") {
-                if let Some(val) = line.split_whitespace().nth(1) {
-                    free = val.parse().unwrap_or(0) * 1024;
-                }
+            if let Some(value_part) = line.split_once("MemFree:").map(|(_, rhs)| rhs.trim()) {
+                let val = value_part
+                    .split_whitespace()
+                    .next()
+                    .ok_or_else(|| {
+                        NumaError::DetectionFailed(
+                            "meminfo MemFree field is missing numeric value".to_string(),
+                        )
+                    })?;
+                let parsed = val.parse::<u64>().map_err(|e| {
+                    NumaError::DetectionFailed(format!("invalid MemFree value '{val}': {e}"))
+                })?;
+                free = Some(parsed * 1024);
             }
         }
 
-        (total, free)
+        match (total, free) {
+            (Some(total), Some(free)) => Ok((total, free)),
+            _ => Err(NumaError::DetectionFailed(
+                "meminfo is missing MemTotal or MemFree".to_string(),
+            )),
+        }
     }
 
-    /// 获取系统总内存
-    fn get_system_memory() -> u64 {
-        #[cfg(target_os = "linux")]
+    fn query_system_memory() -> Result<(u64, u64), NumaError> {
+        #[cfg(unix)]
         {
-            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-                for line in content.lines() {
-                    if line.starts_with("MemTotal:") {
-                        if let Some(val) = line.split_whitespace().nth(1) {
-                            return val.parse::<u64>().unwrap_or(0) * 1024;
-                        }
-                    }
+            unsafe {
+                let page_size = sysconf(_SC_PAGE_SIZE);
+                let total_pages = sysconf(_SC_PHYS_PAGES);
+                let free_pages = sysconf(_SC_AVPHYS_PAGES);
+                if page_size <= 0 || total_pages <= 0 || free_pages < 0 {
+                    return Err(NumaError::DetectionFailed(
+                        "sysconf failed to query memory pages".to_string(),
+                    ));
                 }
+
+                let page_size = page_size as u64;
+                let total_pages = total_pages as u64;
+                let free_pages = free_pages as u64;
+                let total = total_pages.checked_mul(page_size).ok_or_else(|| {
+                    NumaError::DetectionFailed("total memory overflowed u64".to_string())
+                })?;
+                let free = free_pages.checked_mul(page_size).ok_or_else(|| {
+                    NumaError::DetectionFailed("free memory overflowed u64".to_string())
+                })?;
+                return Ok((total, free));
             }
         }
 
-        // 默认 8GB
-        8 * 1024 * 1024 * 1024
-    }
-
-    /// 获取空闲内存
-    fn get_free_memory() -> u64 {
-        #[cfg(target_os = "linux")]
+        #[cfg(windows)]
         {
-            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-                for line in content.lines() {
-                    if line.starts_with("MemFree:") {
-                        if let Some(val) = line.split_whitespace().nth(1) {
-                            return val.parse::<u64>().unwrap_or(0) * 1024;
-                        }
-                    }
+            unsafe {
+                let mut status = MEMORYSTATUSEX {
+                    dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+                    ..std::mem::zeroed()
+                };
+                if GlobalMemoryStatusEx(&mut status) == 0 {
+                    return Err(NumaError::DetectionFailed(
+                        "GlobalMemoryStatusEx failed".to_string(),
+                    ));
                 }
+                return Ok((status.ullTotalPhys, status.ullAvailPhys));
             }
         }
 
-        4 * 1024 * 1024 * 1024
+        #[allow(unreachable_code)]
+        Err(NumaError::UnsupportedPlatform)
     }
 
     // === 公共接口 ===
@@ -779,5 +827,12 @@ mod tests {
     fn test_bind_thread() {
         // 不一定成功（权限问题），但不应 panic
         let _ = bind_thread_to_core(0);
+    }
+
+    #[test]
+    fn test_parse_meminfo_rejects_invalid_numeric_value() {
+        let err = NumaTopology::parse_meminfo("Node 0 MemTotal: abc kB\nNode 0 MemFree: 10 kB")
+            .expect_err("invalid meminfo must fail explicitly");
+        assert!(matches!(err, NumaError::DetectionFailed(_)));
     }
 }

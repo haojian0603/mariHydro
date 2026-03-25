@@ -91,6 +91,11 @@ try {
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1' `
+        -Message "tide reader must not guess leading singleton axes from synthetic default dimensions"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
         -Pattern 'pub fn detect\(path: &Path\)' `
         -Message "tide reader must not expose a public filename-heuristic model detector"
 

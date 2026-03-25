@@ -313,14 +313,14 @@ fn sample_variable(
                 variable.get(&[i, j])
             }
             dims if dims.len() == 3
-                && variable.dims.first().copied().unwrap_or_default() == 1
+                && matches!(variable.dims.first(), Some(&1))
                 && dims[1] == layout.lat_name
                 && dims[2] == layout.lon_name =>
             {
                 variable.get(&[0, j, i])
             }
             dims if dims.len() == 3
-                && variable.dims.first().copied().unwrap_or_default() == 1
+                && matches!(variable.dims.first(), Some(&1))
                 && dims[1] == layout.lon_name
                 && dims[2] == layout.lat_name =>
             {
@@ -1037,5 +1037,33 @@ mod tests {
 
         let levels = constants.predict(12.0, &freqs);
         assert_eq!(levels.len(), 3);
+    }
+
+    #[test]
+    fn test_sample_variable_rejects_missing_singleton_axis() {
+        let variable = Variable {
+            data: vec![1.0, 2.0, 3.0, 4.0],
+            dims: vec![2, 2],
+        };
+        let layout = GridLayout {
+            lon_name: "lon".to_string(),
+            lat_name: "lat".to_string(),
+        };
+        let indices = InterpolationIndices {
+            i: [0, 1, 0, 1],
+            j: [0, 0, 1, 1],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+
+        let err = sample_variable(
+            &variable,
+            "hRe",
+            &["time".to_string(), "lat".to_string(), "lon".to_string()],
+            &layout,
+            &indices,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, TidalIoError::FormatError(_)));
     }
 }

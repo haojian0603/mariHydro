@@ -360,7 +360,21 @@ impl GeoTransformer {
 
     /// 计算投影收敛角（返回错误信息）
     pub fn compute_convergence_angle_checked(&self, x: f64, y: f64) -> MhResult<f64> {
-        if self.is_identity || self.target_crs.is_geographic() {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(mh_foundation::error::MhError::invalid_input(
+                "projected coordinates must be finite",
+            ));
+        }
+
+        if self.is_identity {
+            return Ok(0.0);
+        }
+
+        if self.target_crs.is_geographic() {
+            let _ = self
+                .source_proj
+                .inverse(x, y)
+                .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
             return Ok(0.0);
         }
 
@@ -647,5 +661,18 @@ mod tests {
             .expect("identity rotation failed");
         assert_eq!(u, 1.5);
         assert_eq!(v, -0.25);
+    }
+
+    #[test]
+    fn test_geographic_target_convergence_angle_validates_projected_input() {
+        let source = Crs::from_epsg(32650).expect("source crs failed");
+        let target = Crs::from_epsg(4326).expect("target crs failed");
+        let transformer = GeoTransformer::new(&source, &target).expect("transformer failed");
+        assert!(
+            transformer
+                .compute_convergence_angle(f64::NAN, 1.0)
+                .is_err(),
+            "geographic target must still validate the projected source point"
+        );
     }
 }
