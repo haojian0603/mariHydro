@@ -56,6 +56,23 @@ try {
         Write-Host "[OK] no replacement/private-use Unicode corruption" -ForegroundColor Green
     }
 
+    $questionCorruptionMatches = @(
+        & git grep -n -I -P '\?{3,}' -- '*.rs' '*.ps1' '*.toml' '*.json' '*.yml' '*.yaml' 'AGENTS.md' 2>$null
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($questionCorruptionMatches.Count -gt 0) {
+        Write-Host "[FAIL] obvious question-mark text corruption detected:" -ForegroundColor Red
+        $questionCorruptionMatches | Select-Object -First 10 | ForEach-Object {
+            Write-Host "  $_" -ForegroundColor Red
+        }
+        if ($questionCorruptionMatches.Count -gt 10) {
+            Write-Host "  ... and $($questionCorruptionMatches.Count - 10) more" -ForegroundColor Red
+        }
+        $failed = $true
+    } else {
+        Write-Host "[OK] no obvious question-mark text corruption" -ForegroundColor Green
+    }
+
     $stagedFiles = @(
         & git diff --cached --name-only --diff-filter=ACMR 2>$null
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }

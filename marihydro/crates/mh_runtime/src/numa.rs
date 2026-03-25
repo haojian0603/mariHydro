@@ -70,13 +70,13 @@ impl NumaTopology {
             .map(|p| p.get())
             .unwrap_or(1);
 
-        // ????????????????
+        // 先估算物理核心数，后续再结合平台特定信息修正
         let physical_cores = Self::detect_physical_cores(logical_cores);
         let hyperthreading = logical_cores > physical_cores;
 
         // 尝试检测 NUMA 节点
         let nodes = Self::detect_numa_nodes(logical_cores)?;
-        
+
         // 构建 CPU 到节点映射
         let mut cpu_to_node = HashMap::new();
         for node in &nodes {
@@ -112,12 +112,12 @@ impl NumaTopology {
                     .and_then(|l| l.split(':').nth(1))
                     .and_then(|s| s.trim().parse().ok())
                     .unwrap_or(1);
-                
+
                 let sockets = physical_ids.len().max(1);
                 return sockets * cores_per_socket;
             }
         }
-        
+
         // 默认假设：超线程系统有一半是物理核心
         std::cmp::max(1, logical / 2)
     }
@@ -131,20 +131,23 @@ impl NumaTopology {
             // 尝试从 sysfs 读取 NUMA 信息
             let numa_path = std::path::Path::new("/sys/devices/system/node");
             if numa_path.exists() {
-                for entry in std::fs::read_dir(numa_path).map_err(|e| NumaError::DetectionFailed(e.to_string()))? {
+                for entry in std::fs::read_dir(numa_path)
+                    .map_err(|e| NumaError::DetectionFailed(e.to_string()))?
+                {
                     let entry = entry.map_err(|e| NumaError::DetectionFailed(e.to_string()))?;
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
-                    
+
                     if name_str.starts_with("node") && name_str[4..].parse::<usize>().is_ok() {
                         let node_id: usize = name_str[4..].parse().unwrap();
                         let node_path = entry.path();
-                        
+
                         // 读取 CPU 列表
                         let cpulist_path = node_path.join("cpulist");
                         let cpus = if cpulist_path.exists() {
-                            Self::parse_cpu_list(&std::fs::read_to_string(&cpulist_path)
-                                .unwrap_or_default())
+                            Self::parse_cpu_list(
+                                &std::fs::read_to_string(&cpulist_path).unwrap_or_default(),
+                            )
                         } else {
                             Vec::new()
                         };
@@ -152,8 +155,9 @@ impl NumaTopology {
                         // 读取内存信息
                         let meminfo_path = node_path.join("meminfo");
                         let (total, free) = if meminfo_path.exists() {
-                            Self::parse_meminfo(&std::fs::read_to_string(&meminfo_path)
-                                .unwrap_or_default())
+                            Self::parse_meminfo(
+                                &std::fs::read_to_string(&meminfo_path).unwrap_or_default(),
+                            )
                         } else {
                             (0, 0)
                         };
@@ -181,7 +185,7 @@ impl NumaTopology {
 
         // 按节点 ID 排序
         nodes.sort_by_key(|n| n.id);
-        
+
         Ok(nodes)
     }
 
@@ -193,7 +197,9 @@ impl NumaTopology {
             if part.contains('-') {
                 let range: Vec<&str> = part.split('-').collect();
                 if range.len() == 2 {
-                    if let (Ok(start), Ok(end)) = (range[0].parse::<usize>(), range[1].parse::<usize>()) {
+                    if let (Ok(start), Ok(end)) =
+                        (range[0].parse::<usize>(), range[1].parse::<usize>())
+                    {
                         cpus.extend(start..=end);
                     }
                 }
@@ -209,7 +215,7 @@ impl NumaTopology {
     fn parse_meminfo(s: &str) -> (u64, u64) {
         let mut total = 0u64;
         let mut free = 0u64;
-        
+
         for line in s.lines() {
             if line.contains("MemTotal:") {
                 if let Some(val) = line.split_whitespace().nth(1) {
@@ -222,7 +228,7 @@ impl NumaTopology {
                 }
             }
         }
-        
+
         (total, free)
     }
 
@@ -240,7 +246,7 @@ impl NumaTopology {
                 }
             }
         }
-        
+
         // 默认 8GB
         8 * 1024 * 1024 * 1024
     }
@@ -259,7 +265,7 @@ impl NumaTopology {
                 }
             }
         }
-        
+
         4 * 1024 * 1024 * 1024
     }
 
@@ -362,7 +368,11 @@ pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
     {
         use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
 
-        if core >= std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1) {
+        if core
+            >= std::thread::available_parallelism()
+                .map(|v| v.get())
+                .unwrap_or(1)
+        {
             return Err(NumaError::InvalidCoreSet);
         }
 
@@ -374,7 +384,9 @@ pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
 
         let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
         if res != 0 {
-            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            return Err(NumaError::BindingFailed(
+                std::io::Error::last_os_error().to_string(),
+            ));
         }
         return Ok(());
     }
@@ -408,7 +420,9 @@ pub fn bind_thread_to_core(core: usize) -> Result<(), NumaError> {
             let mask: usize = 1usize << index;
             let result = unsafe { SetThreadAffinityMask(handle, mask) };
             if result == 0 {
-                return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+                return Err(NumaError::BindingFailed(
+                    std::io::Error::last_os_error().to_string(),
+                ));
             }
             return Ok(());
         }
@@ -441,7 +455,9 @@ pub fn bind_thread_to_cores(cores: &[usize]) -> Result<(), NumaError> {
         }
         let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
         if res != 0 {
-            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            return Err(NumaError::BindingFailed(
+                std::io::Error::last_os_error().to_string(),
+            ));
         }
         return Ok(());
     }
@@ -486,7 +502,9 @@ pub fn bind_thread_to_cores(cores: &[usize]) -> Result<(), NumaError> {
         let handle = unsafe { GetCurrentThread() };
         let result = unsafe { SetThreadAffinityMask(handle, mask) };
         if result == 0 {
-            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            return Err(NumaError::BindingFailed(
+                std::io::Error::last_os_error().to_string(),
+            ));
         }
         Ok(())
     }
@@ -502,7 +520,9 @@ pub fn unbind_thread() -> Result<(), NumaError> {
     #[cfg(target_os = "linux")]
     {
         use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
-        let total = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1);
+        let total = std::thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
         let mut set: cpu_set_t = unsafe { std::mem::zeroed() };
         unsafe { CPU_ZERO(&mut set) };
         for core in 0..total {
@@ -510,7 +530,9 @@ pub fn unbind_thread() -> Result<(), NumaError> {
         }
         let res = unsafe { sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), &set) };
         if res != 0 {
-            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            return Err(NumaError::BindingFailed(
+                std::io::Error::last_os_error().to_string(),
+            ));
         }
         return Ok(());
     }
@@ -518,12 +540,20 @@ pub fn unbind_thread() -> Result<(), NumaError> {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
-        let total = std::thread::available_parallelism().map(|v| v.get()).unwrap_or(1);
-        let mask = if total >= 64 { usize::MAX } else { (1usize << total) - 1 };
+        let total = std::thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        let mask = if total >= 64 {
+            usize::MAX
+        } else {
+            (1usize << total) - 1
+        };
         let handle = unsafe { GetCurrentThread() };
         let result = unsafe { SetThreadAffinityMask(handle, mask) };
         if result == 0 {
-            return Err(NumaError::BindingFailed(std::io::Error::last_os_error().to_string()));
+            return Err(NumaError::BindingFailed(
+                std::io::Error::last_os_error().to_string(),
+            ));
         }
         Ok(())
     }
@@ -583,13 +613,13 @@ impl Default for NumaThreadPoolConfig {
 pub trait NumaAllocator {
     /// 在指定节点分配内存
     fn alloc_on_node(&self, size: usize, node: usize) -> Result<*mut u8, NumaError>;
-    
+
     /// 释放内存
     ///
     /// # Safety
     /// 调用者必须确保 `ptr` 来源于 `alloc_on_node` 并且 `size` 与分配时一致。
     unsafe fn dealloc(&self, ptr: *mut u8, size: usize);
-    
+
     /// 获取指针所在节点
     fn get_node(&self, ptr: *const u8) -> Option<usize>;
 }
@@ -601,7 +631,7 @@ impl NumaAllocator for DefaultNumaAllocator {
     fn alloc_on_node(&self, size: usize, _node: usize) -> Result<*mut u8, NumaError> {
         let layout = std::alloc::Layout::from_size_align(size, 64)
             .map_err(|_| NumaError::AllocationFailed)?;
-        
+
         let ptr = unsafe { std::alloc::alloc(layout) };
         if ptr.is_null() {
             Err(NumaError::AllocationFailed)
@@ -609,12 +639,12 @@ impl NumaAllocator for DefaultNumaAllocator {
             Ok(ptr)
         }
     }
-    
+
     unsafe fn dealloc(&self, ptr: *mut u8, size: usize) {
         let layout = std::alloc::Layout::from_size_align_unchecked(size, 64);
         std::alloc::dealloc(ptr, layout);
     }
-    
+
     fn get_node(&self, _ptr: *const u8) -> Option<usize> {
         Some(0) // 默认节点 0
     }
@@ -664,9 +694,16 @@ pub fn print_topology_info() {
             println!("=== 系统拓扑 ===");
             println!("物理核心: {}", topo.physical_cores());
             println!("逻辑核心: {}", topo.logical_cores());
-            println!("超线程: {}", if topo.has_hyperthreading() { "是" } else { "否" });
+            println!(
+                "超线程: {}",
+                if topo.has_hyperthreading() {
+                    "是"
+                } else {
+                    "否"
+                }
+            );
             println!("NUMA 节点数: {}", topo.num_nodes());
-            
+
             for node in topo.nodes() {
                 println!("\n节点 {}:", node.id);
                 println!("  CPU: {:?}", node.cpus);
@@ -676,7 +713,7 @@ pub fn print_topology_info() {
                     node.free_memory as f64 / 1e9
                 );
             }
-            
+
             println!("\n推荐线程数: {}", topo.recommended_threads());
         }
         Err(e) => {
@@ -697,7 +734,7 @@ mod tests {
     fn test_topology_detection() {
         let topo = NumaTopology::detect();
         assert!(topo.is_ok());
-        
+
         let topo = topo.unwrap();
         assert!(topo.logical_cores() >= 1);
         assert!(topo.physical_cores() >= 1);
@@ -731,7 +768,7 @@ mod tests {
         let alloc = DefaultNumaAllocator;
         let ptr = alloc.alloc_on_node(1024, 0);
         assert!(ptr.is_ok());
-        
+
         let ptr = ptr.unwrap();
         unsafe {
             alloc.dealloc(ptr, 1024);

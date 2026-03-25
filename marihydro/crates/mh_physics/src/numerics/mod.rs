@@ -10,8 +10,8 @@
 //! - discretization/ - 有限体积离散化 (拓扑, 组装, 回代)
 //! - operators/ - 数值算子 (扩散等)
 //!
-//! ??????????? limiter / reconstruction?
-//! ????????? `crate::numerics` ? `crate::types::LimiterType` ???
+//! 主链统一从 `limiter` 与 `reconstruction` 子模块导出数值重构能力。
+//! 新代码优先依赖 `crate::numerics`，`crate::types::LimiterType` 只负责配置层枚举。
 
 pub mod discretization;
 pub mod gradient;
@@ -26,25 +26,17 @@ pub use gradient::{
 };
 
 pub use limiter::{
-    create_limiter,
-    BarthJespersen,
-    Minmod,
+    create_limiter, BarthJespersen, LimiterContext, Minmod, NoLimiter, SlopeLimiter,
     Venkatakrishnan,
-    SlopeLimiter, LimiterContext, NoLimiter,
 };
 
 pub use reconstruction::{
-    GradientType, MusclConfig,
-    MusclReconstructor, WenoConfig, WenoReconstructor,
-    ReconstructedState, Reconstructor,
+    GradientType, MusclConfig, MusclReconstructor, ReconstructedState, Reconstructor, WenoConfig,
+    WenoReconstructor,
 };
 
 // 稀疏线性代数
 pub use linear_algebra::{
-    // CSR 矩阵
-    CsrBuilder,
-    CsrMatrix,
-    CsrPattern,
     // 向量运算
     axpy,
     copy,
@@ -53,15 +45,19 @@ pub use linear_algebra::{
     norm2,
     scale,
     xpay,
-    // 预条件器
-    IdentityPreconditioner,
-    JacobiPreconditioner,
-    Preconditioner,
     // 求解器
     BiCgStabSolver,
     ConjugateGradient,
+    // CSR 矩阵
+    CsrBuilder,
+    CsrMatrix,
+    CsrPattern,
+    // 预条件器
+    IdentityPreconditioner,
     IterativeSolver,
+    JacobiPreconditioner,
     PcgSolver,
+    Preconditioner,
     SolverConfig,
     SolverResult,
     SolverStatus,
@@ -69,15 +65,15 @@ pub use linear_algebra::{
 
 // 离散化
 pub use discretization::{
-    // 拓扑
-    CellFaceTopology,
-    FaceInfo,
-    NeighborInfo,
     // 组装器
     AssemblerConfig,
-    ImplicitMomentumAssembler,
-    PressureMatrixAssembler,
+    // 拓扑
+    CellFaceTopology,
     // 回代
     DepthCorrector,
+    FaceInfo,
+    ImplicitMomentumAssembler,
+    NeighborInfo,
+    PressureMatrixAssembler,
     VelocityCorrector,
 };

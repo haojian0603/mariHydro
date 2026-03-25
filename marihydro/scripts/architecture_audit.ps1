@@ -219,6 +219,9 @@ try {
     if (-not (Invoke-FailingScan -Name "source text corruption residue" -Roots @("crates", "apps") -Pattern '[\uE000-\uF8FF\uFFFD]')) {
         $Failed += "source text corruption residue"
     }
+    if (-not (Invoke-FailingScan -Name "question-mark text corruption residue" -Roots @("crates", "apps") -Pattern '\?{3,}')) {
+        $Failed += "question-mark text corruption residue"
+    }
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan

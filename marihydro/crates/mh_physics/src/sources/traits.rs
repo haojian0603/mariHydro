@@ -1,8 +1,8 @@
 // crates/mh_physics/src/sources/traits.rs
 
-//! ???? trait ??
+//! 源项 trait 定义。
 //!
-//! ??????????????????????
+//! 该模块定义主链源项接口、源项上下文、源项贡献结构和测试辅助工具。
 
 use crate::core::Backend;
 use crate::state::ShallowWaterState;
@@ -48,27 +48,39 @@ impl<S: Scalar> SourceContributionGeneric<S> {
     /// 零贡献
     #[inline]
     pub fn zero() -> Self {
-        Self { s_h: S::ZERO, s_hu: S::ZERO, s_hv: S::ZERO }
+        Self {
+            s_h: S::ZERO,
+            s_hu: S::ZERO,
+            s_hv: S::ZERO,
+        }
     }
-    
+
     /// 创建新的源项贡献
     #[inline]
     pub fn new(s_h: S, s_hu: S, s_hv: S) -> Self {
         Self { s_h, s_hu, s_hv }
     }
-    
+
     /// 创建仅动量贡献
     #[inline]
     pub fn momentum(s_hu: S, s_hv: S) -> Self {
-        Self { s_h: S::ZERO, s_hu, s_hv }
+        Self {
+            s_h: S::ZERO,
+            s_hu,
+            s_hv,
+        }
     }
-    
+
     /// 创建仅质量贡献
     #[inline]
     pub fn mass(s_h: S) -> Self {
-        Self { s_h, s_hu: S::ZERO, s_hv: S::ZERO }
+        Self {
+            s_h,
+            s_hu: S::ZERO,
+            s_hv: S::ZERO,
+        }
     }
-    
+
     /// 原地加法
     #[inline]
     pub fn add_assign(&mut self, other: &Self) {
@@ -93,14 +105,19 @@ pub struct SourceContextGeneric<S: Scalar> {
     pub h_wet: S,
 }
 
-
 impl<S: Scalar> SourceContextGeneric<S> {
     /// 创建新的源项上下文
     // ALLOW_F64: 时间参数与模拟进度配合
     pub fn new(time: f64, dt: S, gravity: S, h_dry: S, h_wet: S) -> Self {
-        Self { time, dt, gravity, h_dry, h_wet }
+        Self {
+            time,
+            dt,
+            gravity,
+            h_dry,
+            h_wet,
+        }
     }
-    
+
     /// 使用默认物理参数创建
     // ALLOW_F64: 时间参数与模拟进度配合
     pub fn with_defaults<B: Backend<Scalar = S>>(backend: &B, time: f64, dt: S) -> Self {
@@ -112,27 +129,33 @@ impl<S: Scalar> SourceContextGeneric<S> {
             h_wet: backend.config_scalar(1e-4, "SourceContextGeneric.h_wet"),
         }
     }
-    
+
     /// 检查水深是否为干
     #[inline]
-    pub fn is_dry(&self, h: S) -> bool { h < self.h_dry }
-    
+    pub fn is_dry(&self, h: S) -> bool {
+        h < self.h_dry
+    }
+
     /// 检查水深是否为湿
     #[inline]
-    pub fn is_wet(&self, h: S) -> bool { h >= self.h_wet }
+    pub fn is_wet(&self, h: S) -> bool {
+        h >= self.h_wet
+    }
 }
 
 /// 泛型源项 Trait
 pub trait SourceTermGeneric<B: Backend>: Send + Sync {
     /// 获取源项名称
     fn name(&self) -> &'static str;
-    
+
     /// 获取源项刚性分类
     fn stiffness(&self) -> SourceStiffness;
-    
+
     /// 源项是否启用
-    fn is_enabled(&self) -> bool { true }
-    
+    fn is_enabled(&self) -> bool {
+        true
+    }
+
     /// 计算单个单元的源项贡献
     fn compute_cell(
         &self,
@@ -140,7 +163,7 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
         state: &ShallowWaterState<B>,
         ctx: &SourceContextGeneric<B::Scalar>,
     ) -> SourceContributionGeneric<B::Scalar>;
-    
+
     /// 批量计算所有单元的源项
     fn compute_batch(
         &self,
@@ -148,12 +171,14 @@ pub trait SourceTermGeneric<B: Backend>: Send + Sync {
         contributions: &mut [SourceContributionGeneric<B::Scalar>],
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
-        if !self.is_enabled() { return; }
+        if !self.is_enabled() {
+            return;
+        }
         for cell in 0..state.n_cells() {
             contributions[cell] = self.compute_cell(cell, state, ctx);
         }
     }
-    
+
     /// 累加源项到右端项缓冲区
     fn accumulate(
         &self,
@@ -174,16 +199,24 @@ pub struct NoSource<B: Backend> {
 impl<B: Backend> NoSource<B> {
     #[inline]
     pub fn new() -> Self {
-        Self { _marker: PhantomData }
+        Self {
+            _marker: PhantomData,
+        }
     }
 }
 
 impl<B: Backend> SourceTermGeneric<B> for NoSource<B> {
-    fn name(&self) -> &'static str { "NoSource" }
+    fn name(&self) -> &'static str {
+        "NoSource"
+    }
 
-    fn stiffness(&self) -> SourceStiffness { SourceStiffness::Explicit }
+    fn stiffness(&self) -> SourceStiffness {
+        SourceStiffness::Explicit
+    }
 
-    fn is_enabled(&self) -> bool { false }
+    fn is_enabled(&self) -> bool {
+        false
+    }
 
     fn compute_cell(
         &self,
@@ -227,20 +260,31 @@ pub struct SourceRegistryGeneric<B: Backend, S: SourceTermGeneric<B>> {
 impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistryGeneric<B, S> {
     /// 创建空的注册中心
     pub fn new() -> Self {
-        Self { sources: Vec::new(), _marker: PhantomData }
+        Self {
+            sources: Vec::new(),
+            _marker: PhantomData,
+        }
     }
-    
+
     /// 注册新的源项
-    pub fn register(&mut self, source: S) { self.sources.push(source); }
-    
+    pub fn register(&mut self, source: S) {
+        self.sources.push(source);
+    }
+
     /// 获取已注册的源项数量
-    pub fn len(&self) -> usize { self.sources.len() }
-    
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+
     /// 检查是否为空
-    pub fn is_empty(&self) -> bool { self.sources.is_empty() }
-    
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
     /// 获取所有源项的名称
-    pub fn names(&self) -> Vec<&'static str> { self.sources.iter().map(|s| s.name()).collect() }
+    pub fn names(&self) -> Vec<&'static str> {
+        self.sources.iter().map(|s| s.name()).collect()
+    }
 
     /// 累加所有源项到右端项缓冲区
     pub fn accumulate_all(
@@ -252,14 +296,18 @@ impl<B: Backend, S: SourceTermGeneric<B>> SourceRegistryGeneric<B, S> {
         ctx: &SourceContextGeneric<B::Scalar>,
     ) {
         for source in &self.sources {
-            if !source.is_enabled() { continue; }
+            if !source.is_enabled() {
+                continue;
+            }
             source.accumulate(state, rhs_h, rhs_hu, rhs_hv, ctx);
         }
     }
 }
 
 impl<B: Backend, S: SourceTermGeneric<B>> Default for SourceRegistryGeneric<B, S> {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

@@ -50,7 +50,10 @@ fn try_config_scalar<S: RuntimeScalar>(value: f64, field: &'static str) -> Resul
 #[track_caller]
 fn expect_config_scalar<S: RuntimeScalar>(value: f64, field: &'static str) -> S {
     try_config_scalar(value, field).unwrap_or_else(|_| {
-        panic!("NumericalParams conversion failed for {} = {}", field, value)
+        panic!(
+            "NumericalParams conversion failed for {} = {}",
+            field, value
+        )
     })
 }
 
@@ -192,7 +195,10 @@ pub struct SafeVelocity<S: RuntimeScalar> {
 
 impl<S: RuntimeScalar> SafeVelocity<S> {
     /// 零速度常量
-    pub const ZERO: Self = Self { u: S::ZERO, v: S::ZERO };
+    pub const ZERO: Self = Self {
+        u: S::ZERO,
+        v: S::ZERO,
+    };
 
     /// 从动量和水深计算安全速度
     ///
@@ -450,7 +456,10 @@ where
             dt_max: try_config_scalar(params_f64.dt_max, "dt_max")?,
             eta_tolerance: try_config_scalar(params_f64.eta_tolerance, "eta_tolerance")?,
             flux_tolerance: try_config_scalar(params_f64.flux_tolerance, "flux_tolerance")?,
-            conservation_tolerance: try_config_scalar(params_f64.conservation_tolerance, "conservation_tolerance")?,
+            conservation_tolerance: try_config_scalar(
+                params_f64.conservation_tolerance,
+                "conservation_tolerance",
+            )?,
         })
     }
 
@@ -470,7 +479,7 @@ where
             cfl: config.cfl,
             vel_max: config.max_velocity,
             h_friction: config.h_dry * 10.0, // 默认值
-            h_wet: config.h_dry * 100.0, // 默认值
+            h_wet: config.h_dry * 100.0,     // 默认值
             ..NumericalParams::<f64>::default()
         };
 
@@ -523,10 +532,9 @@ where
     #[inline]
     pub fn wet_fraction_smooth(&self, h: S) -> S {
         let t = self.wet_fraction(h);
-        t * t * (
-            config_scalar!(3.0, "wet_fraction_smooth_three")
-                - config_scalar!(2.0, "wet_fraction_smooth_two") * t
-        )
+        t * t
+            * (config_scalar!(3.0, "wet_fraction_smooth_three")
+                - config_scalar!(2.0, "wet_fraction_smooth_two") * t)
     }
 
     /// 创建安全水深
@@ -600,7 +608,7 @@ where
             let denom = (h4 + eps4).sqrt();
             let u = hu * h_safe / denom;
             let v = hv * h_safe / denom;
-            
+
             // 限制最大速度
             let speed = (u * u + v * v).sqrt();
             let threshold = S::EPSILON * config_scalar!(1000.0, "speed_clamp_threshold");
@@ -864,8 +872,8 @@ pub enum TimeIntegration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// 主链限制器配置枚举。
 ///
-/// ?????? `crate::types::LimiterType` ? `crate::numerics`
-/// ?????/??????????????????
+/// 配置层通过 `crate::types::LimiterType` 选择限制器类型。
+/// 运行时具体实现统一从 `crate::numerics` 创建，避免主链出现重复入口。
 pub enum LimiterType {
     /// 无限制器（一阶精度）
     None,
