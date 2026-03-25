@@ -581,6 +581,41 @@ impl<B: Backend, S: SourceTermGeneric<B>> Default for SourceRegistryGeneric<B, S
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::{SourceContextGeneric, SourceStiffness, SourceTermGeneric};
+    use mh_runtime::CpuBackend;
+
+    pub(crate) type TestBackend = CpuBackend<f64>;
+
+    pub(crate) fn test_backend() -> TestBackend {
+        CpuBackend::<f64>::new()
+    }
+
+    pub(crate) fn test_context(time: f64, dt: f64) -> SourceContextGeneric<f64> {
+        let backend = test_backend();
+        SourceContextGeneric::with_defaults(&backend, time, dt)
+    }
+
+    pub(crate) fn assert_source_metadata<T>(
+        source: &T,
+        expected_name: &'static str,
+        expected_stiffness: SourceStiffness,
+    ) where
+        T: SourceTermGeneric<TestBackend>,
+    {
+        assert_eq!(source.name(), expected_name);
+        assert_eq!(source.stiffness(), expected_stiffness);
+    }
+
+    pub(crate) fn assert_source_enabled<T>(source: &T, expected_enabled: bool)
+    where
+        T: SourceTermGeneric<TestBackend>,
+    {
+        assert_eq!(source.is_enabled(), expected_enabled);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use crate::NumericalParams;
 

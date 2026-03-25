@@ -501,15 +501,20 @@ impl<B: Backend> VegetationImplicit<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{
+    assert_source_metadata,
+    test_backend,
+    test_context,
+    TestBackend,
+};
 
     fn create_test_state(
         n_cells: usize,
         h: f64,
         u: f64,
         v: f64,
-    ) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
+    ) -> ShallowWaterState<TestBackend> {
+        let backend = test_backend();
         let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
@@ -611,8 +616,7 @@ mod tests {
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -626,8 +630,7 @@ mod tests {
         let config = VegetationConfig::new(10, 1000.0);
 
         let state = create_test_state(10, 2.0, 1.0, 0.5);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -641,8 +644,7 @@ mod tests {
             VegetationConfig::new(10, 1000.0).with_uniform_vegetation(VegetationType::reed());
 
         let state = create_test_state(10, 1e-7, 0.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -653,27 +655,20 @@ mod tests {
     #[test]
     fn test_source_term_trait() {
         let config = VegetationConfig::default_config(10);
-        assert_eq!(
-            <VegetationConfig as SourceTermGeneric<CpuBackend<f64>>>::name(&config),
-            "Vegetation"
-        );
-        assert_eq!(
-            <VegetationConfig as SourceTermGeneric<CpuBackend<f64>>>::stiffness(&config),
-            SourceStiffness::LocallyImplicit
-        ); // 使用隐式处理
+        assert_source_metadata(&config, "Vegetation", SourceStiffness::LocallyImplicit);
     }
 
     #[test]
     fn test_vegetation_implicit_creation() {
         let config = VegetationConfig::new(10, 1000.0);
-        let implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
+        let implicit = VegetationImplicit::new(test_backend(), config);
         assert_eq!(implicit.decay_factors.len(), 10);
     }
 
     #[test]
     fn test_vegetation_implicit_no_vegetation() {
         let config = VegetationConfig::new(10, 1000.0);
-        let mut implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
+        let mut implicit = VegetationImplicit::new(test_backend(), config);
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
         implicit.compute_decay_factors(&state, 0.1);
@@ -686,7 +681,7 @@ mod tests {
     fn test_vegetation_implicit_with_vegetation() {
         let mut config = VegetationConfig::new(10, 1000.0);
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
-        let mut implicit = VegetationImplicit::new(CpuBackend::<f64>::new(), config);
+        let mut implicit = VegetationImplicit::new(test_backend(), config);
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
         implicit.compute_decay_factors(&state, 0.1);
@@ -697,4 +692,3 @@ mod tests {
         assert!(factor > 0.0);
     }
 }
-

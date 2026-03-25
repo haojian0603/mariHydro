@@ -347,11 +347,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{test_backend, test_context, TestBackend};
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<TestBackend> {
+        let backend = test_backend();
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_coriolis_creation() {
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         assert!(config.config.enabled);
         assert_eq!(config.config.f, 1e-4);
         assert!(config.config.use_exact_rotation);
@@ -371,23 +371,22 @@ mod tests {
 
     #[test]
     fn test_coriolis_from_latitude() {
-        let equator = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 0.0);
+        let equator = CoriolisGeneric::from_latitude(test_backend(), 0.0);
         assert!(equator.config.f.abs() < 1e-10);
 
-        let north_pole = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 90.0);
+        let north_pole = CoriolisGeneric::from_latitude(test_backend(), 90.0);
         assert!((north_pole.config.f - 2.0 * EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
 
-        let north_30 = CoriolisGeneric::from_latitude(CpuBackend::<f64>::new(), 30.0);
+        let north_30 = CoriolisGeneric::from_latitude(test_backend(), 30.0);
         assert!((north_30.config.f - EARTH_ANGULAR_VELOCITY).abs() < 1e-10);
     }
 
     #[test]
     fn test_coriolis_dry_cell() {
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         // 使用 1e-7 作为干单元（小于默认 h_dry = 1e-6）
         let state = create_test_state(10, 1e-7, 1.0, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -398,10 +397,9 @@ mod tests {
 
     #[test]
     fn test_coriolis_still_water() {
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 0.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -413,10 +411,9 @@ mod tests {
     #[test]
     fn test_coriolis_x_flow_exact() {
         // 仅 x 方向流动，科氏力应该产生 y 方向变化
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -428,10 +425,9 @@ mod tests {
     #[test]
     fn test_coriolis_y_flow_exact() {
         // 仅 y 方向流动
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 0.0, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -444,12 +440,11 @@ mod tests {
         let f = 1e-4;
         let dt = 100.0; // 较大时间步以看出差异
 
-        let exact = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(f));
-        let linear = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(f).with_linear_approximation());
+        let exact = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(f));
+        let linear = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(f).with_linear_approximation());
 
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, dt);
+        let ctx = test_context(0.0, dt);
 
         let contrib_exact = exact.compute_cell(0, &state, &ctx);
         let contrib_linear = linear.compute_cell(0, &state, &ctx);
@@ -462,10 +457,9 @@ mod tests {
     #[test]
     fn test_coriolis_momentum_conservation() {
         // 精确旋转应该保持动量大小
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         let state = create_test_state(10, 1.0, 1.0, 0.5);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 100.0);
+        let ctx = test_context(0.0, 100.0);
 
         let hu = state.hu[0];
         let hv = state.hv[0];
@@ -489,8 +483,7 @@ mod tests {
 
         let config = CoriolisConfig::new(f);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, dt);
+        let ctx = test_context(0.0, dt);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -513,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_source_term_trait() {
-        let config = CoriolisGeneric::new(CpuBackend::<f64>::new(), CoriolisConfigGeneric::new(1e-4));
+        let config = CoriolisGeneric::new(test_backend(), CoriolisConfigGeneric::new(1e-4));
         
         assert_eq!(config.name(), "Coriolis");
         assert!(config.is_enabled());

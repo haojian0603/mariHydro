@@ -536,11 +536,16 @@ impl PressureGradientSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{
+        assert_source_metadata,
+        test_backend,
+        test_context,
+        TestBackend,
+    };
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<TestBackend> {
+        let backend = test_backend();
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = 0.0;
@@ -605,8 +610,7 @@ mod tests {
             .with_uniform_wind(10.0, 0.0);
 
         let state = create_test_state(10, 2.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -621,8 +625,7 @@ mod tests {
             .with_uniform_wind(10.0, 0.0);
 
         let state = create_test_state(10, 1e-7);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -644,8 +647,7 @@ mod tests {
             .with_uniform_gradient(100.0, 0.0); // 100 Pa/m
 
         let state = create_test_state(10, 2.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -661,8 +663,7 @@ mod tests {
             .with_uniform_gradient(100.0, 50.0);
 
         let state = create_test_state(10, 1e-7);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&config, 0, &state, &ctx);
 
@@ -673,26 +674,12 @@ mod tests {
     #[test]
     fn test_source_term_trait_wind() {
         let config = WindStressConfig::default_config(10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
-            "WindStress"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&config),
-            SourceStiffness::Explicit
-        );
+        assert_source_metadata(&config, "WindStress", SourceStiffness::Explicit);
     }
 
     #[test]
     fn test_source_term_trait_pressure() {
         let config = PressureGradientConfig::default_config(10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
-            "PressureGradient"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&config),
-            SourceStiffness::Explicit
-        );
+        assert_source_metadata(&config, "PressureGradient", SourceStiffness::Explicit);
     }
 }

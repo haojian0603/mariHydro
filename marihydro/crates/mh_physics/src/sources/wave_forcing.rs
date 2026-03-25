@@ -266,10 +266,10 @@ impl<B: Backend> SourceTermGeneric<B> for WaveForcing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{test_backend, test_context, TestBackend};
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<TestBackend> {
+        let backend = test_backend();
         let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
@@ -287,8 +287,7 @@ mod tests {
     fn test_zero_gradient() {
         let wf = WaveForcing::with_defaults(10);
         let state = create_test_state(10, 2.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&wf, 0, &state, &ctx);
         
@@ -305,8 +304,7 @@ mod tests {
         // 设置非零梯度
         wf.grad_sxx_sxy.fill(100.0); // N/m²
         
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
         let contrib = SourceTermGeneric::compute_cell(&wf, 0, &state, &ctx);
         
         // 应该有负的 x 动量源（辐射应力驱动）

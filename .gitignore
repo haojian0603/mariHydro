@@ -8,6 +8,7 @@ target/
 *.py
 docs/
 *.md
+!marihydro/AGENTS.md
 *.zip
 *.tar.gz
 

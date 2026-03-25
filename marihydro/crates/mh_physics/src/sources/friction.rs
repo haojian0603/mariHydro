@@ -672,10 +672,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{
+        assert_source_metadata,
+        test_backend,
+        test_context,
+        TestBackend,
+    };
 
-    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(CpuBackend::<f64>::new(), n_cells);
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<TestBackend> {
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(test_backend(), n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;
@@ -697,8 +702,7 @@ mod tests {
     fn test_manning_dry_cell() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 0.0001, 1.0, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
+        let ctx = test_context(0.0, 0.1);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -712,8 +716,7 @@ mod tests {
     fn test_manning_still_water() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 0.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
+        let ctx = test_context(0.0, 0.1);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -727,8 +730,7 @@ mod tests {
     fn test_manning_flowing_water() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
+        let ctx = test_context(0.0, 0.1);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -743,8 +745,7 @@ mod tests {
         // 验证隐式处理不会产生负动量
         let config = ManningFrictionConfig::new(9.81, 10, 0.1); // 高摩擦
         let state = create_test_state(10, 0.1, 1.0, 0.5); // 浅水
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0); // 大时间步
+        let ctx = test_context(0.0, 1.0); // 大时间步
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -765,8 +766,7 @@ mod tests {
     fn test_chezy_flowing_water() {
         let config = ChezyFrictionConfig::new(9.81, 50.0);
         let state = create_test_state(10, 1.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
+        let ctx = test_context(0.0, 0.1);
 
         let contrib = config.compute_cell(0, &state, &ctx);
         
@@ -800,8 +800,7 @@ mod tests {
     fn test_manning_batch_compute() {
         let config = ManningFrictionConfig::new(9.81, 10, 0.03);
         let state = create_test_state(10, 1.0, 1.0, 0.5);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 0.1);
+        let ctx = test_context(0.0, 0.1);
 
         let mut out_h = vec![0.0; 10];
         let mut out_hu = vec![0.0; 10];
@@ -822,18 +821,8 @@ mod tests {
         let manning = ManningFrictionConfig::new(9.81, 10, 0.03);
         let chezy = ChezyFrictionConfig::new(9.81, 50.0);
 
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&manning),
-            "ManningFriction"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&chezy),
-            "ChezyFriction"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&manning),
-            SourceStiffness::LocallyImplicit
-        );
+        assert_source_metadata(&manning, "ManningFriction", SourceStiffness::LocallyImplicit);
+        assert_source_metadata(&chezy, "ChezyFriction", SourceStiffness::LocallyImplicit);
     }
 
     #[test]

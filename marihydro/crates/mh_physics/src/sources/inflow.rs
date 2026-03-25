@@ -570,11 +570,16 @@ impl EvaporationSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{
+        assert_source_metadata,
+        test_backend,
+        test_context,
+        TestBackend,
+    };
 
-    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    fn create_test_state(n_cells: usize, h: f64) -> ShallowWaterState<TestBackend> {
+        let backend = test_backend();
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.z[i] = 0.0;
@@ -630,8 +635,7 @@ mod tests {
             .with_uniform_rainfall(36.0);
 
         let state = create_test_state(10, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -647,8 +651,7 @@ mod tests {
         config.add_point_source(0, 1.0, 0.0); // 1 m³/s, 东向
 
         let state = create_test_state(10, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -683,16 +686,12 @@ mod tests {
             .with_uniform_intensity(36.0);
 
         let state = create_test_state(10, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
         assert!((contrib.s_h - 1e-5).abs() < 1e-10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
-            "Rainfall"
-        );
+        assert_source_metadata(&config, "Rainfall", SourceStiffness::Explicit);
     }
 
     #[test]
@@ -709,17 +708,13 @@ mod tests {
             .with_uniform_rate(3.6);
 
         let state = create_test_state(10, 1.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
         // 蒸发为负值
         assert!((contrib.s_h - (-1e-6)).abs() < 1e-12);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&config),
-            "Evaporation"
-        );
+        assert_source_metadata(&config, "Evaporation", SourceStiffness::Explicit);
     }
 
     #[test]
@@ -728,8 +723,7 @@ mod tests {
             .with_uniform_rate(3.6);
 
         let state = create_test_state(10, 1e-8);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -740,33 +734,12 @@ mod tests {
     #[test]
     fn test_source_term_traits() {
         let inflow = InflowConfig::new(10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&inflow),
-            "Inflow"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&inflow),
-            SourceStiffness::Explicit
-        );
+        assert_source_metadata(&inflow, "Inflow", SourceStiffness::Explicit);
 
         let rainfall = RainfallConfig::new(10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&rainfall),
-            "Rainfall"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&rainfall),
-            SourceStiffness::Explicit
-        );
+        assert_source_metadata(&rainfall, "Rainfall", SourceStiffness::Explicit);
 
         let evap = EvaporationConfig::new(10);
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&evap),
-            "Evaporation"
-        );
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::stiffness(&evap),
-            SourceStiffness::Explicit
-        );
+        assert_source_metadata(&evap, "Evaporation", SourceStiffness::Explicit);
     }
 }

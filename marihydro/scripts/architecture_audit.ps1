@@ -208,6 +208,7 @@ try {
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
     Invoke-InformationalScan -Name "legacy SourceTrait residue" -Roots @("crates/mh_physics") -Pattern "SourceTrait"
+    Invoke-InformationalScan -Name "sources CpuBackend<f64> residue" -Roots @("crates/mh_physics/src/sources") -Pattern "SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend"
     Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("
     Invoke-InformationalScan -Name "scalar_from_f64 symbol residue" -Roots @("crates/mh_physics") -Pattern "\bscalar_from_f64\b"
     Invoke-InformationalScan -Name "T06 unimplemented residue" -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern "unimplemented!"

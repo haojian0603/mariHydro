@@ -276,16 +276,13 @@ where
 mod tests {
     use super::*;
     use crate::sources::atmosphere::DragCoefficientMethod;
-    use mh_runtime::CpuBackend;
-
+    use crate::sources::traits::test_support::{assert_source_enabled, assert_source_metadata};
+    
     #[test]
     fn test_wind_forcing_adapter() {
         let adapter = WindForcingAdapter::constant(10.0, 180.0, DragCoefficientMethod::Wu1982);
-        
-        assert_eq!(
-            SourceTermGeneric::<CpuBackend<f64>>::name(&adapter),
-            "WindForcing"
-        );
-        assert!(SourceTermGeneric::<CpuBackend<f64>>::is_enabled(&adapter));
+
+        assert_source_metadata(&adapter, "WindForcing", SourceStiffness::Explicit);
+        assert_source_enabled(&adapter, true);
     }
 }
