@@ -75,5 +75,5 @@
 ## 9. 仓库协作契约补充
 
 - `scripts/check_repo_contracts.ps1` 是强制门禁：它检查 `AGENTS.md`?`.githooks/`?`core.hooksPath` 和 hook 路由是否仍然生效。
-- `legacy_limiters` 的兼容实体只允许存在于 `crates/mh_physics/src/legacy_limiters.rs`，不允许再通过 `mod limiters;` 或其他内部 shim 转发。
+- `legacy_limiters` 的兼容实体只允许存在于 `crates/mh_physics/src/legacy_limiters/` 目录内，不允许再通过 `mod limiters;` 或其他内部 shim 转发。
 - 如果当前批次调整了门禁或 hook 行为，必须同步更新本文件，不再只留在临时提示词。

@@ -23,6 +23,7 @@ try {
         "AGENTS.md",
         ".githooks/pre-commit",
         ".githooks/pre-push",
+        "crates/mh_physics/src/legacy_limiters/mod.rs",
         "scripts/run_fast_gates.ps1",
         "scripts/run_required_gates.ps1",
         "scripts/setup_git_hooks.ps1"
