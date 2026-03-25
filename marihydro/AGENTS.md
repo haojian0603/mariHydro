@@ -29,6 +29,10 @@
   - `powershell -ExecutionPolicy Bypass -File scripts/architecture_audit.ps1`
 - 如果当前批次引入了新的架构约束，必须同步更新门禁脚本，确保后续不会回退。
 - 门禁如果新增扫描项，优先先做 advisory，再视收敛成熟度升级为 blocking。
+- 本地 Git hook 统一走仓库内 `.githooks/`，由 `scripts/setup_git_hooks.ps1` 安装到 `core.hooksPath`。
+- `pre-commit` 执行 `scripts/run_fast_gates.ps1`。
+- `pre-push` 执行 `scripts/run_required_gates.ps1`。
+- hook 失败时先修门禁问题，不要绕过 hook 继续提交或推送。
 
 ## 4. 架构收敛优先级
 

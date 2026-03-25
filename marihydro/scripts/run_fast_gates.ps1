@@ -1,0 +1,57 @@
+#!/usr/bin/env pwsh
+#
+# Fast gates for local commit hooks.
+#
+
+param(
+    [string]$HookName = "manual"
+)
+
+$ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+
+function Invoke-Step {
+    param(
+        [string]$Name,
+        [scriptblock]$Action
+    )
+
+    Write-Host "== $Name ==" -ForegroundColor Cyan
+    & $Action
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $LASTEXITCODE"
+    }
+}
+
+Push-Location $ProjectRoot
+try {
+    Write-Host "MariHydro fast gates ($HookName)" -ForegroundColor Cyan
+    Write-Host "Project root: $ProjectRoot"
+    Write-Host ""
+
+    Invoke-Step -Name "tracked temp artifacts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_tracked_temp_artifacts.ps1"
+    }
+
+    Invoke-Step -Name "architecture verification" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/verify_architecture.ps1"
+    }
+
+    Invoke-Step -Name "cargo check --workspace" -Action {
+        cargo check --workspace
+    }
+
+    Write-Host ""
+    Write-Host "[OK] fast gates passed" -ForegroundColor Green
+    exit 0
+}
+catch {
+    Write-Host ""
+    Write-Host "[FAIL] fast gates failed: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+finally {
+    Pop-Location
+}
