@@ -409,23 +409,6 @@ impl NumaTopology {
     }
 }
 
-impl Default for NumaTopology {
-    fn default() -> Self {
-        Self::detect().unwrap_or_else(|_| Self {
-            nodes: vec![NumaNode {
-                id: 0,
-                cpus: vec![0],
-                total_memory: 0,
-                free_memory: 0,
-            }],
-            cpu_to_node: [(0, 0)].into_iter().collect(),
-            physical_cores: 1,
-            logical_cores: 1,
-            hyperthreading: false,
-        })
-    }
-}
-
 // ============================================================================
 // 核心绑定
 // ============================================================================
@@ -662,16 +645,15 @@ impl NumaThreadPoolConfig {
         }
     }
 
+    /// 显式检测运行时拓扑并生成线程池配置
+    pub fn detect() -> Result<Self, NumaError> {
+        let topo = NumaTopology::detect()?;
+        Ok(Self::from_topology(&topo))
+    }
+
     /// 总线程数
     pub fn total_threads(&self) -> usize {
         self.threads_per_node.iter().map(|(_, t)| *t).sum()
-    }
-}
-
-impl Default for NumaThreadPoolConfig {
-    fn default() -> Self {
-        let topo = NumaTopology::default();
-        Self::from_topology(&topo)
     }
 }
 
@@ -812,8 +794,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_topology() {
-        let topo = NumaTopology::default();
+    fn test_detect_topology() {
+        let topo = NumaTopology::detect().expect("topology detection must succeed in tests");
         assert!(topo.num_nodes() >= 1);
     }
 
@@ -827,9 +809,9 @@ mod tests {
     }
 
     #[test]
-    fn test_thread_pool_config() {
-        let topo = NumaTopology::default();
-        let config = NumaThreadPoolConfig::from_topology(&topo);
+    fn test_thread_pool_config_detect() {
+        let config = NumaThreadPoolConfig::detect()
+            .expect("thread-pool config detection must succeed in tests");
         assert!(config.total_threads() >= 1);
     }
 

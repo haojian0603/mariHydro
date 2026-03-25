@@ -107,6 +107,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.66: runtime topology contract guard
+    Write-Host "=== Phase 0.66: runtime topology contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_topology_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "runtime topology contracts must pass"
+    } else {
+        Write-Host "[OK] runtime topology contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.7: AI state contract guard
     Write-Host "=== Phase 0.7: AI state contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_ai_state_contracts.ps1"

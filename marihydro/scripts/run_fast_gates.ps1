@@ -67,6 +67,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_parallelism_contracts.ps1"
     }
 
+    Invoke-Step -Name "runtime topology contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_topology_contracts.ps1"
+    }
+
     Invoke-Step -Name "architecture verification" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/verify_architecture.ps1"
     }
