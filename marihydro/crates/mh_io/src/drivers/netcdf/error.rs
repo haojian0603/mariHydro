@@ -32,16 +32,16 @@ pub enum NetCdfError {
 impl fmt::Display for NetCdfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NetCdfError::FileNotFound(path) => write!(f, "File not found: {}", path),
-            NetCdfError::OpenFailed(msg) => write!(f, "Failed to open file: {}", msg),
-            NetCdfError::DimensionNotFound(name) => write!(f, "Dimension not found: {}", name),
-            NetCdfError::VariableNotFound(name) => write!(f, "Variable not found: {}", name),
-            NetCdfError::ReadFailed(msg) => write!(f, "Failed to read data: {}", msg),
-            NetCdfError::AttributeNotFound(name) => write!(f, "Attribute not found: {}", name),
-            NetCdfError::TimeParseError(msg) => write!(f, "Failed to parse time: {}", msg),
-            NetCdfError::NotAvailable => write!(f, "NetCDF is not available"),
-            NetCdfError::UnsupportedLayout(msg) => write!(f, "Unsupported NetCDF layout: {}", msg),
-            NetCdfError::Other(msg) => write!(f, "NetCDF error: {}", msg),
+            NetCdfError::FileNotFound(path) => write!(f, "文件不存在: {}", path),
+            NetCdfError::OpenFailed(msg) => write!(f, "打开 NetCDF 文件失败: {}", msg),
+            NetCdfError::DimensionNotFound(name) => write!(f, "维度不存在: {}", name),
+            NetCdfError::VariableNotFound(name) => write!(f, "变量不存在: {}", name),
+            NetCdfError::ReadFailed(msg) => write!(f, "读取 NetCDF 数据失败: {}", msg),
+            NetCdfError::AttributeNotFound(name) => write!(f, "属性不存在: {}", name),
+            NetCdfError::TimeParseError(msg) => write!(f, "时间解析失败: {}", msg),
+            NetCdfError::NotAvailable => write!(f, "当前环境未接入 NetCDF 运行时"),
+            NetCdfError::UnsupportedLayout(msg) => write!(f, "不支持的 NetCDF 布局: {}", msg),
+            NetCdfError::Other(msg) => write!(f, "NetCDF 错误: {}", msg),
         }
     }
 }

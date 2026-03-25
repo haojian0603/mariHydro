@@ -85,6 +85,11 @@ try {
         -Message "tide reader must not synthesize zero-valued constituents or fallback layouts"
 
     Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'let model = TidalModel::detect\(path\)' `
+        -Message "tide reader dispatch must not rely on filename heuristics when a real path is available"
+
+    Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `
         -Pattern 'and_then\(\|v\| v\.parse\(\)\.ok\(\)\)' `
         -Message "GDAL CLI fallback must not silently discard invalid NoData metadata"

@@ -724,15 +724,25 @@ impl TidalDataReader for Fes2014Reader {
 /// 自动检测并打开潮汐数据
 pub fn open_tidal_data(path: impl AsRef<Path>) -> Result<Box<dyn TidalDataReader>, TidalIoError> {
     let path = path.as_ref();
-    let model = TidalModel::detect(path);
 
-    match model {
-        TidalModel::Tpxo9 | TidalModel::TpxoLocal => Ok(Box::new(TpxoReader::open(path)?)),
-        TidalModel::Fes2014 => Ok(Box::new(Fes2014Reader::open(path)?)),
-        TidalModel::Unknown => Err(TidalIoError::Unsupported(format!(
-            "无法识别潮汐数据布局: {}",
+    if path.exists() {
+        if path.is_dir() {
+            return Ok(Box::new(Fes2014Reader::open(path)?));
+        }
+        if path.is_file() {
+            return Ok(Box::new(TpxoReader::open(path)?));
+        }
+        return Err(TidalIoError::Unsupported(format!(
+            "不支持的潮汐数据路径类型: {}",
             path.display()
-        ))),
+        )));
+    }
+
+    match TidalModel::detect(path) {
+        TidalModel::Fes2014 => Ok(Box::new(Fes2014Reader::open(path)?)),
+        TidalModel::Tpxo9 | TidalModel::TpxoLocal | TidalModel::Unknown => {
+            Ok(Box::new(TpxoReader::open(path)?))
+        }
     }
 }
 
@@ -935,12 +945,49 @@ mod tests {
     }
 
     #[test]
-    fn test_open_tidal_data_rejects_unknown_layout() {
-        let err = match open_tidal_data(Path::new("unknown_layout.bin")) {
-            Ok(_) => panic!("unknown layout should not open successfully"),
+    fn test_open_tidal_data_existing_directory_uses_directory_reader() {
+        let base = std::env::temp_dir().join(format!(
+            "mh_io_tide_dir_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let err = match open_tidal_data(&base) {
+            Ok(_) => panic!("existing directory should dispatch to FES reader and fail explicitly"),
             Err(err) => err,
         };
-        assert!(matches!(err, TidalIoError::Unsupported(_)));
+        assert!(matches!(err, TidalIoError::FormatError(_)));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_open_tidal_data_existing_file_uses_file_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "mh_io_tide_file_{}.nc",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, b"not a netcdf file").unwrap();
+
+        let err = match open_tidal_data(&path) {
+            Ok(_) => panic!("existing file should dispatch to TPXO reader and fail explicitly"),
+            Err(err) => err,
+        };
+        assert!(!matches!(err, TidalIoError::Unsupported(_)));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_open_tidal_data_missing_path_reports_file_not_found() {
+        let path = Path::new("unknown_layout.bin");
+        let err = match open_tidal_data(path) {
+            Ok(_) => panic!("missing path should not open successfully"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, TidalIoError::FileNotFound(_)));
     }
 
     #[test]

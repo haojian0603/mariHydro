@@ -26,13 +26,13 @@ pub enum GdalError {
 impl fmt::Display for GdalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GdalError::FileNotFound(path) => write!(f, "File not found: {}", path),
-            GdalError::OpenFailed(msg) => write!(f, "Failed to open dataset: {}", msg),
-            GdalError::BandNotFound(idx) => write!(f, "Band {} not found", idx),
-            GdalError::ReadFailed(msg) => write!(f, "Failed to read data: {}", msg),
-            GdalError::ProjectionError(msg) => write!(f, "Projection error: {}", msg),
-            GdalError::NotAvailable => write!(f, "GDAL is not available"),
-            GdalError::Other(msg) => write!(f, "GDAL error: {}", msg),
+            GdalError::FileNotFound(path) => write!(f, "文件不存在: {}", path),
+            GdalError::OpenFailed(msg) => write!(f, "打开 GDAL 数据集失败: {}", msg),
+            GdalError::BandNotFound(idx) => write!(f, "波段不存在: {}", idx),
+            GdalError::ReadFailed(msg) => write!(f, "读取 GDAL 数据失败: {}", msg),
+            GdalError::ProjectionError(msg) => write!(f, "投影解析失败: {}", msg),
+            GdalError::NotAvailable => write!(f, "当前环境未接入 GDAL 运行时"),
+            GdalError::Other(msg) => write!(f, "GDAL 错误: {}", msg),
         }
     }
 }
