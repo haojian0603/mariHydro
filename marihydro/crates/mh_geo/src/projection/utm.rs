@@ -28,6 +28,22 @@ use mh_foundation::error::{MhError, MhResult};
 /// UTM 比例因子
 pub const UTM_K0: f64 = 0.9996;
 
+fn validate_utm_domain(lat: f64, zone: u8) -> MhResult<()> {
+    if !(-80.0..=84.0).contains(&lat) {
+        return Err(MhError::InvalidInput {
+            message: format!("Latitude {lat} out of UTM range (-80, 84)"),
+        });
+    }
+
+    if !(1..=60).contains(&zone) {
+        return Err(MhError::InvalidInput {
+            message: format!("UTM zone {zone} out of range (1-60)"),
+        });
+    }
+
+    Ok(())
+}
+
 /// 地理坐标 -> UTM
 ///
 /// # Arguments
@@ -42,19 +58,7 @@ pub const UTM_K0: f64 = 0.9996;
 /// # Errors
 /// 如果纬度超出 UTM 有效范围 (-80°, 84°) 则返回错误
 pub fn geographic_to_utm(lon: f64, lat: f64, zone: u8, north: bool) -> MhResult<(f64, f64)> {
-    // 验证纬度范围
-    if !(-80.0..=84.0).contains(&lat) {
-        return Err(MhError::InvalidInput {
-            message: format!("Latitude {lat} out of UTM range (-80, 84)"),
-        });
-    }
-
-    // 验证带号范围
-    if !(1..=60).contains(&zone) {
-        return Err(MhError::InvalidInput {
-            message: format!("UTM zone {zone} out of range (1-60)"),
-        });
-    }
+    validate_utm_domain(lat, zone)?;
 
     let params = TransverseMercatorParams::utm(zone, north);
     transverse_mercator::forward(&params, lon, lat)
@@ -117,10 +121,10 @@ pub fn utm_central_meridian(zone: u8) -> f64 {
 /// - `lat`: 纬度 (度)
 /// - `zone`: UTM 带号
 ///
-/// # Returns
-/// 在该点的比例因子
-#[must_use]
-pub fn utm_scale_factor(lon: f64, lat: f64, zone: u8) -> f64 {
+/// # Errors
+/// 如果经纬度超出 UTM 适用范围，或投影参数无效，则返回错误。
+pub fn utm_scale_factor(lon: f64, lat: f64, zone: u8) -> MhResult<f64> {
+    validate_utm_domain(lat, zone)?;
     let params = TransverseMercatorParams::utm(zone, lat >= 0.0);
     transverse_mercator::scale_factor_at(&params, lon, lat)
 }
@@ -132,10 +136,10 @@ pub fn utm_scale_factor(lon: f64, lat: f64, zone: u8) -> f64 {
 /// - `lat`: 纬度 (度)
 /// - `zone`: UTM 带号
 ///
-/// # Returns
-/// 子午线收敛角 (弧度)
-#[must_use]
-pub fn utm_convergence_angle(lon: f64, lat: f64, zone: u8) -> f64 {
+/// # Errors
+/// 如果经纬度超出 UTM 适用范围，或投影参数无效，则返回错误。
+pub fn utm_convergence_angle(lon: f64, lat: f64, zone: u8) -> MhResult<f64> {
+    validate_utm_domain(lat, zone)?;
     let params = TransverseMercatorParams::utm(zone, lat >= 0.0);
     transverse_mercator::convergence_angle(&params, lon, lat)
 }
@@ -166,14 +170,8 @@ mod tests {
         let (lon2, lat2) = utm_to_geographic(x, y, zone, north).expect("from UTM failed");
 
         // 高精度要求：1e-9 度约 0.1mm
-        assert!(
-            (lon - lon2).abs() < 1e-9,
-            "lon mismatch: {lon} vs {lon2}"
-        );
-        assert!(
-            (lat - lat2).abs() < 1e-9,
-            "lat mismatch: {lat} vs {lat2}"
-        );
+        assert!((lon - lon2).abs() < 1e-9, "lon mismatch: {lon} vs {lon2}");
+        assert!((lat - lat2).abs() < 1e-9, "lat mismatch: {lat} vs {lat2}");
     }
 
     #[test]
@@ -222,13 +220,18 @@ mod tests {
     }
 
     /// EPSG 标准验证测试 - UTM Zone 51N
-    /// 
+    ///
     /// 目标精度：1mm (0.001m)
     #[test]
     fn test_utm_zone51n_epsg_validation() {
         const EPSG_TEST_CASES: &[(f64, f64, f64, f64)] = &[
             // Verified against PROJ 9 (pyproj 3.7.2, EPSG:32651)
-            (121.880356, 29.887703, 391_888.063_726_413, 3_306_868.456_385_104),
+            (
+                121.880356,
+                29.887703,
+                391_888.063_726_413,
+                3_306_868.456_385_104,
+            ),
             (121.430427, 28.637151, 346582.4108433011, 3168793.409367069),
             (121.880772, 31.491324, 393700.3650201835, 3484597.440826551),
             (122.625275, 30.246954, 463948.3333072607, 3346209.757229396),
@@ -305,9 +308,9 @@ mod tests {
             (121.430427, 28.637151),
             (121.880772, 31.491324),
             (122.625275, 30.246954),
-            (117.0, 0.0),   // 赤道
-            (117.0, 84.0),  // 高纬度
-            (114.0, 40.0),  // 带边缘
+            (117.0, 0.0),  // 赤道
+            (117.0, 84.0), // 高纬度
+            (114.0, 40.0), // 带边缘
         ];
 
         let zone = 51;
@@ -342,18 +345,25 @@ mod tests {
     #[test]
     fn test_utm_scale_factor() {
         // 中央子午线处比例因子应为 k0
-        let k = utm_scale_factor(117.0, 40.0, 50);
+        let k = utm_scale_factor(117.0, 40.0, 50).expect("utm scale factor failed");
         assert!((k - 0.9996).abs() < 0.0001, "k = {k}");
 
         // 偏离中央子午线，比例因子应该增大
-        let k_offset = utm_scale_factor(120.0, 40.0, 50);
+        let k_offset =
+            utm_scale_factor(120.0, 40.0, 50).expect("utm scale factor offset failed");
         assert!(k_offset > k, "k_offset = {k_offset}");
     }
 
     #[test]
     fn test_utm_convergence_angle() {
         // 中央子午线上收敛角应接近 0
-        let gamma = utm_convergence_angle(117.0, 40.0, 50);
+        let gamma =
+            utm_convergence_angle(117.0, 40.0, 50).expect("utm convergence angle failed");
         assert!(gamma.abs() < 0.001, "gamma = {gamma}");
+    }
+
+    #[test]
+    fn test_utm_scale_factor_rejects_invalid_latitude() {
+        assert!(utm_scale_factor(117.0, 90.0, 50).is_err());
     }
 }

@@ -12,6 +12,7 @@
 //! - UTM/高斯-克吕格使用 Karney (2011) 算法，精度达亚毫米级
 //! - 支持多种椭球体（WGS84、CGCS2000、GRS80 等）
 //! - 零外部依赖，纯 Rust 实现
+//! - 投影辅助量（比例因子、收敛角）失败时显式返回错误，不使用 `NaN` 或零值伪装成功
 //!
 //! # 示例
 //!
@@ -29,8 +30,8 @@
 //! ```
 
 mod gauss_kruger;
-mod traits;
 mod math_utils;
+mod traits;
 pub mod transverse_mercator;
 mod utm;
 mod web_mercator;
@@ -42,7 +43,7 @@ pub use web_mercator::*;
 
 use crate::ellipsoid::Ellipsoid;
 use crate::error::{GeoError, GeoResult};
-use mh_foundation::error::{MhResult};
+use mh_foundation::error::MhResult;
 
 // ============================================================================
 // 投影类型定义
@@ -240,10 +241,10 @@ impl Projection {
     ///
     /// # Errors
     /// 如果 EPSG 代码无效则返回错误
-    pub fn from_epsg(source_epsg: u32, target_epsg: u32) -> MhResult<Self> { 
+    pub fn from_epsg(source_epsg: u32, target_epsg: u32) -> MhResult<Self> {
         // GeoError 会通过 From trait 自动转换为 MhError
-        let source = ProjectionType::from_epsg(source_epsg)?;  
-        let target = ProjectionType::from_epsg(target_epsg)?;  
+        let source = ProjectionType::from_epsg(source_epsg)?;
+        let target = ProjectionType::from_epsg(target_epsg)?;
         Ok(Self::new(source, target))
     }
 
@@ -413,7 +414,10 @@ mod tests {
 
     #[test]
     fn test_projection_type_to_epsg() {
-        assert_eq!(ProjectionType::Geographic { epsg: 4326 }.to_epsg(), Some(4326));
+        assert_eq!(
+            ProjectionType::Geographic { epsg: 4326 }.to_epsg(),
+            Some(4326)
+        );
         assert_eq!(ProjectionType::WebMercator.to_epsg(), Some(3857));
         assert_eq!(
             ProjectionType::Utm {

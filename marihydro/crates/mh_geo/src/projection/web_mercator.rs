@@ -141,8 +141,10 @@ pub fn tile_to_bbox(x: u32, y: u32, zoom: u8) -> (f64, f64, f64, f64) {
     let (lon_min, lat_max) = tile_to_lonlat(x, y, zoom);
     let (lon_max, lat_min) = tile_to_lonlat(x + 1, y + 1, zoom);
 
-    let (x_min, y_min) = geographic_to_web_mercator(lon_min, lat_min).unwrap_or((0.0, 0.0));
-    let (x_max, y_max) = geographic_to_web_mercator(lon_max, lat_max).unwrap_or((0.0, 0.0));
+    let (x_min, y_min) = geographic_to_web_mercator(lon_min, lat_min)
+        .expect("tile_to_lonlat returns coordinates inside Web Mercator domain");
+    let (x_max, y_max) = geographic_to_web_mercator(lon_max, lat_max)
+        .expect("tile_to_lonlat returns coordinates inside Web Mercator domain");
 
     (x_min, y_min, x_max, y_max)
 }
