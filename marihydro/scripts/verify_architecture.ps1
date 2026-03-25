@@ -96,6 +96,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.7: AI state contract guard
+    Write-Host "=== Phase 0.7: AI state contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_ai_state_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "AI state contracts must pass"
+    } else {
+        Write-Host "[OK] AI state contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 1: layer dependency checks
     Write-Host "=== Phase 1: layer dependency checks ===" -ForegroundColor Cyan
 

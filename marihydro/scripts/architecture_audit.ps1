@@ -185,6 +185,10 @@ try {
         $Failed += "check_external_data_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_ai_state_contracts.ps1" -Path (Join-Path $ScriptDir "check_ai_state_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_ai_state_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_runtime_probe_contracts.ps1" -Path (Join-Path $ScriptDir "check_runtime_probe_contracts.ps1") -Arguments @{})) {
         $Failed += "check_runtime_probe_contracts.ps1"
     }
@@ -248,6 +252,7 @@ try {
     Invoke-InformationalScan -Name 'external shape fallback residue' -Roots @("crates/mh_io/src") -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1'
     Invoke-InformationalScan -Name 'external data filename heuristic residue' -Roots @("crates/mh_io/src") -Pattern 'let model = TidalModel::detect\(path\)'
     Invoke-InformationalScan -Name 'public tolerant parser residue' -Roots @("crates/mh_io/src") -Pattern 'pub fn parse_calendar_or_default\(|pub fn detect\(path: &Path\)'
+    Invoke-InformationalScan -Name 'AI state fallback residue' -Roots @("crates/mh_agent") -Pattern 'let _ = model\.load_state|let _ = self\.save_state|\.unwrap_or\(0\.8\)|features\.get\(i\)\.copied\(\)\.unwrap_or\(0\.0\)|pred\.get\(o\)\.copied\(\)\.unwrap_or\(0\.0\)|target_norm\.get\(o\)\.copied\(\)\.unwrap_or\(0\.0\)|norm\.(mean|std|m2)\.get\(.*\)\.copied\(\)\.unwrap_or\((0\.0|1\.0)\)|pred\.values\.len\(\)\.min\(cell_areas\.len\(\)\)'
     Invoke-InformationalScan -Name 'remote sensing hardcoded calibration residue' -Roots @("crates/mh_agent") -Pattern 'modis_red_band|sentinel2_b4|empirical_inversion|SensorType::Optical => .*10\.0|SensorType::SAR => .*5\.0|SensorType::Hyperspectral => .*8\.0'
     Invoke-InformationalScan -Name 'surrogate fake model surface residue' -Roots @("crates/mh_agent") -Pattern '\bSurrogateType\b|\bReducedOrder\b|\bGaussianProcess\b|\bPolynomialChaos\b|\bUnsupportedModelType\b|only LinearRegression is implemented'
     Invoke-InformationalScan -Name 'gpu placeholder surface residue' -Roots @("crates/mh_physics") -Pattern '\bCudaBackendPlaceholder\b|\bGpuStatus\b|\bGpuCapabilities\b|pub mod gpu;|\bhas_cuda\b|\bavailable_gpus\b'

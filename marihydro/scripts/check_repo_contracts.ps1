@@ -24,6 +24,7 @@ try {
         ".githooks/pre-commit",
         ".githooks/pre-push",
         "scripts/check_external_data_contracts.ps1",
+        "scripts/check_ai_state_contracts.ps1",
         "scripts/check_physics_provenance.ps1",
         "scripts/check_real_implementation_contracts.ps1",
         "scripts/check_runtime_probe_contracts.ps1",
@@ -67,6 +68,7 @@ try {
             "[RULE_FORMULA_NAME_HONEST]",
             "[RULE_PUBLIC_SURFACE_TRUTHFUL]",
             "[RULE_CALIBRATED_AI_NAMING]",
+            "[RULE_AI_STATE_CONTRACTS_EXPLICIT]",
             "[RULE_NO_FAKE_BACKEND_SURFACE]",
             "[RULE_GATES_STRICTER_ONLY]"
         )

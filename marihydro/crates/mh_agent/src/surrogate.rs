@@ -71,21 +71,57 @@ impl LinearRegressionCore {
         self.bias = vec![0.0; output_dim];
     }
 
-    fn predict(&self, features: &[f64]) -> Vec<f64> {
-        let output_dim = self.output_dim.max(1);
+    fn validate(&self) -> Result<(), AiError> {
+        if self.output_dim == 0 {
+            return Err(AiError::InvalidShape {
+                expected: vec![1],
+                actual: vec![0],
+            });
+        }
+        let expected_weights = self
+            .input_dim
+            .checked_mul(self.output_dim)
+            .ok_or_else(|| AiError::InferenceFailed("surrogate weight shape overflowed".into()))?;
+        if self.weights.len() != expected_weights {
+            return Err(AiError::InvalidShape {
+                expected: vec![expected_weights],
+                actual: vec![self.weights.len()],
+            });
+        }
+        if self.bias.len() != self.output_dim {
+            return Err(AiError::InvalidShape {
+                expected: vec![self.output_dim],
+                actual: vec![self.bias.len()],
+            });
+        }
+        Ok(())
+    }
+
+    fn predict(&self, features: &[f64]) -> Result<Vec<f64>, AiError> {
+        self.validate()?;
         if self.input_dim == 0 || self.weights.is_empty() {
-            return vec![0.0; output_dim];
+            return Err(AiError::NotReady(
+                "surrogate linear core has no trained weights".into(),
+            ));
         }
-        let mut out = vec![0.0; output_dim];
+        if features.len() != self.input_dim {
+            return Err(AiError::InvalidShape {
+                expected: vec![self.input_dim],
+                actual: vec![features.len()],
+            });
+        }
+        let mut out = vec![0.0; self.output_dim];
         for (o, out_item) in out.iter_mut().enumerate() {
-            let mut sum = self.bias.get(o).copied().unwrap_or(0.0);
-            for i in 0..self.input_dim {
-                let idx = o * self.input_dim + i;
-                sum += self.weights[idx] * features.get(i).copied().unwrap_or(0.0);
-            }
-            *out_item = sum;
+            let row_start = o * self.input_dim;
+            let row_end = row_start + self.input_dim;
+            let weighted_sum = self.weights[row_start..row_end]
+                .iter()
+                .zip(features.iter())
+                .map(|(weight, feature)| weight * feature)
+                .sum::<f64>();
+            *out_item = self.bias[o] + weighted_sum;
         }
-        out
+        Ok(out)
     }
 }
 
@@ -97,6 +133,7 @@ pub struct SurrogateModel<B: Backend = DefaultBackend> {
     last_update_time: B::Scalar,
     linear_core: LinearRegressionCore,
     error_ema: Option<f64>,
+    trained: bool,
 }
 
 impl<B: Backend> SurrogateModel<B>
@@ -105,6 +142,7 @@ where
     B::Vector2D: bytemuck::Pod,
 {
     pub fn new(config: SurrogateConfig<B>) -> Result<Self, AiError> {
+        validate_supported_output_features(&config.output_features)?;
         let output_dim = config.output_features.len().max(1);
         let mut model = Self {
             config,
@@ -114,10 +152,11 @@ where
             last_update_time: B::Scalar::ZERO,
             linear_core: LinearRegressionCore::new(output_dim),
             error_ema: None,
+            trained: false,
         };
 
         if let Some(path) = model.config.model_path.clone() {
-            let _ = model.load_state(&path);
+            model.load_state(&path)?;
         }
 
         Ok(model)
@@ -126,12 +165,17 @@ where
         &mut self,
         snapshot: &PhysicsSnapshot<B>,
     ) -> Result<SurrogatePrediction<B>, AiError> {
-        let mut features = self.extract_features(snapshot);
-        self.ensure_model_initialized(features.len());
-        self.normalize_input(&mut features);
+        if !self.trained {
+            return Err(AiError::NotReady(
+                "surrogate model must be trained or loaded before prediction".into(),
+            ));
+        }
 
-        let mut values = self.forward_linear(&features);
-        self.denormalize_output(&mut values);
+        let mut features = self.extract_features(snapshot)?;
+        self.normalize_input(&mut features)?;
+
+        let mut values = self.forward_linear(&features)?;
+        self.denormalize_output(&mut values)?;
         let values: ScalarSamples<B> = values
             .into_iter()
             .map(|v| scalar_from_f64_or_panic::<B>(v, "surrogate.prediction_value"))
@@ -139,13 +183,21 @@ where
             .into();
 
         let uncertainty = if self.config.estimate_uncertainty {
-            Some(
-                vec![
-                    scalar_from_f64_or_panic::<B>(0.1, "surrogate.default_uncertainty");
-                    values.len()
-                ]
-                .into(),
-            )
+            if let Some(error_ema) = self.error_ema {
+                let estimated_std = error_ema.max(self.config.min_std.to_f64_lossy().max(1e-6));
+                Some(
+                    vec![
+                        scalar_from_f64_or_panic::<B>(
+                            estimated_std,
+                            "surrogate.estimated_uncertainty",
+                        );
+                        values.len()
+                    ]
+                    .into(),
+                )
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -153,7 +205,7 @@ where
         let confidence = self
             .error_ema
             .map(|e| 1.0 / (1.0 + e))
-            .unwrap_or(0.8)
+            .unwrap_or(0.0)
             .clamp(0.0, 1.0);
 
         let prediction = SurrogatePrediction {
@@ -168,7 +220,7 @@ where
         Ok(prediction)
     }
 
-    fn extract_features(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<f64> {
+    fn extract_features(&self, snapshot: &PhysicsSnapshot<B>) -> Result<Vec<f64>, AiError> {
         let mut feats = Vec::new();
         let push_buffer = |buf: &B::Buffer<B::Scalar>, out: &mut Vec<f64>| {
             out.extend(buf.iter().map(|v| v.to_f64_lossy()));
@@ -186,57 +238,63 @@ where
                     "v" => push_buffer(&snapshot.v, &mut feats),
                     "z" => push_buffer(&snapshot.z, &mut feats),
                     "sediment" => {
-                        if let Some(s) = &snapshot.sediment {
-                            push_buffer(s, &mut feats);
-                        }
+                        let sediment = snapshot.sediment.as_ref().ok_or_else(|| {
+                            AiError::StateAccessError(
+                                "snapshot is missing sediment requested by surrogate input_features"
+                                    .into(),
+                            )
+                        })?;
+                        push_buffer(sediment, &mut feats);
                     }
-                    _ => {}
+                    other => {
+                        return Err(AiError::InvalidObservation(format!(
+                            "unsupported surrogate input feature: {other}"
+                        )));
+                    }
                 }
             }
         }
-        feats
+        if feats.is_empty() {
+            return Err(AiError::InvalidShape {
+                expected: vec![1],
+                actual: vec![0],
+            });
+        }
+        Ok(feats)
     }
 
-    fn normalize_input(&self, features: &mut [f64]) {
+    fn normalize_input(&self, features: &mut [f64]) -> Result<(), AiError> {
         if let Some(norm) = &self.input_normalization {
+            let (mean, std, _, _) = scalar_normalization_state(norm, "input normalization")?;
             let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
-            for (i, val) in features.iter_mut().enumerate() {
-                let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm
-                    .std
-                    .get(i % norm.std.len())
-                    .copied()
-                    .unwrap_or(1.0)
-                    .max(min_std);
+            let std = std.max(min_std);
+            for val in features.iter_mut() {
                 *val = (*val - mean) / std;
             }
         }
+        Ok(())
     }
 
-    fn normalize_output(&self, output: &mut [f64]) {
+    fn normalize_output(&self, output: &mut [f64]) -> Result<(), AiError> {
         if let Some(norm) = &self.output_normalization {
+            let (mean, std, _, _) = scalar_normalization_state(norm, "output normalization")?;
             let min_std = self.config.min_std.to_f64_lossy().max(1e-6);
-            for (i, val) in output.iter_mut().enumerate() {
-                let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm
-                    .std
-                    .get(i % norm.std.len())
-                    .copied()
-                    .unwrap_or(1.0)
-                    .max(min_std);
+            let std = std.max(min_std);
+            for val in output.iter_mut() {
                 *val = (*val - mean) / std;
             }
         }
+        Ok(())
     }
 
-    fn denormalize_output(&self, output: &mut [f64]) {
+    fn denormalize_output(&self, output: &mut [f64]) -> Result<(), AiError> {
         if let Some(norm) = &self.output_normalization {
-            for (i, val) in output.iter_mut().enumerate() {
-                let mean = norm.mean.get(i % norm.mean.len()).copied().unwrap_or(0.0);
-                let std = norm.std.get(i % norm.std.len()).copied().unwrap_or(1.0);
+            let (mean, std, _, _) = scalar_normalization_state(norm, "output normalization")?;
+            for val in output.iter_mut() {
                 *val = *val * std + mean;
             }
         }
+        Ok(())
     }
 
     pub fn evaluate_prediction(
@@ -285,33 +343,42 @@ where
         snapshot: &PhysicsSnapshot<B>,
         target: &[B::Scalar],
     ) -> Result<(), AiError> {
-        let features_raw = self.extract_features(snapshot);
-        self.ensure_model_initialized(features_raw.len());
-        let output_dim = target.len().max(1);
+        if target.is_empty() {
+            return Err(AiError::InvalidShape {
+                expected: vec![1],
+                actual: vec![0],
+            });
+        }
+
+        let features_raw = self.extract_features(snapshot)?;
+        let output_dim = target.len();
         self.linear_core
             .ensure_shape(features_raw.len(), output_dim);
 
-        self.update_normalization_input(&features_raw);
+        self.update_normalization_input(&features_raw)?;
         let target_raw: Vec<f64> = target.iter().map(|v| v.to_f64_lossy()).collect();
-        self.update_normalization_output(&target_raw);
+        self.update_normalization_output(&target_raw)?;
 
         let mut features = features_raw.clone();
         let mut target_norm = target_raw.clone();
-        self.normalize_input(&mut features);
-        self.normalize_output(&mut target_norm);
+        self.normalize_input(&mut features)?;
+        self.normalize_output(&mut target_norm)?;
 
-        let pred = self.forward_linear(&features);
+        let pred = self.forward_linear(&features)?;
         let lr = self.config.learning_rate.to_f64_lossy().max(1e-8);
         let l2 = self.config.l2_reg.to_f64_lossy().max(0.0);
 
         for o in 0..self.linear_core.output_dim {
-            let err =
-                pred.get(o).copied().unwrap_or(0.0) - target_norm.get(o).copied().unwrap_or(0.0);
+            let err = pred[o] - target_norm[o];
             self.linear_core.bias[o] -= lr * err;
-            for i in 0..self.linear_core.input_dim {
+            for (i, feature) in features
+                .iter()
+                .take(self.linear_core.input_dim)
+                .copied()
+                .enumerate()
+            {
                 let idx = o * self.linear_core.input_dim + i;
-                let grad = err * features.get(i).copied().unwrap_or(0.0)
-                    + l2 * self.linear_core.weights[idx];
+                let grad = err * feature + l2 * self.linear_core.weights[idx];
                 self.linear_core.weights[idx] -= lr * grad;
             }
         }
@@ -332,10 +399,11 @@ where
             None => rmse,
         });
 
+        self.trained = true;
         self.last_update_time = snapshot.time;
 
         if let Some(path) = self.config.model_path.clone() {
-            let _ = self.save_state(&path);
+            self.save_state(&path)?;
         }
 
         Ok(())
@@ -351,18 +419,13 @@ where
         true
     }
 
-    fn ensure_model_initialized(&mut self, input_dim: usize) {
-        let output_dim = self.linear_core.output_dim.max(1);
-        self.linear_core.ensure_shape(input_dim, output_dim);
-    }
-
-    fn forward_linear(&self, features: &[f64]) -> Vec<f64> {
+    fn forward_linear(&self, features: &[f64]) -> Result<Vec<f64>, AiError> {
         self.linear_core.predict(features)
     }
 
-    fn update_normalization_input(&mut self, values: &[f64]) {
+    fn update_normalization_input(&mut self, values: &[f64]) -> Result<(), AiError> {
         match &mut self.input_normalization {
-            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
+            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy())?,
             None => {
                 self.input_normalization = Some(init_normalization(
                     values,
@@ -370,11 +433,12 @@ where
                 ))
             }
         }
+        Ok(())
     }
 
-    fn update_normalization_output(&mut self, values: &[f64]) {
+    fn update_normalization_output(&mut self, values: &[f64]) -> Result<(), AiError> {
         match &mut self.output_normalization {
-            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy()),
+            Some(norm) => update_normalization(norm, values, self.config.min_std.to_f64_lossy())?,
             None => {
                 self.output_normalization = Some(init_normalization(
                     values,
@@ -382,6 +446,7 @@ where
                 ))
             }
         }
+        Ok(())
     }
 
     fn save_state(&self, path: &str) -> Result<(), AiError> {
@@ -400,10 +465,18 @@ where
         let content = std::fs::read_to_string(path).map_err(|e| AiError::Other(e.to_string()))?;
         let state: SurrogateState =
             serde_json::from_str(&content).map_err(|e| AiError::Other(e.to_string()))?;
+        state.linear_core.validate()?;
+        if let Some(norm) = &state.input_normalization {
+            let _ = scalar_normalization_state(norm, "input normalization")?;
+        }
+        if let Some(norm) = &state.output_normalization {
+            let _ = scalar_normalization_state(norm, "output normalization")?;
+        }
         self.linear_core = state.linear_core;
         self.input_normalization = state.input_normalization;
         self.output_normalization = state.output_normalization;
         self.error_ema = state.error_ema;
+        self.trained = true;
         Ok(())
     }
 }
@@ -439,13 +512,19 @@ fn init_normalization(values: &[f64], min_std: f64) -> NormalizationParams {
     }
 }
 
-fn update_normalization(norm: &mut NormalizationParams, values: &[f64], min_std: f64) {
+fn update_normalization(
+    norm: &mut NormalizationParams,
+    values: &[f64],
+    min_std: f64,
+) -> Result<(), AiError> {
     if values.is_empty() {
-        return;
+        return Err(AiError::InvalidShape {
+            expected: vec![1],
+            actual: vec![0],
+        });
     }
-    let mut mean = norm.mean.first().copied().unwrap_or(0.0);
-    let mut m2 = norm.m2.first().copied().unwrap_or(0.0);
-    let mut count = norm.count;
+    let (mut mean, _, mut m2, mut count) =
+        scalar_normalization_state(norm, "surrogate normalization state")?;
 
     for &x in values {
         count += 1;
@@ -465,6 +544,37 @@ fn update_normalization(norm: &mut NormalizationParams, values: &[f64], min_std:
     norm.std = vec![std];
     norm.count = count;
     norm.m2 = vec![m2];
+    Ok(())
+}
+
+fn validate_supported_output_features(output_features: &[String]) -> Result<(), AiError> {
+    if output_features.is_empty() {
+        return Ok(());
+    }
+    if output_features.len() == 1 && output_features[0] == "h" {
+        return Ok(());
+    }
+    Err(AiError::InvalidObservation(
+        "surrogate output_features currently only support the depth field 'h'".into(),
+    ))
+}
+
+fn scalar_normalization_state(
+    norm: &NormalizationParams,
+    label: &str,
+) -> Result<(f64, f64, f64, usize), AiError> {
+    if norm.count == 0 {
+        return Err(AiError::InvalidObservation(format!(
+            "{label} must carry at least one sample"
+        )));
+    }
+    if norm.mean.len() != 1 || norm.std.len() != 1 || norm.m2.len() != 1 {
+        return Err(AiError::InvalidShape {
+            expected: vec![1, 1, 1],
+            actual: vec![norm.mean.len(), norm.std.len(), norm.m2.len()],
+        });
+    }
+    Ok((norm.mean[0], norm.std[0], norm.m2[0], norm.count))
 }
 
 impl<B: Backend> AIAgent<B> for SurrogateModel<B>
@@ -485,10 +595,16 @@ where
         if let Some(pred) = &self.current_prediction {
             let before_volume = state.total_water_volume().to_f64_lossy();
             let cell_areas = state.cell_areas().copy_to_vec();
-            let n = pred.values.len().min(cell_areas.len());
-            if n == 0 {
+            if pred.values.is_empty() || cell_areas.is_empty() {
                 return Ok(());
             }
+            if pred.values.len() != cell_areas.len() {
+                return Err(AiError::InvalidShape {
+                    expected: vec![cell_areas.len()],
+                    actual: vec![pred.values.len()],
+                });
+            }
+            let n = pred.values.len();
 
             let old_depth: Vec<B::Scalar> = {
                 let depth = state.get_depth();
@@ -516,11 +632,7 @@ where
                     let mut sum_area = 0.0f64;
                     for i in 0..n {
                         if depth[i] > B::Scalar::ZERO {
-                            sum_area += cell_areas
-                                .get(i)
-                                .copied()
-                                .unwrap_or(B::Scalar::ZERO)
-                                .to_f64_lossy();
+                            sum_area += cell_areas[i].to_f64_lossy();
                         }
                     }
                     if sum_area <= 0.0 {
@@ -532,11 +644,7 @@ where
                         if depth[i] <= B::Scalar::ZERO {
                             continue;
                         }
-                        let area = cell_areas
-                            .get(i)
-                            .copied()
-                            .unwrap_or(B::Scalar::ZERO)
-                            .to_f64_lossy();
+                        let area = cell_areas[i].to_f64_lossy();
                         if area <= 0.0 {
                             continue;
                         }
