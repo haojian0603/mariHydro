@@ -1,6 +1,9 @@
 // crates/mh_io/src/drivers/netcdf/driver.rs
 
 //! NetCDF 驱动实现
+//!
+//! IO_SOURCE: NetCDF 经典数据模型，以及 `ncdump -h` / `ncdump -v <var>` 文本输出格式约定。
+//! IO_SCOPE: 原生后端负责真实 NetCDF 变量读取；CLI 回退路径仅接受结构完整、数值 token 可完整解释的 `ncdump` 输出。遇到缺失 `data:` 段、坏 token 或维度长度非法时直接报错，不做部分解析。
 
 use super::error::NetCdfError;
 use std::path::Path;
@@ -545,37 +548,62 @@ fn cli_read_variable_data(path: &Path, name: &str) -> Result<Vec<f64>, NetCdfErr
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_numeric_values(&text))
+    parse_numeric_values(&text)
 }
 
 #[cfg(not(feature = "netcdf"))]
-fn parse_numeric_values(text: &str) -> Vec<f64> {
+fn parse_numeric_values(text: &str) -> Result<Vec<f64>, NetCdfError> {
     let mut values = Vec::new();
     let mut in_data = false;
+    let mut saw_data_section = false;
     for line in text.lines() {
         let raw = line.trim();
         if raw.starts_with("data:") {
             in_data = true;
+            saw_data_section = true;
             continue;
         }
         if !in_data {
             continue;
         }
-        let cleaned = raw.replace(',', " ");
+        if raw == "}" {
+            break;
+        }
+
+        let payload = if let Some((_, rhs)) = raw.split_once('=') {
+            rhs.trim()
+        } else {
+            raw
+        };
+        let cleaned = payload
+            .trim_end_matches(';')
+            .replace(',', " ")
+            .trim()
+            .to_string();
+        if cleaned.is_empty() {
+            continue;
+        }
         for token in cleaned.split_whitespace() {
             let lower = token.to_ascii_lowercase();
-            let parsed = match lower.as_str() {
-                "nan" => Some(f64::NAN),
-                "inf" | "infinity" => Some(f64::INFINITY),
-                "-inf" | "-infinity" => Some(f64::NEG_INFINITY),
-                _ => token.parse::<f64>().ok(),
+            let value = match lower.as_str() {
+                "nan" => f64::NAN,
+                "inf" | "infinity" => f64::INFINITY,
+                "-inf" | "-infinity" => f64::NEG_INFINITY,
+                _ => token.parse::<f64>().map_err(|_| {
+                    NetCdfError::ReadFailed(format!("ncdump 数值载荷无法解析: {token}"))
+                })?,
             };
-            if let Some(v) = parsed {
-                values.push(v);
-            }
+            values.push(value);
         }
     }
-    values
+
+    if !saw_data_section {
+        return Err(NetCdfError::ReadFailed(
+            "ncdump 输出缺少 data 段".to_string(),
+        ));
+    }
+
+    Ok(values)
 }
 
 #[cfg(not(feature = "netcdf"))]
@@ -631,5 +659,48 @@ data:
 }
 "#;
         assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_numeric_values_supports_assignment_lines() {
+        let text = r#"
+netcdf sample {
+data:
+    h =
+        1, 2, nan, -inf ;
+}
+"#;
+        let values = parse_numeric_values(text).unwrap();
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[0], 1.0);
+        assert_eq!(values[1], 2.0);
+        assert!(values[2].is_nan());
+        assert_eq!(values[3], f64::NEG_INFINITY);
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_numeric_values_rejects_invalid_payload_token() {
+        let text = r#"
+netcdf sample {
+data:
+    h =
+        1, bad, 3 ;
+}
+"#;
+        assert!(parse_numeric_values(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_numeric_values_rejects_missing_data_section() {
+        let text = r#"
+netcdf sample {
+variables:
+    float h(lon);
+}
+"#;
+        assert!(parse_numeric_values(text).is_err());
     }
 }

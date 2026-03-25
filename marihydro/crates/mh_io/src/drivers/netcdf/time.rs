@@ -4,6 +4,9 @@
 //!
 //! 解析 NetCDF 文件中的 CF 约定时间格式。
 //!
+//! IO_SOURCE: CF Metadata Conventions 关于时间坐标单位与日历类型的约定（`units since reference_time`）。
+//! IO_SCOPE: 当前实现支持标准 CF 时间单位和文档中列出的日历类型；时间字符串或时间分量非法时显式报错，非法月份不会再回退为默认 30 天。
+//!
 //! # CF 时间约定
 //!
 //! CF (Climate and Forecast) 约定使用 "units since reference_time" 格式：
@@ -129,7 +132,7 @@ impl CfCalendar {
                     28
                 }
             }
-            _ => 30, // 默认
+            _ => panic!("invalid month in CF calendar: {month}"),
         }
     }
 
@@ -702,6 +705,13 @@ mod tests {
         let day360 = CfCalendar::Day360;
         assert_eq!(day360.days_in_month(2020, 1), 30);
         assert_eq!(day360.days_in_month(2020, 2), 30);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid month in CF calendar")]
+    fn test_days_in_month_rejects_invalid_month() {
+        let std = CfCalendar::Standard;
+        let _ = std.days_in_month(2020, 13);
     }
 
     #[test]

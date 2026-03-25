@@ -75,6 +75,9 @@ try {
 
     Check-TagSet -RelativePath "crates/mh_io/src/netcdf_tide.rs" -Label "netcdf_tide reader"
     Check-TagSet -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" -Label "GDAL CLI driver fallback"
+    Check-TagSet -RelativePath "crates/mh_io/src/drivers/netcdf/mod.rs" -Label "NetCDF driver module"
+    Check-TagSet -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" -Label "NetCDF CLI driver fallback"
+    Check-TagSet -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" -Label "CF time parser"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
@@ -97,9 +100,19 @@ try {
         -Message "NetCDF header parsing must not collapse invalid dimensions to zero"
 
     Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
+        -Pattern 'token\.parse::<f64>\(\)\.ok\(\)' `
+        -Message "NetCDF CLI fallback must not silently skip invalid numeric payload tokens"
+
+    Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
         -Pattern 'parse\(\)\.ok\(\)\.unwrap_or\((?:0|0\.0)\)' `
         -Message "CF time parsing must not collapse malformed components to zero"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
+        -Pattern '_ => 30' `
+        -Message "CF calendar month length must not fall back to a synthetic default month"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""
