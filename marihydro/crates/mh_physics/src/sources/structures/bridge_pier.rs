@@ -227,16 +227,15 @@ impl<B: Backend> SourceTermGeneric<B> for BridgePierDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{test_backend, test_context, TestBackend};
 
     fn create_test_state(
         n_cells: usize,
         h: f64,
         u: f64,
         v: f64,
-    ) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(backend, n_cells);
+    ) -> ShallowWaterState<TestBackend> {
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(test_backend(), n_cells);
         for i in 0..n_cells {
             state.h[i] = h;
             state.hu[i] = h * u;
@@ -255,8 +254,7 @@ mod tests {
     fn test_zero_blockage() {
         let pier = BridgePierDrag::with_defaults(10).unwrap();
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
 
@@ -270,8 +268,7 @@ mod tests {
         pier.set_pier(0, 0.2, None); // 20% 阻塞
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
-        let backend = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = SourceTermGeneric::compute_cell(&pier, 0, &state, &ctx);
 

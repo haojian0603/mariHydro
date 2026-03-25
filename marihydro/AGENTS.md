@@ -57,3 +57,9 @@
 - 用户侧沟通、注释和文档优先中文。
 - 涉及中文文件写入时，必须显式保证 UTF-8；不要用会污染编码的 shell 重定向方式直接写中文内容。
 - 如果终端显示异常，先区分“终端乱码”与“文件真坏了”，不要在未确认前重复覆盖文件。
+
+## 8. Sources 测试支撑
+
+- `sources` 目录下的测试优先复用 `crate::sources::traits::test_support`。
+- 不要在每个测试模块里重复创建 `CpuBackend<f64>`、`SourceContextGeneric::with_defaults(...)` 和元数据断言样板。
+- 如需新增共享测试辅助，优先扩展 `test_support`，再批量替换调用点。

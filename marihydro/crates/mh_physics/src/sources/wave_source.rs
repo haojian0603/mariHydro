@@ -271,21 +271,26 @@ impl<B: Backend> SourceTermGeneric<B> for WaveRadiationSourceGeneric<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
+    use crate::sources::traits::test_support::{
+        assert_source_enabled,
+        assert_source_metadata,
+        test_backend,
+        TestBackend,
+    };
 
     #[test]
     fn test_wave_radiation_source_creation() {
-        let source = WaveRadiationSource::new(CpuBackend::<f64>::new(), 100);
-        assert_eq!(source.name(), "WaveRadiation");
-        assert!(!source.is_enabled());
+        let source = WaveRadiationSource::new(test_backend(), 100);
+        assert_source_metadata(&source, "WaveRadiation", SourceStiffness::Explicit);
+        assert_source_enabled(&source, false);
     }
 
     #[test]
     fn test_generic_wave_source() {
-        let mut source = WaveRadiationSourceGeneric::<CpuBackend<f64>>::new(10);
-        assert!(!source.is_enabled());
+        let mut source = WaveRadiationSourceGeneric::<TestBackend>::new(10);
+        assert_source_enabled(&source, false);
 
         source.set_momentum_source(&[(0.1, 0.2); 10]);
-        assert!(source.is_enabled());
+        assert_source_enabled(&source, true);
     }
 }

@@ -65,8 +65,8 @@
 //! let coriolis = CoriolisSource::from_latitude(30.0);
 //!
 //! // 创建 Smagorinsky 湍流模型（推荐使用常数涡粘性）
-//! let backend = mh_runtime::CpuBackend::<f64>::new();
-//! let model = TurbulenceModel::constant(&backend, 1.0);
+//! let backend = mh_runtime::CpuBackend::<f32>::new();
+//! let model = TurbulenceModel::constant(&backend, 1.0_f32);
 //! let turb = SmagorinskySolver::new(backend, n_cells, model);
 //! ```
 

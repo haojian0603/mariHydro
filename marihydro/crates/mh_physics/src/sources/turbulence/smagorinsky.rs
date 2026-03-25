@@ -528,6 +528,7 @@ impl<B: Backend> SourceTermGeneric<B> for TurbulenceConfig<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::traits::test_support::{assert_source_metadata, test_backend, test_context, TestBackend};
 
     #[test]
     fn test_turbulence_model_default() {
@@ -545,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_turbulence_model_constant() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let model = TurbulenceModel::constant(&backend, 0.01_f64);
         match model {
             TurbulenceModel::ConstantViscosity(nu) => {
@@ -557,7 +558,7 @@ mod tests {
 
     #[test]
     fn test_smagorinsky_solver_creation() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let solver = SmagorinskySolver::new(backend, 10, TurbulenceModel::default());
         assert_eq!(solver.grid_scale.len(), 10);
         assert_eq!(solver.eddy_viscosity.len(), 10);
@@ -565,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_smagorinsky_solver_constant_viscosity() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let model = TurbulenceModel::constant(&backend, 0.1_f64);
         let mut solver = SmagorinskySolver::new(backend, 10, model);
         solver.update_eddy_viscosity();
@@ -577,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_turbulence_config_creation() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let config = TurbulenceConfig::new(backend, 10, TurbulenceModel::default());
         assert!(config.enabled);
         assert_eq!(config.eddy_viscosity.len(), 10);
@@ -586,29 +587,25 @@ mod tests {
 
     #[test]
     fn test_turbulence_config_constant() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let config = TurbulenceConfig::constant(backend, 10, 0.05);
         assert!((config.eddy_viscosity[0] - 0.05).abs() < 1e-10);
     }
 
     #[test]
     fn test_turbulence_source_term() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let mut config = TurbulenceConfig::constant(backend, 10, 0.1);
         config.velocity_gradient[0] = VelocityGradient::new(1.0, 0.0, 0.0, 1.0);
 
-        let mut state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(
-            CpuBackend::<f64>::new(),
-            10,
-        );
+        let mut state = ShallowWaterState::<TestBackend>::new_with_backend(test_backend(), 10);
         // 设置测试状态
         for i in 0..10 {
             state.h[i] = 2.0;
             state.hu[i] = 2.0; // h * u = 2.0 * 1.0
             state.hv[i] = 1.0; // h * v = 2.0 * 0.5
         }
-        let backend_ctx = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend_ctx, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -619,16 +616,12 @@ mod tests {
 
     #[test]
     fn test_turbulence_dry_cell() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let config = TurbulenceConfig::constant(backend, 10, 0.1);
 
-        let state = ShallowWaterState::<CpuBackend<f64>>::new_with_backend(
-            CpuBackend::<f64>::new(),
-            10,
-        );
+        let state = ShallowWaterState::<TestBackend>::new_with_backend(test_backend(), 10);
         // h 默认为 0，是干单元
-        let backend_ctx = CpuBackend::<f64>::new();
-        let ctx = SourceContextGeneric::with_defaults(&backend_ctx, 0.0, 1.0);
+        let ctx = test_context(0.0, 1.0);
 
         let contrib = config.compute_cell(0, &state, &ctx);
 
@@ -638,15 +631,14 @@ mod tests {
 
     #[test]
     fn test_source_term_generic_trait() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let config = TurbulenceConfig::constant(backend, 10, 0.15);
-        assert_eq!(config.name(), "Turbulence");
-        assert_eq!(config.stiffness(), SourceStiffness::Explicit);
+        assert_source_metadata(&config, "Turbulence", SourceStiffness::Explicit);
     }
 
     #[test]
     fn test_turbulence_closure_trait() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let model = TurbulenceModel::constant(&backend, 0.5);
         let mut solver = SmagorinskySolver::new(backend, 10, model);
         assert_eq!(solver.name(), "Smagorinsky");
@@ -661,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_turbulence_model_smagorinsky() {
-        let backend = CpuBackend::<f64>::new();
+        let backend = test_backend();
         let model = TurbulenceModel::smagorinsky(&backend, 0.2_f64);
         match model {
             TurbulenceModel::Smagorinsky { cs } => assert!((cs - 0.2).abs() < 1e-10),
@@ -672,7 +664,7 @@ mod tests {
     #[test]
     fn test_f32_precision() {
         let backend_f32 = CpuBackend::<f32>::new();
-        let backend_f64 = CpuBackend::<f64>::new();
+        let backend_f64 = test_backend();
         let model_f32 = TurbulenceModel::<f32>::constant(&backend_f32, 0.1_f32);
         let model_f64 = TurbulenceModel::<f64>::constant(&backend_f64, 0.1_f64);
 

@@ -351,18 +351,6 @@ impl<B: Backend> SourceTermGeneric<B> for WeirFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mh_runtime::CpuBackend;
-
-    #[allow(dead_code)]
-    fn create_test_state(n_cells: usize, h: f64, z: f64) -> ShallowWaterState<CpuBackend<f64>> {
-        let backend = CpuBackend::<f64>::new();
-        let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
-        for i in 0..n_cells {
-            state.h[i] = h;
-            state.z[i] = z;
-        }
-        state
-    }
 
     #[test]
     fn test_weir_type_cd() {

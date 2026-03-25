@@ -27,8 +27,8 @@
 //! use mh_physics::sources::turbulence::{SmagorinskySolver, TurbulenceModel};
 //!
 //! // 推荐：常数涡粘性（0.1-10 m²/s）
-//! let backend = mh_runtime::CpuBackend::<f64>::new();
-//! let model = TurbulenceModel::constant(&backend, 1.0);
+//! let backend = mh_runtime::CpuBackend::<f32>::new();
+//! let model = TurbulenceModel::constant(&backend, 1.0_f32);
 //! let solver = SmagorinskySolver::new(backend, n_cells, model);
 //! ```
 //!
