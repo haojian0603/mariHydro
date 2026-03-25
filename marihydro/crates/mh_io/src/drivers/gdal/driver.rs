@@ -293,12 +293,16 @@ fn parse_gdalinfo_metadata(value: &serde_json::Value) -> Result<RasterMetadata, 
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let empty_bands: Vec<serde_json::Value> = Vec::new();
     let bands = value
         .get("bands")
         .and_then(|v| v.as_array())
-        .unwrap_or(&empty_bands);
-    let band_count = bands.len().max(1);
+        .ok_or_else(|| GdalError::ReadFailed("gdalinfo 输出缺少 bands 数组".to_string()))?;
+    if bands.is_empty() {
+        return Err(GdalError::ReadFailed(
+            "gdalinfo 输出包含空 bands 数组".to_string(),
+        ));
+    }
+    let band_count = bands.len();
     let nodata = bands
         .first()
         .and_then(|b| b.get("noDataValue"))
@@ -476,6 +480,25 @@ mod tests {
         let value = serde_json::json!({
             "size": [100, 50],
             "geoTransform": [0.0, 1.0, "bad", 100.0, 0.0, -1.0]
+        });
+        assert!(parse_gdalinfo_metadata(&value).is_err());
+    }
+
+    #[test]
+    fn test_parse_gdalinfo_metadata_rejects_missing_bands() {
+        let value = serde_json::json!({
+            "size": [100, 50],
+            "geoTransform": [0.0, 1.0, 0.0, 100.0, 0.0, -1.0]
+        });
+        assert!(parse_gdalinfo_metadata(&value).is_err());
+    }
+
+    #[test]
+    fn test_parse_gdalinfo_metadata_rejects_empty_bands() {
+        let value = serde_json::json!({
+            "size": [100, 50],
+            "geoTransform": [0.0, 1.0, 0.0, 100.0, 0.0, -1.0],
+            "bands": []
         });
         assert!(parse_gdalinfo_metadata(&value).is_err());
     }

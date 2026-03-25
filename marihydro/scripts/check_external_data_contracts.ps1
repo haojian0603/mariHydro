@@ -105,6 +105,11 @@ try {
         -Message "GDAL CLI fallback must not silently drop invalid raster payload tokens"
 
     Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `
+        -Pattern 'unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)' `
+        -Message "GDAL metadata parsing must not invent a synthetic single-band layout when bands are missing"
+
+    Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
         -Pattern 'parse::<usize>\(\)\.ok\(\)\.unwrap_or\(0\)' `
         -Message "NetCDF header parsing must not collapse invalid dimensions to zero"
@@ -113,6 +118,11 @@ try {
         -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
         -Pattern 'token\.parse::<f64>\(\)\.ok\(\)' `
         -Message "NetCDF CLI fallback must not silently skip invalid numeric payload tokens"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
+        -Pattern 'parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\(' `
+        -Message "NetCDF header parsing must not skip malformed variable declarations or attributes by filling empty placeholders"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `

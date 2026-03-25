@@ -480,49 +480,85 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
             if raw.contains('(') && raw.ends_with(';') && !raw.contains(":") {
                 // 变量声明行：dtype name(dim, dim, ...)
                 let cleaned = raw.trim_end_matches(';').trim();
-                if let Some(space) = cleaned.find(' ') {
-                    let dtype = cleaned[..space].trim().to_string();
-                    let rest = cleaned[space + 1..].trim();
-                    if let Some(lparen) = rest.find('(') {
-                        let name = rest[..lparen].trim().to_string();
-                        let dims_str = rest[lparen + 1..].trim_end_matches(')');
-                        let dims = dims_str
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>();
-                        header.variables.push(VariableInfo {
-                            name,
-                            dimensions: dims,
-                            dtype,
-                            standard_name: None,
-                            long_name: None,
-                            units: None,
-                        });
-                    }
+                let space = cleaned.find(' ').ok_or_else(|| {
+                    NetCdfError::ReadFailed(format!(
+                        "ncdump 变量声明缺少类型与名称分隔: {cleaned}"
+                    ))
+                })?;
+                let dtype = cleaned[..space].trim().to_string();
+                let rest = cleaned[space + 1..].trim();
+                let lparen = rest.find('(').ok_or_else(|| {
+                    NetCdfError::ReadFailed(format!(
+                        "ncdump 变量声明缺少维度列表起始符号: {rest}"
+                    ))
+                })?;
+                let name = rest[..lparen].trim().to_string();
+                if name.is_empty() {
+                    return Err(NetCdfError::ReadFailed(format!(
+                        "ncdump 变量声明缺少变量名: {cleaned}"
+                    )));
                 }
+                let dims_str = rest[lparen + 1..].trim_end_matches(')');
+                let dims = dims_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
+                header.variables.push(VariableInfo {
+                    name,
+                    dimensions: dims,
+                    dtype,
+                    standard_name: None,
+                    long_name: None,
+                    units: None,
+                });
             } else if raw.starts_with(":") {
                 // 全局属性
-                if let Some(eq) = raw.find('=') {
-                    let key = raw[1..eq].trim().to_string();
-                    let val = raw[eq + 1..].trim().trim_end_matches(';').trim();
-                    header.global_attrs.push((key, trim_quotes(val)));
+                let eq = raw.find('=').ok_or_else(|| {
+                    NetCdfError::ReadFailed(format!(
+                        "ncdump 全局属性缺少赋值符号: {raw}"
+                    ))
+                })?;
+                let key = raw[1..eq].trim().to_string();
+                if key.is_empty() {
+                    return Err(NetCdfError::ReadFailed(format!(
+                        "ncdump 全局属性缺少键名: {raw}"
+                    )));
                 }
+                let val = raw[eq + 1..].trim().trim_end_matches(';').trim();
+                header.global_attrs.push((key, trim_quotes(val)));
             } else if raw.contains(":") {
                 // 变量属性
-                let mut parts = raw.splitn(2, ':');
-                let var = parts.next().unwrap_or("").trim();
-                let rest = parts.next().unwrap_or("").trim();
-                if let Some(eq) = rest.find('=') {
-                    let key = rest[..eq].trim();
-                    let val = rest[eq + 1..].trim().trim_end_matches(';');
-                    if let Some(info) = header.variables.iter_mut().find(|v| v.name == var) {
-                        match key {
-                            "standard_name" => info.standard_name = Some(trim_quotes(val)),
-                            "long_name" => info.long_name = Some(trim_quotes(val)),
-                            "units" => info.units = Some(trim_quotes(val)),
-                            _ => {}
-                        }
+                let (var, rest) = raw.split_once(':').ok_or_else(|| {
+                    NetCdfError::ReadFailed(format!(
+                        "ncdump 变量属性缺少变量名前缀: {raw}"
+                    ))
+                })?;
+                let var = var.trim();
+                if var.is_empty() {
+                    return Err(NetCdfError::ReadFailed(format!(
+                        "ncdump 变量属性缺少变量名: {raw}"
+                    )));
+                }
+                let rest = rest.trim();
+                let eq = rest.find('=').ok_or_else(|| {
+                    NetCdfError::ReadFailed(format!(
+                        "ncdump 变量属性缺少赋值符号: {raw}"
+                    ))
+                })?;
+                let key = rest[..eq].trim();
+                if key.is_empty() {
+                    return Err(NetCdfError::ReadFailed(format!(
+                        "ncdump 变量属性缺少属性名: {raw}"
+                    )));
+                }
+                let val = rest[eq + 1..].trim().trim_end_matches(';');
+                if let Some(info) = header.variables.iter_mut().find(|v| v.name == var) {
+                    match key {
+                        "standard_name" => info.standard_name = Some(trim_quotes(val)),
+                        "long_name" => info.long_name = Some(trim_quotes(val)),
+                        "units" => info.units = Some(trim_quotes(val)),
+                        _ => {}
                     }
                 }
             }
@@ -655,6 +691,53 @@ dimensions:
     lon = abc ;
 variables:
     float h(lon);
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_malformed_variable_declaration() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = 3 ;
+variables:
+    float(lon);
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_malformed_variable_attribute() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = 3 ;
+variables:
+    float h(lon);
+    h: units "m";
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_malformed_global_attribute() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = 3 ;
+variables:
+    float h(lon);
+    :title "demo";
 data:
 }
 "#;
