@@ -1,5 +1,5 @@
 use mh_agent::{
-    ObservationOperator, PhysicsSnapshot, ReflectanceCalibration, ReflectanceOperator,
+    ObservationOperator, PhysicsSnapshot, LogReflectanceCalibration, CalibratedLogReflectanceOperator,
     WaterLevelOperator,
 };
 use mh_runtime::{CellIndex, CpuBackend};
@@ -19,11 +19,11 @@ fn snapshot_with_sediment() -> PhysicsSnapshot<CpuBackend<f64>> {
 }
 
 #[test]
-fn reflectance_operator_uses_explicit_calibration() {
+fn calibrated_log_reflectance_operator_uses_explicit_calibration() {
     let snapshot = snapshot_with_sediment();
-    let op = ReflectanceOperator::<CpuBackend<f64>>::new(
+    let op = CalibratedLogReflectanceOperator::<CpuBackend<f64>>::new(
         645.0,
-        ReflectanceCalibration::new(1.0, 0.5),
+        LogReflectanceCalibration::new(1.0, 0.5),
         0.2,
     );
 
@@ -43,11 +43,11 @@ fn water_level_operator_validates_indices() {
 }
 
 #[test]
-fn reflectance_operator_reports_one_variance_per_observation() {
+fn calibrated_log_reflectance_operator_reports_one_variance_per_observation() {
     let snapshot = snapshot_with_sediment();
-    let op = ReflectanceOperator::<CpuBackend<f64>>::new(
+    let op = CalibratedLogReflectanceOperator::<CpuBackend<f64>>::new(
         645.0,
-        ReflectanceCalibration::new(1.0, 0.5),
+        LogReflectanceCalibration::new(1.0, 0.5),
         0.2,
     );
 

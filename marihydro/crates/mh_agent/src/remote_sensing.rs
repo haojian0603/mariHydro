@@ -57,7 +57,7 @@ pub struct RemoteSensingConfig<B: Backend = DefaultBackend> {
     pub max_concentration: B::Scalar,
     pub max_cloud_cover: f32,
     pub interpolation: InterpolationMethod<B>,
-    pub inversion: InversionModel<B>,
+    pub inversion: CalibratedInversionModel<B>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -68,7 +68,7 @@ pub enum InterpolationMethod<B: Backend = DefaultBackend> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum InversionModel<B: Backend = DefaultBackend> {
+pub enum CalibratedInversionModel<B: Backend = DefaultBackend> {
     Linear {
         slope: B::Scalar,
         intercept: B::Scalar,
@@ -80,30 +80,30 @@ pub enum InversionModel<B: Backend = DefaultBackend> {
     },
 }
 
-impl<B: Backend> InversionModel<B>
+impl<B: Backend> CalibratedInversionModel<B>
 where
     B::Scalar: RuntimeScalar,
 {
     pub fn linear(slope: f64, intercept: f64) -> Self {
         Self::Linear {
-            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.inversion.linear.slope"),
+            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.calibrated_inversion.linear.slope"),
             intercept: scalar_from_f64_or_panic::<B>(
                 intercept,
-                "remote_sensing.inversion.linear.intercept",
+                "remote_sensing.calibrated_inversion.linear.intercept",
             ),
         }
     }
 
     pub fn log_linear(slope: f64, intercept: f64, min_signal: f64) -> Self {
         Self::LogLinear {
-            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.inversion.log.slope"),
+            slope: scalar_from_f64_or_panic::<B>(slope, "remote_sensing.calibrated_inversion.log.slope"),
             intercept: scalar_from_f64_or_panic::<B>(
                 intercept,
-                "remote_sensing.inversion.log.intercept",
+                "remote_sensing.calibrated_inversion.log.intercept",
             ),
             min_signal: scalar_from_f64_or_panic::<B>(
                 min_signal,
-                "remote_sensing.inversion.log.min_signal",
+                "remote_sensing.calibrated_inversion.log.min_signal",
             ),
         }
     }

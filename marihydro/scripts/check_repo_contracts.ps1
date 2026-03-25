@@ -50,6 +50,7 @@ try {
             "[RULE_PHYSICS_TAG_REQUIRED]",
             "[RULE_FORMULA_NAME_HONEST]",
             "[RULE_PUBLIC_SURFACE_TRUTHFUL]",
+            "[RULE_CALIBRATED_AI_NAMING]",
             "[RULE_NO_FAKE_BACKEND_SURFACE]",
             "[RULE_GATES_STRICTER_ONLY]"
         )

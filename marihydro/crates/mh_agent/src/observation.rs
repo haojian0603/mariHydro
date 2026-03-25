@@ -43,12 +43,12 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ReflectanceCalibration {
+pub struct LogReflectanceCalibration {
     pub log_slope: f64,
     pub intercept: f64,
 }
 
-impl ReflectanceCalibration {
+impl LogReflectanceCalibration {
     pub const fn new(log_slope: f64, intercept: f64) -> Self {
         Self {
             log_slope,
@@ -57,14 +57,14 @@ impl ReflectanceCalibration {
     }
 }
 
-pub struct ReflectanceOperator<B: Backend = DefaultBackend> {
+pub struct CalibratedLogReflectanceOperator<B: Backend = DefaultBackend> {
     wavelength: B::Scalar,
     log_slope: B::Scalar,
     intercept: B::Scalar,
     observation_std: B::Scalar,
 }
 
-impl<B: Backend> ReflectanceOperator<B>
+impl<B: Backend> CalibratedLogReflectanceOperator<B>
 where
     B::Scalar: RuntimeScalar,
 {
@@ -72,14 +72,14 @@ where
     ///
     /// 本仓库不再提供内置传感器默认系数；调用方必须提供经过场景、
     /// 波段和悬沙标定得到的对数线性系数。
-    pub fn new(wavelength: f64, calibration: ReflectanceCalibration, observation_std: f64) -> Self {
+    pub fn new(wavelength: f64, calibration: LogReflectanceCalibration, observation_std: f64) -> Self {
         Self {
-            wavelength: scalar_from_f64_or_panic::<B>(wavelength, "reflectance.wavelength"),
-            log_slope: scalar_from_f64_or_panic::<B>(calibration.log_slope, "reflectance.log_slope"),
-            intercept: scalar_from_f64_or_panic::<B>(calibration.intercept, "reflectance.intercept"),
+            wavelength: scalar_from_f64_or_panic::<B>(wavelength, "calibrated_log_reflectance.wavelength"),
+            log_slope: scalar_from_f64_or_panic::<B>(calibration.log_slope, "calibrated_log_reflectance.log_slope"),
+            intercept: scalar_from_f64_or_panic::<B>(calibration.intercept, "calibrated_log_reflectance.intercept"),
             observation_std: scalar_from_f64_or_panic::<B>(
                 observation_std,
-                "reflectance.observation_std",
+                "calibrated_log_reflectance.observation_std",
             ),
         }
     }
@@ -92,19 +92,19 @@ where
     ) -> Self {
         Self::new(
             wavelength,
-            ReflectanceCalibration::new(log_slope, intercept),
+            LogReflectanceCalibration::new(log_slope, intercept),
             observation_std,
         )
     }
 }
 
-impl<B: Backend> ObservationOperator<B> for ReflectanceOperator<B>
+impl<B: Backend> ObservationOperator<B> for CalibratedLogReflectanceOperator<B>
 where
     B::Scalar: RuntimeScalar,
     B::Vector2D: Pod,
 {
     fn name(&self) -> &'static str {
-        "Reflectance"
+        "CalibratedLogReflectance"
     }
 
     fn observe(&self, snapshot: &PhysicsSnapshot<B>) -> ScalarSamples<B> {
@@ -117,7 +117,7 @@ where
                     .map(|&conc| {
                         let c_safe = conc.max(scalar_from_f64_or_panic::<B>(
                             1e-10,
-                            "reflectance.min_concentration",
+                            "calibrated_log_reflectance.min_concentration",
                         ));
                         self.log_slope * c_safe.ln() + self.intercept
                     })
