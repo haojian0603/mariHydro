@@ -30,6 +30,12 @@ try {
     Write-Host "[OK] core.hooksPath = $ConfiguredPath" -ForegroundColor Green
     Write-Host "[INFO] pre-commit -> scripts/run_fast_gates.ps1" -ForegroundColor Cyan
     Write-Host "[INFO] pre-push   -> scripts/run_required_gates.ps1" -ForegroundColor Cyan
+
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_repo_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        throw "repository collaboration contract check failed"
+    }
+
     exit 0
 }
 catch {

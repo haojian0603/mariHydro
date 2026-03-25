@@ -1,4 +1,4 @@
-// crates/mh_physics/src/limiters.rs
+// crates/mh_physics/src/legacy_limiters.rs
 //
 // Legacy note:
 // - The main engine path uses `crate::numerics::limiter` and
@@ -8,6 +8,7 @@
 // - `crate::types::LimiterType` is the configuration entry, and
 //   `crate::legacy_limiters::{LimiterType, MusclConfig, MusclReconstructor}`
 //   is the only supported compatibility namespace for old scalar callers.
+// - The compatibility entity is now physically isolated in this file.
 
 //! 斜率限制器与重构方法
 //!

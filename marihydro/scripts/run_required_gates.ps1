@@ -51,6 +51,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_text_safety.ps1"
     }
 
+    Invoke-Step -Name "repository contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_repo_contracts.ps1"
+    }
+
     Invoke-Step -Name "architecture verification" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/verify_architecture.ps1"
     }

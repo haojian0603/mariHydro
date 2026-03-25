@@ -353,17 +353,42 @@ try {
         Write-Host "[OK] public root-level limiters shim is removed" -ForegroundColor Green
     }
 
-    $legacyLimitersNamespace = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod legacy_limiters \{' -CaseSensitive
+    $legacyLimitersNamespace = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod legacy_limiters;' -CaseSensitive
     if (-not $legacyLimitersNamespace) {
         Write-Host "[FAIL] legacy_limiters namespace is missing" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/lib.rs must expose an explicit legacy_limiters namespace"
+        $errors += "crates/mh_physics/src/lib.rs must expose legacy_limiters as a real module"
     } else {
         Write-Host "[OK] legacy_limiters namespace is present" -ForegroundColor Green
     }
 
+    if (-not (Test-Path "crates/mh_physics/src/legacy_limiters.rs")) {
+        Write-Host "[FAIL] legacy_limiters.rs is missing" -ForegroundColor Red
+        $errors += "crates/mh_physics/src/legacy_limiters.rs must exist as the only legacy limiter implementation file"
+    } else {
+        Write-Host "[OK] legacy_limiters.rs is present" -ForegroundColor Green
+    }
+
+    if (Test-Path "crates/mh_physics/src/limiters.rs") {
+        Write-Host "[FAIL] obsolete limiters.rs compatibility file reappeared" -ForegroundColor Red
+        $errors += "crates/mh_physics/src/limiters.rs must not reappear once legacy_limiters.rs is established"
+    } else {
+        Write-Host "[OK] obsolete limiters.rs compatibility file is absent" -ForegroundColor Green
+    }
+
+    $internalLimiterShim = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*mod limiters;' -CaseSensitive
+    if ($internalLimiterShim) {
+        Write-Host "[FAIL] legacy limiters are still routed through an internal limiters shim:" -ForegroundColor Red
+        $internalLimiterShim | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        $errors += "legacy limiters compatibility must live in crates/mh_physics/src/legacy_limiters.rs"
+    } else {
+        Write-Host "[OK] no internal limiters shim remains in lib.rs" -ForegroundColor Green
+    }
+
     $legacyLimiterImports = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
         Where-Object {
-            $_.FullName -notlike "*\mh_physics\src\limiters.rs" -and
+            $_.FullName -notlike "*\mh_physics\src\legacy_limiters.rs" -and
             $_.FullName -notlike "*\mh_physics\src\lib.rs"
         } |
         Select-String -Pattern 'crate::limiters|limiters::LimiterType|limiters::MusclConfig|limiters::MusclReconstructor' -CaseSensitive
@@ -375,7 +400,7 @@ try {
         if ($legacyLimiterImports.Count -gt 10) {
             Write-Host "  ... and $($legacyLimiterImports.Count - 10) more" -ForegroundColor Red
         }
-        $errors += "legacy limiters bridge must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/limiters.rs"
+        $errors += "legacy limiters bridge must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/legacy_limiters.rs"
     } else {
         Write-Host "[OK] legacy limiters bridge is confined to the allowed bridge files" -ForegroundColor Green
     }

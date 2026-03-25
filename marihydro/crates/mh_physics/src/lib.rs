@@ -63,7 +63,7 @@ pub mod vertical;
 // 业务功能模块（持续整理中）
 pub mod forcing;
 // legacy 兼容层：新主链不要继续从根级限制器 shim 接入
-mod limiters;
+pub mod legacy_limiters;
 pub mod numerics;
 pub mod sediment;
 pub mod sources;
@@ -75,15 +75,6 @@ pub mod fields;
 pub mod gpu;
 pub mod config_bridge;
 pub mod error;
-
-/// Legacy scalar limiter compatibility namespace.
-///
-/// New mainline code must use `crate::types::LimiterType` together with
-/// `crate::numerics::{limiter, reconstruction}`. This namespace exists only
-/// for old scalar callers that still need a transition path.
-pub mod legacy_limiters {
-    pub use crate::limiters::*;
-}
 
 // 重导出核心运行时符号
 pub use mh_runtime::{

@@ -177,6 +177,10 @@ try {
         $Failed += "check_tracked_temp_artifacts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_repo_contracts.ps1" -Path (Join-Path $ScriptDir "check_repo_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_repo_contracts.ps1"
+    }
+
     if ($Deep) {
         $HardcodedArgs = @{}
         if ($Verbose) {
@@ -211,7 +215,7 @@ try {
     Invoke-InformationalScan -Name "legacy source bridge footprint" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/sources/legacy.rs") -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b'
     Invoke-InformationalScan -Name "legacy source top-level export residue" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/lib.rs") -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers'
     Invoke-InformationalScan -Name "sources CpuBackend<f64> bridge footprint" -Roots @("crates/mh_physics/src/sources/legacy.rs") -Pattern "SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend"
-    Invoke-InformationalScan -Name "legacy limiters compatibility footprint" -Roots @("crates/mh_physics/src/lib.rs", "crates/mh_physics/src/limiters.rs") -Pattern 'pub mod legacy_limiters|LegacyLimiterType|LegacyMusclConfig|LegacyMusclReconstructor'
+    Invoke-InformationalScan -Name "legacy limiters compatibility footprint" -Roots @("crates/mh_physics/src/lib.rs", "crates/mh_physics/src/legacy_limiters.rs") -Pattern 'pub mod legacy_limiters|LegacyLimiterType|LegacyMusclConfig|LegacyMusclReconstructor'
     Invoke-InformationalScan -Name "legacy limiters root export residue" -Roots @("crates/mh_physics/src/lib.rs") -Pattern 'pub mod limiters;'
     Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("
     Invoke-InformationalScan -Name "scalar_from_f64 symbol residue" -Roots @("crates/mh_physics") -Pattern "\bscalar_from_f64\b"
