@@ -46,6 +46,7 @@ try {
             "[RULE_NO_COMPAT_MAINLINE]",
             "[RULE_NO_FAKE_IMPL]",
             "[RULE_PHYSICS_PROVENANCE]",
+            "[RULE_FORMULA_NAME_HONEST]",
             "[RULE_GATES_STRICTER_ONLY]"
         )
 

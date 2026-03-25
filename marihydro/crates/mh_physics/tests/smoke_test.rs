@@ -96,6 +96,24 @@ fn test_morphology_config() {
     assert!(coarse.porosity < fine.porosity);
 }
 
+#[test]
+fn test_wave_spectrum_jonswap_frequency_cosine_spread() {
+    use mh_physics::waves::WaveSpectrum;
+
+    let spectrum = WaveSpectrum::from_jonswap_frequency_cosine_spread(
+        24,
+        24,
+        2.0,
+        9.0,
+        3.3,
+        0.0,
+        6.0,
+    );
+
+    assert!((spectrum.significant_height() - 2.0).abs() < 1e-6);
+    assert!(spectrum.peak_period().is_finite());
+}
+
 // ============================================================
 // Plan 3: 示踪剂输运测试
 // ============================================================

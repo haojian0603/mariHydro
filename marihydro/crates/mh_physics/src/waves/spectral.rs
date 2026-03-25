@@ -3,6 +3,11 @@
 //! 谱波模型框架（基础版本）
 //!
 //! 提供波能谱与诊断参数计算，为外部谱波模型耦合与后续扩展提供入口。
+//! 当前显式实现的是：
+//! - JONSWAP 频率谱
+//! - 余弦幂方向散布
+//!
+//! 不把这两者的组合冒充成“完整方向 JONSWAP 谱”。
 
 use std::f64::consts::PI;
 use crate::waves::radiation_stress::{compute_wavenumber_and_n, RadiationStressTensorGeneric};
@@ -41,21 +46,24 @@ impl WaveSpectrum {
         }
     }
 
-    /// 从 JONSWAP 谱初始化
-    pub fn from_jonswap(
+    /// 用 JONSWAP 频率谱和余弦幂方向散布初始化二维谱
+    ///
+    /// 频率部分采用 Hasselmann et al. (1973) JONSWAP 形式，
+    /// 方向部分采用显式余弦幂权重；这里不宣称实现完整的方向 JONSWAP 闭合。
+    pub fn from_jonswap_frequency_cosine_spread(
         n_freq: usize,
         n_dir: usize,
         hs: f64,
         tp: f64,
         gamma: f64,
         mean_dir: f64,
-        spread: f64,
+        spread_power: f64,
     ) -> Self {
         let mut spectrum = Self::new(n_freq, n_dir);
         let hs = hs.max(0.0);
         let tp = tp.max(1e-6);
         let gamma = gamma.max(1.0);
-        let spread = spread.max(0.0);
+        let spread_power = spread_power.max(0.0);
         let fp = 1.0 / tp;
         let g = 9.81;
 
@@ -74,7 +82,7 @@ impl WaveSpectrum {
             for j in 0..n_dir {
                 let theta = spectrum.directions[j];
                 let dtheta = (theta - mean_dir).cos().max(0.0);
-                let dir_spread = dtheta.powf(spread);
+                let dir_spread = dtheta.powf(spread_power);
                 spectrum.energy[i][j] = (s_j * dir_spread).max(0.0);
             }
         }
@@ -162,6 +170,42 @@ impl WaveSpectrum {
             }
         }
         sin_sum.atan2(cos_sum)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WaveSpectrum;
+
+    #[test]
+    fn test_jonswap_frequency_cosine_spread_matches_target_hs() {
+        let spectrum = WaveSpectrum::from_jonswap_frequency_cosine_spread(
+            32,
+            36,
+            2.5,
+            8.0,
+            3.3,
+            0.0,
+            4.0,
+        );
+
+        assert!((spectrum.significant_height() - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_jonswap_frequency_cosine_spread_prefers_mean_direction() {
+        let spectrum = WaveSpectrum::from_jonswap_frequency_cosine_spread(
+            24,
+            36,
+            1.8,
+            7.0,
+            3.3,
+            std::f64::consts::FRAC_PI_2,
+            8.0,
+        );
+
+        let mean_dir = spectrum.mean_direction();
+        assert!((mean_dir - std::f64::consts::FRAC_PI_2).abs() < 0.35);
     }
 }
 
