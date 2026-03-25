@@ -30,7 +30,7 @@
 //!
 //! ```text
 //! sources/
-//! ├── traits.rs           # SourceTerm trait 定义
+//! ├── traits.rs           # `SourceTermGeneric` 主链接口 + legacy `SourceTerm` 桥接
 //! ├── friction.rs         # 摩擦源项
 //! ├── coriolis.rs         # 科氏力
 //! ├── implicit.rs         # 隐式处理
@@ -48,9 +48,12 @@
 //!
 //! # 设计
 //!
-//! 所有源项实现 [`SourceTerm`] trait，提供统一的计算接口：
+//! 新主链源项实现使用 [`SourceTermGeneric`]，提供统一的泛型计算接口：
 //! - `compute_cell()` - 计算单个单元的源项贡献
-//! - `compute_all()` - 批量计算所有单元
+//! - `compute_batch()` - 批量计算所有单元
+//!
+//! [`SourceTerm`] / [`SourceContext`] / [`SourceContribution`] 仅作为
+//! 旧 CPU/f64 桥接接口保留，不再继续扩散。
 //!
 //! # 使用示例
 //!
@@ -95,12 +98,14 @@ pub mod turbulence;
 // ==================== 水工结构 ====================
 pub mod structures;
 
-// ==================== 核心 trait 导出 ====================
+// ==================== 泛型主链导出 ====================
 pub use traits::{
-    SourceContribution, SourceContext, SourceTerm, SourceHelpers,
     SourceContributionGeneric, SourceContextGeneric, SourceTermGeneric,
     SourceStiffness, SourceRegistryGeneric, NoSource,
 };
+
+// ==================== Legacy CPU/f64 桥接导出 ====================
+pub use traits::{SourceContribution, SourceContext, SourceTerm, SourceHelpers};
 
 pub use registry::SourceRegistry;
 

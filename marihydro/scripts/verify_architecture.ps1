@@ -268,6 +268,41 @@ try {
         Write-Host "[OK] no raw if-let from_config option handling in mh_physics/src" -ForegroundColor Green
     }
 
+    $legacySourceImpls = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
+        Where-Object { $_.FullName -notlike "*\sources\traits.rs" } |
+        Select-String -Pattern '\bimpl\s+SourceTerm\s+for\b' -CaseSensitive
+    if ($legacySourceImpls) {
+        Write-Host "[FAIL] legacy SourceTerm implementations exist outside the bridge definition:" -ForegroundColor Red
+        $legacySourceImpls | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($legacySourceImpls.Count -gt 10) {
+            Write-Host "  ... and $($legacySourceImpls.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "legacy SourceTerm implementations must not be added outside crates/mh_physics/src/sources/traits.rs"
+    } else {
+        Write-Host "[OK] no legacy SourceTerm implementations outside the bridge definition" -ForegroundColor Green
+    }
+
+    $legacyBridgeLeaks = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
+        Where-Object {
+            $_.FullName -notlike "*\sources\traits.rs" -and
+            $_.FullName -notlike "*\sources\mod.rs"
+        } |
+        Select-String -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b' -CaseSensitive
+    if ($legacyBridgeLeaks) {
+        Write-Host "[FAIL] legacy source bridge symbols leaked outside allowed bridge files:" -ForegroundColor Red
+        $legacyBridgeLeaks | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($legacyBridgeLeaks.Count -gt 10) {
+            Write-Host "  ... and $($legacyBridgeLeaks.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "legacy SourceTerm/SourceContext/SourceContribution symbols must remain confined to sources/traits.rs and sources/mod.rs"
+    } else {
+        Write-Host "[OK] legacy source bridge symbols are confined to the allowed bridge files" -ForegroundColor Green
+    }
+
     $silentScalarFallbacks = @(
         Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
             Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive

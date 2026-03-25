@@ -63,3 +63,4 @@
 - `sources` 目录下的测试优先复用 `crate::sources::traits::test_support`。
 - 不要在每个测试模块里重复创建 `CpuBackend<f64>`、`SourceContextGeneric::with_defaults(...)` 和元数据断言样板。
 - 如需新增共享测试辅助，优先扩展 `test_support`，再批量替换调用点。
+- 禁止新增 `impl SourceTerm for ...`；legacy `SourceTerm` 只允许留在兼容桥接层，不再作为新实现入口。

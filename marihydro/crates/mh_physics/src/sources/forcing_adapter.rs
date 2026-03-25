@@ -6,7 +6,7 @@
 //!
 //! # 设计思路
 //!
-//! - WindForcingAdapter: 将 WindProvider 包装为 SourceTerm
+//! - WindForcingAdapter: 将 WindProvider 包装为 `SourceTermGeneric`
 //! - TideForcingAdapter: 将 TideProvider 包装为边界源项
 //!
 //! # 使用示例

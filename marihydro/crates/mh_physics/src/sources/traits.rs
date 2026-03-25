@@ -133,6 +133,10 @@ impl std::ops::Mul<f64> for SourceContribution {
 ///
 /// 包含源项计算所需的时间和参数信息。
 #[derive(Debug, Clone)]
+/// Legacy CPU/f64 源项上下文。
+///
+/// 仅用于兼容旧的 `SourceTerm` 桥接接口；新代码应优先使用
+/// `SourceContextGeneric` 与 `SourceTermGeneric`。
 pub struct SourceContext<'a> {
     /// 当前模拟时间 [s]
     pub time: f64,
@@ -166,6 +170,10 @@ impl<'a> SourceContext<'a> {
 /// 源项 Trait
 ///
 /// 定义源项计算的统一接口。
+/// Legacy CPU/f64 源项 trait。
+///
+/// 这是保留下来的兼容桥接层，不再作为新的主链接口扩展点。
+/// 新源项实现必须优先实现 `SourceTermGeneric<B>`。
 pub trait SourceTerm: Send + Sync {
     /// 获取源项名称
     fn name(&self) -> &'static str;
