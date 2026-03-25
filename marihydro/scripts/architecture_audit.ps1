@@ -201,6 +201,10 @@ try {
         $Failed += "check_runtime_topology_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_runtime_allocator_contracts.ps1" -Path (Join-Path $ScriptDir "check_runtime_allocator_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_runtime_allocator_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_physics_provenance.ps1" -Path (Join-Path $ScriptDir "check_physics_provenance.ps1") -Arguments @{})) {
         $Failed += "check_physics_provenance.ps1"
     }
@@ -270,6 +274,7 @@ try {
     Invoke-InformationalScan -Name 'runtime probe fallback residue' -Roots @("crates/mh_runtime/src") -Pattern 'read_to_string\(&cpulist_path\)\.unwrap_or_default\(\)|read_to_string\(&meminfo_path\)\.unwrap_or_default\(\)|parse\(\)\.unwrap_or\(0\)|parse::<u64>\(\)\.unwrap_or\(0\)|8 \* 1024 \* 1024 \* 1024|4 \* 1024 \* 1024 \* 1024'
     Invoke-InformationalScan -Name 'runtime parallelism fallback residue' -Roots @("crates/mh_runtime/src") -Pattern 'available_parallelism\(\)[^\r\n;]*unwrap_or\((?:1|1usize)\)|available_parallelism\(\)[^\r\n;]*unwrap_or_default\(\)|parse::<usize>\(\)\.ok\(\)'
     Invoke-InformationalScan -Name 'runtime topology default residue' -Roots @("crates/mh_runtime/src") -Pattern 'impl Default for NumaTopology|impl Default for NumaThreadPoolConfig|NumaTopology::default\(\)|NumaThreadPoolConfig::default\(\)|unwrap_or_else\(\|_\| Self \{'
+    Invoke-InformationalScan -Name 'runtime allocator node fabrication residue' -Roots @("crates/mh_runtime/src") -Pattern 'fn get_node\(&self, _ptr: \*const u8\) -> Option<usize> \{\s*Some\(0\)'
     Invoke-InformationalScan -Name 'try_scalar_from_f64 explicit-path usage' -Roots @("crates/mh_physics") -Pattern '\btry_scalar_from_f64\('
     Invoke-InformationalScan -Name 'scalar_from_f64 symbol residue' -Roots @("crates/mh_physics") -Pattern '\bscalar_from_f64\b'
     Invoke-InformationalScan -Name 'T06 unimplemented residue' -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern 'unimplemented!'

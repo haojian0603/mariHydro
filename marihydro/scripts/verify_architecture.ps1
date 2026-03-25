@@ -118,6 +118,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.67: runtime allocator contract guard
+    Write-Host "=== Phase 0.67: runtime allocator contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_allocator_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "runtime allocator contracts must pass"
+    } else {
+        Write-Host "[OK] runtime allocator contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.7: AI state contract guard
     Write-Host "=== Phase 0.7: AI state contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_ai_state_contracts.ps1"

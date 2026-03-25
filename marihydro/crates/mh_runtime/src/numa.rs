@@ -698,7 +698,7 @@ impl NumaAllocator for DefaultNumaAllocator {
     }
 
     fn get_node(&self, _ptr: *const u8) -> Option<usize> {
-        Some(0) // 默认节点 0
+        None
     }
 }
 
@@ -822,6 +822,11 @@ mod tests {
         assert!(ptr.is_ok());
 
         let ptr = ptr.unwrap();
+        assert_eq!(
+            alloc.get_node(ptr.cast_const()),
+            None,
+            "fallback allocator must report unknown NUMA node instead of fabricating node 0"
+        );
         unsafe {
             alloc.dealloc(ptr, 1024);
         }
