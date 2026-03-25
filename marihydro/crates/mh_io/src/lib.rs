@@ -3,6 +3,7 @@
 //! MariHydro IO 模块
 //!
 //! 提供数据输入输出功能，包括异步管道、检查点、VTU导出等。
+//! 对外部数据驱动，主链只接受“真实读取或显式报错”，不接受合成零值或默认网格。
 //!
 //! # 模块
 //!
@@ -15,10 +16,10 @@
 //! - `checkpoint`: 检查点保存/恢复
 
 pub mod drivers;
+pub mod error;
 pub mod exporters;
 pub mod import;
 pub mod infra;
-pub mod error;
 pub mod netcdf_tide;
 pub mod project;
 
@@ -32,8 +33,8 @@ mod vtu;
 
 // 重导出常用类型
 pub use drivers::{GdalDriver, GdalError, NetCdfDriver, NetCdfError, RasterMetadata};
-pub use exporters::{VtuExporter, VtuMesh, VtuState};
 pub use error::{IoError, IoResult};
+pub use exporters::{VtuExporter, VtuMesh, VtuState};
 
 // 类型别名
 pub type Result<T> = IoResult<T>;
@@ -43,9 +44,8 @@ pub use checkpoint::{Checkpoint, CheckpointError, CheckpointManager};
 pub use pipeline::{IoPipeline, OutputRequest, PipelineConfig, PipelineStats, PvdEntry};
 pub use snapshot::{MeshSnapshot, SnapshotMeta, StateSnapshot, StateSnapshotMeta, StateStatistics};
 
-// 潮汐数据 I/O
+// 潮汐数据 I/O：未知布局必须显式报错，不允许回退到伪读取器
 pub use netcdf_tide::{
-    TidalDataReader, TpxoReader, Fes2014Reader, TidalModel, TidalGrid,
-    TidalConstituent, BoundaryTidalConstants, TidalIoError,
-    open_tidal_data, TidalBoundaryExtractor,
+    open_tidal_data, BoundaryTidalConstants, Fes2014Reader, TidalBoundaryExtractor,
+    TidalConstituent, TidalDataReader, TidalGrid, TidalIoError, TidalModel, TpxoReader,
 };

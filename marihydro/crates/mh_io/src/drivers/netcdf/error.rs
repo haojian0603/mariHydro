@@ -23,6 +23,8 @@ pub enum NetCdfError {
     TimeParseError(String),
     /// NetCDF 不可用
     NotAvailable,
+    /// 数据布局不受支持
+    UnsupportedLayout(String),
     /// 其他错误
     Other(String),
 }
@@ -38,6 +40,7 @@ impl fmt::Display for NetCdfError {
             NetCdfError::AttributeNotFound(name) => write!(f, "Attribute not found: {}", name),
             NetCdfError::TimeParseError(msg) => write!(f, "Failed to parse time: {}", msg),
             NetCdfError::NotAvailable => write!(f, "NetCDF is not available"),
+            NetCdfError::UnsupportedLayout(msg) => write!(f, "Unsupported NetCDF layout: {}", msg),
             NetCdfError::Other(msg) => write!(f, "NetCDF error: {}", msg),
         }
     }

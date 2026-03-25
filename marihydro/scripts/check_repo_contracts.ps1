@@ -46,8 +46,10 @@ try {
         $requiredClauses = @(
             "[RULE_NO_COMPAT_MAINLINE]",
             "[RULE_NO_FAKE_IMPL]",
+            "[RULE_EXTERNAL_DATA_NO_SYNTHETIC_FILL]",
             "[RULE_PHYSICS_PROVENANCE]",
             "[RULE_PHYSICS_TAG_REQUIRED]",
+            "[RULE_STANDARD_FORMULA_OR_REMOVE]",
             "[RULE_FORMULA_NAME_HONEST]",
             "[RULE_PUBLIC_SURFACE_TRUTHFUL]",
             "[RULE_CALIBRATED_AI_NAMING]",

@@ -63,6 +63,14 @@ try {
         @{ Name = "wave radiation placeholder gradient"; Path = "crates/mh_physics/src/sources/wave_source.rs"; Pattern = 'compute_gradient_simple'; Message = "wave radiation source must not keep placeholder gradient APIs" },
         @{ Name = "wave bottom friction JONSWAP preset"; Path = "crates/mh_physics/src/waves/bottom_friction.rs"; Pattern = '\bJonswap\b|\bjonswap\('; Message = "wave bottom friction must not expose unsourced JONSWAP preset coefficients" },
         @{ Name = "wave spectral misleading JONSWAP shortcut"; Path = "crates/mh_physics/src/waves/spectral.rs"; Pattern = '\bfrom_jonswap\(|JONSWAP 谱初始化'; Message = "spectral helpers must name JONSWAP frequency spectrum plus directional spreading honestly" },
+        @{ Name = "tide synthetic reader residue"; Path = "crates/mh_io/src/netcdf_tide.rs"; Pattern = '模拟实现|vec!\[vec!\[0\.0; n_lon\]; n_lat\]|Ok\(\(0\.0, 0\.0\)\)|Ok\(\(\(0\.0, 0\.0\), \(0\.0, 0\.0\)\)\)|尝试作为 TPXO 格式打开'; Message = "tide readers must not synthesize zero-valued fields, default grids or fallback readers when the layout is unsupported" },
+        @{ Name = "tide unsupported public model surface"; Path = "crates/mh_io/src/netcdf_tide.rs"; Pattern = '\bGot410\b'; Message = "netcdf_tide must not expose unsupported model kinds in the public surface" },
+        @{ Name = "Dietrich settling surface"; Path = "crates/mh_physics/src/sediment/suspended/settling.rs"; Pattern = '\bDietrichSettling\b'; Message = "Dietrich settling must stay removed until particle shape factor and roundness are modeled and cited" },
+        @{ Name = "Dietrich settling export residue"; Path = "crates/mh_physics/src/sediment/mod.rs"; Pattern = '\bDietrichSettling\b'; Message = "sediment root must not export Dietrich settling before the full input set exists" },
+        @{ Name = "Dietrich settling suspended export residue"; Path = "crates/mh_physics/src/sediment/suspended/mod.rs"; Pattern = '\bDietrichSettling\b'; Message = "suspended sediment module must not export Dietrich settling before the full input set exists" },
+        @{ Name = "fake Van Rijn interpolation in settling"; Path = "crates/mh_physics/src/sediment/suspended/settling.rs"; Pattern = "d_star_1|ws_stokes \* \(one - f\) \+ ws_newton \* f"; Message = "Van Rijn settling must use the verified piecewise relation instead of a linear interpolation surrogate" },
+        @{ Name = "fake Van Rijn interpolation in sediment properties"; Path = "crates/mh_physics/src/sediment/properties.rs"; Pattern = "ws_stokes \* \(1\.0 - f\) \+ ws_newton \* f"; Message = "sediment properties must derive settling velocity with the verified Van Rijn relation instead of a linear interpolation surrogate" },
+        @{ Name = "anisotropic diffusion projection surrogate"; Path = "crates/mh_physics/src/tracer/diffusion.rs"; Pattern = "self\.longitudinal \* cos_theta\.abs\(\) \+ self\.transverse \* sin_theta"; Message = "flow-aligned anisotropic diffusion must use tensor projection D_L cos^2 + D_T sin^2 instead of a linear surrogate" },
         @{ Name = "sources bridge narrative"; Path = "crates/mh_physics/src/sources/mod.rs"; Pattern = 'CPU/f64.*retain|retain.*CPU/f64|\bcompat'; Message = "sources module docs must not claim bridge retention" },
         @{ Name = "sources registry bridge narrative"; Path = "crates/mh_physics/src/sources/registry.rs"; Pattern = 'sources/legacy|retain.*bridge|\bcompat'; Message = "sources registry comments must not mention removed bridge paths" },
         @{ Name = "pcg compatibility narrative"; Path = "crates/mh_physics/src/engine/pcg.rs"; Pattern = '\bcompat'; Message = "pcg docs must not describe a compatibility layer" }
@@ -90,7 +98,7 @@ try {
             $_.FullName -notlike "*\benches\*"
         }
 
-    $placeholderMatches = $productionFiles | Select-String -Pattern '\bplaceholder\b|\bfake implementation\b|\bstub\b' -CaseSensitive:$false
+    $placeholderMatches = $productionFiles | Select-String -Pattern '\bplaceholder\b|\bfake implementation\b|\bstub\b|模拟实现|测试数据' -CaseSensitive:$false
     if ($placeholderMatches) {
         Add-Failure "placeholder wording exists in production source"
         $placeholderMatches | Select-Object -First 10 | ForEach-Object {

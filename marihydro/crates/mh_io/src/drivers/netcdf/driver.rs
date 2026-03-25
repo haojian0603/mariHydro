@@ -98,6 +98,19 @@ impl NetCdfDriver {
         Ok(Self { file })
     }
 
+    /// 获取单个变量信息
+    pub fn variable_info(&self, name: &str) -> Result<VariableInfo, NetCdfError> {
+        self.variables()?
+            .into_iter()
+            .find(|info| info.name == name)
+            .ok_or_else(|| NetCdfError::VariableNotFound(name.to_string()))
+    }
+
+    /// 检查变量是否存在
+    pub fn has_variable(&self, name: &str) -> bool {
+        self.variable_info(name).is_ok()
+    }
+
     /// 获取所有维度
     pub fn dimensions(&self) -> Result<Vec<Dimension>, NetCdfError> {
         let dims: Vec<_> = self
@@ -131,24 +144,36 @@ impl NetCdfDriver {
             .file
             .variables()
             .map(|v| {
-                let dims: Vec<String> = v.dimensions().iter().map(|d| d.name().to_string()).collect();
-                
+                let dims: Vec<String> = v
+                    .dimensions()
+                    .iter()
+                    .map(|d| d.name().to_string())
+                    .collect();
+
                 VariableInfo {
                     name: v.name().to_string(),
                     dimensions: dims,
                     dtype: format!("{:?}", v.vartype()),
-                    standard_name: v.attribute("standard_name").and_then(|a| a.value().ok()).and_then(|v| match v {
-                        netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                        _ => None,
-                    }),
-                    long_name: v.attribute("long_name").and_then(|a| a.value().ok()).and_then(|v| match v {
-                        netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                        _ => None,
-                    }),
-                    units: v.attribute("units").and_then(|a| a.value().ok()).and_then(|v| match v {
-                        netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                        _ => None,
-                    }),
+                    standard_name: v
+                        .attribute("standard_name")
+                        .and_then(|a| a.value().ok())
+                        .and_then(|v| match v {
+                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
+                            _ => None,
+                        }),
+                    long_name: v
+                        .attribute("long_name")
+                        .and_then(|a| a.value().ok())
+                        .and_then(|v| match v {
+                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
+                            _ => None,
+                        }),
+                    units: v.attribute("units").and_then(|a| a.value().ok()).and_then(
+                        |v| match v {
+                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
+                            _ => None,
+                        },
+                    ),
                 }
             })
             .collect();
@@ -163,7 +188,8 @@ impl NetCdfDriver {
             .ok_or_else(|| NetCdfError::VariableNotFound(name.to_string()))?;
 
         let dims: Vec<usize> = var.dimensions().iter().map(|d| d.len()).collect();
-        let data: Vec<f64> = var.values::<f64, _>(..)
+        let data: Vec<f64> = var
+            .values::<f64, _>(..)
             .map_err(|e| NetCdfError::ReadFailed(e.to_string()))?;
 
         Ok(Variable { data, dims })
@@ -181,27 +207,35 @@ impl NetCdfDriver {
             .ok_or_else(|| NetCdfError::VariableNotFound(name.to_string()))?;
 
         let dims: Vec<usize> = var.dimensions().iter().map(|d| d.len()).collect();
-        
+
         if dims.is_empty() {
-            return Err(NetCdfError::ReadFailed("Variable has no dimensions".to_string()));
+            return Err(NetCdfError::ReadFailed(
+                "Variable has no dimensions".to_string(),
+            ));
         }
 
         if time_idx >= dims[0] {
-            return Err(NetCdfError::ReadFailed("time index out of range".to_string()));
+            return Err(NetCdfError::ReadFailed(
+                "time index out of range".to_string(),
+            ));
         }
 
         // 假设第一个维度是时间
         let slice_dims: Vec<usize> = dims[1..].to_vec();
-        
+
         // 构建索引范围
         let extents: Vec<_> = std::iter::once(time_idx..time_idx + 1)
             .chain(dims[1..].iter().map(|&d| 0..d))
             .collect();
-        
-        let data: Vec<f64> = var.values::<f64, _>(extents.as_slice())
+
+        let data: Vec<f64> = var
+            .values::<f64, _>(extents.as_slice())
             .map_err(|e| NetCdfError::ReadFailed(e.to_string()))?;
 
-        Ok(Variable { data, dims: slice_dims })
+        Ok(Variable {
+            data,
+            dims: slice_dims,
+        })
     }
 
     /// 获取全局属性
@@ -210,7 +244,7 @@ impl NetCdfDriver {
             .file
             .attribute(name)
             .ok_or_else(|| NetCdfError::AttributeNotFound(name.to_string()))?;
-        
+
         match attr.value()? {
             netcdf::AttrValue::Str(s) => Ok(s.to_string()),
             other => Ok(format!("{:?}", other)),
@@ -249,6 +283,21 @@ impl NetCdfDriver {
         })
     }
 
+    /// 获取单个变量信息
+    pub fn variable_info(&self, name: &str) -> Result<VariableInfo, NetCdfError> {
+        self.header
+            .variables
+            .iter()
+            .find(|info| info.name == name)
+            .cloned()
+            .ok_or_else(|| NetCdfError::VariableNotFound(name.to_string()))
+    }
+
+    /// 检查变量是否存在
+    pub fn has_variable(&self, name: &str) -> bool {
+        self.variable_info(name).is_ok()
+    }
+
     /// 获取所有维度
     pub fn dimensions(&self) -> Result<Vec<Dimension>, NetCdfError> {
         Ok(self.header.dimensions.clone())
@@ -282,10 +331,7 @@ impl NetCdfDriver {
         let dims = var_info
             .dimensions
             .iter()
-            .map(|d| {
-                self.dimension(d)
-                    .map(|dim| dim.len)
-            })
+            .map(|d| self.dimension(d).map(|dim| dim.len))
             .collect::<Result<Vec<_>, _>>()?;
 
         let data = cli_read_variable_data(&self.path, name)?;
@@ -301,12 +347,16 @@ impl NetCdfDriver {
     ) -> Result<Variable, NetCdfError> {
         let var = self.read_variable(name)?;
         if var.dims.is_empty() {
-            return Err(NetCdfError::ReadFailed("Variable has no dimensions".to_string()));
+            return Err(NetCdfError::ReadFailed(
+                "Variable has no dimensions".to_string(),
+            ));
         }
 
         let time_len = var.dims[0];
         if time_idx >= time_len {
-            return Err(NetCdfError::ReadFailed("time index out of range".to_string()));
+            return Err(NetCdfError::ReadFailed(
+                "time index out of range".to_string(),
+            ));
         }
 
         let slice_dims = var.dims[1..].to_vec();
@@ -343,7 +393,9 @@ fn cli_read_header(path: &Path) -> Result<CliHeader, NetCdfError> {
         .map_err(|_| NetCdfError::NotAvailable)?;
 
     if !output.status.success() {
-        return Err(NetCdfError::OpenFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+        return Err(NetCdfError::OpenFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -372,28 +424,41 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
         }
 
         if in_dimensions {
-            if raw.is_empty() { continue; }
+            if raw.is_empty() {
+                continue;
+            }
             if let Some(eq) = raw.find('=') {
                 let name = raw[..eq].trim().to_string();
                 let rhs = raw[eq + 1..].trim();
                 let (len, unlimited) = if rhs.starts_with("UNLIMITED") {
-                    let current = rhs.split('(')
+                    let current = rhs
+                        .split('(')
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
                         .and_then(|s| s.parse::<usize>().ok())
                         .unwrap_or(0);
                     (current, true)
                 } else {
-                    let len = rhs.split(';').next().and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0);
+                    let len = rhs
+                        .split(';')
+                        .next()
+                        .and_then(|s| s.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
                     (len, false)
                 };
-                header.dimensions.push(Dimension { name, len, is_unlimited: unlimited });
+                header.dimensions.push(Dimension {
+                    name,
+                    len,
+                    is_unlimited: unlimited,
+                });
             }
             continue;
         }
 
         if in_variables {
-            if raw.is_empty() { continue; }
+            if raw.is_empty() {
+                continue;
+            }
 
             if raw.contains('(') && raw.ends_with(';') && !raw.contains(":") {
                 // 变量声明行：dtype name(dim, dim, ...)
@@ -460,7 +525,9 @@ fn cli_read_variable_data(path: &Path, name: &str) -> Result<Vec<f64>, NetCdfErr
         .map_err(|_| NetCdfError::NotAvailable)?;
 
     if !output.status.success() {
-        return Err(NetCdfError::ReadFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+        return Err(NetCdfError::ReadFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);

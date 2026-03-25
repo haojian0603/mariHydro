@@ -219,19 +219,20 @@ try {
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
-    Invoke-InformationalScan -Name "placeholder wording residue" -Roots @("crates", "apps") -Pattern "\bplaceholder\b|\bfake implementation\b|\bstub\b"
-    Invoke-InformationalScan -Name "compatibility residue" -Roots @("crates", "apps") -Pattern "\blegacy_limiters\b|\bsources::legacy\b|\bcompatibility shim\b|\bcompatibility namespace\b|\bhistorical compatibility\b"
-    Invoke-InformationalScan -Name "fake model naming residue" -Roots @("crates", "apps") -Pattern "\bWhiteColebrook\b|\bNaturalNeighborInterpolator\b|\bNaturalNeighborConfig\b|\bSolverBuilder\b|\bSimpleSolver\b|Box<dyn DynSolver>|\bReflectanceOperator\b|\bReflectanceCalibration\b|\bInversionModel\b"
-    Invoke-InformationalScan -Name "physical formula risk wording" -Roots @("crates/mh_physics", "crates/mh_agent", "apps") -Pattern "^(?!.*PHYSICS_(?:SOURCE|SCOPE):).*\b(?:empirical|simplified|approximate|experimental|uncalibrated|unverified|temporary)\b"
-    Invoke-InformationalScan -Name "remote sensing hardcoded calibration residue" -Roots @("crates/mh_agent") -Pattern "modis_red_band|sentinel2_b4|empirical_inversion|SensorType::Optical => .*10\.0|SensorType::SAR => .*5\.0|SensorType::Hyperspectral => .*8\.0"
-    Invoke-InformationalScan -Name "surrogate fake model surface residue" -Roots @("crates/mh_agent") -Pattern "\bSurrogateType\b|\bReducedOrder\b|\bGaussianProcess\b|\bPolynomialChaos\b|\bUnsupportedModelType\b|only LinearRegression is implemented"
-    Invoke-InformationalScan -Name "gpu placeholder surface residue" -Roots @("crates/mh_physics") -Pattern "\bCudaBackendPlaceholder\b|\bGpuStatus\b|\bGpuCapabilities\b|pub mod gpu;|\bhas_cuda\b|\bavailable_gpus\b"
-    Invoke-InformationalScan -Name "source hydraulic preset residue" -Roots @("crates/mh_physics/src/sources") -Pattern "\bFlexible\b|\breed\(\)|\bmangrove\(\)|with_reed_zone|with_mangrove_zone|update_from_radiation_stress|compute_effective_shear\(|compute_gradient_simple"
-    Invoke-InformationalScan -Name "wave bottom friction preset residue" -Roots @("crates/mh_physics/src/waves/bottom_friction.rs") -Pattern "\bJonswap\b|\bjonswap\("
-    Invoke-InformationalScan -Name "spectral misleading naming residue" -Roots @("crates/mh_physics/src/waves/spectral.rs") -Pattern "\bfrom_jonswap\(|JONSWAP 谱初始化"
-    Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("
-    Invoke-InformationalScan -Name "scalar_from_f64 symbol residue" -Roots @("crates/mh_physics") -Pattern "\bscalar_from_f64\b"
-    Invoke-InformationalScan -Name "T06 unimplemented residue" -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern "unimplemented!"
+    Invoke-InformationalScan -Name 'placeholder wording residue' -Roots @("crates", "apps") -Pattern '\bplaceholder\b|\bfake implementation\b|\bstub\b'
+    Invoke-InformationalScan -Name 'compatibility residue' -Roots @("crates", "apps") -Pattern '\blegacy_limiters\b|\bsources::legacy\b|\bcompatibility shim\b|\bcompatibility namespace\b|\bhistorical compatibility\b'
+    Invoke-InformationalScan -Name 'fake model naming residue' -Roots @("crates", "apps") -Pattern '\bWhiteColebrook\b|\bNaturalNeighborInterpolator\b|\bNaturalNeighborConfig\b|\bSolverBuilder\b|\bSimpleSolver\b|Box<dyn DynSolver>|\bReflectanceOperator\b|\bReflectanceCalibration\b|\bInversionModel\b|\bDietrichSettling\b'
+    Invoke-InformationalScan -Name 'physical formula risk wording' -Roots @("crates/mh_physics", "crates/mh_agent", "apps") -Pattern '^(?!.*PHYSICS_(?:SOURCE|SCOPE):).*\b(?:empirical|simplified|approximate|experimental|uncalibrated|unverified|temporary)\b'
+    Invoke-InformationalScan -Name 'formula regression residue' -Roots @("crates/mh_physics") -Pattern 'let f = \(d_star - 1\.0\) / 99\.0|let f = \(d_star - d_star_1\) / cfg\(99\.0\)|self\.longitudinal \* cos_theta\.abs\(\) \+ self\.transverse \* sin_theta|\bDietrichSettling\b'
+    Invoke-InformationalScan -Name 'remote sensing hardcoded calibration residue' -Roots @("crates/mh_agent") -Pattern 'modis_red_band|sentinel2_b4|empirical_inversion|SensorType::Optical => .*10\.0|SensorType::SAR => .*5\.0|SensorType::Hyperspectral => .*8\.0'
+    Invoke-InformationalScan -Name 'surrogate fake model surface residue' -Roots @("crates/mh_agent") -Pattern '\bSurrogateType\b|\bReducedOrder\b|\bGaussianProcess\b|\bPolynomialChaos\b|\bUnsupportedModelType\b|only LinearRegression is implemented'
+    Invoke-InformationalScan -Name 'gpu placeholder surface residue' -Roots @("crates/mh_physics") -Pattern '\bCudaBackendPlaceholder\b|\bGpuStatus\b|\bGpuCapabilities\b|pub mod gpu;|\bhas_cuda\b|\bavailable_gpus\b'
+    Invoke-InformationalScan -Name 'source hydraulic preset residue' -Roots @("crates/mh_physics/src/sources") -Pattern '\bFlexible\b|\breed\(\)|\bmangrove\(\)|with_reed_zone|with_mangrove_zone|update_from_radiation_stress|compute_effective_shear\(|compute_gradient_simple'
+    Invoke-InformationalScan -Name 'wave bottom friction preset residue' -Roots @("crates/mh_physics/src/waves/bottom_friction.rs") -Pattern '\bJonswap\b|\bjonswap\('
+    Invoke-InformationalScan -Name 'spectral misleading naming residue' -Roots @("crates/mh_physics/src/waves/spectral.rs") -Pattern '\bfrom_jonswap\(|JONSWAP 谱初始化'
+    Invoke-InformationalScan -Name 'try_scalar_from_f64 explicit-path usage' -Roots @("crates/mh_physics") -Pattern '\btry_scalar_from_f64\('
+    Invoke-InformationalScan -Name 'scalar_from_f64 symbol residue' -Roots @("crates/mh_physics") -Pattern '\bscalar_from_f64\b'
+    Invoke-InformationalScan -Name 'T06 unimplemented residue' -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern 'unimplemented!'
 }
 finally {
     Pop-Location
