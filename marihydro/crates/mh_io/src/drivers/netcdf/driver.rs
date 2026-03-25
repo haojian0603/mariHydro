@@ -431,19 +431,33 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                 let name = raw[..eq].trim().to_string();
                 let rhs = raw[eq + 1..].trim();
                 let (len, unlimited) = if rhs.starts_with("UNLIMITED") {
-                    let current = rhs
+                    let current_raw = rhs
                         .split('(')
                         .nth(1)
                         .and_then(|s| s.split_whitespace().next())
-                        .and_then(|s| s.parse::<usize>().ok())
-                        .unwrap_or(0);
+                        .ok_or_else(|| {
+                            NetCdfError::ReadFailed(format!(
+                                "ncdump 维度声明缺少 UNLIMITED 当前长度: {rhs}"
+                            ))
+                        })?;
+                    let current = current_raw.parse::<usize>().map_err(|_| {
+                        NetCdfError::ReadFailed(format!(
+                            "ncdump UNLIMITED 当前长度无法解析为整数: {current_raw}"
+                        ))
+                    })?;
                     (current, true)
                 } else {
-                    let len = rhs
+                    let len_raw = rhs
                         .split(';')
                         .next()
-                        .and_then(|s| s.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| {
+                            NetCdfError::ReadFailed(format!("ncdump 维度声明缺少长度: {rhs}"))
+                        })?;
+                    let len = len_raw.parse::<usize>().map_err(|_| {
+                        NetCdfError::ReadFailed(format!("ncdump 维度长度无法解析为整数: {len_raw}"))
+                    })?;
                     (len, false)
                 };
                 header.dimensions.push(Dimension {
@@ -602,5 +616,20 @@ mod tests {
         assert_eq!(var.get(&[0, 0, 0]), Some(0.0));
         assert_eq!(var.get(&[1, 2, 3]), Some(23.0));
         assert_eq!(var.get(&[2, 0, 0]), None); // 越界
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_invalid_dimension_length() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = abc ;
+variables:
+    float h(lon);
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
     }
 }

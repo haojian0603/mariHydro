@@ -333,7 +333,11 @@ impl GeoTransformer {
         }
 
         if x.len() != y.len() {
-            return Err(mh_foundation::error::MhError::size_mismatch("transform_inplace", x.len(), y.len()));
+            return Err(mh_foundation::error::MhError::size_mismatch(
+                "transform_inplace",
+                x.len(),
+                y.len(),
+            ));
         }
 
         for i in 0..x.len() {
@@ -347,10 +351,11 @@ impl GeoTransformer {
     /// 计算投影收敛角（用于矢量旋转）
     ///
     /// 返回从真北到网格北的顺时针角度（弧度）
-    #[must_use]
-    pub fn compute_convergence_angle(&self, x: f64, y: f64) -> f64 {
+    ///
+    /// # Errors
+    /// 如果逆投影或正投影失败，则返回错误
+    pub fn compute_convergence_angle(&self, x: f64, y: f64) -> MhResult<f64> {
         self.compute_convergence_angle_checked(x, y)
-            .unwrap_or(0.0)
     }
 
     /// 计算投影收敛角（返回错误信息）
@@ -380,19 +385,30 @@ impl GeoTransformer {
     }
 
     /// 旋转矢量以补偿投影收敛角
-    #[must_use]
-    pub fn rotate_vector(&self, u: f64, v: f64, x: f64, y: f64) -> (f64, f64) {
-        let angle = self.compute_convergence_angle(x, y);
+    ///
+    /// # Errors
+    /// 如果收敛角计算失败，则返回错误
+    pub fn rotate_vector(&self, u: f64, v: f64, x: f64, y: f64) -> MhResult<(f64, f64)> {
+        let angle = self.compute_convergence_angle(x, y)?;
         if angle.abs() < 1e-10 {
-            return (u, v);
+            return Ok((u, v));
         }
         let cos_a = angle.cos();
         let sin_a = angle.sin();
-        (u * cos_a - v * sin_a, u * sin_a + v * cos_a)
+        Ok((u * cos_a - v * sin_a, u * sin_a + v * cos_a))
     }
 
     /// 批量旋转矢量
-    pub fn rotate_vectors(&self, u: &mut [f64], v: &mut [f64], x: &[f64], y: &[f64]) -> MhResult<()> {
+    ///
+    /// # Errors
+    /// 如果输入长度不一致或任一点的收敛角计算失败，则返回错误
+    pub fn rotate_vectors(
+        &self,
+        u: &mut [f64],
+        v: &mut [f64],
+        x: &[f64],
+        y: &[f64],
+    ) -> MhResult<()> {
         if self.is_identity {
             return Ok(());
         }
@@ -404,7 +420,7 @@ impl GeoTransformer {
             ));
         }
         for i in 0..u.len() {
-            let (nu, nv) = self.rotate_vector(u[i], v[i], x[i], y[i]);
+            let (nu, nv) = self.rotate_vector(u[i], v[i], x[i], y[i])?;
             u[i] = nu;
             v[i] = nv;
         }
@@ -569,8 +585,7 @@ mod tests {
 
     #[test]
     fn test_web_mercator_conversion() {
-        let (x, y) =
-            conversions::wgs84_to_web_mercator(116.0, 40.0).expect("web mercator failed");
+        let (x, y) = conversions::wgs84_to_web_mercator(116.0, 40.0).expect("web mercator failed");
 
         assert!(x > 12_900_000.0 && x < 12_950_000.0, "x out of range: {x}");
         assert!(y > 4_800_000.0 && y < 4_900_000.0, "y out of range: {y}");
@@ -613,5 +628,24 @@ mod tests {
     fn test_affine_is_identity() {
         assert!(AffineTransform::identity().is_identity());
         assert!(!AffineTransform::translation(1.0, 0.0).is_identity());
+    }
+
+    #[test]
+    fn test_identity_convergence_angle_is_explicit_zero() {
+        let transformer = GeoTransformer::identity();
+        let angle = transformer
+            .compute_convergence_angle(120.0, 30.0)
+            .expect("identity convergence angle failed");
+        assert_eq!(angle, 0.0);
+    }
+
+    #[test]
+    fn test_rotate_vector_identity_returns_original_components() {
+        let transformer = GeoTransformer::identity();
+        let (u, v) = transformer
+            .rotate_vector(1.5, -0.25, 120.0, 30.0)
+            .expect("identity rotation failed");
+        assert_eq!(u, 1.5);
+        assert_eq!(v, -0.25);
     }
 }

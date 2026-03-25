@@ -3,8 +3,8 @@
 //! GDAL 栅格驱动实现
 
 use super::error::GdalError;
-use std::path::Path;
 use serde_json;
+use std::path::Path;
 
 /// 栅格元数据
 #[derive(Debug, Clone)]
@@ -238,36 +238,51 @@ impl GdalDriver {
 }
 
 #[cfg(not(feature = "gdal"))]
-fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
-    let output = std::process::Command::new(gdalinfo_bin())
-        .arg("-json")
-        .arg(path)
-        .output()
-        .map_err(|_| GdalError::NotAvailable)?;
+fn parse_json_usize(value: &serde_json::Value, field: &str) -> Result<usize, GdalError> {
+    value
+        .as_u64()
+        .map(|raw| raw as usize)
+        .ok_or_else(|| GdalError::ReadFailed(format!("gdalinfo 输出中的 {field} 不是无符号整数")))
+}
 
-    if !output.status.success() {
-        return Err(GdalError::OpenFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+#[cfg(not(feature = "gdal"))]
+fn parse_json_f64(value: &serde_json::Value, field: &str) -> Result<f64, GdalError> {
+    value
+        .as_f64()
+        .ok_or_else(|| GdalError::ReadFailed(format!("gdalinfo 输出中的 {field} 不是数值")))
+}
+
+#[cfg(not(feature = "gdal"))]
+fn parse_gdalinfo_metadata(value: &serde_json::Value) -> Result<RasterMetadata, GdalError> {
+    let size = value
+        .get("size")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| GdalError::ReadFailed("gdalinfo 输出缺少 size".to_string()))?;
+    if size.len() != 2 {
+        return Err(GdalError::ReadFailed(
+            "gdalinfo 输出中的 size 长度不正确".to_string(),
+        ));
     }
 
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| GdalError::Other(e.to_string()))?;
-
-    let size = value.get("size").and_then(|v| v.as_array()).ok_or_else(|| {
-        GdalError::ReadFailed("gdalinfo 输出缺少 size".to_string())
-    })?;
-    let width = size.first().and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let height = size.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let width = parse_json_usize(&size[0], "size[0]")?;
+    let height = parse_json_usize(&size[1], "size[1]")?;
 
     let geo_transform = value
         .get("geoTransform")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| GdalError::ReadFailed("gdalinfo 输出缺少 geoTransform".to_string()))?
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0))
-        .collect::<Vec<_>>();
+        .ok_or_else(|| GdalError::ReadFailed("gdalinfo 输出缺少 geoTransform".to_string()))?;
     if geo_transform.len() != 6 {
         return Err(GdalError::ReadFailed("geoTransform 长度不正确".to_string()));
     }
+
+    let geo_transform = [
+        parse_json_f64(&geo_transform[0], "geoTransform[0]")?,
+        parse_json_f64(&geo_transform[1], "geoTransform[1]")?,
+        parse_json_f64(&geo_transform[2], "geoTransform[2]")?,
+        parse_json_f64(&geo_transform[3], "geoTransform[3]")?,
+        parse_json_f64(&geo_transform[4], "geoTransform[4]")?,
+        parse_json_f64(&geo_transform[5], "geoTransform[5]")?,
+    ];
 
     let projection = value
         .get("coordinateSystem")
@@ -276,7 +291,10 @@ fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
         .map(|s| s.to_string());
 
     let empty_bands: Vec<serde_json::Value> = Vec::new();
-    let bands = value.get("bands").and_then(|v| v.as_array()).unwrap_or(&empty_bands);
+    let bands = value
+        .get("bands")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty_bands);
     let band_count = bands.len().max(1);
     let nodata = bands
         .first()
@@ -287,21 +305,37 @@ fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
         width,
         height,
         band_count,
-        geo_transform: [
-            geo_transform[0],
-            geo_transform[1],
-            geo_transform[2],
-            geo_transform[3],
-            geo_transform[4],
-            geo_transform[5],
-        ],
+        geo_transform,
         projection,
         nodata,
     })
 }
 
 #[cfg(not(feature = "gdal"))]
-fn cli_read_band(path: &Path, band_idx: usize, meta: &RasterMetadata) -> Result<RasterBand, GdalError> {
+fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
+    let output = std::process::Command::new(gdalinfo_bin())
+        .arg("-json")
+        .arg(path)
+        .output()
+        .map_err(|_| GdalError::NotAvailable)?;
+
+    if !output.status.success() {
+        return Err(GdalError::OpenFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| GdalError::Other(e.to_string()))?;
+    parse_gdalinfo_metadata(&value)
+}
+
+#[cfg(not(feature = "gdal"))]
+fn cli_read_band(
+    path: &Path,
+    band_idx: usize,
+    meta: &RasterMetadata,
+) -> Result<RasterBand, GdalError> {
     let output = std::process::Command::new(gdal_translate_bin())
         .arg("-of")
         .arg("AAIGrid")
@@ -313,7 +347,9 @@ fn cli_read_band(path: &Path, band_idx: usize, meta: &RasterMetadata) -> Result<
         .map_err(|_| GdalError::NotAvailable)?;
 
     if !output.status.success() {
-        return Err(GdalError::ReadFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+        return Err(GdalError::ReadFailed(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -324,9 +360,21 @@ fn cli_read_band(path: &Path, band_idx: usize, meta: &RasterMetadata) -> Result<
     for (idx, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.to_lowercase().starts_with("ncols") {
-            ncols = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+            let raw = line
+                .split_whitespace()
+                .nth(1)
+                .ok_or_else(|| GdalError::ReadFailed("AAIGrid 头缺少 ncols 值".to_string()))?;
+            ncols = raw
+                .parse()
+                .map_err(|_| GdalError::ReadFailed(format!("AAIGrid ncols 无法解析: {raw}")))?;
         } else if line.to_lowercase().starts_with("nrows") {
-            nrows = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+            let raw = line
+                .split_whitespace()
+                .nth(1)
+                .ok_or_else(|| GdalError::ReadFailed("AAIGrid 头缺少 nrows 值".to_string()))?;
+            nrows = raw
+                .parse()
+                .map_err(|_| GdalError::ReadFailed(format!("AAIGrid nrows 无法解析: {raw}")))?;
         } else if line.to_lowercase().starts_with("nodata_value") {
             nodata = line.split_whitespace().nth(1).and_then(|v| v.parse().ok());
         } else if !line.is_empty() {
@@ -350,7 +398,9 @@ fn cli_read_band(path: &Path, band_idx: usize, meta: &RasterMetadata) -> Result<
     }
 
     if data.len() != ncols * nrows {
-        return Err(GdalError::ReadFailed("栅格数据长度与维度不匹配".to_string()));
+        return Err(GdalError::ReadFailed(
+            "栅格数据长度与维度不匹配".to_string(),
+        ));
     }
 
     Ok(RasterBand {
@@ -405,5 +455,14 @@ mod tests {
         // 中心点应该是 4 个角的平均值
         let val = band.interpolate(0.5, 0.5).unwrap();
         assert!((val - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_parse_gdalinfo_metadata_rejects_non_numeric_geotransform() {
+        let value = serde_json::json!({
+            "size": [100, 50],
+            "geoTransform": [0.0, 1.0, "bad", 100.0, 0.0, -1.0]
+        });
+        assert!(parse_gdalinfo_metadata(&value).is_err());
     }
 }

@@ -298,15 +298,27 @@ impl DateTime {
         let (hour, minute, second) = if parts.len() > 1 {
             let time_str = parts[1].trim_end_matches('Z'); // 移除可能的 Z 后缀
             let time_parts: Vec<&str> = time_str.split(':').collect();
-            let h: u32 = time_parts
+            let hour_str = time_parts
                 .first()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            let m: u32 = time_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let s: f64 = time_parts
-                .get(2)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| CfTimeError::InvalidDate("缺少小时字段".to_string()))?;
+            let h: u32 = hour_str
+                .parse()
+                .map_err(|_| CfTimeError::InvalidDate(format!("无效的小时: {}", hour_str)))?;
+            let m: u32 = if let Some(minute_str) = time_parts.get(1) {
+                minute_str
+                    .parse()
+                    .map_err(|_| CfTimeError::InvalidDate(format!("无效的分钟: {}", minute_str)))?
+            } else {
+                0
+            };
+            let s: f64 = if let Some(second_str) = time_parts.get(2) {
+                second_str
+                    .parse()
+                    .map_err(|_| CfTimeError::InvalidDate(format!("无效的秒数: {}", second_str)))?
+            } else {
+                0.0
+            };
             (h, m, s)
         } else {
             (0, 0, 0.0)
@@ -341,7 +353,10 @@ impl DateTime {
         let calendar = CfCalendar::Standard;
         let max_day = calendar.days_in_month(year, month);
         if day == 0 || day > max_day {
-            return Err(CfTimeError::InvalidDate(format!("无效的日期: {}-{}-{}", year, month, day)));
+            return Err(CfTimeError::InvalidDate(format!(
+                "无效的日期: {}-{}-{}",
+                year, month, day
+            )));
         }
         Ok(())
     }
@@ -418,10 +433,7 @@ impl CfTimeUnits {
     }
 
     /// 同时解析单位和日历
-    pub fn parse_with_calendar(
-        units_str: &str,
-        calendar_str: Option<&str>,
-    ) -> CfTimeResult<Self> {
+    pub fn parse_with_calendar(units_str: &str, calendar_str: Option<&str>) -> CfTimeResult<Self> {
         let mut result = Self::parse(units_str)?;
         if let Some(cal) = calendar_str {
             result.calendar = CfCalendar::from_str(cal)?;
@@ -485,9 +497,7 @@ impl CfTimeUnits {
         let m_adj = m + 12 * a - 3;
 
         let jdn = match self.calendar {
-            CfCalendar::Julian => {
-                d + (153 * m_adj + 2) / 5 + 365 * y_adj + y_adj / 4 - 32083
-            }
+            CfCalendar::Julian => d + (153 * m_adj + 2) / 5 + 365 * y_adj + y_adj / 4 - 32083,
             CfCalendar::Day360 => {
                 // 360天历
                 y * 360 + (m - 1) * 30 + d
@@ -510,8 +520,7 @@ impl CfTimeUnits {
         };
 
         // 添加时间部分
-        let time_fraction =
-            (dt.hour as f64 + dt.minute as f64 / 60.0 + dt.second / 3600.0) / 24.0;
+        let time_fraction = (dt.hour as f64 + dt.minute as f64 / 60.0 + dt.second / 3600.0) / 24.0;
         jdn as f64 + time_fraction - 0.5
     }
 
@@ -530,7 +539,8 @@ impl CfTimeUnits {
                 (y, m as u32, d as u32)
             }
             CfCalendar::NoLeap => {
-                let days_before_month = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
+                let days_before_month =
+                    [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
                 let total_days = jd_int as i32;
                 let mut y = total_days / 365;
                 let mut doy = total_days % 365; // 1..=365 ideally
@@ -539,7 +549,9 @@ impl CfTimeUnits {
                     y -= 1;
                 }
                 // find month where cumulative days >= doy
-                let m = (1..=12).find(|&i| days_before_month[i] >= doy).unwrap_or(12);
+                let m = (1..=12)
+                    .find(|&i| days_before_month[i] >= doy)
+                    .unwrap_or(12);
                 let d = doy - days_before_month[m - 1];
                 (y, m as u32, d as u32)
             }
@@ -660,14 +672,8 @@ mod tests {
             CfCalendar::Standard
         );
         assert_eq!(CfCalendar::from_str("noleap").unwrap(), CfCalendar::NoLeap);
-        assert_eq!(
-            CfCalendar::from_str("365_day").unwrap(),
-            CfCalendar::NoLeap
-        );
-        assert_eq!(
-            CfCalendar::from_str("360_day").unwrap(),
-            CfCalendar::Day360
-        );
+        assert_eq!(CfCalendar::from_str("365_day").unwrap(), CfCalendar::NoLeap);
+        assert_eq!(CfCalendar::from_str("360_day").unwrap(), CfCalendar::Day360);
     }
 
     #[test]
@@ -715,6 +721,12 @@ mod tests {
         assert_eq!(dt.year, 2020);
         assert_eq!(dt.month, 6);
         assert_eq!(dt.day, 15);
+    }
+
+    #[test]
+    fn test_datetime_parse_rejects_invalid_time_component() {
+        let err = DateTime::parse("2020-06-15 12:xx:45").unwrap_err();
+        assert!(matches!(err, CfTimeError::InvalidDate(_)));
     }
 
     #[test]

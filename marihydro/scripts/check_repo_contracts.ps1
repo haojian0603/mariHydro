@@ -47,6 +47,7 @@ try {
             "[RULE_NO_COMPAT_MAINLINE]",
             "[RULE_NO_FAKE_IMPL]",
             "[RULE_EXTERNAL_DATA_NO_SYNTHETIC_FILL]",
+            "[RULE_NO_SILENT_NUMERIC_FALLBACK]",
             "[RULE_PHYSICS_PROVENANCE]",
             "[RULE_PHYSICS_TAG_REQUIRED]",
             "[RULE_STANDARD_FORMULA_OR_REMOVE]",

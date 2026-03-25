@@ -189,7 +189,11 @@ impl Point3D {
     #[inline]
     #[must_use]
     pub fn normalize_or_zero(&self) -> Self {
-        self.normalize().unwrap_or(Self::ZERO)
+        if let Some(normalized) = self.normalize() {
+            normalized
+        } else {
+            Self::ZERO
+        }
     }
 
     /// 计算到另一个点的欧几里得距离
@@ -710,7 +714,11 @@ impl Point2D {
     #[inline]
     #[must_use]
     pub fn normalize_or_zero(&self) -> Self {
-        self.normalize().unwrap_or(Self::ZERO)
+        if let Some(normalized) = self.normalize() {
+            normalized
+        } else {
+            Self::ZERO
+        }
     }
 
     /// 线性插值
@@ -1030,5 +1038,11 @@ mod tests {
 
         assert!(rotated.x.abs() < 1e-10);
         assert!((rotated.y - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_point3d_normalize_or_zero_for_zero_vector() {
+        let normalized = Point3D::ZERO.normalize_or_zero();
+        assert_eq!(normalized, Point3D::ZERO);
     }
 }
