@@ -1,4 +1,6 @@
 // crates/mh_io/src/import/geojson.rs
+// IO_SOURCE: RFC 7946 GeoJSON geometry model; Polygon and MultiPolygon coordinates must follow linear-ring structure.
+// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry.
 
 //! GeoJSON 导入模块
 //!
@@ -63,6 +65,8 @@ pub enum GeoJsonError {
     MissingProperty(String),
     /// 坐标格式错误
     InvalidCoordinates,
+    /// 几何结构不完整或不符合 GeoJSON 约束
+    InvalidStructure(String),
 }
 
 impl std::fmt::Display for GeoJsonError {
@@ -73,6 +77,7 @@ impl std::fmt::Display for GeoJsonError {
             GeoJsonError::InvalidGeometry(t) => write!(f, "Invalid geometry type: {}", t),
             GeoJsonError::MissingProperty(p) => write!(f, "Missing property: {}", p),
             GeoJsonError::InvalidCoordinates => write!(f, "Invalid coordinates format"),
+            GeoJsonError::InvalidStructure(msg) => write!(f, "Invalid geometry structure: {}", msg),
         }
     }
 }
@@ -108,7 +113,9 @@ pub enum GeometryData {
         holes: Vec<Vec<(f64, f64)>>,
     },
     /// 多多边形
-    MultiPolygon { polygons: Vec<(Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>)> },
+    MultiPolygon {
+        polygons: Vec<(Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>)>,
+    },
 }
 
 impl GeometryData {
@@ -152,9 +159,7 @@ impl GeometryData {
             GeometryData::Point { x, y } => vec![(*x, *y)],
             GeometryData::MultiPoint { coords } => coords.clone(),
             GeometryData::LineString { coords } => coords.clone(),
-            GeometryData::MultiLineString { lines } => {
-                lines.iter().flatten().copied().collect()
-            }
+            GeometryData::MultiLineString { lines } => lines.iter().flatten().copied().collect(),
             GeometryData::Polygon { exterior, holes } => {
                 let mut all = exterior.clone();
                 for hole in holes {
@@ -380,9 +385,7 @@ impl GeoJsonReader {
                 Ok(GeometryData::MultiLineString { lines })
             }
             "Polygon" => {
-                let rings = Self::parse_coord_array_array(&g.coordinates)?;
-                let exterior = rings.first().cloned().unwrap_or_default();
-                let holes = rings.into_iter().skip(1).collect();
+                let (exterior, holes) = Self::parse_polygon(&g.coordinates, "Polygon")?;
                 Ok(GeometryData::Polygon { exterior, holes })
             }
             "MultiPolygon" => {
@@ -421,17 +424,66 @@ impl GeoJsonReader {
         arr.iter().map(Self::parse_coord_array).collect()
     }
 
+    fn parse_polygon(
+        value: &serde_json::Value,
+        geometry_type: &'static str,
+    ) -> Result<(Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>), GeoJsonError> {
+        let rings = value.as_array().ok_or(GeoJsonError::InvalidCoordinates)?;
+        if rings.is_empty() {
+            return Err(GeoJsonError::InvalidStructure(format!(
+                "{geometry_type} must contain at least one linear ring"
+            )));
+        }
+
+        let exterior = Self::parse_linear_ring(rings[0].clone(), geometry_type, "exterior")?;
+        let mut holes = Vec::with_capacity(rings.len().saturating_sub(1));
+        for ring in rings.iter().skip(1) {
+            holes.push(Self::parse_linear_ring(
+                ring.clone(),
+                geometry_type,
+                "interior",
+            )?);
+        }
+
+        Ok((exterior, holes))
+    }
+
+    fn parse_linear_ring(
+        value: serde_json::Value,
+        geometry_type: &'static str,
+        ring_role: &'static str,
+    ) -> Result<Vec<(f64, f64)>, GeoJsonError> {
+        let coords = Self::parse_coord_array(&value)?;
+        if coords.len() < 4 {
+            return Err(GeoJsonError::InvalidStructure(format!(
+                "{geometry_type} {ring_role} ring must contain at least 4 positions"
+            )));
+        }
+
+        let first = coords.first().copied();
+        let last = coords.last().copied();
+        if first != last {
+            return Err(GeoJsonError::InvalidStructure(format!(
+                "{geometry_type} {ring_role} ring must be closed"
+            )));
+        }
+
+        Ok(coords)
+    }
+
     /// 解析多多边形
     fn parse_multi_polygon(
         value: &serde_json::Value,
     ) -> Result<Vec<(Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>)>, GeoJsonError> {
         let arr = value.as_array().ok_or(GeoJsonError::InvalidCoordinates)?;
+        if arr.is_empty() {
+            return Err(GeoJsonError::InvalidStructure(
+                "MultiPolygon must contain at least one polygon".to_string(),
+            ));
+        }
         let mut result = Vec::new();
         for poly_val in arr {
-            let rings = Self::parse_coord_array_array(poly_val)?;
-            let exterior = rings.first().cloned().unwrap_or_default();
-            let holes = rings.into_iter().skip(1).collect();
-            result.push((exterior, holes));
+            result.push(Self::parse_polygon(poly_val, "MultiPolygon")?);
         }
         Ok(result)
     }
@@ -492,9 +544,7 @@ impl GeoJsonReader {
 
             let location = match &feature.geometry {
                 GeometryData::Point { x, y } => BcLocation::Point(*x, *y),
-                GeometryData::LineString { coords } => {
-                    BcLocation::Line(coords.clone())
-                }
+                GeometryData::LineString { coords } => BcLocation::Line(coords.clone()),
                 _ => continue,
             };
 
@@ -753,6 +803,76 @@ mod tests {
         assert_eq!(zones.len(), 1);
         assert_eq!(zones[0].name, "zone1");
         assert_eq!(zones[0].get_f64("manning_n"), Some(0.035));
+    }
+
+    #[test]
+    fn test_polygon_requires_exterior_ring() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": []
+            },
+            "properties": {}
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("empty polygon rings must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("Polygon must contain at least one linear ring")
+        ));
+    }
+
+    #[test]
+    fn test_polygon_requires_closed_ring() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[0, 0], [10, 0], [10, 10], [0, 10]]
+                ]
+            },
+            "properties": {}
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("open polygon ring must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("Polygon exterior ring must be closed")
+        ));
+    }
+
+    #[test]
+    fn test_multi_polygon_requires_polygon_rings() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                    []
+                ]
+            },
+            "properties": {}
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("multipolygon without rings must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("MultiPolygon must contain at least one linear ring")
+        ));
     }
 
     #[test]

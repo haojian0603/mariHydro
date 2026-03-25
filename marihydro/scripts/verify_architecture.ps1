@@ -85,6 +85,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.55: import contract guard
+    Write-Host "=== Phase 0.55: import contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "import contracts must pass"
+    } else {
+        Write-Host "[OK] import contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.6: runtime probe contract guard
     Write-Host "=== Phase 0.6: runtime probe contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"
