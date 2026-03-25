@@ -1,31 +1,31 @@
-﻿// crates/mh_physics/src/numerics/limiter/venkatakrishnan.rs
+// crates/mh_physics/src/numerics/limiter/venkatakrishnan.rs
 
-//! Venkatakrishnan 闄愬埗鍣?- 娉涘瀷瀹炵幇
+//! Venkatakrishnan 限制器。
 //!
-//! 鍏夋粦鐨勬搴﹂檺鍒跺櫒锛岄伩鍏?Barth-Jespersen 鐨勬搴︾獊鍙橀棶棰樸€?
-//! 浣跨敤鍏夋粦鍑芥暟鏇夸唬 min 鎿嶄綔锛屾彁渚涗簩闃剁簿搴﹀苟淇濇寔鏁板€肩ǔ瀹氭€с€?
+//! 该限制器通过平滑分式抑制局部极值，相比 Barth-Jespersen 一类
+//! 分段限制器更连续，便于稳态收敛和隐式耦合。
 //!
-//! # 绫诲瀷鍙傛暟
-//! - `S: RuntimeScalar` - 鏀寔 f32/f64 绮惧害
+//! # 类型参数
+//! - `S: RuntimeScalar` - 支持 f32/f64 等运行时标量
 //!
-//! # K 鍙傛暟閫夋嫨
-//! - 0.1-0.3: 寮洪檺鍒讹紝閫傜敤浜庢縺娉?婧冨潩
-//! - 0.3-1.0: 涓瓑闄愬埗锛岄€氱敤鍦烘櫙锛堥粯璁わ級
-//! - 1.0-5.0: 寮遍檺鍒讹紝閫傜敤浜庡厜婊戞祦鍔?
+//! # K 参数建议
+//! - 0.1-0.3: 激波捕捉与强间断
+//! - 0.3-1.0: 干湿交替或陡峭梯度流场
+//! - 1.0-5.0: 平滑流场与弱限制需求
 //!
-//! # 娉ㄦ剰浜嬮」
-//! 榛樿鏋勯€犲櫒浣跨敤 `mesh_scale=1.0`锛屽疄闄呬娇鐢ㄦ椂蹇呴』璋冪敤 `update_mesh_scale()`
-//! 鏍规嵁鐪熷疄缃戞牸灏哄害鏇存柊锛屽惁鍒欓檺鍒舵晥鏋滃彲鑳戒笉绗﹀悎棰勬湡銆?
+//! # 网格尺度
+//! 若未显式更新网格尺度，则默认使用 `mesh_scale=1.0` 计算平滑参数；
+//! 在真实网格上应调用 `update_mesh_scale()` 以保持限制器尺度一致。
 //!
-//! # 鍙傝€冩枃鐚?
+//! # 参考文献
 //! Venkatakrishnan, V. (1993). "On the accuracy of limiters and convergence to steady state solutions".
 //! AIAA Paper 93-0880.
 
+use super::traits::{LimiterContext, SlopeLimiter};
 use mh_runtime::{Backend, RuntimeScalar};
 use num_traits::Float;
-use super::traits::{LimiterContext, SlopeLimiter};
 
-/// Venkatakrishnan 闄愬埗鍣?
+/// Venkatakrishnan 限制器
 #[derive(Clone, Copy)]
 pub struct Venkatakrishnan<B: Backend> {
     k: B::Scalar,
@@ -50,11 +50,11 @@ impl<B: Backend> Venkatakrishnan<B> {
             panic!("failed to convert preset limiter parameter for {context}: {value}")
         })
     }
-    /// 鍒涘缓鏂扮殑闄愬埗鍣?
+    /// 创建限制器
     ///
-    /// # 鍙傛暟
-    /// - `k`: K 鍙傛暟锛屾帶鍒堕檺鍒跺己搴?
-    /// - `mesh_scale`: 缃戞牸鐗瑰緛灏哄害
+    /// # 参数
+    /// - `k`: K 参数，数值越小限制越强
+    /// - `mesh_scale`: 网格特征尺度
     #[inline]
     pub fn new(k: B::Scalar, mesh_scale: B::Scalar) -> Self {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -64,7 +64,7 @@ impl<B: Backend> Venkatakrishnan<B> {
         };
         let kh = k * scale;
         let eps_squared = kh * kh * kh;
-        
+
         Self {
             k,
             eps_squared,
@@ -72,7 +72,7 @@ impl<B: Backend> Venkatakrishnan<B> {
         }
     }
 
-    /// 鍒涘缓鍏锋湁鑷畾涔夊宸殑闄愬埗鍣?
+    /// 使用显式容差创建限制器
     #[inline]
     pub fn with_tolerance(k: B::Scalar, mesh_scale: B::Scalar, tol: B::Scalar) -> Self {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -82,7 +82,7 @@ impl<B: Backend> Venkatakrishnan<B> {
         };
         let kh = k * scale;
         let eps_squared = kh * kh * kh;
-        
+
         Self {
             k,
             eps_squared,
@@ -90,43 +90,43 @@ impl<B: Backend> Venkatakrishnan<B> {
         }
     }
 
-        /// 棰勮锛氭縺娉?寮洪棿鏂?
-        pub fn for_shock_capturing(mesh_scale: B::Scalar) -> Self {
-            let k = Self::preset_k(0.1, "venkatakrishnan.shock_capturing");
-            Self::new(k, mesh_scale)
-        }
+    /// 适用于激波捕捉的默认参数
+    pub fn for_shock_capturing(mesh_scale: B::Scalar) -> Self {
+        let k = Self::preset_k(0.1, "venkatakrishnan.shock_capturing");
+        Self::new(k, mesh_scale)
+    }
 
-        /// 棰勮锛氬共婀夸氦鐣?
-        pub fn for_wetting_drying(mesh_scale: B::Scalar) -> Self {
-            let k = Self::preset_k(0.3, "venkatakrishnan.wetting_drying");
-            Self::new(k, mesh_scale)
-        }
+    /// 适用于干湿交替的默认参数
+    pub fn for_wetting_drying(mesh_scale: B::Scalar) -> Self {
+        let k = Self::preset_k(0.3, "venkatakrishnan.wetting_drying");
+        Self::new(k, mesh_scale)
+    }
 
-        /// 棰勮锛氬厜婊戞祦鍔?
-        pub fn for_smooth_flow(mesh_scale: B::Scalar) -> Self {
-            let k = Self::preset_k(2.0, "venkatakrishnan.smooth_flow");
-            Self::new(k, mesh_scale)
-        }
+    /// 适用于平滑流场的默认参数
+    pub fn for_smooth_flow(mesh_scale: B::Scalar) -> Self {
+        let k = Self::preset_k(2.0, "venkatakrishnan.smooth_flow");
+        Self::new(k, mesh_scale)
+    }
 
-        /// 棰勮锛氭渶灏忛檺鍒?
-        pub fn minimal_limiting(mesh_scale: B::Scalar) -> Self {
-            let k = Self::preset_k(5.0, "venkatakrishnan.minimal_limiting");
-            Self::new(k, mesh_scale)
-        }
+    /// 适用于最小限制的默认参数
+    pub fn minimal_limiting(mesh_scale: B::Scalar) -> Self {
+        let k = Self::preset_k(5.0, "venkatakrishnan.minimal_limiting");
+        Self::new(k, mesh_scale)
+    }
 
-    /// 鑾峰彇 K 鍙傛暟
+    /// 获取 K 参数
     #[inline]
     pub fn k(&self) -> B::Scalar {
         self.k
     }
 
-    /// 鑾峰彇 蔚虏 鍊?
+    /// 获取平滑参数平方项
     #[inline]
     pub fn eps_squared(&self) -> B::Scalar {
         self.eps_squared
     }
 
-    /// 鏇存柊缃戞牸灏哄害
+    /// 更新网格特征尺度
     #[inline]
     pub fn update_mesh_scale(&mut self, mesh_scale: B::Scalar) {
         let scale = if mesh_scale.is_finite() && mesh_scale > B::Scalar::ZERO {
@@ -138,16 +138,16 @@ impl<B: Backend> Venkatakrishnan<B> {
         self.eps_squared = kh * kh * kh;
     }
 
-    /// 璁＄畻鍏夋粦闄愬埗鍑芥暟
+    /// 计算限制器的平滑函数
     #[inline]
     fn phi(&self, x: B::Scalar, y: B::Scalar) -> B::Scalar {
         let x2 = x * x;
         let y2 = y * y;
         let eps2 = self.eps_squared;
-        
+
         let numerator = (y2 + eps2) * x + B::Scalar::TWO * x2 * y;
         let denominator = y2 + B::Scalar::TWO * x2 + x * y + eps2;
-        
+
         if denominator.abs() < self.tol {
             B::Scalar::ONE
         } else {
@@ -162,9 +162,9 @@ impl<B: Backend> SlopeLimiter<B> for Venkatakrishnan<B> {
         if ctx.is_gradient_zero(self.tol) {
             return B::Scalar::ONE;
         }
-        
+
         let delta = ctx.gradient;
-        
+
         if delta > B::Scalar::ZERO {
             let delta_max = ctx.delta_max();
             if delta_max < self.tol {
@@ -181,7 +181,7 @@ impl<B: Backend> SlopeLimiter<B> for Venkatakrishnan<B> {
             }
         }
     }
-    
+
     #[inline]
     fn name(&self) -> &'static str {
         "Venkatakrishnan"
@@ -192,7 +192,7 @@ impl<B: Backend> SlopeLimiter<B> for Venkatakrishnan<B> {
 mod tests {
     use super::*;
     use mh_runtime::CpuBackend;
-    
+
     type BackendF64 = CpuBackend<f64>;
     type BackendF32 = CpuBackend<f32>;
 
@@ -250,9 +250,7 @@ mod tests {
     #[test]
     fn test_small_gradient_f32() {
         let limiter = Venkatakrishnan::<BackendF32>::new(5.0f32, 0.1f32);
-        let ctx = LimiterContext::<BackendF32>::new(
-            1.0f32, 0.1f32, 0.5f32, 1.5f32, 0.1f32
-        );
+        let ctx = LimiterContext::<BackendF32>::new(1.0f32, 0.1f32, 0.5f32, 1.5f32, 0.1f32);
         let alpha = limiter.compute_limiter(&ctx);
         assert!((0.0f32..=1.0f32).contains(&alpha));
     }
@@ -316,7 +314,9 @@ mod tests {
         let limiter = Venkatakrishnan::<BackendF64>::new(5.0, 0.1);
         let ctx_pos = LimiterContext::<BackendF64>::new(1.0, 0.3, 0.5, 1.5, 0.1);
         let ctx_neg = LimiterContext::<BackendF64>::new(1.0, -0.3, 0.5, 1.5, 0.1);
-        assert!((limiter.compute_limiter(&ctx_pos) - limiter.compute_limiter(&ctx_neg)).abs() < 1e-10);
+        assert!(
+            (limiter.compute_limiter(&ctx_pos) - limiter.compute_limiter(&ctx_neg)).abs() < 1e-10
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-﻿use crate::{
+use crate::{
     scalar_from_f64_or_panic, AIAgent, AiError, Assimilable, DefaultBackend, PhysicsSnapshot,
     ScalarSamples,
 };
@@ -542,7 +542,8 @@ where
                         }
                         let new_h = (depth[i].to_f64_lossy() + delta).max(0.0);
                         applied += (new_h - depth[i].to_f64_lossy()) * area;
-                        depth[i] = scalar_from_f64_or_panic::<B>(new_h, "surrogate.depth_correction");
+                        depth[i] =
+                            scalar_from_f64_or_panic::<B>(new_h, "surrogate.depth_correction");
                     }
                     diff -= applied;
                     iter += 1;
@@ -571,7 +572,9 @@ where
 
             Ok(())
         } else {
-            Err(AiError::NotReady("娴狅絿鎮婃０鍕ゴ鐏忔碍婀悽鐔稿灇".into()))
+            Err(AiError::NotReady(
+                "代理模型预测尚未就绪".into(),
+            ))
         }
     }
 
@@ -583,4 +586,3 @@ where
         self.uncertainty()
     }
 }
-

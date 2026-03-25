@@ -40,9 +40,9 @@ pub enum VegetationType {
     Rigid {
         /// 阻力系数
         cd: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 茎直�?[m]
+        /// 茎直径 [m]
         diameter: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 茎密�?[1/m²]
+        /// 茎密度 [1/m²]
         density: f64, // ALLOW_F64: Layer 4 配置参数
         /// 植被高度 [m]
         height: f64, // ALLOW_F64: Layer 4 配置参数
@@ -185,7 +185,7 @@ pub struct VegetationConfig {
     pub enabled: bool,
     /// 每个单元的植被类型
     pub vegetation: Vec<VegetationType>,
-    /// 水密�?[kg/m³]
+    /// 水密度 [kg/m³]
     pub rho_water: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
     pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
@@ -223,7 +223,6 @@ impl VegetationConfig {
         self.vegetation.fill(veg);
         self
     }
-
 }
 
 impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
@@ -410,18 +409,10 @@ impl<B: Backend> VegetationImplicit<B> {
 mod tests {
     use super::*;
     use crate::sources::traits::test_support::{
-    assert_source_metadata,
-    test_backend,
-    test_context,
-    TestBackend,
-};
+        assert_source_metadata, test_backend, test_context, TestBackend,
+    };
 
-    fn create_test_state(
-        n_cells: usize,
-        h: f64,
-        u: f64,
-        v: f64,
-    ) -> ShallowWaterState<TestBackend> {
+    fn create_test_state(n_cells: usize, h: f64, u: f64, v: f64) -> ShallowWaterState<TestBackend> {
         let backend = test_backend();
         let mut state = ShallowWaterState::new_with_backend(backend, n_cells);
         for i in 0..n_cells {
@@ -473,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_effective_drag_partial() {
-        // 水深0.5m，植被高�?m（部分淹没）
+        // 水深 0.5 m，植被高度 1.0 m（部分淹没）
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
 
         // effective_height = 0.5

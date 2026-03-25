@@ -39,6 +39,23 @@ try {
         Write-Host "[OK] no unresolved merge markers" -ForegroundColor Green
     }
 
+    $corruptionMatches = @(
+        & git grep -n -I -P '[\x{E000}-\x{F8FF}\x{FFFD}]' -- '*.rs' '*.ps1' '*.toml' '*.json' '*.yml' '*.yaml' 'AGENTS.md' 2>$null
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($corruptionMatches.Count -gt 0) {
+        Write-Host "[FAIL] text corruption markers detected:" -ForegroundColor Red
+        $corruptionMatches | Select-Object -First 10 | ForEach-Object {
+            Write-Host "  $_" -ForegroundColor Red
+        }
+        if ($corruptionMatches.Count -gt 10) {
+            Write-Host "  ... and $($corruptionMatches.Count - 10) more" -ForegroundColor Red
+        }
+        $failed = $true
+    } else {
+        Write-Host "[OK] no replacement/private-use Unicode corruption" -ForegroundColor Green
+    }
+
     $stagedFiles = @(
         & git diff --cached --name-only --diff-filter=ACMR 2>$null
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }

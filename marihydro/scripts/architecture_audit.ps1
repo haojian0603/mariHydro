@@ -216,6 +216,9 @@ try {
     if (-not (Invoke-FailingScan -Name "silent from_f64/from_f32 unwrap_or usage (mh_runtime/src)" -Roots @("crates/mh_runtime/src") -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(')) {
         $Failed += "silent from_f64/from_f32 unwrap_or usage (mh_runtime/src)"
     }
+    if (-not (Invoke-FailingScan -Name "source text corruption residue" -Roots @("crates", "apps") -Pattern '[\uE000-\uF8FF\uFFFD]')) {
+        $Failed += "source text corruption residue"
+    }
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan

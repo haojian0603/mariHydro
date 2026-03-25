@@ -166,7 +166,7 @@ where
         Ok(())
     }
 
-    /// 鎵ц鍚屽寲
+    /// 执行单次同化
     pub fn assimilate(
         &mut self,
         state: &mut dyn Assimilable<B>,
@@ -180,7 +180,7 @@ where
         self.assimilate_internal(&mut guard, state, observation, current_time)
     }
 
-    /// 璁＄畻鍗曠偣淇
+    /// 计算单个观测点的修正量
     fn compute_correction(
         &self,
         simulated: B::Scalar,
@@ -272,7 +272,10 @@ where
     }
 
     let r2 = radius * radius;
-    let cell_size = radius.max(scalar_from_f64_or_panic::<B>(1e-6, "nudging.grid_cell_size_min"));
+    let cell_size = radius.max(scalar_from_f64_or_panic::<B>(
+        1e-6,
+        "nudging.grid_cell_size_min",
+    ));
     let cell_size_f64 = cell_size.to_f64_lossy();
     let mut grid: HashMap<(i32, i32), Vec<CellIndex>> = HashMap::new();
 
