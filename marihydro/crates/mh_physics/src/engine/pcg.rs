@@ -95,9 +95,9 @@ pub struct PcgResult<S: RuntimeScalar> {
     pub relative_residual: S,
 }
 
-/// 稀疏矩阵-向量乘法trait
-/// 兼容层：新的 CSR SpMV 调用应优先走 `numerics::linear_algebra::csr::CsrMatrix`
-/// 的 backend 入口。
+/// 稀疏矩阵-向量乘法 trait。
+/// 当前主链推荐直接使用 `numerics::linear_algebra::csr::CsrMatrix`
+/// 的 backend 入口；这里保留的是求解器内部抽象，不是对外兼容层。
 pub trait SparseMvp<B: Backend> {
     fn apply(&self, x: &B::Buffer<B::Scalar>, y: &mut B::Buffer<B::Scalar>);
     fn dimension(&self) -> usize;

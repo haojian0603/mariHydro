@@ -29,8 +29,6 @@ pub enum FrictionFormula {
     Chezy,
     /// 达西-魏斯巴赫
     DarcyWeisbach,
-    /// 白-科里根
-    WhiteColebrook,
     /// 线性阻力
     Linear,
     /// 二次阻力
@@ -208,11 +206,6 @@ impl FrictionCalculator {
             }
             FrictionFormula::Quadratic => {
                 self.config.friction_factor / h
-            }
-            FrictionFormula::WhiteColebrook => {
-                // 简化实现，实际需要迭代求解
-                let n = self.get_manning_n(cell);
-                g * n * n / h.powf(1.0 / 3.0)
             }
         };
 

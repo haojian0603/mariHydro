@@ -181,6 +181,10 @@ try {
         $Failed += "check_repo_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_real_implementation_contracts.ps1" -Path (Join-Path $ScriptDir "check_real_implementation_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_real_implementation_contracts.ps1"
+    }
+
     if ($Deep) {
         $HardcodedArgs = @{}
         if ($Verbose) {
@@ -211,12 +215,10 @@ try {
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
-    Invoke-InformationalScan -Name "legacy SourceTerm implementation residue" -Roots @("crates/mh_physics/src/sources/legacy.rs") -Pattern '\bimpl\s+SourceTerm\s+for\b'
-    Invoke-InformationalScan -Name "legacy source bridge footprint" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/sources/legacy.rs") -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b'
-    Invoke-InformationalScan -Name "legacy source top-level export residue" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/lib.rs") -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers'
-    Invoke-InformationalScan -Name "sources CpuBackend<f64> bridge footprint" -Roots @("crates/mh_physics/src/sources/legacy.rs") -Pattern "SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend"
-    Invoke-InformationalScan -Name "legacy limiters compatibility footprint" -Roots @("crates/mh_physics/src/lib.rs", "crates/mh_physics/src/legacy_limiters/mod.rs", "crates/mh_physics/src/legacy_limiters/classic.rs", "crates/mh_physics/src/legacy_limiters/unstructured.rs", "crates/mh_physics/src/legacy_limiters/muscl.rs") -Pattern 'pub mod legacy_limiters|LegacyLimiterType|LegacyMusclConfig|LegacyMusclReconstructor'
-    Invoke-InformationalScan -Name "legacy limiters root export residue" -Roots @("crates/mh_physics/src/lib.rs") -Pattern 'pub mod limiters;'
+    Invoke-InformationalScan -Name "placeholder wording residue" -Roots @("crates", "apps") -Pattern "\bplaceholder\b|\bfake implementation\b|\bstub\b"
+    Invoke-InformationalScan -Name "compatibility residue" -Roots @("crates", "apps") -Pattern "\blegacy_limiters\b|\bsources::legacy\b|\bcompatibility shim\b|\bcompatibility namespace\b|\bhistorical compatibility\b"
+    Invoke-InformationalScan -Name "fake model naming residue" -Roots @("crates", "apps") -Pattern "\bWhiteColebrook\b|\bNaturalNeighborInterpolator\b|\bNaturalNeighborConfig\b|\bSolverBuilder\b|\bSimpleSolver\b|Box<dyn DynSolver>"
+    Invoke-InformationalScan -Name "physical formula risk wording" -Roots @("crates/mh_physics", "crates/mh_agent", "apps") -Pattern "\bempirical\b|\bsimplified\b|\bapproximate\b|\bexperimental\b|\buncalibrated\b|\bunverified\b|\btemporary\b"
     Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("
     Invoke-InformationalScan -Name "scalar_from_f64 symbol residue" -Roots @("crates/mh_physics") -Pattern "\bscalar_from_f64\b"
     Invoke-InformationalScan -Name "T06 unimplemented residue" -Roots @("crates/mh_geo", "crates/mh_io", "crates/mh_mesh", "crates/mh_terrain", "apps", "tests") -Pattern "unimplemented!"

@@ -31,7 +31,6 @@
 //! ```text
 //! sources/
 //! ├── traits.rs           # `SourceTermGeneric` 主链接口
-//! ├── legacy.rs           # legacy `SourceTerm` CPU/f64 桥接
 //! ├── friction.rs         # 摩擦源项
 //! ├── coriolis.rs         # 科氏力
 //! ├── implicit.rs         # 隐式处理
@@ -53,8 +52,7 @@
 //! - `compute_cell()` - 计算单个单元的源项贡献
 //! - `compute_batch()` - 批量计算所有单元
 //!
-//! `sources::legacy::{SourceTerm, SourceContext, SourceContribution}` 仅作为
-//! 旧 CPU/f64 桥接接口保留，不再继续扩散。
+//! 主链只保留泛型真实实现；任何历史入口、兼容命名空间或 CPU/f64 专用旁路都不得回流。
 //!
 //! # 使用示例
 //!
@@ -83,7 +81,6 @@ pub mod friction;
 pub mod coriolis;
 pub mod implicit;
 pub mod inflow;
-pub mod legacy;
 
 // ==================== 2D 专用源项 ====================
 pub mod atmosphere;

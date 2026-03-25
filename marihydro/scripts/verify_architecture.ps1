@@ -268,148 +268,18 @@ try {
         Write-Host "[OK] no raw if-let from_config option handling in mh_physics/src" -ForegroundColor Green
     }
 
-    $legacySourceImpls = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
-        Where-Object { $_.FullName -notlike "*\sources\legacy.rs" } |
-        Select-String -Pattern '\bimpl\s+SourceTerm\s+for\b' -CaseSensitive
-    if ($legacySourceImpls) {
-        Write-Host "[FAIL] legacy SourceTerm implementations exist outside the bridge definition:" -ForegroundColor Red
-        $legacySourceImpls | Select-Object -First 10 | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+    $realImplementationGuard = Join-Path $ScriptDir "check_real_implementation_contracts.ps1"
+    if (-not (Test-Path $realImplementationGuard)) {
+        Write-Host "[FAIL] check_real_implementation_contracts.ps1 is missing" -ForegroundColor Red
+        $errors += "check_real_implementation_contracts.ps1 must exist"
+    } else {
+        Write-Host "Checking real implementation contracts..." -ForegroundColor Yellow
+        & powershell -ExecutionPolicy Bypass -File $realImplementationGuard
+        if ($LASTEXITCODE -ne 0) {
+            $errors += "real implementation contracts failed"
+        } else {
+            Write-Host "[OK] real implementation contracts passed" -ForegroundColor Green
         }
-        if ($legacySourceImpls.Count -gt 10) {
-            Write-Host "  ... and $($legacySourceImpls.Count - 10) more" -ForegroundColor Red
-        }
-        $errors += "legacy SourceTerm implementations must not be added outside crates/mh_physics/src/sources/legacy.rs"
-    } else {
-        Write-Host "[OK] no legacy SourceTerm implementations outside the bridge definition" -ForegroundColor Green
-    }
-
-    $legacyBridgeLeaks = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
-        Where-Object {
-            $_.FullName -notlike "*\sources\legacy.rs" -and
-            $_.FullName -notlike "*\sources\mod.rs"
-        } |
-        Select-String -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b' -CaseSensitive
-    if ($legacyBridgeLeaks) {
-        Write-Host "[FAIL] legacy source bridge symbols leaked outside allowed bridge files:" -ForegroundColor Red
-        $legacyBridgeLeaks | Select-Object -First 10 | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        if ($legacyBridgeLeaks.Count -gt 10) {
-            Write-Host "  ... and $($legacyBridgeLeaks.Count - 10) more" -ForegroundColor Red
-        }
-        $errors += "legacy SourceTerm/SourceContext/SourceContribution symbols must remain confined to sources/legacy.rs and sources/mod.rs"
-    } else {
-        Write-Host "[OK] legacy source bridge symbols are confined to the allowed bridge files" -ForegroundColor Green
-    }
-
-    $legacySourceTopLevelExports = @()
-    $legacySourceTopLevelExports += Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers' -CaseSensitive
-    $legacySourceTopLevelExports += Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers' -CaseSensitive
-    if ($legacySourceTopLevelExports) {
-        Write-Host "[FAIL] legacy source bridge items are still exported from top-level modules:" -ForegroundColor Red
-        $legacySourceTopLevelExports | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        $errors += "legacy source bridge items must be confined to mh_physics::sources::legacy"
-    } else {
-        Write-Host "[OK] legacy source bridge exports are confined to mh_physics::sources::legacy" -ForegroundColor Green
-    }
-
-    $legacySourceNamespace = Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern '^\s*pub mod legacy;' -CaseSensitive
-    if (-not $legacySourceNamespace) {
-        Write-Host "[FAIL] sources::legacy namespace is missing" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/sources/mod.rs must expose an explicit legacy namespace"
-    } else {
-        Write-Host "[OK] sources::legacy namespace is present" -ForegroundColor Green
-    }
-
-    $sourceCpuBackendLeakage = Get-ChildItem -Path "crates/mh_physics/src/sources" -Recurse -Filter "*.rs" -File |
-        Where-Object {
-            $_.FullName -notlike "*\sources\legacy.rs"
-        } |
-        Select-String -Pattern 'ShallowWaterState<CpuBackend<f64>>|SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend' -CaseSensitive
-    if ($sourceCpuBackendLeakage) {
-        Write-Host "[FAIL] CpuBackend<f64> source residue leaked outside sources/legacy.rs:" -ForegroundColor Red
-        $sourceCpuBackendLeakage | Select-Object -First 10 | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        if ($sourceCpuBackendLeakage.Count -gt 10) {
-            Write-Host "  ... and $($sourceCpuBackendLeakage.Count - 10) more" -ForegroundColor Red
-        }
-        $errors += "CpuBackend<f64> source residue must remain confined to crates/mh_physics/src/sources/legacy.rs"
-    } else {
-        Write-Host "[OK] CpuBackend<f64> source residue is confined to sources/legacy.rs" -ForegroundColor Green
-    }
-
-    $publicLegacyLimiterRoot = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod limiters;' -CaseSensitive
-    if ($publicLegacyLimiterRoot) {
-        Write-Host "[FAIL] public root-level limiters shim is still exposed from lib.rs" -ForegroundColor Red
-        $publicLegacyLimiterRoot | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        $errors += "public root-level crate::limiters shim must be removed from crates/mh_physics/src/lib.rs"
-    } else {
-        Write-Host "[OK] public root-level limiters shim is removed" -ForegroundColor Green
-    }
-
-    $legacyLimitersNamespace = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*pub mod legacy_limiters;' -CaseSensitive
-    if (-not $legacyLimitersNamespace) {
-        Write-Host "[FAIL] legacy_limiters namespace is missing" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/lib.rs must expose legacy_limiters as a real module"
-    } else {
-        Write-Host "[OK] legacy_limiters namespace is present" -ForegroundColor Green
-    }
-
-    if (-not (Test-Path "crates/mh_physics/src/legacy_limiters/mod.rs")) {
-        Write-Host "[FAIL] legacy_limiters/mod.rs is missing" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/legacy_limiters/mod.rs must exist as the legacy limiter compatibility root"
-    } else {
-        Write-Host "[OK] legacy_limiters/mod.rs is present" -ForegroundColor Green
-    }
-
-    if (Test-Path "crates/mh_physics/src/limiters.rs") {
-        Write-Host "[FAIL] obsolete limiters.rs compatibility file reappeared" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/limiters.rs must not reappear once legacy_limiters/ is established"
-    } else {
-        Write-Host "[OK] obsolete limiters.rs compatibility file is absent" -ForegroundColor Green
-    }
-
-    if (Test-Path "crates/mh_physics/src/legacy_limiters.rs") {
-        Write-Host "[FAIL] obsolete flat legacy_limiters.rs file reappeared" -ForegroundColor Red
-        $errors += "crates/mh_physics/src/legacy_limiters.rs must stay absent after the directory split"
-    } else {
-        Write-Host "[OK] obsolete flat legacy_limiters.rs file is absent" -ForegroundColor Green
-    }
-
-    $internalLimiterShim = Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern '^\s*mod limiters;' -CaseSensitive
-    if ($internalLimiterShim) {
-        Write-Host "[FAIL] legacy limiters are still routed through an internal limiters shim:" -ForegroundColor Red
-        $internalLimiterShim | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        $errors += "legacy limiters compatibility must live in crates/mh_physics/src/legacy_limiters.rs"
-    } else {
-        Write-Host "[OK] no internal limiters shim remains in lib.rs" -ForegroundColor Green
-    }
-
-    $legacyLimiterImports = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
-        Where-Object {
-            $_.FullName -notlike "*\mh_physics\src\legacy_limiters\*" -and
-            $_.FullName -notlike "*\mh_physics\src\lib.rs"
-        } |
-        Select-String -Pattern 'crate::limiters|limiters::LimiterType|limiters::MusclConfig|limiters::MusclReconstructor' -CaseSensitive
-    if ($legacyLimiterImports) {
-        Write-Host "[FAIL] legacy limiters bridge is referenced outside the allowed bridge files:" -ForegroundColor Red
-        $legacyLimiterImports | Select-Object -First 10 | ForEach-Object {
-            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
-        }
-        if ($legacyLimiterImports.Count -gt 10) {
-            Write-Host "  ... and $($legacyLimiterImports.Count - 10) more" -ForegroundColor Red
-        }
-        $errors += "legacy limiters bridge must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/legacy_limiters/"
-    } else {
-        Write-Host "[OK] legacy limiters bridge is confined to the allowed bridge files" -ForegroundColor Green
     }
 
     $silentScalarFallbacks = @(

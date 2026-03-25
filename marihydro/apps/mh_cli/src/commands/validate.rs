@@ -2,11 +2,14 @@
 
 //! 配置验证命令
 //!
-//! 验证配置文件和网格文件的正确性。
+//! 验证真实配置结构和已接入的网格格式。
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
-use std::path::PathBuf;
+use mh_config::SolverConfig;
+use mh_mesh::io::{GmshLoader, load_mhb};
+use mh_mesh::io::geojson::read_geojson_polygons;
+use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
 /// 验证参数
@@ -56,222 +59,150 @@ pub fn execute(args: ValidateArgs) -> Result<()> {
 
     let mut result = ValidationResult::default();
 
-    // 验证配置文件
     if let Some(config_path) = &args.config {
         validate_config(config_path, &mut result)?;
     }
 
-    // 验证网格文件
     if let Some(mesh_path) = &args.mesh {
         validate_mesh(mesh_path, &mut result)?;
     }
 
-    // 如果没有指定任何文件
     if args.config.is_none() && args.mesh.is_none() {
         println!("用法: mh_cli validate --config <配置文件> [--mesh <网格文件>]");
         println!("      mh_cli validate --mesh <网格文件>");
         return Ok(());
     }
 
-    // 输出结果
     print_validation_result(&result, args.strict)
 }
 
-fn validate_config(path: &PathBuf, result: &mut ValidationResult) -> Result<()> {
+fn validate_config(path: &Path, result: &mut ValidationResult) -> Result<()> {
     println!("\n检查配置文件: {}", path.display());
 
-    // 检查文件是否存在
     if !path.exists() {
         result.add_error(format!("配置文件不存在: {}", path.display()));
         return Ok(());
     }
 
-    // 读取文件
-    let content = std::fs::read_to_string(path)
-        .context("无法读取配置文件")?;
-
-    // 尝试解析 JSON
-    let json: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            result.add_error(format!("JSON 解析错误: {}", e));
+    let config = match SolverConfig::from_file(path)
+        .with_context(|| format!("解析配置文件失败: {}", path.display()))
+    {
+        Ok(config) => config,
+        Err(err) => {
+            result.add_error(err.to_string());
             return Ok(());
         }
     };
 
-    // 验证必需字段
-    validate_config_fields(&json, result);
+    println!("  ✓ 配置结构与数值约束有效");
+    println!("  - 精度: {:?}", config.precision);
+    println!("  - CFL: {}", config.physics.cfl);
+    println!("  - 时间积分: {:?}", config.numerical.time_integration);
+    println!("  - 黎曼求解器: {:?}", config.numerical.riemann_solver);
 
-    println!("  ✓ 配置文件格式有效");
+    if let Some(mesh_path) = resolve_config_mesh_path(path, &config) {
+        validate_mesh(&mesh_path, result)?;
+    } else {
+        result.add_warning("配置未提供可解析的网格文件路径；仅完成配置结构验证".to_string());
+    }
 
     Ok(())
 }
 
-fn validate_config_fields(json: &serde_json::Value, result: &mut ValidationResult) {
-    // 检查精度设置
-    if let Some(precision) = json.get("precision") {
-        match precision.as_str() {
-            Some("f32") | Some("f64") | Some("F32") | Some("F64") => {}
-            Some(other) => result.add_error(format!("无效的精度值: {}", other)),
-            None => result.add_error("precision 字段应为字符串"),
-        }
+fn resolve_config_mesh_path(config_path: &Path, config: &SolverConfig) -> Option<PathBuf> {
+    if config.mesh.file.as_os_str().is_empty() {
+        return None;
     }
 
-    // 检查 CFL 数
-    if let Some(cfl) = json.get("cfl") {
-        if let Some(v) = cfl.as_f64() {
-            if v <= 0.0 {
-                result.add_error("CFL 数必须为正数");
-            } else if v > 1.0 {
-                result.add_warning("CFL 数大于 1.0 可能导致不稳定");
-            }
-        }
+    let raw = &config.mesh.file;
+    let default_placeholder = Path::new("mesh.msh");
+    if raw == default_placeholder && !raw.exists() {
+        return None;
     }
 
-    // 检查重力加速度
-    if let Some(gravity) = json.get("gravity") {
-        if let Some(v) = gravity.as_f64() {
-            if v <= 0.0 {
-                result.add_error("重力加速度必须为正数");
-            } else if (v - 9.81).abs() > 1.0 {
-                result.add_warning(format!("重力加速度 {} 偏离地球标准值较大", v));
-            }
-        }
-    }
-
-    // 检查干单元阈值
-    if let Some(h_dry) = json.get("h_dry") {
-        if let Some(v) = h_dry.as_f64() {
-            if v < 0.0 {
-                result.add_error("h_dry 不能为负数");
-            } else if v > 0.1 {
-                result.add_warning(format!("h_dry = {} 较大，可能影响精度", v));
-            }
-        }
-    }
-
-    // 检查最小水深
-    if let Some(h_min) = json.get("h_min") {
-        if let Some(v) = h_min.as_f64() {
-            if v < 0.0 {
-                result.add_error("h_min 不能为负数");
-            }
-        }
-    }
-
-    // 检查网格路径
-    if let Some(mesh_path) = json.get("mesh_path") {
-        if let Some(p) = mesh_path.as_str() {
-            if !std::path::Path::new(p).exists() {
-                result.add_warning(format!("网格文件不存在: {}", p));
-            }
-        }
+    if raw.is_absolute() {
+        Some(raw.clone())
+    } else {
+        config_path
+            .parent()
+            .map(|dir| dir.join(raw))
+            .or_else(|| Some(raw.clone()))
     }
 }
 
-fn validate_mesh(path: &PathBuf, result: &mut ValidationResult) -> Result<()> {
+fn validate_mesh(path: &Path, result: &mut ValidationResult) -> Result<()> {
     println!("\n检查网格文件: {}", path.display());
 
-    // 检查文件是否存在
     if !path.exists() {
         result.add_error(format!("网格文件不存在: {}", path.display()));
         return Ok(());
     }
 
-    // 检查文件扩展名
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_lowercase();
 
-    match extension.to_lowercase().as_str() {
+    match extension.as_str() {
+        "mhb" => validate_mhb_mesh(path, result)?,
         "msh" => validate_gmsh_mesh(path, result)?,
         "geojson" => validate_geojson_mesh(path, result)?,
-        "qmd" => validate_qmd_mesh(path, result)?,
-        _ => {
-            result.add_warning(format!("未知的网格文件格式: .{}", extension));
-        }
+        "qmd" => result.add_warning("QMD 校验尚未接入真实解析器；当前不会伪装成已验证通过".to_string()),
+        _ => result.add_warning(format!("未接入的网格格式: .{}", extension)),
     }
 
     Ok(())
 }
 
-fn validate_gmsh_mesh(path: &PathBuf, result: &mut ValidationResult) -> Result<()> {
-    // 读取文件头
-    let content = std::fs::read_to_string(path)
-        .context("无法读取网格文件")?;
-
-    let lines: Vec<&str> = content.lines().take(10).collect();
-
-    // 检查 Gmsh 格式标记
-    if lines.is_empty() || !lines[0].starts_with("$MeshFormat") {
-        result.add_error("无效的 Gmsh 格式：缺少 $MeshFormat 标记");
-        return Ok(());
+fn validate_mhb_mesh(path: &Path, result: &mut ValidationResult) -> Result<()> {
+    match load_mhb(path) {
+        Ok(mesh) => {
+            mesh.validate()
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            println!("  ✓ MHB 网格有效: 单元={}, 面={}", mesh.n_cells, mesh.n_faces);
+        }
+        Err(err) => result.add_error(format!("MHB 读取失败: {}", err)),
     }
+    Ok(())
+}
 
-    // 检查版本
-    if lines.len() > 1 {
-        let version_parts: Vec<&str> = lines[1].split_whitespace().collect();
-        if !version_parts.is_empty() {
-            let version: f64 = version_parts[0].parse().unwrap_or(0.0);
-            if version < 2.0 {
-                result.add_warning(format!("Gmsh 版本 {} 较旧，建议使用 2.0 或更高版本", version));
+fn validate_gmsh_mesh(path: &Path, result: &mut ValidationResult) -> Result<()> {
+    match GmshLoader::load(path) {
+        Ok(mesh) => {
+            if mesh.n_nodes() == 0 || mesh.n_cells() == 0 {
+                result.add_error("Gmsh 网格缺少节点或单元".to_string());
+            } else {
+                println!(
+                    "  ✓ Gmsh 网格有效: 节点={}, 单元={}, 边界边={}",
+                    mesh.n_nodes(),
+                    mesh.n_cells(),
+                    mesh.n_boundary_edges()
+                );
             }
         }
+        Err(err) => result.add_error(format!("Gmsh 读取失败: {}", err)),
     }
-
-    println!("  ✓ Gmsh 格式有效");
-
     Ok(())
 }
 
-fn validate_geojson_mesh(path: &PathBuf, result: &mut ValidationResult) -> Result<()> {
-    let content = std::fs::read_to_string(path)
-        .context("无法读取 GeoJSON 文件")?;
-
-    // 尝试解析 JSON
-    let json: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            result.add_error(format!("GeoJSON 解析错误: {}", e));
-            return Ok(());
+fn validate_geojson_mesh(path: &Path, result: &mut ValidationResult) -> Result<()> {
+    match read_geojson_polygons(path) {
+        Ok(polygons) => {
+            if polygons.is_empty() {
+                result.add_error("GeoJSON 未解析出任何多边形".to_string());
+            } else {
+                println!("  ✓ GeoJSON 多边形读取有效: {} 个外环", polygons.len());
+            }
         }
-    };
-
-    // 检查类型
-    if let Some(type_field) = json.get("type") {
-        match type_field.as_str() {
-            Some("FeatureCollection") | Some("Feature") | Some("Polygon") | Some("MultiPolygon") => {}
-            Some(other) => result.add_warning(format!("非标准 GeoJSON 类型: {}", other)),
-            None => result.add_error("type 字段应为字符串"),
-        }
-    } else {
-        result.add_error("GeoJSON 缺少 type 字段");
+        Err(err) => result.add_error(format!("GeoJSON 读取失败: {}", err)),
     }
-
-    println!("  ✓ GeoJSON 格式有效");
-
-    Ok(())
-}
-
-fn validate_qmd_mesh(path: &PathBuf, result: &mut ValidationResult) -> Result<()> {
-    // QMD 是内部四叉树网格格式
-    let content = std::fs::read_to_string(path)
-        .context("无法读取 QMD 文件")?;
-
-    // 简单检查文件头
-    if !content.starts_with("QMD") && !content.starts_with("{") {
-        result.add_warning("QMD 文件格式可能不正确");
-    }
-
-    println!("  ✓ QMD 格式检查完成");
-
     Ok(())
 }
 
 fn print_validation_result(result: &ValidationResult, strict: bool) -> Result<()> {
     println!("\n=== 验证结果 ===");
 
-    // 输出错误
     if !result.errors.is_empty() {
         println!("\n错误 ({}):", result.errors.len());
         for err in &result.errors {
@@ -280,7 +211,6 @@ fn print_validation_result(result: &ValidationResult, strict: bool) -> Result<()
         }
     }
 
-    // 输出警告
     if !result.warnings.is_empty() {
         println!("\n警告 ({}):", result.warnings.len());
         for warning in &result.warnings {
@@ -289,7 +219,6 @@ fn print_validation_result(result: &ValidationResult, strict: bool) -> Result<()
         }
     }
 
-    // 最终判定
     let success = if strict {
         result.is_ok_strict()
     } else {
@@ -301,7 +230,10 @@ fn print_validation_result(result: &ValidationResult, strict: bool) -> Result<()
         Ok(())
     } else {
         println!("\n✗ 验证失败");
-        bail!("验证失败：发现 {} 个错误，{} 个警告",
-              result.errors.len(), result.warnings.len())
+        bail!(
+            "验证失败：发现 {} 个错误，{} 个警告",
+            result.errors.len(),
+            result.warnings.len()
+        )
     }
 }

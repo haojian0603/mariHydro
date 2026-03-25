@@ -1,8 +1,7 @@
 // crates/mh_physics/src/sources/registry.rs
 //
 // 泛型主链源项注册中心。
-// legacy CPU/f64 桥接接口已收口到 sources/legacy.rs；
-// 新的收敛工作都应落在泛型主链。
+// 本文件只承载真实泛型实现，不再为历史桥接层保留叙事或入口。
 
 use crate::core::Backend;
 use crate::engine::strategy::workspace::SolverWorkspaceGeneric;

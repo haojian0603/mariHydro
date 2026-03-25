@@ -72,7 +72,7 @@ pub enum LimiterType {
 ///
 /// // 从文件加载
 /// let loaded = SolverConfig::load("simulation.yaml")?;
-/// let layer3: Layer3Config<f64> = Layer3Config::from_builder(&loaded).unwrap();
+/// let params = NumericalParams::<f64>::from_config(&loaded).unwrap();
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverConfig {

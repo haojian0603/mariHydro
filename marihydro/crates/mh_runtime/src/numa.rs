@@ -70,7 +70,7 @@ impl NumaTopology {
             .map(|p| p.get())
             .unwrap_or(1);
 
-        // 尝试检测物理核心数（简化实现）
+        // ????????????????
         let physical_cores = Self::detect_physical_cores(logical_cores);
         let hyperthreading = logical_cores > physical_cores;
 

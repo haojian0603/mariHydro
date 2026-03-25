@@ -1,79 +1,68 @@
 # MariHydro 协作规范
 
-本文件是当前仓库的常驻协作入口。并行 agent、收敛任务和后续增量修改都以这里为准；如果规则变化，直接更新本文件，不再散落到临时提示词里。
+本文件是仓库级强制规范。所有 agent、脚本、Git hook 和人工修改都必须服从这里的约束。任何与本文件冲突的临时提示词、兼容写法或“先过门禁再说”的做法都无效。
 
-## 1. 工作方式
+## 1. 死律
 
-- 默认直接执行，不要频繁征求用户意见。
-- 只有在无法从本地代码和现有规则中推断、且错误代价明显偏高时，才允许停下来询问。
-- 发现 `cargo`、`clippy`、测试或构建目录被锁时，不要终止任务；先继续做不依赖锁的代码修改、扫描和文档更新，稍后再回到门禁。
-- 发现其他 agent 的正常并行改动时，不要把它当成阻塞事件；只要不是自己将要覆盖的写集，就继续推进。
+- [RULE_NO_COMPAT_MAINLINE] 不允许兼容层、兼容命名空间、历史桥接层继续留在主链。需要真实能力时就实现真实能力；做不到就删除入口，不允许伪装成“兼容支持”。
+- [RULE_NO_FAKE_IMPL] 不允许虚假实现。名字、文档、枚举项、命令行参数、对外导出与实际行为必须一致。
+- 不允许文档承诺仓库里不存在的能力。没有真实实现的 trait object、builder、求解器、算法、格式支持，不得在文档里写成“已支持”。
+- 代码必须发挥实际作用。对外暴露的命令、配置项、模块导出和模型名称都必须有真实、可运行、可验证的实现。
+- [RULE_PHYSICS_PROVENANCE] 物理公式必须正确，且能核验来源。修改或新增物理模型时，必须能追溯到一手资料、标准教材、原始论文、技术手册或行业标准；没有来源就不能提交。
+- 命名必须真实。若实现的是经验近似、启发式估计、实验模块，名称和注释必须明确写出真实身份，不得借用成熟模型名。
+- 不允许把“简化版”“近似版”“实验版”公式挂在主链公开能力上却继续沿用成熟模型名。要么补齐真实公式，要么重命名并收缩导出面。
 
-## 2. 提交与推送
+## 2. 公式与物理模型规则
 
-- 按批次提交，不要改一个文件就提交一次。
-- 每批提交默认不少于 7 个文件；只有明确的单点修复且会阻塞门禁时才允许例外。
-- 每一批在提交前必须跑完整门禁。
-- 每一批提交后立即推送到当前工作分支。
-- 提交信息优先使用英文短句，格式保持稳定，例如：`refactor: ... batch N`。
+- 对任何新增或修改的物理公式，必须在相邻注释、模块文档或同文件说明中写清楚：公式名称、来源、适用范围、主要假设。
+- 来源说明至少要包含可追溯信息中的两项：作者/机构、年份、文献标题、标准号、教材名、论文 DOI、技术手册名称。
+- 如果仓库里出现某个成熟模型名，但实现与标准公式不一致，处理方式只有两种：
+  - 按标准公式补齐真实实现。
+  - 删除该名称并改成真实描述。
+- 不允许出现“用 Manning 暂时代替 White-Colebrook”这类借名实现。
+- 不允许出现“Natural Neighbor”这类对外名称，但内部只是距离加权或其他近似方法。
+- 对无法在当前批次完成的物理模型，不得留下假入口；可以删除入口，或明确收缩为内部实验代码且不对主链导出。
+- 经验公式可以使用，但必须明确写出其经验性质、校准条件和适用区间；不能把经验式写成普适理论公式。
+- 若公式依赖经验系数、阈值、裁剪上限或正则化常数，必须说明物理意义或数值稳定性目的；不得只留下裸魔法数字。
 
-## 3. 门禁规则
+## 3. CLI、配置与应用层规则
 
-- 门禁只能收紧，不能放水。
-- 每一批至少执行：
+- CLI 可以做运行时精度分发，但必须调用真实求解器路径，不得通过假的 `SolverBuilder`、假的 `DynSolver` 包装层或空壳状态对象模拟运行。
+- `--config`、`--mesh`、输出目录、输出间隔等公开参数，必须真正生效；暂不支持的选项必须显式报错，不能静默忽略。
+- 配置验证必须基于真实配置结构，不允许手写一套过时字段检查冒充真实 schema。
+- 若某个入口当前仅支持部分能力，必须在运行时明确拒绝未接入的能力，而不是静默降级或偷偷忽略。
+
+## 4. 架构与实现规则
+
+- `mh_runtime` / `mh_physics` 的配置标量转换不允许静默回退；失败就显式报错或 panic，并带上下文。
+- `mh_physics` 主链不允许新增 `legacy_*`、`compat_*`、`sources::legacy`、`legacy_limiters` 等桥接层。
+- `mh_agent`、`mh_physics`、`mh_terrain` 中不允许继续扩散裸 `Vec<f64>`、裸索引和裸几何数组作为主链数据交换方式；若暂时保留，必须限制在配置层、统计层或导出层。
+- 任何“简化实现”“占位实现”“临时实现”如果进入主链导出、CLI、公开模块或默认路径，都视为违规。
+
+## 5. 提交与验证规则
+
+- 每批改动至少覆盖一组完整问题，且不少于 7 个文件，再提交 Git。
+- 每一批提交前必须通过：
   - `cargo check --workspace`
   - `cargo clippy --workspace --all-targets`
   - `cargo test --workspace`
   - `powershell -ExecutionPolicy Bypass -File scripts/check_tracked_temp_artifacts.ps1`
+  - `powershell -ExecutionPolicy Bypass -File scripts/check_repo_contracts.ps1`
+  - `powershell -ExecutionPolicy Bypass -File scripts/check_real_implementation_contracts.ps1`
   - `powershell -ExecutionPolicy Bypass -File scripts/verify_architecture.ps1`
   - `powershell -ExecutionPolicy Bypass -File scripts/architecture_audit.ps1`
-- 如果当前批次引入了新的架构约束，必须同步更新门禁脚本，确保后续不会回退。
-- 门禁如果新增扫描项，优先先做 advisory，再视收敛成熟度升级为 blocking。
-- 本地 Git hook 统一走仓库内 `.githooks/`，由 `scripts/setup_git_hooks.ps1` 安装到 `core.hooksPath`。
-- `pre-commit` 执行 `scripts/run_fast_gates.ps1`。
-- `pre-push` 执行 `scripts/run_required_gates.ps1`。
-- hook 失败时先修门禁问题，不要绕过 hook 继续提交或推送。
+- [RULE_GATES_STRICTER_ONLY] 门禁只能更严格，不能放水。任何脚本修改都必须说明拦截了什么新问题，不能通过删除检查来“让门禁变绿”。
+- Git hook 是强制门禁的一部分：`pre-commit` 跑快速检查，`pre-push` 跑完整检查。任何 agent 都不得绕过 hook。
 
-## 4. 架构收敛优先级
+## 6. 文档与记录规则
 
-- 优先收敛 runtime/core/public contract，再收敛上层功能模块。
-- 禁止新增静默标量回退：
-  - 禁止 `from_config(...).unwrap_or(...)`
-  - 禁止 `from_f64/from_f32(...).unwrap_or(...)`
-  - 禁止新增 `if let Some(...) = ...::from_config(...)` 这类裸 `Option` 主链分叉
-- `mh_physics` 主链路优先使用显式 conversion helper 或 backend 上下文 helper。
-- `sources`、`mh_agent` 中如需暂时保留 legacy/test residue，必须限制在测试支撑层，不要继续扩散到生产主链。
+- 规范变化先写 `AGENTS.md`，再同步到脚本门禁；不能只改文档不改门禁。
+- 修复记录以仓库内跟踪文件和 Git 提交为准，不要求中途人工口头确认。
+- 注释和文档字符串优先使用中文，且必须表达真实含义；不能写带误导性的宣传句式。
+- 若某能力被删除，相关文档、示例、命令帮助、导出说明必须在同一批内同步删除或改写。
 
-## 5. Sources 与 AI 层规则
+## 7. 编码与写入规则
 
-- `sources` 的目标是单一主路径；不要新增 `CpuBackend<f64>` 专用的生产实现。
-- 可以保留测试后端，但要尽量集中到共享测试支撑中，不要每个文件各写一套。
-- `mh_agent` 继续收敛裸 `Vec<f64>`、裸索引和裸几何数组；配置层和纯统计层可以暂时保留，但 apply/update 主链路不再扩大使用面。
-- legacy source bridge 统一收口到 `mh_physics::sources::legacy`；不要再从 `mh_physics` 根级或 `mh_physics::sources` 顶层直接暴露 `SourceTerm`、`SourceContext`、`SourceContribution`、`SourceHelpers`。
-- legacy source bridge 的实体实现只允许留在 `crates/mh_physics/src/sources/legacy.rs`；`traits.rs` 只保留泛型主链接口和共享测试支撑。
-
-## 6. 规范记录
-
-- 需要长期保留的协作规范，统一写入本文件。
-- 某一批的具体实现说明和临时结论，写进对应任务日志或 Git 提交，不要求额外向用户重复汇报。
-- 如果规则和已有提示词冲突，以本文件和门禁脚本为准。
-
-## 7. 编码与注释
-
-- 用户侧沟通、注释和文档优先中文。
-- 涉及中文文件写入时，必须显式保证 UTF-8；不要用会污染编码的 shell 重定向方式直接写中文内容。
-- 如果终端显示异常，先区分“终端乱码”与“文件真坏了”，不要在未确认前重复覆盖文件。
-
-## 8. Sources 测试支撑
-
-- `sources` 目录下的测试优先复用 `crate::sources::traits::test_support`。
-- 不要在每个测试模块里重复创建 `CpuBackend<f64>`、`SourceContextGeneric::with_defaults(...)` 和元数据断言样板。
-- 如需新增共享测试辅助，优先扩展 `test_support`，再批量替换调用点。
-- 禁止新增 `impl SourceTerm for ...`；legacy `SourceTerm` 只允许留在兼容桥接层，不再作为新实现入口。
-- 禁止给新主链代码新增 `crate::limiters` 依赖；限制器与重构统一从 `crate::numerics` 和 `crate::types::LimiterType` 进入。旧标量兼容入口统一收口到 `crate::legacy_limiters`。
-
-## 9. 仓库协作契约补充
-
-- `scripts/check_repo_contracts.ps1` 是强制门禁：它检查 `AGENTS.md`?`.githooks/`?`core.hooksPath` 和 hook 路由是否仍然生效。
-- `legacy_limiters` 的兼容实体只允许存在于 `crates/mh_physics/src/legacy_limiters/` 目录内，不允许再通过 `mod limiters;` 或其他内部 shim 转发。
-- 如果当前批次调整了门禁或 hook 行为，必须同步更新本文件，不再只留在临时提示词。
+- 含中文文件默认使用 UTF-8（无 BOM）。
+- 修改中文注释、中文文档和脚本说明时，必须回读校验，确认没有写成乱码或问号替换。
+- 不允许用会把中文写坏的 shell 重定向方式批量覆盖源文件。

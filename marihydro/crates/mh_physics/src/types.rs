@@ -864,9 +864,8 @@ pub enum TimeIntegration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// 主链限制器配置枚举。
 ///
-/// 新代码应通过 `crate::types::LimiterType` 和 `crate::numerics`
-/// 进入限制器/重构路径；仅旧标量调用方才允许通过
-/// `crate::legacy_limiters` 兼容命名空间访问历史别名。
+/// ?????? `crate::types::LimiterType` ? `crate::numerics`
+/// ?????/??????????????????
 pub enum LimiterType {
     /// 无限制器（一阶精度）
     None,
@@ -1194,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_conversion_from_builder() {
+    fn test_config_conversion_from_builder_config() {
         let builder_config = crate::builder::SolverConfig::default();
         let params = NumericalParams::<f64>::from_config(&builder_config).unwrap();
         assert_eq!(params.h_min, builder_config.h_min);

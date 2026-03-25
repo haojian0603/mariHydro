@@ -10,9 +10,8 @@
 //! - discretization/ - 有限体积离散化 (拓扑, 组装, 回代)
 //! - operators/ - 数值算子 (扩散等)
 //!
-//! 主引擎路径从本模块进入 limiter / reconstruction。
-//! `crate::legacy_limiters` 仅作为历史标量兼容命名空间，
-//! 不再作为新代码入口。
+//! ??????????? limiter / reconstruction?
+//! ????????? `crate::numerics` ? `crate::types::LimiterType` ???
 
 pub mod discretization;
 pub mod gradient;

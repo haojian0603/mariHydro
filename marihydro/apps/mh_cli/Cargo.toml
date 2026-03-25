@@ -11,9 +11,10 @@ authors = ["MariHydro Team"]
 # 架构层级
 mh_runtime = { path = "../../crates/mh_runtime" }
 mh_config = { path = "../../crates/mh_config" }
-# 核心库
 mh_physics = { path = "../../crates/mh_physics" }
 mh_io = { path = "../../crates/mh_io" }
+mh_mesh = { path = "../../crates/mh_mesh" }
+mh_geo = { path = "../../crates/mh_geo" }
 
 # CLI 框架
 clap = { version = "4.4", features = ["derive"] }

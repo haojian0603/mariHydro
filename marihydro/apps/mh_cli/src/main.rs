@@ -1,4 +1,4 @@
-// marihydro\apps\mh_cli\src/main.rs
+// marihydro\apps\mh_cli\src\main.rs
 
 //! MariHydro 命令行界面
 //!
@@ -6,9 +6,10 @@
 //!
 //! # 架构层级
 //!
-//! 本模块属于 **Layer 5: Application**，遵循以下原则：
-//! - 零泛型语法：仅使用 `SolverConfig` 和 `Box<dyn DynSolver>`
-//! - 通过 `Precision` 枚举选择精度，无需指定类型参数
+//! 本模块属于 Layer 5: Application。
+//! 用户通过命令行参数选择精度、配置和网格；命令内部会分发到真实的
+//! `ShallowWaterSolver<CpuBackend<f32/f64>, ...>` 路径，不再依赖假的 builder 或
+//! 不存在的 `DynSolver` 实现。
 
 mod commands;
 
@@ -44,7 +45,6 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // 初始化日志
     let level = match cli.log_level.to_lowercase().as_str() {
         "trace" => Level::TRACE,
         "debug" => Level::DEBUG,
@@ -60,11 +60,9 @@ fn main() -> anyhow::Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // 执行命令
     match cli.command {
         Commands::Run(args) => commands::run::execute(args),
         Commands::Info(args) => commands::info::execute(args),
         Commands::Validate(args) => commands::validate::execute(args),
     }
 }
-

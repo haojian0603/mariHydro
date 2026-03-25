@@ -23,7 +23,7 @@ try {
         "AGENTS.md",
         ".githooks/pre-commit",
         ".githooks/pre-push",
-        "crates/mh_physics/src/legacy_limiters/mod.rs",
+        "scripts/check_real_implementation_contracts.ps1",
         "scripts/run_fast_gates.ps1",
         "scripts/run_required_gates.ps1",
         "scripts/setup_git_hooks.ps1"
@@ -36,6 +36,26 @@ try {
         } else {
             Write-Host "[FAIL] missing required contract file: $relativePath" -ForegroundColor Red
             $Errors += "missing required contract file: $relativePath"
+        }
+    }
+
+    $agentsPath = Join-Path $ProjectRoot "AGENTS.md"
+    if (Test-Path $agentsPath) {
+        $agentsContent = Get-Content $agentsPath -Raw -Encoding UTF8
+        $requiredClauses = @(
+            "[RULE_NO_COMPAT_MAINLINE]",
+            "[RULE_NO_FAKE_IMPL]",
+            "[RULE_PHYSICS_PROVENANCE]",
+            "[RULE_GATES_STRICTER_ONLY]"
+        )
+
+        foreach ($clause in $requiredClauses) {
+            if ($agentsContent -like "*$clause*") {
+                Write-Host "[OK] AGENTS.md contains required clause: $clause" -ForegroundColor Green
+            } else {
+                Write-Host "[FAIL] AGENTS.md is missing required clause: $clause" -ForegroundColor Red
+                $Errors += "AGENTS.md must contain required clause: $clause"
+            }
         }
     }
 
