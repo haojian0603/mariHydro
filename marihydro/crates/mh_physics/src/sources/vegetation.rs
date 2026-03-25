@@ -18,9 +18,9 @@
 //!
 //! # 植被参数化
 //!
-//! 提供多种植被模型：
+//! 提供显式参数化的植被模型：
 //! - 刚性植被（固定高度）
-//! - 柔性植被（随流弯曲）
+//! - 通用体积阻力植被
 //! - 淹没/露出植被
 
 use super::traits::{
@@ -47,17 +47,6 @@ pub enum VegetationType {
         /// 植被高度 [m]
         height: f64, // ALLOW_F64: Layer 4 配置参数
     },
-    /// 柔性植被（如水草）
-    Flexible {
-        /// 基础阻力系数
-        cd_base: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 弯曲模量
-        flex_modulus: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 叶面积指�?[m²/m²]
-        lai: f64, // ALLOW_F64: Layer 4 配置参数
-        /// 植被高度 [m]
-        height: f64, // ALLOW_F64: Layer 4 配置参数
-    },
     /// 通用植被（使用体积阻力系数）
     Generic {
         /// 体积阻力系数 [1/m]
@@ -75,27 +64,6 @@ impl VegetationType {
             cd: cd.max(0.1).min(3.0),
             diameter: diameter.max(0.001),
             density: density.max(0.0),
-            height: height.max(0.0),
-        }
-    }
-
-    /// 创建典型芦苇植被
-    pub fn reed() -> Self {
-        Self::rigid(1.2, 0.01, 50.0, 2.0) // 直径1cm�?0�?m²，高2m
-    }
-
-    /// 创建典型红树林
-    pub fn mangrove() -> Self {
-        Self::rigid(1.0, 0.05, 10.0, 3.0) // 直径5cm�?0�?m²，高3m
-    }
-
-    /// 创建柔性水草
-    // ALLOW_F64: 物理参数
-    pub fn flexible(cd_base: f64, lai: f64, height: f64) -> Self {
-        Self::Flexible {
-            cd_base: cd_base.max(0.1),
-            flex_modulus: 1.0,
-            lai: lai.max(0.0),
             height: height.max(0.0),
         }
     }
@@ -134,21 +102,6 @@ impl VegetationType {
                 let av = diameter * density * effective_height / water_depth;
                 cd * av
             }
-            Self::Flexible {
-                cd_base,
-                flex_modulus,
-                lai,
-                height,
-            } => {
-                let effective_height = height.min(water_depth);
-                if effective_height <= 0.0 {
-                    return 0.0;
-                }
-                // 柔性植被的阻力随流速降低（弯曲效应）
-                let bend_factor = 1.0 / (1.0 + flex_modulus * velocity.abs());
-                let av = lai * effective_height / water_depth;
-                cd_base * bend_factor * av
-            }
             Self::Generic { av_cd, height } => {
                 let effective_height = height.min(water_depth);
                 if effective_height <= 0.0 {
@@ -165,7 +118,6 @@ impl VegetationType {
         match *self {
             Self::None => 0.0,
             Self::Rigid { height, .. } => height,
-            Self::Flexible { height, .. } => height,
             Self::Generic { height, .. } => height,
         }
     }
@@ -208,29 +160,6 @@ impl VegetationType {
                 }
                 let av = diameter * density * effective_height / water_depth;
                 cd * av
-            }
-            Self::Flexible {
-                cd_base,
-                flex_modulus,
-                lai,
-                height,
-            } => {
-                let cd_base = backend.config_scalar(cd_base, "VegetationType.flexible.cd_base");
-                let flex_modulus =
-                    backend.config_scalar(flex_modulus, "VegetationType.flexible.flex_modulus");
-                let lai = backend.config_scalar(lai, "VegetationType.flexible.lai");
-                let height = backend.config_scalar(height, "VegetationType.flexible.height");
-                let effective_height = if height < water_depth {
-                    height
-                } else {
-                    water_depth
-                };
-                if effective_height <= B::Scalar::ZERO {
-                    return B::Scalar::ZERO;
-                }
-                let bend_factor = B::Scalar::ONE / (B::Scalar::ONE + flex_modulus * velocity.abs());
-                let av = lai * effective_height / water_depth;
-                cd_base * bend_factor * av
             }
             Self::Generic { av_cd, height } => {
                 let av_cd = backend.config_scalar(av_cd, "VegetationType.generic.av_cd");
@@ -295,27 +224,6 @@ impl VegetationConfig {
         self
     }
 
-    /// 设置芦苇区域
-    pub fn with_reed_zone(mut self, cells: &[usize]) -> Self {
-        let veg = VegetationType::reed();
-        for &cell in cells {
-            if cell < self.vegetation.len() {
-                self.vegetation[cell] = veg;
-            }
-        }
-        self
-    }
-
-    /// 设置红树林区域
-    pub fn with_mangrove_zone(mut self, cells: &[usize]) -> Self {
-        let veg = VegetationType::mangrove();
-        for &cell in cells {
-            if cell < self.vegetation.len() {
-                self.vegetation[cell] = veg;
-            }
-        }
-        self
-    }
 }
 
 impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
@@ -552,18 +460,6 @@ mod tests {
     }
 
     #[test]
-    fn test_vegetation_type_reed() {
-        let veg = VegetationType::reed();
-        assert!((veg.height() - 2.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_vegetation_type_mangrove() {
-        let veg = VegetationType::mangrove();
-        assert!((veg.height() - 3.0).abs() < 1e-10);
-    }
-
-    #[test]
     fn test_vegetation_effective_drag_rigid() {
         // 直径0.01m, 密度100/m², 高度1m
         let veg = VegetationType::rigid(1.0, 0.01, 100.0, 1.0);
@@ -602,8 +498,8 @@ mod tests {
 
     #[test]
     fn test_vegetation_config_uniform() {
-        let config =
-            VegetationConfig::new(10, 1000.0).with_uniform_vegetation(VegetationType::reed());
+        let config = VegetationConfig::new(10, 1000.0)
+            .with_uniform_vegetation(VegetationType::rigid(1.2, 0.01, 50.0, 2.0));
 
         for v in &config.vegetation {
             assert!((v.height() - 2.0).abs() < 1e-10);
@@ -640,8 +536,8 @@ mod tests {
 
     #[test]
     fn test_vegetation_source_dry_cell() {
-        let config =
-            VegetationConfig::new(10, 1000.0).with_uniform_vegetation(VegetationType::reed());
+        let config = VegetationConfig::new(10, 1000.0)
+            .with_uniform_vegetation(VegetationType::rigid(1.2, 0.01, 50.0, 2.0));
 
         let state = create_test_state(10, 1e-7, 0.0, 0.0);
         let ctx = test_context(0.0, 1.0);

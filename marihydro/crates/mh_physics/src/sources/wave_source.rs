@@ -92,7 +92,7 @@ impl<B: Backend> WaveRadiationSource<B> {
         Ok(())
     }
 
-    pub fn compute_gradient_simple(&mut self, _cell_sizes: &[B::Scalar]) {
+    pub fn clear_gradient(&mut self) {
         for grad in &mut self.stress_gradient {
             *grad = (B::Scalar::ZERO, B::Scalar::ZERO);
         }
@@ -292,5 +292,15 @@ mod tests {
 
         source.set_momentum_source(&[(0.1, 0.2); 10]);
         assert_source_enabled(&source, true);
+    }
+
+    #[test]
+    fn test_clear_gradient_disables_source() {
+        let mut source = WaveRadiationSource::new(test_backend(), 4);
+        source.set_gradient(&[(1.0, 0.0); 4]);
+        assert_source_enabled(&source, true);
+
+        source.clear_gradient();
+        assert_source_enabled(&source, false);
     }
 }

@@ -2,7 +2,7 @@
 
 //! 波浪底摩擦计算
 //! 
-//! 实现多种波浪底摩擦模型，包括 Jonswap, Madsen, Nielsen 等。
+//! 实现显式参数化的波浪底摩擦模型，包括 Madsen、Nielsen 和常数摩擦。
 
 use serde::{Deserialize, Serialize};
 use crate::prelude::*;
@@ -17,11 +17,7 @@ fn scalar_pi<B: Backend>(backend: &B) -> B::Scalar {
 
 /// 波浪底摩擦模型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
 pub enum WaveBottomFrictionModel {
-    /// JONSWAP 经验公式
-    #[default]
-    Jonswap,
     /// Madsen (1988) 公式
     Madsen,
     /// Nielsen (1992) 公式
@@ -117,31 +113,13 @@ pub struct WaveBottomFrictionConfig {
     pub friction_coefficient: f64,
 }
 
-impl Default for WaveBottomFrictionConfig {
-    fn default() -> Self {
-        Self {
-            model: WaveBottomFrictionModel::Jonswap,
-            roughness_height: 0.05,
-            friction_coefficient: 0.01,
-        }
-    }
-}
-
 impl WaveBottomFrictionConfig {
-    /// 创建 JONSWAP 模型配置
-    pub fn jonswap() -> Self {
-        Self {
-            model: WaveBottomFrictionModel::Jonswap,
-            ..Default::default()
-        }
-    }
-
     /// 创建 Madsen 模型配置
     pub fn madsen(roughness_height: f64) -> Self {
         Self {
             model: WaveBottomFrictionModel::Madsen,
             roughness_height,
-            ..Default::default()
+            friction_coefficient: 0.01,
         }
     }
 
@@ -150,7 +128,7 @@ impl WaveBottomFrictionConfig {
         Self {
             model: WaveBottomFrictionModel::Nielsen,
             roughness_height,
-            ..Default::default()
+            friction_coefficient: 0.01,
         }
     }
 
@@ -158,8 +136,8 @@ impl WaveBottomFrictionConfig {
     pub fn constant(friction_coefficient: f64) -> Self {
         Self {
             model: WaveBottomFrictionModel::Constant,
+            roughness_height: 0.05,
             friction_coefficient,
-            ..Default::default()
         }
     }
 }
@@ -284,11 +262,6 @@ impl<B: Backend> WaveBottomFriction<B> {
         let a = amplitude.abs().max(a_min);
         let ks = scalar_const(backend, config.roughness_height.max(1e-6));
         match config.model {
-            WaveBottomFrictionModel::Jonswap => {
-                // JONSWAP 经验公式
-                // fw = 0.067 for typical conditions
-                scalar_const(backend, 0.067)
-            }
             WaveBottomFrictionModel::Madsen => {
                 // Madsen (1988)
                 // fw = exp(-5.977 + 5.213(a/ks)^(-0.194))
@@ -478,16 +451,14 @@ mod tests {
 
     #[test]
     fn test_wave_bottom_friction_config() {
-        let config = WaveBottomFrictionConfig::jonswap();
-        assert_eq!(config.model, WaveBottomFrictionModel::Jonswap);
-        
         let config = WaveBottomFrictionConfig::madsen(0.03);
+        assert_eq!(config.model, WaveBottomFrictionModel::Madsen);
         assert!((config.roughness_height - 0.03).abs() < 1e-10);
     }
 
     #[test]
-    fn test_wave_bottom_friction_jonswap() {
-        let config = WaveBottomFrictionConfig::jonswap();
+    fn test_wave_bottom_friction_constant() {
+        let config = WaveBottomFrictionConfig::constant(0.02);
         let backend = CpuBackend::<f64>::new();
         let mut friction = WaveBottomFriction::new(backend.clone(), 10, config);
         
@@ -503,7 +474,7 @@ mod tests {
         friction.compute_friction(&height, &period, &wavenumber, &depth).unwrap();
         
         let fw = friction.friction_coefficients().as_slice();
-        assert!(fw.iter().all(|&f| f > 0.0));
+        assert!(fw.iter().all(|&f| (f - 0.02).abs() < 1e-12));
         
         let tau = friction.wave_shear_stress().as_slice();
         assert!(tau.iter().all(|&t| t >= 0.0));
@@ -584,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_wave_current_interaction() {
-        let config = WaveBottomFrictionConfig::jonswap();
+        let config = WaveBottomFrictionConfig::constant(0.02);
         let backend = CpuBackend::<f64>::new();
         let mut interaction = WaveCurrentInteraction::new(backend.clone(), 10, config);
         

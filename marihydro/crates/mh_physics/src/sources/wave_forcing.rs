@@ -3,8 +3,8 @@
 //!
 //! 实现辐射应力梯度对流场的驱动作用：
 //! - 辐射应力梯度 → 动量源
-//! - 波浪增强底摩擦
-//! - 波浪增强泥沙起动
+//! - 外部提供的波流联合剪切应力缓存
+//! - 外部提供的轨道速度缓存
 //!
 //! # 辐射应力梯度
 //!
@@ -77,29 +77,6 @@ impl WaveForcing {
         Self::new(n_cells, WaveForcingConfig::default())
     }
 
-    /// 从辐射应力张量更新梯度
-    ///
-    /// # 参数
-    /// - `stress`: 辐射应力张量计算器
-    /// - `dx`, `dy`: 网格间距（简化版，假设均匀网格）
-    pub fn update_from_radiation_stress(
-        &mut self,
-        s_xx: &[f64],
-        s_xy: &[f64],
-        s_yy: &[f64],
-        grad_x: &[f64], // ∂/∂x 算子结果
-        grad_y: &[f64], // ∂/∂y 算子结果
-    ) {
-        let n = self.n_cells.min(s_xx.len()).min(s_xy.len()).min(s_yy.len());
-
-        for i in 0..n {
-            // 简化：直接使用预计算的梯度
-            // 实际应该用单独的梯度计算
-            self.grad_sxx_sxy[i] = grad_x.get(i).copied().unwrap_or(0.0);
-            self.grad_sxy_syy[i] = grad_y.get(i).copied().unwrap_or(0.0);
-        }
-    }
-
     /// 设置辐射应力梯度
     pub fn set_stress_gradients(
         &mut self,
@@ -117,21 +94,10 @@ impl WaveForcing {
         self.orbital_velocity[..n].copy_from_slice(&u_orb[..n]);
     }
 
-    /// 计算有效剪切应力（波流联合）
-    ///
-    /// # 参数
-    /// - `tau_current`: 流动引起的床面剪切应力 [Pa]
-    pub fn compute_effective_shear(&mut self, tau_current: &[f64]) {
-        for i in 0..self.n_cells.min(tau_current.len()) {
-            let u_orb = self.orbital_velocity[i];
-            
-            // 波浪引起的剪切应力：τ_wave = 0.5 × ρ × fw × u_orb²
-            let fw = 0.05; // 简化摩擦系数
-            let tau_wave = 0.5 * self.config.rho_water * fw * u_orb * u_orb;
-            
-            // 简单叠加（Soulsby 公式的简化版）
-            self.effective_shear[i] = tau_current[i] + tau_wave;
-        }
+    /// 设置外部已经计算好的波流联合剪切应力。
+    pub fn set_effective_shear(&mut self, effective_shear: &[f64]) {
+        let n = self.n_cells.min(effective_shear.len());
+        self.effective_shear[..n].copy_from_slice(&effective_shear[..n]);
     }
 
     /// 获取有效剪切应力（用于泥沙计算）
@@ -312,16 +278,12 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_shear() {
+    fn test_set_effective_shear() {
         let mut wf = WaveForcing::with_defaults(10);
-        
-        // 设置轨道速度
-        wf.orbital_velocity.fill(0.5);
-        
-        let tau_current = vec![1.0; 10];
-        wf.compute_effective_shear(&tau_current);
-        
-        // 有效应力应该大于流动应力
-        assert!(wf.effective_shear[0] > 1.0);
+
+        let target = vec![1.2; 10];
+        wf.set_effective_shear(&target);
+
+        assert!((wf.effective_shear[0] - 1.2).abs() < 1e-10);
     }
 }
