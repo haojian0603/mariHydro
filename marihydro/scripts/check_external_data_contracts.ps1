@@ -90,6 +90,11 @@ try {
         -Message "tide reader dispatch must not rely on filename heuristics when a real path is available"
 
     Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'pub fn detect\(path: &Path\)' `
+        -Message "tide reader must not expose a public filename-heuristic model detector"
+
+    Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `
         -Pattern 'and_then\(\|v\| v\.parse\(\)\.ok\(\)\)' `
         -Message "GDAL CLI fallback must not silently discard invalid NoData metadata"
@@ -118,6 +123,11 @@ try {
         -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
         -Pattern '_ => 30' `
         -Message "CF calendar month length must not fall back to a synthetic default month"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
+        -Pattern 'pub fn parse_calendar_or_default\(' `
+        -Message "CF calendar parser must not expose a public default-on-failure entrypoint"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""

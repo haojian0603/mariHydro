@@ -60,8 +60,11 @@ pub enum TidalModel {
 }
 
 impl TidalModel {
-    /// 从文件检测模型类型
-    pub fn detect(path: &Path) -> Self {
+    /// 从路径提示推断模型类型
+    ///
+    /// 该逻辑只用于路径不存在时的内部错误分流，以及 TPXO 文件的提示性元数据。
+    /// 真实打开路径时，主入口必须优先依据实际文件类型、目录结构和布局校验结果分发读取器。
+    fn infer_from_path_hint(path: &Path) -> Self {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -459,7 +462,7 @@ impl TpxoReader {
         }
 
         // 检测模型类型
-        let model_type = TidalModel::detect(path);
+        let model_type = TidalModel::infer_from_path_hint(path);
         let driver = NetCdfDriver::open(path)?;
         if !(driver.has_variable(TPXO_HEIGHT_COMPONENTS.0)
             && driver.has_variable(TPXO_HEIGHT_COMPONENTS.1))
@@ -738,7 +741,7 @@ pub fn open_tidal_data(path: impl AsRef<Path>) -> Result<Box<dyn TidalDataReader
         )));
     }
 
-    match TidalModel::detect(path) {
+    match TidalModel::infer_from_path_hint(path) {
         TidalModel::Fes2014 => Ok(Box::new(Fes2014Reader::open(path)?)),
         TidalModel::Tpxo9 | TidalModel::TpxoLocal | TidalModel::Unknown => {
             Ok(Box::new(TpxoReader::open(path)?))
@@ -884,13 +887,16 @@ mod tests {
 
     #[test]
     fn test_model_detection() {
-        assert_eq!(TidalModel::detect(Path::new("tpxo9.nc")), TidalModel::Tpxo9);
         assert_eq!(
-            TidalModel::detect(Path::new("fes2014.nc")),
+            TidalModel::infer_from_path_hint(Path::new("tpxo9.nc")),
+            TidalModel::Tpxo9
+        );
+        assert_eq!(
+            TidalModel::infer_from_path_hint(Path::new("fes2014.nc")),
             TidalModel::Fes2014
         );
         assert_eq!(
-            TidalModel::detect(Path::new("unknown.nc")),
+            TidalModel::infer_from_path_hint(Path::new("unknown.nc")),
             TidalModel::Unknown
         );
     }

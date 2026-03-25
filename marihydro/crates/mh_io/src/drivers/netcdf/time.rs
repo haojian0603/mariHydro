@@ -609,11 +609,6 @@ pub fn parse_calendar(calendar_str: &str) -> CfTimeResult<CfCalendar> {
     CfCalendar::from_str(calendar_str)
 }
 
-/// 解析日历属性（容错版本，失败时返回 Standard）
-pub fn parse_calendar_or_default(calendar_str: &str) -> CfCalendar {
-    CfCalendar::from_str(calendar_str).unwrap_or(CfCalendar::Standard)
-}
-
 // ============================================================
 // 测试
 // ============================================================
@@ -677,6 +672,11 @@ mod tests {
         assert_eq!(CfCalendar::from_str("noleap").unwrap(), CfCalendar::NoLeap);
         assert_eq!(CfCalendar::from_str("365_day").unwrap(), CfCalendar::NoLeap);
         assert_eq!(CfCalendar::from_str("360_day").unwrap(), CfCalendar::Day360);
+    }
+
+    #[test]
+    fn test_parse_calendar_rejects_unknown_calendar() {
+        assert!(parse_calendar("bad_calendar").is_err());
     }
 
     #[test]
