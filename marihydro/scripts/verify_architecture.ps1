@@ -303,6 +303,27 @@ try {
         Write-Host "[OK] legacy source bridge symbols are confined to the allowed bridge files" -ForegroundColor Green
     }
 
+    $legacySourceTopLevelExports = @()
+    $legacySourceTopLevelExports += Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers' -CaseSensitive
+    $legacySourceTopLevelExports += Select-String -Path "crates/mh_physics/src/lib.rs" -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers' -CaseSensitive
+    if ($legacySourceTopLevelExports) {
+        Write-Host "[FAIL] legacy source bridge items are still exported from top-level modules:" -ForegroundColor Red
+        $legacySourceTopLevelExports | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        $errors += "legacy source bridge items must be confined to mh_physics::sources::legacy"
+    } else {
+        Write-Host "[OK] legacy source bridge exports are confined to mh_physics::sources::legacy" -ForegroundColor Green
+    }
+
+    $legacySourceNamespace = Select-String -Path "crates/mh_physics/src/sources/mod.rs" -Pattern '^\s*pub mod legacy \{' -CaseSensitive
+    if (-not $legacySourceNamespace) {
+        Write-Host "[FAIL] sources::legacy namespace is missing" -ForegroundColor Red
+        $errors += "crates/mh_physics/src/sources/mod.rs must expose an explicit legacy namespace"
+    } else {
+        Write-Host "[OK] sources::legacy namespace is present" -ForegroundColor Green
+    }
+
     $legacyLimiterImports = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
         Where-Object {
             $_.FullName -notlike "*\mh_physics\src\limiters.rs" -and

@@ -47,6 +47,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_tracked_temp_artifacts.ps1"
     }
 
+    Invoke-Step -Name "text safety" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_text_safety.ps1"
+    }
+
     Invoke-Step -Name "architecture verification" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/verify_architecture.ps1"
     }

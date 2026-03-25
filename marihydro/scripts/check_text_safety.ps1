@@ -1,0 +1,74 @@
+#!/usr/bin/env pwsh
+#
+# Text safety guard for local gates.
+# - blocks unresolved merge markers in tracked files
+# - blocks whitespace errors in staged changes when available
+#
+
+param(
+    [switch]$Verbose
+)
+
+$ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
+
+Push-Location $ProjectRoot
+try {
+    Write-Host "=== Checking text safety ===" -ForegroundColor Cyan
+    Write-Host "Project root: $ProjectRoot"
+    Write-Host ""
+
+    $failed = $false
+
+    $mergeMatches = @(
+        & git grep -n -I -E "^(<<<<<<< |=======|>>>>>>> )" -- . 2>$null
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($mergeMatches.Count -gt 0) {
+        Write-Host "[FAIL] unresolved merge markers detected:" -ForegroundColor Red
+        $mergeMatches | Select-Object -First 10 | ForEach-Object {
+            Write-Host "  $_" -ForegroundColor Red
+        }
+        if ($mergeMatches.Count -gt 10) {
+            Write-Host "  ... and $($mergeMatches.Count - 10) more" -ForegroundColor Red
+        }
+        $failed = $true
+    } else {
+        Write-Host "[OK] no unresolved merge markers" -ForegroundColor Green
+    }
+
+    $stagedFiles = @(
+        & git diff --cached --name-only --diff-filter=ACMR 2>$null
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    if ($stagedFiles.Count -gt 0) {
+        if ($Verbose) {
+            Write-Host "[INFO] checking staged patch whitespace" -ForegroundColor Yellow
+        }
+        $diffCheck = & git diff --cached --check 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] staged whitespace or conflict issues detected:" -ForegroundColor Red
+            $diffCheck | Select-Object -First 20 | ForEach-Object {
+                Write-Host "  $_" -ForegroundColor Red
+            }
+            $failed = $true
+        } else {
+            Write-Host "[OK] staged patch text safety" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "[OK] no staged patch to validate" -ForegroundColor Green
+    }
+
+    if ($failed) {
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "[OK] text safety passed" -ForegroundColor Green
+    exit 0
+}
+finally {
+    Pop-Location
+}

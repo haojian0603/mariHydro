@@ -120,8 +120,8 @@ pub use types::{
 
 // 重导出源项类型
 pub use sources::{
-    SourceContribution, SourceContext, SourceTerm, SourceHelpers,
-    CoriolisConfig, CoriolisSource, NoSource,
+    CoriolisConfig, CoriolisSource, NoSource, SourceContributionGeneric,
+    SourceContextGeneric, SourceRegistry, SourceStiffness, SourceTermGeneric,
 };
 
 // 重导出边界条件类型

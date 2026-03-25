@@ -209,6 +209,7 @@ try {
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
     Invoke-InformationalScan -Name "legacy SourceTerm implementation residue" -Roots @("crates/mh_physics/src/sources") -Pattern '\bimpl\s+SourceTerm\s+for\b'
     Invoke-InformationalScan -Name "legacy source bridge footprint" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/sources/traits.rs") -Pattern '\bSourceTerm\b|\bSourceContext\b|\bSourceContribution\b'
+    Invoke-InformationalScan -Name "legacy source top-level export residue" -Roots @("crates/mh_physics/src/sources/mod.rs", "crates/mh_physics/src/lib.rs") -Pattern 'SourceContribution,\s*SourceContext,\s*SourceTerm,\s*SourceHelpers'
     Invoke-InformationalScan -Name "sources CpuBackend<f64> residue" -Roots @("crates/mh_physics/src/sources") -Pattern "SourceTermGeneric::<CpuBackend<f64>>|ShallowWaterState<CpuBackend<f64>>|ShallowWaterState::<CpuBackend<f64>>::new_with_backend"
     Invoke-InformationalScan -Name "legacy limiters bridge footprint" -Roots @("crates/mh_physics/src/lib.rs", "crates/mh_physics/src/limiters.rs") -Pattern 'pub mod limiters;|LegacyLimiterType|LegacyMusclConfig|LegacyMusclReconstructor'
     Invoke-InformationalScan -Name "try_scalar_from_f64 explicit-path usage" -Roots @("crates/mh_physics") -Pattern "\btry_scalar_from_f64\("

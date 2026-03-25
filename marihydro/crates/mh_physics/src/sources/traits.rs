@@ -333,6 +333,15 @@ impl SourceHelpers {
     }
 }
 
+/// Legacy CPU/f64 source bridge namespace.
+///
+/// New mainline code should not import these items directly from
+/// `mh_physics::sources`; use `mh_physics::sources::legacy::*` only when an
+/// old CPU/f64 bridge is still being retired.
+pub mod legacy {
+    pub use super::{SourceContribution, SourceContext, SourceHelpers, SourceTerm};
+}
+
 // =============================================================================
 // 泛型版本（推荐使用）
 // =============================================================================

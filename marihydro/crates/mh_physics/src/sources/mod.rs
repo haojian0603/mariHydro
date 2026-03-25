@@ -52,7 +52,7 @@
 //! - `compute_cell()` - 计算单个单元的源项贡献
 //! - `compute_batch()` - 批量计算所有单元
 //!
-//! [`SourceTerm`] / [`SourceContext`] / [`SourceContribution`] 仅作为
+//! `sources::legacy::{SourceTerm, SourceContext, SourceContribution}` 仅作为
 //! 旧 CPU/f64 桥接接口保留，不再继续扩散。
 //!
 //! # 使用示例
@@ -104,8 +104,12 @@ pub use traits::{
     SourceStiffness, SourceRegistryGeneric, NoSource,
 };
 
-// ==================== Legacy CPU/f64 桥接导出 ====================
-pub use traits::{SourceContribution, SourceContext, SourceTerm, SourceHelpers};
+// ==================== Legacy CPU/f64 桥接命名空间 ====================
+pub mod legacy {
+    pub use super::traits::legacy::{
+        SourceContribution, SourceContext, SourceHelpers, SourceTerm,
+    };
+}
 
 pub use registry::SourceRegistry;
 
