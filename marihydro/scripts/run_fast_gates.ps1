@@ -51,6 +51,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }
 
+    Invoke-Step -Name "geo projection contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_projection_contracts.ps1"
+    }
+
     Invoke-Step -Name "AI state contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_ai_state_contracts.ps1"
     }

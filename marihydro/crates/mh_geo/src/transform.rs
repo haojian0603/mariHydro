@@ -375,7 +375,9 @@ impl GeoTransformer {
                 .source_proj
                 .inverse(x, y)
                 .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
-            return Ok(0.0);
+            return Err(mh_foundation::error::MhError::invalid_input(
+                "convergence angle is only defined for projected target CRS",
+            ));
         }
 
         let (lon, lat) = self
@@ -673,6 +675,40 @@ mod tests {
                 .compute_convergence_angle(f64::NAN, 1.0)
                 .is_err(),
             "geographic target must still validate the projected source point"
+        );
+    }
+
+    #[test]
+    fn test_geographic_target_convergence_angle_requires_projected_target() {
+        let source = Crs::from_epsg(32650).expect("source crs failed");
+        let target = Crs::from_epsg(4326).expect("target crs failed");
+        let transformer = GeoTransformer::new(&source, &target).expect("transformer failed");
+
+        let err = transformer
+            .compute_convergence_angle(500_000.0, 4_427_757.0)
+            .expect_err("geographic target must reject convergence-angle queries");
+
+        assert!(
+            err.to_string()
+                .contains("convergence angle is only defined for projected target CRS"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_geographic_target_rotate_vector_requires_projected_target() {
+        let source = Crs::from_epsg(32650).expect("source crs failed");
+        let target = Crs::from_epsg(4326).expect("target crs failed");
+        let transformer = GeoTransformer::new(&source, &target).expect("transformer failed");
+
+        let err = transformer
+            .rotate_vector(1.0, 0.0, 500_000.0, 4_427_757.0)
+            .expect_err("geographic target must reject vector rotation compensation");
+
+        assert!(
+            err.to_string()
+                .contains("convergence angle is only defined for projected target CRS"),
+            "unexpected error: {err}"
         );
     }
 }

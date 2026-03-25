@@ -96,6 +96,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.56: geo projection contract guard
+    Write-Host "=== Phase 0.56: geo projection contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_projection_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo projection contracts must pass"
+    } else {
+        Write-Host "[OK] geo projection contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.6: runtime probe contract guard
     Write-Host "=== Phase 0.6: runtime probe contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"

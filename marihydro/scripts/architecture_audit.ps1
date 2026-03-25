@@ -189,6 +189,10 @@ try {
         $Failed += "check_import_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_geo_projection_contracts.ps1" -Path (Join-Path $ScriptDir "check_geo_projection_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_geo_projection_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_ai_state_contracts.ps1" -Path (Join-Path $ScriptDir "check_ai_state_contracts.ps1") -Arguments @{})) {
         $Failed += "check_ai_state_contracts.ps1"
     }

@@ -18,6 +18,7 @@
 - [RULE_IMPORT_GEOMETRY_STRUCTURE_REQUIRED] 外部矢量导入不得在 Polygon 或 MultiPolygon 缺少外环、环点数不足、线性环未闭合时继续返回空外环或部分几何。几何结构不完整就必须显式报错，不能把坏输入折成“空面”“空洞列表”或其他伪成功结果。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
+- [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
 - [RULE_RUNTIME_SYSTEM_PROBES_EXPLICIT] 运行时硬件和系统探测不得伪造常量结果。读取 `/proc`、`sysfs`、Win32 系统信息或线程拓扑失败时，要么显式报错，要么明确落到“未知”状态；不能把 `8GB/4GB`、空字符串、空 CPU 列表或 `0` 解析值当成真实探测结果。
 - [RULE_RUNTIME_PARALLELISM_PROBES_EXPLICIT] 运行时并行度和物理核心探测不得把 OS 查询失败、`/proc/cpuinfo` 字段缺失或字段损坏静默折叠成 `1`、默认核心数或“看起来可用”的线程上限。线程数探测失败就显式失败；只有在元数据整体缺席且语义明确时，才允许落到带注释的保守估计。
 - [RULE_RUNTIME_TOPOLOGY_DEFAULTS_FORBIDDEN] 运行时拓扑类型不得再暴露伪造的 `Default` 实现。`NumaTopology`、`NumaThreadPoolConfig` 这类对象如果依赖 OS 探测才能成立，就必须走显式 `detect()` 路径；禁止在 `default()` 里偷偷合成单节点、单核心或零内存拓扑。
