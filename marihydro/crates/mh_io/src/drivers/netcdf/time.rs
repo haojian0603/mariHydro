@@ -552,9 +552,12 @@ impl CfTimeUnits {
                     y -= 1;
                 }
                 // find month where cumulative days >= doy
-                let m = (1..=12)
-                    .find(|&i| days_before_month[i] >= doy)
-                    .unwrap_or(12);
+                let m = find_month_index_or_panic(
+                    &days_before_month,
+                    doy,
+                    true,
+                    "noleap calendar",
+                );
                 let d = doy - days_before_month[m - 1];
                 (y, m as u32, d as u32)
             }
@@ -564,7 +567,8 @@ impl CfTimeUnits {
                 let total_days = jd_int as i32;
                 let y = total_days / 366;
                 let doy = total_days % 366;
-                let m = (1..=12).find(|&i| days_before_month[i] > doy).unwrap_or(12);
+                let m =
+                    find_month_index_or_panic(&days_before_month, doy, false, "all_leap calendar");
                 let d = doy - days_before_month[m - 1] + 1;
                 (y, m as u32, d as u32)
             }
@@ -592,6 +596,21 @@ impl CfTimeUnits {
 
         DateTime::new(year, month, day, hour, minute, second)
     }
+}
+
+fn find_month_index_or_panic(
+    days_before_month: &[i32; 13],
+    doy: i32,
+    inclusive_end: bool,
+    calendar_name: &str,
+) -> usize {
+    let found = if inclusive_end {
+        (1..=12).find(|&i| days_before_month[i] >= doy)
+    } else {
+        (1..=12).find(|&i| days_before_month[i] > doy)
+    };
+
+    found.unwrap_or_else(|| panic!("day-of-year out of range for {calendar_name}: {doy}"))
 }
 
 impl fmt::Display for CfTimeUnits {
@@ -712,6 +731,22 @@ mod tests {
     fn test_days_in_month_rejects_invalid_month() {
         let std = CfCalendar::Standard;
         let _ = std.days_in_month(2020, 13);
+    }
+
+    #[test]
+    fn test_find_month_index_or_panic_resolves_noleap_year_end() {
+        let days_before_month =
+            [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
+        let month = find_month_index_or_panic(&days_before_month, 365, true, "noleap calendar");
+        assert_eq!(month, 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "day-of-year out of range for noleap calendar")]
+    fn test_find_month_index_or_panic_rejects_noleap_overflow() {
+        let days_before_month =
+            [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
+        let _ = find_month_index_or_panic(&days_before_month, 366, true, "noleap calendar");
     }
 
     #[test]

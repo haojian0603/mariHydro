@@ -67,6 +67,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_projection_contracts.ps1"
     }
 
+    Invoke-Step -Name "IO invariant contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_invariant_contracts.ps1"
+    }
+
     Invoke-Step -Name "AI state contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_ai_state_contracts.ps1"
     }

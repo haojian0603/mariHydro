@@ -260,6 +260,8 @@ fn detect_regular_grid(
 
         let lon_resolution = infer_regular_spacing(&lon, lon_name)?;
         let lat_resolution = infer_regular_spacing(&lat, lat_name)?;
+        let lon_range = axis_bounds(&lon, lon_name)?;
+        let lat_range = axis_bounds(&lat, lat_name)?;
 
         return Ok((
             GridLayout {
@@ -267,8 +269,8 @@ fn detect_regular_grid(
                 lat_name: (*lat_name).to_string(),
             },
             TidalGrid {
-                lon_range: (lon[0], *lon.last().unwrap_or(&lon[0])),
-                lat_range: (lat[0], *lat.last().unwrap_or(&lat[0])),
+                lon_range,
+                lat_range,
                 lon_resolution,
                 lat_resolution,
                 n_lon: lon.len(),
@@ -280,6 +282,21 @@ fn detect_regular_grid(
     Err(TidalIoError::FormatError(
         "未找到受支持的规则经纬度坐标变量".to_string(),
     ))
+}
+
+fn axis_bounds(values: &[f64], axis_name: &str) -> Result<(f64, f64), TidalIoError> {
+    let first = values.first().copied().ok_or_else(|| {
+        TidalIoError::FormatError(format!(
+            "坐标轴 {axis_name} 为空，无法构建规则网格范围"
+        ))
+    })?;
+    let last = values.last().copied().ok_or_else(|| {
+        TidalIoError::FormatError(format!(
+            "坐标轴 {axis_name} 缺少末端值，无法构建规则网格范围"
+        ))
+    })?;
+
+    Ok((first, last))
 }
 
 fn infer_constituent_from_path(path: &Path, candidates: &[&str]) -> Option<String> {
@@ -948,6 +965,19 @@ mod tests {
         let (amp, phase) = complex_components_to_amplitude_phase(0.0, -2.0);
         assert!((amp - 2.0).abs() < 1.0e-12);
         assert!((phase - 90.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn test_axis_bounds_rejects_empty_axis() {
+        let err = axis_bounds(&[], "lon").unwrap_err();
+        assert!(matches!(err, TidalIoError::FormatError(_)));
+        assert!(err.to_string().contains("坐标轴 lon 为空"));
+    }
+
+    #[test]
+    fn test_axis_bounds_uses_real_endpoints() {
+        let bounds = axis_bounds(&[120.0, 121.5, 123.0], "lon").unwrap();
+        assert_eq!(bounds, (120.0, 123.0));
     }
 
     #[test]

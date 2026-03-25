@@ -107,6 +107,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.57: IO invariant contract guard
+    Write-Host "=== Phase 0.57: IO invariant contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_invariant_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "IO invariant contracts must pass"
+    } else {
+        Write-Host "[OK] IO invariant contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.6: runtime probe contract guard
     Write-Host "=== Phase 0.6: runtime probe contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"
