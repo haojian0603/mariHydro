@@ -6,17 +6,8 @@ use mh_runtime::prelude::Float;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
-pub enum SurrogateType {
-    LinearRegression,
-    ReducedOrder,
-    GaussianProcess,
-    PolynomialChaos,
-}
-
 #[derive(Debug, Clone)]
 pub struct SurrogateConfig<B: Backend = DefaultBackend> {
-    pub model_type: SurrogateType,
     pub model_path: Option<String>,
     pub input_features: Vec<String>,
     pub output_features: Vec<String>,
@@ -113,10 +104,6 @@ where
     B::Scalar: RuntimeScalar,
     B::Vector2D: bytemuck::Pod,
 {
-    fn unsupported_model_message(model: &'static str) -> String {
-        format!("only LinearRegression is implemented; {model} is not wired in")
-    }
-
     pub fn new(config: SurrogateConfig<B>) -> Result<Self, AiError> {
         let output_dim = config.output_features.len().max(1);
         let mut model = Self {
@@ -132,8 +119,6 @@ where
         if let Some(path) = model.config.model_path.clone() {
             let _ = model.load_state(&path);
         }
-
-        model.ensure_supported_model_type()?;
 
         Ok(model)
     }
@@ -181,21 +166,6 @@ where
         self.current_prediction = Some(prediction.clone());
         self.last_update_time = snapshot.time;
         Ok(prediction)
-    }
-
-    fn ensure_supported_model_type(&self) -> Result<(), AiError> {
-        match self.config.model_type {
-            SurrogateType::LinearRegression => Ok(()),
-            SurrogateType::ReducedOrder => Err(AiError::UnsupportedModelType(
-                Self::unsupported_model_message("ReducedOrder"),
-            )),
-            SurrogateType::GaussianProcess => Err(AiError::UnsupportedModelType(
-                Self::unsupported_model_message("GaussianProcess"),
-            )),
-            SurrogateType::PolynomialChaos => Err(AiError::UnsupportedModelType(
-                Self::unsupported_model_message("PolynomialChaos"),
-            )),
-        }
     }
 
     fn extract_features(&self, snapshot: &PhysicsSnapshot<B>) -> Vec<f64> {
@@ -507,7 +477,6 @@ where
     }
 
     fn update(&mut self, snapshot: &PhysicsSnapshot<B>) -> Result<(), AiError> {
-        self.ensure_supported_model_type()?;
         let _ = self.predict(snapshot)?;
         Ok(())
     }

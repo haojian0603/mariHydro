@@ -65,9 +65,6 @@ pub enum AiError {
     #[error("观测无效: {0}")]
     InvalidObservation(String),
 
-    #[error("代理模型类型不受支持: {0}")]
-    UnsupportedModelType(String),
-
     /// 状态访问失败。
     #[error("状态访问错误: {0}")]
     StateAccessError(String),
@@ -401,5 +398,5 @@ pub use remote_sensing::{
     RemoteSensingConfig, SatelliteImage, SensorType,
 };
 pub use surrogate::{
-    PredictionMetrics, SurrogateConfig, SurrogateModel, SurrogatePrediction, SurrogateType,
+    PredictionMetrics, SurrogateConfig, SurrogateModel, SurrogatePrediction,
 };

@@ -47,6 +47,7 @@ try {
             "[RULE_NO_FAKE_IMPL]",
             "[RULE_PHYSICS_PROVENANCE]",
             "[RULE_FORMULA_NAME_HONEST]",
+            "[RULE_PUBLIC_SURFACE_TRUTHFUL]",
             "[RULE_GATES_STRICTER_ONLY]"
         )
 

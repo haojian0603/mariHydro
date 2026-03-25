@@ -1,6 +1,4 @@
-use mh_agent::{
-    AiError, DenseScalarMatrix, ScalarSamples, SurrogateConfig, SurrogateModel, SurrogateType,
-};
+use mh_agent::{AiError, DenseScalarMatrix, ScalarSamples, SurrogateConfig, SurrogateModel};
 use mh_runtime::CpuBackend;
 
 #[test]
@@ -44,9 +42,8 @@ fn dense_scalar_matrix_rejects_jagged_rows() {
 }
 
 #[test]
-fn surrogate_rejects_unimplemented_model_types() {
+fn surrogate_model_constructs_without_fake_type_selector() {
     let config = SurrogateConfig::<CpuBackend<f64>> {
-        model_type: SurrogateType::GaussianProcess,
         model_path: None,
         input_features: Vec::new(),
         output_features: vec!["h".into()],
@@ -58,12 +55,5 @@ fn surrogate_rejects_unimplemented_model_types() {
         min_std: 1e-6,
     };
 
-    match SurrogateModel::new(config) {
-        Err(AiError::UnsupportedModelType(message)) => {
-            assert!(message.contains("only LinearRegression is implemented"));
-            assert!(message.contains("GaussianProcess"));
-        }
-        Err(other) => panic!("unexpected error: {other}"),
-        Ok(_) => panic!("expected UnsupportedModelType"),
-    }
+    SurrogateModel::new(config).expect("surrogate should expose only the shipped linear model");
 }
