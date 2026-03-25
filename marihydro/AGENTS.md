@@ -64,3 +64,4 @@
 - 不要在每个测试模块里重复创建 `CpuBackend<f64>`、`SourceContextGeneric::with_defaults(...)` 和元数据断言样板。
 - 如需新增共享测试辅助，优先扩展 `test_support`，再批量替换调用点。
 - 禁止新增 `impl SourceTerm for ...`；legacy `SourceTerm` 只允许留在兼容桥接层，不再作为新实现入口。
+- 禁止给新主链代码新增根级 `crate::limiters` 依赖；限制器与重构统一从 `crate::numerics` 和 `crate::types::LimiterType` 进入。

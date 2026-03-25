@@ -862,6 +862,10 @@ pub enum TimeIntegration {
 
 /// 梯度限制器类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// 主链限制器配置枚举。
+///
+/// 新代码应通过 `crate::types::LimiterType` 和 `crate::numerics`
+/// 进入限制器/重构路径，不再从根级 legacy limiters shim 使用兼容别名。
 pub enum LimiterType {
     /// 无限制器（一阶精度）
     None,

@@ -9,6 +9,9 @@
 //! - linear_algebra/ - 稀疏线性代数 (CSR, PCG, BiCGStab)
 //! - discretization/ - 有限体积离散化 (拓扑, 组装, 回代)
 //! - operators/ - 数值算子 (扩散等)
+//!
+//! 主引擎路径从本模块进入 limiter / reconstruction。
+//! 根级 legacy limiters shim 不再作为新代码入口。
 
 pub mod discretization;
 pub mod gradient;

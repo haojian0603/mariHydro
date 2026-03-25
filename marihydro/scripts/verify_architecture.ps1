@@ -303,6 +303,25 @@ try {
         Write-Host "[OK] legacy source bridge symbols are confined to the allowed bridge files" -ForegroundColor Green
     }
 
+    $legacyLimiterImports = Get-ChildItem -Path "crates/mh_physics/src" -Recurse -Filter "*.rs" -File |
+        Where-Object {
+            $_.FullName -notlike "*\mh_physics\src\limiters.rs" -and
+            $_.FullName -notlike "*\mh_physics\src\lib.rs"
+        } |
+        Select-String -Pattern 'crate::limiters|limiters::LimiterType|limiters::MusclConfig|limiters::MusclReconstructor' -CaseSensitive
+    if ($legacyLimiterImports) {
+        Write-Host "[FAIL] legacy root limiters shim is referenced outside the allowed bridge files:" -ForegroundColor Red
+        $legacyLimiterImports | Select-Object -First 10 | ForEach-Object {
+            Write-Host ("  " + $_.Path + ":" + $_.LineNumber + ": " + $_.Line.Trim()) -ForegroundColor Red
+        }
+        if ($legacyLimiterImports.Count -gt 10) {
+            Write-Host "  ... and $($legacyLimiterImports.Count - 10) more" -ForegroundColor Red
+        }
+        $errors += "legacy crate::limiters shim must remain confined to crates/mh_physics/src/lib.rs and crates/mh_physics/src/limiters.rs"
+    } else {
+        Write-Host "[OK] legacy root limiters shim is confined to the allowed bridge files" -ForegroundColor Green
+    }
+
     $silentScalarFallbacks = @(
         Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
             Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive

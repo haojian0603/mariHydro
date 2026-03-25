@@ -62,6 +62,7 @@ pub mod vertical;
 
 // 业务功能模块（持续整理中）
 pub mod forcing;
+// legacy 兼容层：新主链不要继续从根 `crate::limiters` 接入
 pub mod limiters;
 pub mod numerics;
 pub mod sediment;
