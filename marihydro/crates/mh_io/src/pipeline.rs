@@ -911,6 +911,25 @@ mod tests {
     }
 
     #[test]
+    fn test_write_vtu_ascii_rejects_missing_boundary_ids() {
+        let mut mesh = MeshSnapshot::<f64>::from_mesh_data(
+            4,
+            1,
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            vec![vec![0, 1, 2, 3]],
+            vec![1.0],
+            vec![0.0],
+        );
+        mesh.boundary_faces = Some(vec![0]);
+        mesh.boundary_ids = None;
+
+        let path = std::env::temp_dir().join("mh_io_invalid_boundary_ids_ascii.vtu");
+        let result = IoPipeline::write_vtu_ascii_impl(&path, &mesh, &sample_state(), 0.0);
+        assert!(result.is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn test_pipeline_creation() {
         let pipeline = IoPipeline::new();
         assert_eq!(pipeline.pending_count(), 0);
@@ -946,8 +965,7 @@ mod tests {
     #[test]
     fn test_serialize_boundary_names_json() {
         let names = vec!["open-sea".to_string(), "river-inlet".to_string()];
-        let serialized =
-            serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
+        let serialized = serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
         assert_eq!(serialized, r#"["open-sea","river-inlet"]"#);
     }
 

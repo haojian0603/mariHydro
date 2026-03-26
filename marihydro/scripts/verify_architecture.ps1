@@ -118,6 +118,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.545: snapshot boundary contract guard
+    Write-Host "=== Phase 0.545: snapshot boundary contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_snapshot_boundary_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "snapshot boundary contracts must pass"
+    } else {
+        Write-Host "[OK] snapshot boundary contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

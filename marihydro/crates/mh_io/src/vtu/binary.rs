@@ -122,6 +122,19 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
     state: &crate::snapshot::StateSnapshot<S>,
     time: f64,
 ) -> io::Result<()> {
+    mesh.validate().map_err(|err| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("网格验证失败: {err}"))
+    })?;
+    state.validate().map_err(|err| {
+        io::Error::new(io::ErrorKind::InvalidData, format!("状态验证失败: {err}"))
+    })?;
+    if mesh.n_cells != state.h.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "mesh/state length mismatch",
+        ));
+    }
+
     writeln!(writer, r#"<?xml version="1.0"?>"#)?;
     writeln!(
         writer,
@@ -322,6 +335,26 @@ mod tests {
     }
 
     #[test]
+    fn test_write_vtu_binary_rejects_missing_boundary_ids() {
+        let mut mesh = MeshSnapshot::<f64>::from_mesh_data(
+            4,
+            1,
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            vec![vec![0, 1, 2, 3]],
+            vec![1.0],
+            vec![0.0],
+        );
+        mesh.boundary_faces = Some(vec![0]);
+        mesh.boundary_ids = None;
+
+        let state = StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.0], vec![0.0]);
+        let mut out = Vec::new();
+        let err =
+            write_vtu_binary(&mut out, &mesh, &state, 0.0).expect_err("缺少边界 ID 时必须失败");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn test_binary_encoder_f64() {
         let mut encoder = BinaryEncoder::new();
         let data = vec![1.0f64, 2.0, 3.0];
@@ -362,8 +395,7 @@ mod tests {
     #[test]
     fn test_serialize_boundary_names_json() {
         let names = vec!["open-sea".to_string(), "river-inlet".to_string()];
-        let serialized =
-            serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
+        let serialized = serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
         assert_eq!(serialized, r#"["open-sea","river-inlet"]"#);
     }
 }

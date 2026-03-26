@@ -21,6 +21,7 @@
 - [RULE_EXPORT_METADATA_SERIALIZATION_EXPLICIT] 导出链路里的元数据序列化不得伪装成功。像 `boundary_names`、字段名列表、属性清单这类会进入 VTU/PVD/检查点/项目文件的元数据，只要序列化失败就必须显式报错并终止写出，不能回退成 `"[]"`、`""`、空对象或其他合成占位值。
 - [RULE_METADATA_TIMESTAMPS_EXPLICIT] 检查点、快照、项目文件和其他持久化元数据里的 `created_at`、时间戳或生成时刻字段不得在系统时钟异常时回退成 `0`、Unix 纪元或其他合成占位值。要么显式失败，要么把“未知时间”编码成真实的可区分状态，不能把假时间戳写进产物。
 - [RULE_CHECKPOINT_METADATA_EXPLICIT] 检查点文件里的 `config_hash`、`mesh_hash`、目录扫描结果和头部摘要不得使用 `0`、`u32::MAX`、静默跳过坏文件等哨兵语义伪装“缺失”或“可继续”。缺失元数据必须编码成真实的可区分状态，严格校验时必须显式报错；检查点目录里一旦存在损坏或结构错误的 `.mhck` 文件，也必须立即失败，不能在列举和清理阶段偷偷忽略。
+- [RULE_SNAPSHOT_BOUNDARY_METADATA_EXPLICIT] 网格快照里的边界元数据不得把缺失边界 ID 写成 `u32::MAX`、`-1`、空字符串或其他导出层哨兵值。冻结网格缺少边界 ID 时必须在快照构建阶段显式失败；VTU、检查点和其他导出入口也必须先验证快照，再决定是否写出边界字段。
 - [RULE_IMPORT_GEOMETRY_STRUCTURE_REQUIRED] 外部矢量导入不得在 Polygon 或 MultiPolygon 缺少外环、环点数不足、线性环未闭合时继续返回空外环或部分几何。几何结构不完整就必须显式报错，不能把坏输入折成“空面”“空洞列表”或其他伪成功结果。
 - [RULE_IMPORT_SEMANTIC_NAMES_EXPLICIT] GeoJSON 、边界条件、分区或其他带语义名称的导入要素不得在缺少 `name` 或等价语义标识时自动合成 `unnamed`、`zone` 等占位名称。一旦该要素已被识别为边界条件、分区、规划单元或其他业务实体，就必须显式报错，不能用合成名称伪装语义存在。
 - [RULE_MULTIPART_SEMANTIC_NAMES_PRESERVED] 一旦外部语义要素已经声明了真实名称，就不得在拆分 MultiPolygon、MultiLineString 或其他 multipart 结构时合成 `name_1`、`name_2` 这类后缀名称。若业务确实需要区分分片，必须保留原始名称，并通过显式 `part_index`、`segment_index` 或等价结构另行表达分片身份。

@@ -291,6 +291,7 @@ try {
     Invoke-InformationalScan -Name 'export metadata fallback residue' -Roots @("crates/mh_io/src") -Pattern 'serde_json::to_string\(names\)\.unwrap_or_else\(\|_\| "\[\]"\.into\(\)\)|boundary_names.*\[\]|field names.*\[\]'
     Invoke-InformationalScan -Name 'metadata timestamp fallback residue' -Roots @("crates/mh_io/src") -Pattern 'duration_since\(std::time::UNIX_EPOCH\)\s*\.map\(\|d\| d\.as_secs\(\)\)\s*\.unwrap_or\(0\)|created_at:\s*0\b'
     Invoke-InformationalScan -Name 'checkpoint sentinel metadata residue' -Roots @("crates/mh_io/src/checkpoint.rs") -Pattern 'config_hash\.unwrap_or\(0\)|mesh_hash:\s*0\b|config_hash != 0|found:\s*0\s*\}|if let Ok\(header\) = Checkpoint::read_header'
+    Invoke-InformationalScan -Name 'snapshot boundary sentinel residue' -Roots @("crates/mh_io/src/snapshot.rs") -Pattern 'unwrap_or\(u32::MAX\)|-1\b'
     Invoke-InformationalScan -Name 'GeoJSON semantic-name fallback residue' -Roots @("crates/mh_io/src/import") -Pattern 'get_string\("name"\)\.unwrap_or\("unnamed"\)|get_string\("name"\)\.unwrap_or\("zone"\)|pub fn boundary_conditions\(&self\) -> Vec<BoundaryConditionLocation>|pub fn zone_properties\(&self\) -> Vec<ZoneProperties>'
     Invoke-InformationalScan -Name 'GeoJSON multipart semantic-name synthesis residue' -Roots @("crates/mh_io/src/import") -Pattern 'format!\(\"\\{\\}_\\{\\}\", name, idx \+ 1\)'
     Invoke-InformationalScan -Name 'GeoJSON feature-id collapse residue' -Roots @("crates/mh_io/src/import") -Pattern 'rf\.id\.map\(\|v\| match v|_ => String::new\(\)|id:\s*None,'

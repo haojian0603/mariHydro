@@ -139,7 +139,9 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
     /// 从冻结网格创建快照（标量类型一致）
     ///
     /// 仅用于 `B::Scalar == S` 的场景，避免隐式精度转换。
-    pub fn from_frozen<B: Backend<Scalar = S>>(mesh: &FrozenMeshGeneric<B>) -> Self {
+    pub fn from_frozen<B: Backend<Scalar = S>>(
+        mesh: &FrozenMeshGeneric<B>,
+    ) -> Result<Self, String> {
         let node_positions = mesh
             .node_coords
             .iter()
@@ -166,17 +168,21 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
             Some(mesh.boundary_face_indices.clone())
         };
 
-        let boundary_ids = boundary_faces.as_ref().map(|faces| {
-            faces
-                .iter()
-                .map(|&f| {
-                    mesh.face_boundary_id
-                        .get(f as usize)
-                        .and_then(|opt| *opt)
-                        .unwrap_or(u32::MAX)
-                })
-                .collect::<Vec<_>>()
-        });
+        let boundary_ids = match boundary_faces.as_ref() {
+            Some(faces) => {
+                let mut ids = Vec::with_capacity(faces.len());
+                for &face in faces {
+                    let boundary_id = mesh
+                        .face_boundary_id
+                        .get(face as usize)
+                        .ok_or_else(|| format!("边界面 {} 缺少边界 ID 槽位", face))?
+                        .ok_or_else(|| format!("边界面 {} 缺少边界 ID", face))?;
+                    ids.push(boundary_id);
+                }
+                Some(ids)
+            }
+            None => None,
+        };
 
         let boundary_names = if mesh.boundary_names.is_empty() {
             None
@@ -184,7 +190,7 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
             Some(mesh.boundary_names.clone())
         };
 
-        Self {
+        Ok(Self {
             n_nodes: mesh.n_nodes,
             n_cells: mesh.n_cells,
             node_positions,
@@ -195,7 +201,7 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
             boundary_ids,
             boundary_names,
             meta: None,
-        }
+        })
     }
 
     /// 添加边界数据
@@ -778,6 +784,8 @@ pub struct StateStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mh_geo::Point3D;
+    use mh_runtime::CpuBackend;
 
     #[test]
     fn test_current_unix_timestamp_nonzero() {
@@ -819,6 +827,51 @@ mod tests {
     }
 
     #[test]
+    fn test_mesh_snapshot_from_frozen_rejects_missing_boundary_id() {
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMeshGeneric::empty_with_backend(backend.clone());
+        mesh.n_nodes = 3;
+        mesh.node_coords = vec![
+            Point3D::new(0.0, 0.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+        ];
+        mesh.n_cells = 1;
+        mesh.cell_node_offsets = vec![0, 3];
+        mesh.cell_node_indices = vec![0, 1, 2];
+        mesh.cell_area = backend.alloc_init(1, 1.0);
+        mesh.cell_z_bed = backend.alloc_init(1, 0.0);
+        mesh.boundary_face_indices = vec![0];
+        mesh.face_boundary_id = vec![None];
+
+        let err = MeshSnapshot::<f64>::from_frozen(&mesh).expect_err("缺少边界 ID 时必须失败");
+        assert!(err.contains("缺少边界 ID"));
+    }
+
+    #[test]
+    fn test_mesh_snapshot_from_frozen_preserves_boundary_id() {
+        let backend = CpuBackend::<f64>::new();
+        let mut mesh = FrozenMeshGeneric::empty_with_backend(backend.clone());
+        mesh.n_nodes = 3;
+        mesh.node_coords = vec![
+            Point3D::new(0.0, 0.0, 0.0),
+            Point3D::new(1.0, 0.0, 0.0),
+            Point3D::new(0.0, 1.0, 0.0),
+        ];
+        mesh.n_cells = 1;
+        mesh.cell_node_offsets = vec![0, 3];
+        mesh.cell_node_indices = vec![0, 1, 2];
+        mesh.cell_area = backend.alloc_init(1, 1.0);
+        mesh.cell_z_bed = backend.alloc_init(1, 0.0);
+        mesh.boundary_face_indices = vec![0];
+        mesh.face_boundary_id = vec![Some(7)];
+        mesh.boundary_names = vec!["open".to_string()];
+
+        let snapshot = MeshSnapshot::<f64>::from_frozen(&mesh).expect("真实边界 ID 必须保留");
+        assert_eq!(snapshot.boundary_ids, Some(vec![7]));
+    }
+
+    #[test]
     fn test_state_snapshot_creation() {
         let snapshot = StateSnapshot::<f64>::from_state_data(
             vec![1.0, 2.0, 3.0],
@@ -832,8 +885,8 @@ mod tests {
 
     #[test]
     fn test_state_snapshot_meta_records_real_timestamp() {
-        let snapshot =
-            StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.0], vec![0.0]).with_meta(1.0, 2);
+        let snapshot = StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.0], vec![0.0])
+            .with_meta(1.0, 2);
         let meta = snapshot.meta.expect("元数据应当存在");
         assert_eq!(meta.time, 1.0);
         assert_eq!(meta.step, 2);
