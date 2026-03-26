@@ -83,6 +83,49 @@ fn validate_resolution_input(lat: f64, tile_size: u32) -> MhResult<()> {
     Ok(())
 }
 
+fn tile_grid_width(zoom: u8) -> MhResult<u64> {
+    1_u64
+        .checked_shl(u32::from(zoom))
+        .ok_or_else(|| MhError::invalid_input(format!("zoom {zoom} is too large for tile indexing")))
+}
+
+fn validate_tile_index(x: u32, y: u32, zoom: u8) -> MhResult<()> {
+    let tiles_per_axis = tile_grid_width(zoom)?;
+    if u64::from(x) >= tiles_per_axis {
+        return Err(MhError::invalid_input(format!(
+            "tile x {x} out of range for zoom {zoom} (expected 0..{})",
+            tiles_per_axis - 1
+        )));
+    }
+    if u64::from(y) >= tiles_per_axis {
+        return Err(MhError::invalid_input(format!(
+            "tile y {y} out of range for zoom {zoom} (expected 0..{})",
+            tiles_per_axis - 1
+        )));
+    }
+    Ok(())
+}
+
+fn tile_corner_to_lonlat(x: u32, y: u32, zoom: u8) -> MhResult<(f64, f64)> {
+    let tiles_per_axis = tile_grid_width(zoom)?;
+    if u64::from(x) > tiles_per_axis {
+        return Err(MhError::invalid_input(format!(
+            "tile corner x {x} out of range for zoom {zoom} (expected 0..={tiles_per_axis})"
+        )));
+    }
+    if u64::from(y) > tiles_per_axis {
+        return Err(MhError::invalid_input(format!(
+            "tile corner y {y} out of range for zoom {zoom} (expected 0..={tiles_per_axis})"
+        )));
+    }
+
+    let n = tiles_per_axis as f64;
+    let lon = f64::from(x) / n * 360.0 - 180.0;
+    let lat_rad = (PI * (1.0 - 2.0 * f64::from(y) / n)).sinh().atan();
+    let lat = lat_rad.to_degrees();
+    Ok((lon, lat))
+}
+
 /// 地理坐标 -> Web Mercator
 ///
 /// # Arguments
@@ -199,6 +242,7 @@ pub fn lonlat_to_tile(lon: f64, lat: f64, zoom: u8) -> MhResult<(u32, u32)> {
     let lat_rad = lat.to_radians();
     let y = ((1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0 * n).floor() as u32;
 
+    validate_tile_index(x, y, zoom)?;
     Ok((x, y))
 }
 
@@ -208,13 +252,9 @@ pub fn lonlat_to_tile(lon: f64, lat: f64, zoom: u8) -> MhResult<(u32, u32)> {
 /// - `x`: 瓦片 X 坐标
 /// - `y`: 瓦片 Y 坐标
 /// - `zoom`: 缩放级别
-#[must_use]
-pub fn tile_to_lonlat(x: u32, y: u32, zoom: u8) -> (f64, f64) {
-    let n = 2.0_f64.powi(i32::from(zoom));
-    let lon = f64::from(x) / n * 360.0 - 180.0;
-    let lat_rad = (PI * (1.0 - 2.0 * f64::from(y) / n)).sinh().atan();
-    let lat = lat_rad.to_degrees();
-    (lon, lat)
+pub fn tile_to_lonlat(x: u32, y: u32, zoom: u8) -> MhResult<(f64, f64)> {
+    validate_tile_index(x, y, zoom)?;
+    tile_corner_to_lonlat(x, y, zoom)
 }
 
 /// 瓦片范围 -> 边界框 (Web Mercator 坐标)
@@ -224,8 +264,9 @@ pub fn tile_to_lonlat(x: u32, y: u32, zoom: u8) -> (f64, f64) {
 /// # Errors
 /// 若瓦片边界转换出的经纬度无法映射到合法 Web Mercator 坐标，则显式报错
 pub fn tile_to_bbox(x: u32, y: u32, zoom: u8) -> MhResult<(f64, f64, f64, f64)> {
-    let (lon_min, lat_max) = tile_to_lonlat(x, y, zoom);
-    let (lon_max, lat_min) = tile_to_lonlat(x + 1, y + 1, zoom);
+    validate_tile_index(x, y, zoom)?;
+    let (lon_min, lat_max) = tile_corner_to_lonlat(x, y, zoom)?;
+    let (lon_max, lat_min) = tile_corner_to_lonlat(x + 1, y + 1, zoom)?;
 
     let (x_min, y_min) = geographic_to_web_mercator(lon_min, lat_min)?;
     let (x_max, y_max) = geographic_to_web_mercator(lon_max, lat_max)?;
@@ -306,7 +347,7 @@ mod tests {
         assert!(tile_y < max_tile);
 
         // 瓦片左上角应该在原点西北方向
-        let (lon2, lat2) = tile_to_lonlat(tile_x, tile_y, zoom);
+        let (lon2, lat2) = tile_to_lonlat(tile_x, tile_y, zoom).expect("tile origin conversion");
         assert!(lon2 <= lon);
         assert!(lat2 >= lat);
     }
@@ -342,6 +383,30 @@ mod tests {
     #[test]
     fn test_web_mercator_scale_rejects_nonpositive_dpi() {
         assert!(web_mercator_scale(40.0, 10, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_tile_to_lonlat_rejects_out_of_range_tile_index() {
+        assert!(tile_to_lonlat(1024, 0, 10).is_err());
+        assert!(tile_to_lonlat(0, 1024, 10).is_err());
+    }
+
+    #[test]
+    fn test_tile_to_bbox_rejects_out_of_range_tile_index() {
+        assert!(tile_to_bbox(1024, 0, 10).is_err());
+        assert!(tile_to_bbox(0, 1024, 10).is_err());
+    }
+
+    #[test]
+    fn test_lonlat_to_tile_rejects_antimeridian_open_boundary() {
+        assert!(lonlat_to_tile(180.0, 0.0, 10).is_err());
+    }
+
+    #[test]
+    fn test_tile_helpers_reject_unsupported_zoom() {
+        assert!(lonlat_to_tile(116.0, 40.0, 64).is_err());
+        assert!(tile_to_lonlat(0, 0, 64).is_err());
+        assert!(tile_to_bbox(0, 0, 64).is_err());
     }
 
     #[test]

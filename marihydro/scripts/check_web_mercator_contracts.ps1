@@ -100,13 +100,23 @@ try {
 
     Check-PatternPresent `
         -RelativePath $relativePath `
+        -Pattern 'pub fn tile_to_lonlat\(x: u32, y: u32, zoom: u8\) -> MhResult<\(f64, f64\)>' `
+        -Message "Web Mercator tile origin helper must return MhResult<(f64, f64)>"
+
+    Check-PatternPresent `
+        -RelativePath $relativePath `
         -Pattern 'pub fn tile_to_bbox\(x: u32, y: u32, zoom: u8\) -> MhResult<\(f64, f64, f64, f64\)>' `
         -Message "Web Mercator tile bbox helper must return MhResult<(f64, f64, f64, f64)>"
 
     Check-PatternPresent `
         -RelativePath $relativePath `
-        -Pattern 'test_web_mercator_rejects_out_of_range_latitude|test_web_mercator_to_geographic_rejects_out_of_extent|test_web_mercator_resolution_rejects_invalid_latitude|test_web_mercator_scale_rejects_nonpositive_dpi' `
-        -Message "Web Mercator helpers must keep regression coverage for domain failures"
+        -Pattern 'validate_tile_index|tile_grid_width|zoom .* too large for tile indexing|tile corner x .* out of range|tile y .* out of range' `
+        -Message "Web Mercator tile helpers must keep explicit tile-index and zoom-domain checks"
+
+    Check-PatternPresent `
+        -RelativePath $relativePath `
+        -Pattern 'test_web_mercator_rejects_out_of_range_latitude|test_web_mercator_to_geographic_rejects_out_of_extent|test_web_mercator_resolution_rejects_invalid_latitude|test_web_mercator_scale_rejects_nonpositive_dpi|test_tile_to_lonlat_rejects_out_of_range_tile_index|test_tile_to_bbox_rejects_out_of_range_tile_index|test_lonlat_to_tile_rejects_antimeridian_open_boundary|test_tile_helpers_reject_unsupported_zoom' `
+        -Message "Web Mercator helpers must keep regression coverage for domain and tile-index failures"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""
