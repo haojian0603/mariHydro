@@ -11,6 +11,7 @@
 //! - 支持标量和向量场
 //! - ASCII 和二进制格式
 //! - 额外标量访问失败时显式报错，不使用 `Option` 折叠失败语义
+//! - 状态数组长度不一致时在构造阶段显式报错
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -26,6 +27,12 @@ pub enum VtuError {
     Io(std::io::Error),
     /// 无效数据
     InvalidData(String),
+    /// 状态数组长度不匹配
+    StateShapeMismatch {
+        field: String,
+        expected: usize,
+        actual: usize,
+    },
     /// 请求的附加标量不存在
     MissingScalarField { name: String },
     /// 附加标量索引越界
@@ -41,6 +48,15 @@ impl std::fmt::Display for VtuError {
         match self {
             VtuError::Io(e) => write!(f, "IO error: {}", e),
             VtuError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            VtuError::StateShapeMismatch {
+                field,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "State shape mismatch: field={}, expected={}, actual={}",
+                field, expected, actual
+            ),
             VtuError::MissingScalarField { name } => {
                 write!(f, "Missing scalar field: {}", name)
             }
@@ -923,8 +939,24 @@ pub struct SimpleState<'a> {
 
 impl<'a> SimpleState<'a> {
     /// 创建新的简单状态
-    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Self {
-        Self { h, hu, hv }
+    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Result<Self, VtuError> {
+        let expected = h.len();
+        if hu.len() != expected {
+            return Err(VtuError::StateShapeMismatch {
+                field: "hu".to_string(),
+                expected,
+                actual: hu.len(),
+            });
+        }
+        if hv.len() != expected {
+            return Err(VtuError::StateShapeMismatch {
+                field: "hv".to_string(),
+                expected,
+                actual: hv.len(),
+            });
+        }
+
+        Ok(Self { h, hu, hv })
     }
 }
 
@@ -956,17 +988,25 @@ pub struct StateWithScalars<'a> {
 
 impl<'a> StateWithScalars<'a> {
     /// 创建新状态
-    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Self {
-        Self {
-            base: SimpleState::new(h, hu, hv),
+    pub fn new(h: &'a [f64], hu: &'a [f64], hv: &'a [f64]) -> Result<Self, VtuError> {
+        Ok(Self {
+            base: SimpleState::new(h, hu, hv)?,
             scalars: Vec::new(),
-        }
+        })
     }
 
     /// 添加标量场
-    pub fn with_scalar(mut self, name: &'a str, data: &'a [f64]) -> Self {
+    pub fn with_scalar(mut self, name: &'a str, data: &'a [f64]) -> Result<Self, VtuError> {
+        let expected = self.base.n_cells();
+        if data.len() != expected {
+            return Err(VtuError::StateShapeMismatch {
+                field: format!("scalar:{name}"),
+                expected,
+                actual: data.len(),
+            });
+        }
         self.scalars.push((name, data));
-        self
+        Ok(self)
     }
 }
 
@@ -1046,7 +1086,7 @@ mod tests {
         let hu = vec![0.1, 0.2, 0.3];
         let hv = vec![0.0, 0.0, 0.0];
 
-        let state = SimpleState::new(&h, &hu, &hv);
+        let state = SimpleState::new(&h, &hu, &hv).unwrap();
         assert_eq!(state.n_cells(), 3);
         assert!((state.h(0) - 1.0).abs() < 1e-10);
 
@@ -1062,7 +1102,10 @@ mod tests {
         let hv = vec![0.0; 2];
         let temp = vec![20.0, 21.0];
 
-        let state = StateWithScalars::new(&h, &hu, &hv).with_scalar("temperature", &temp);
+        let state = StateWithScalars::new(&h, &hu, &hv)
+            .unwrap()
+            .with_scalar("temperature", &temp)
+            .unwrap();
 
         assert_eq!(state.available_scalars(), vec!["temperature"]);
         assert!((state.scalar("temperature", 0).unwrap() - 20.0).abs() < 1e-10);
@@ -1079,7 +1122,10 @@ mod tests {
         let hv = vec![0.0; 2];
         let temp = vec![20.0, 21.0];
 
-        let state = StateWithScalars::new(&h, &hu, &hv).with_scalar("temperature", &temp);
+        let state = StateWithScalars::new(&h, &hu, &hv)
+            .unwrap()
+            .with_scalar("temperature", &temp)
+            .unwrap();
 
         assert!(matches!(
             state.scalar("temperature", 3),
@@ -1094,12 +1140,41 @@ mod tests {
         let hu = vec![3.13, 0.0]; // 大约 Fr = 1 对于 h=1, g=9.81
         let hv = vec![0.0, 0.0];
 
-        let state = SimpleState::new(&h, &hu, &hv);
+        let state = SimpleState::new(&h, &hu, &hv).unwrap();
         let fr = state.froude_number(0, 1e-6, 9.81);
         assert!((fr - 1.0).abs() < 0.01);
 
         // 干单元应该返回 0
         let fr_dry = state.froude_number(1, 0.001, 9.81);
         assert!((fr_dry - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_simple_state_rejects_shape_mismatch() {
+        let h = vec![1.0, 2.0];
+        let hu = vec![0.0];
+        let hv = vec![0.0, 0.0];
+
+        assert!(matches!(
+            SimpleState::new(&h, &hu, &hv),
+            Err(VtuError::StateShapeMismatch { field, expected, actual })
+                if field == "hu" && expected == 2 && actual == 1
+        ));
+    }
+
+    #[test]
+    fn test_state_with_scalars_rejects_scalar_shape_mismatch() {
+        let h = vec![1.0, 2.0];
+        let hu = vec![0.0; 2];
+        let hv = vec![0.0; 2];
+        let temp = vec![20.0];
+
+        assert!(matches!(
+            StateWithScalars::new(&h, &hu, &hv)
+                .unwrap()
+                .with_scalar("temperature", &temp),
+            Err(VtuError::StateShapeMismatch { field, expected, actual })
+                if field == "scalar:temperature" && expected == 2 && actual == 1
+        ));
     }
 }

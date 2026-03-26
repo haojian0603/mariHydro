@@ -8,6 +8,7 @@
 //!
 //! VTU (VTK Unstructured Grid) 格式用于 ParaView 可视化。
 //! 额外标量字段一旦缺失、越界或实现者内部失败，主链必须显式报错。
+//! 状态数组长度不一致时，构造器必须立即报错，不能把错形状状态带到导出阶段。
 //!
 //! ```rust,ignore
 //! use mh_io::exporters::{VtuExporter, SimpleState};

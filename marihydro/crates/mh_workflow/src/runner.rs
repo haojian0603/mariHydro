@@ -680,7 +680,8 @@ impl<S: Storage> JobRunner<S> {
             state.h_slice(),
             state.hu_slice(),
             state.hv_slice(),
-        );
+        )
+        .map_err(|e| RunnerError::Other(format!("VTU状态构造失败: {}", e)))?;
 
         let output_dir = context.config.project_path.join("output");
         std::fs::create_dir_all(&output_dir)?;

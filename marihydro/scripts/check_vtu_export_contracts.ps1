@@ -75,6 +75,11 @@ try {
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/exporters/vtu.rs" `
+        -Pattern 'StateShapeMismatch' `
+        -Message "VTU exporter must expose explicit state-shape errors"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/exporters/vtu.rs" `
         -Pattern 'fn scalar\(&self, name: &str, _?idx: usize\) -> Result<f64, VtuError>' `
         -Message "VtuState::scalar must return Result<f64, VtuError>"
 
@@ -95,13 +100,28 @@ try {
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/exporters/vtu.rs" `
-        -Pattern 'test_state_with_scalars|test_state_with_scalars_reports_out_of_bounds' `
-        -Message "VTU tests must cover missing scalar fields and out-of-bounds access"
+        -Pattern 'pub fn new\(h: .*?\) -> Result<Self, VtuError>|pub fn with_scalar\(mut self, name: .*?\) -> Result<Self, VtuError>' `
+        -Message "VTU state constructors must return Result<Self, VtuError> for shape validation"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/exporters/vtu.rs" `
+        -Pattern 'test_state_with_scalars|test_state_with_scalars_reports_out_of_bounds|test_simple_state_rejects_shape_mismatch|test_state_with_scalars_rejects_scalar_shape_mismatch' `
+        -Message "VTU tests must cover scalar access and state-shape mismatch failures"
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/lib.rs" `
         -Pattern 'pub use exporters::\{VtuError, VtuExporter, VtuMesh, VtuState\};' `
         -Message "mh_io root must re-export VtuError with the public VTU state trait"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_workflow/src/runner.rs" `
+        -Pattern 'SimpleState::new\(' `
+        -Message "workflow runner must construct VTU state through the validated constructor"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_workflow/src/runner.rs" `
+        -Pattern 'map_err\(\|e\| RunnerError::Other\(format!\(' `
+        -Message "workflow runner must map VTU state construction failures into explicit runner errors"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""
