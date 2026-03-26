@@ -140,6 +140,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.548: geo geodesic contract guard
+    Write-Host "=== Phase 0.548: geo geodesic contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_geodesic_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo geodesic contracts must pass"
+    } else {
+        Write-Host "[OK] geo geodesic contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

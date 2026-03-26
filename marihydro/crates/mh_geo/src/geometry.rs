@@ -10,6 +10,7 @@
 //! - `vincenty_distance_to`: Vincenty 公式（高精度椭球面距离）
 
 use crate::ellipsoid::Ellipsoid;
+use crate::error::{GeoError, GeoResult};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 use std::ops::{Add, Mul, Neg, Sub};
@@ -507,18 +508,20 @@ impl Point2D {
     /// - `other`: 另一个点（经纬度，度）
     ///
     /// # Returns
-    /// 测地线距离（米），如果迭代不收敛返回 None
-    #[must_use]
-    pub fn vincenty_distance_to(&self, other: &Self) -> Option<f64> {
+    /// 测地线距离（米），如果迭代不收敛返回显式错误
+    pub fn vincenty_distance_to(&self, other: &Self) -> GeoResult<f64> {
         self.vincenty_distance(other, &Ellipsoid::WGS84)
     }
 
     /// Vincenty 公式（可自定义椭球体）
-    #[must_use]
-    pub fn vincenty_distance(&self, other: &Self, ellipsoid: &Ellipsoid) -> Option<f64> {
+    pub fn vincenty_distance(&self, other: &Self, ellipsoid: &Ellipsoid) -> GeoResult<f64> {
         let a = ellipsoid.a;
         let f = ellipsoid.f;
         let b = ellipsoid.b();
+
+        if (self.x - other.x).abs() < 1e-15 && (self.y - other.y).abs() < 1e-15 {
+            return Ok(0.0);
+        }
 
         let phi1 = deg_to_rad(self.y);
         let phi2 = deg_to_rad(other.y);
@@ -544,6 +547,7 @@ impl Point2D {
 
         const MAX_ITER: usize = 100;
         const TOLERANCE: f64 = 1e-12;
+        let mut converged = false;
 
         for _ in 0..MAX_ITER {
             let sin_lambda = lambda.sin();
@@ -554,8 +558,9 @@ impl Point2D {
             .sqrt();
 
             if sin_sigma < 1e-12 {
-                // 两点重合
-                return Some(0.0);
+                // 同点零距离已在迭代前单独处理。这里进入的是 Vincenty 退化状态，
+                // 继续返回零会把对跖点等非收敛输入伪装成成功。
+                return Err(GeoError::vincenty_not_converged());
             }
 
             cos_sigma = sin_u1 * sin_u2 + cos_u1 * cos_u2 * cos_lambda;
@@ -582,8 +587,13 @@ impl Point2D {
                             * (cos_2sigma_m + c * cos_sigma * (-1.0 + 2.0 * cos_2sigma_m.powi(2))));
 
             if (lambda - lambda_prev).abs() < TOLERANCE {
+                converged = true;
                 break;
             }
+        }
+
+        if !converged {
+            return Err(GeoError::vincenty_not_converged());
         }
 
         // 计算距离
@@ -603,7 +613,7 @@ impl Point2D {
 
         let s = b * aa * (sigma - delta_sigma);
 
-        Some(s)
+        Ok(s)
     }
 
     /// 计算初始方位角（从 self 到 other）
@@ -968,10 +978,10 @@ mod tests {
         let beijing = Point2D::from_lonlat(116.4, 39.9);
         let shanghai = Point2D::from_lonlat(121.5, 31.2);
 
-        let dist = beijing.vincenty_distance_to(&shanghai);
-        assert!(dist.is_some());
-
-        let dist_km = dist.unwrap() / 1000.0;
+        let dist_km = beijing
+            .vincenty_distance_to(&shanghai)
+            .expect("Vincenty 距离应当收敛")
+            / 1000.0;
         // Vincenty 精度更高
         assert!(
             (dist_km - 1068.0).abs() < 10.0,
@@ -982,9 +992,21 @@ mod tests {
     #[test]
     fn test_vincenty_same_point() {
         let p = Point2D::from_lonlat(116.4, 39.9);
-        let dist = p.vincenty_distance_to(&p);
-        assert!(dist.is_some());
-        assert!(dist.unwrap() < 1e-6);
+        let dist = p
+            .vincenty_distance_to(&p)
+            .expect("Vincenty 同点距离应当返回零");
+        assert!(dist < 1e-6);
+    }
+
+    #[test]
+    fn test_vincenty_antipodal_reports_not_converged() {
+        let p1 = Point2D::from_lonlat(0.0, 0.0);
+        let p2 = Point2D::from_lonlat(180.0, 0.0);
+
+        let err = p1
+            .vincenty_distance_to(&p2)
+            .expect_err("Vincenty 对严格对跖点应当显式报告不收敛");
+        assert!(matches!(err, GeoError::VincentyNotConverged));
     }
 
     // 方位角测试
