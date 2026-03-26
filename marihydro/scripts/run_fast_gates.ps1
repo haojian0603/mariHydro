@@ -63,6 +63,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_snapshot_boundary_contracts.ps1"
     }
 
+    Invoke-Step -Name "IO pipeline shutdown contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_pipeline_shutdown_contracts.ps1"
+    }
+
     Invoke-Step -Name "import contracts (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default)" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }

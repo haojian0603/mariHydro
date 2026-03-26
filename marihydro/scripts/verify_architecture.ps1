@@ -129,6 +129,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.547: IO pipeline shutdown contract guard
+    Write-Host "=== Phase 0.547: IO pipeline shutdown contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_pipeline_shutdown_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "IO pipeline shutdown contracts must pass"
+    } else {
+        Write-Host "[OK] IO pipeline shutdown contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

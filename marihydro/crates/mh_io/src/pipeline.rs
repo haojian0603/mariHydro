@@ -409,15 +409,22 @@ impl IoPipeline {
     }
 
     /// 等待所有请求完成
-    pub fn wait_for_completion(&self, timeout: Duration) -> bool {
+    pub fn wait_for_completion(&self, timeout: Duration) -> crate::error::IoResult<()> {
         let start = Instant::now();
         while self.pending_count() > 0 {
             if start.elapsed() > timeout {
-                return false;
+                return Err(crate::error::IoError::PipelineFailed {
+                    stage: "wait_for_completion".to_string(),
+                    message: format!(
+                        "pending requests did not drain within {:?}; remaining={}",
+                        timeout,
+                        self.pending_count()
+                    ),
+                });
             }
             thread::sleep(Duration::from_millis(10));
         }
-        true
+        Ok(())
     }
 
     /// 获取统计信息
@@ -432,32 +439,53 @@ impl IoPipeline {
     }
 
     /// 显式关闭管道
-    pub fn shutdown(&mut self) {
-        self.shutdown_graceful(Duration::from_secs(30));
+    pub fn shutdown(&mut self) -> crate::error::IoResult<()> {
+        self.shutdown_graceful(Duration::from_secs(30))
     }
 
     /// 优雅关闭（等待队列清空）
-    pub fn shutdown_graceful(&mut self, timeout: Duration) {
-        let _ = self.flush();
-        let _ = self.wait_for_completion(timeout);
+    pub fn shutdown_graceful(&mut self, timeout: Duration) -> crate::error::IoResult<()> {
+        self.flush()?;
+        self.wait_for_completion(timeout)?;
         self.shutdown_flag.store(true, Ordering::SeqCst);
-        let _ = self.sender.send(OutputRequest::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        self.send_shutdown_request("shutdown_graceful")?;
+        self.join_worker("shutdown_graceful")
     }
 
     /// 立即关闭（不等待队列）
-    pub fn shutdown_immediate(&mut self) {
+    pub fn shutdown_immediate(&mut self) -> crate::error::IoResult<()> {
         self.shutdown_flag.store(true, Ordering::SeqCst);
         self.pending_count.store(0, Ordering::SeqCst);
-        if let Ok(mut stats) = self.stats.lock() {
-            stats.current_queue_length = 0;
-        }
-        let _ = self.sender.send(OutputRequest::Shutdown);
+        self.stats
+            .lock()
+            .map_err(|_| crate::error::IoError::PipelineFailed {
+                stage: "shutdown_immediate".to_string(),
+                message: "pipeline stats mutex poisoned".to_string(),
+            })?
+            .current_queue_length = 0;
+        self.send_shutdown_request("shutdown_immediate")?;
+        self.join_worker("shutdown_immediate")
+    }
+
+    fn send_shutdown_request(&self, stage: &str) -> crate::error::IoResult<()> {
+        self.sender.send(OutputRequest::Shutdown).map_err(|_| {
+            crate::error::IoError::PipelineFailed {
+                stage: stage.to_string(),
+                message: "failed to deliver shutdown request to worker".to_string(),
+            }
+        })
+    }
+
+    fn join_worker(&mut self, stage: &str) -> crate::error::IoResult<()> {
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            worker
+                .join()
+                .map_err(|_| crate::error::IoError::PipelineFailed {
+                    stage: stage.to_string(),
+                    message: "worker thread panicked during shutdown".to_string(),
+                })?;
         }
+        Ok(())
     }
 
     /// 工作线程主循环
@@ -499,16 +527,18 @@ impl IoPipeline {
                 Self::process_request(&request).map_err(|e| e.into_io_error("process_request"));
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             if write_timeout_ms > 0 && elapsed_ms as u64 > write_timeout_ms {
-                if result.is_ok() {
-                    eprintln!(
-                        "[mh_io::pipeline] 写入超时警告: elapsed_ms={elapsed_ms:.2}, limit_ms={write_timeout_ms}"
-                    );
-                } else {
-                    result = Err(
-                        PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
-                            .into_io_error("process_request"),
-                    );
-                }
+                let timeout_message = match &result {
+                    Ok(()) => format!(
+                        "write exceeded timeout: elapsed_ms={elapsed_ms:.2}, limit_ms={write_timeout_ms}"
+                    ),
+                    Err(err) => format!(
+                        "write exceeded timeout: elapsed_ms={elapsed_ms:.2}, limit_ms={write_timeout_ms}, last_error={err}"
+                    ),
+                };
+                result = Err(crate::error::IoError::PipelineFailed {
+                    stage: "process_request".to_string(),
+                    message: timeout_message,
+                });
             }
 
             {
@@ -885,7 +915,18 @@ impl Default for IoPipeline {
 
 impl Drop for IoPipeline {
     fn drop(&mut self) {
-        self.shutdown_graceful(Duration::from_secs(30));
+        if let Err(err) = self.shutdown_graceful(Duration::from_secs(30)) {
+            eprintln!("[mh_io::pipeline] 析构时优雅关闭失败: {err}");
+            self.shutdown_flag.store(true, Ordering::SeqCst);
+            if self.sender.send(OutputRequest::Shutdown).is_err() {
+                eprintln!("[mh_io::pipeline] 析构时发送关闭请求失败");
+            }
+            if let Some(worker) = self.worker.take() {
+                if worker.join().is_err() {
+                    eprintln!("[mh_io::pipeline] 析构时工作线程 join 失败");
+                }
+            }
+        }
     }
 }
 
@@ -938,7 +979,7 @@ mod tests {
     #[test]
     fn test_pipeline_shutdown() {
         let mut pipeline = IoPipeline::new();
-        pipeline.shutdown();
+        pipeline.shutdown().expect("pipeline 显式关闭应当成功");
     }
 
     #[test]
@@ -1000,7 +1041,9 @@ mod tests {
 
         let pipeline = IoPipeline::new();
         pipeline.write_vtu_binary(&path, mesh, state, 0.0).unwrap();
-        assert!(pipeline.wait_for_completion(Duration::from_secs(5)));
+        pipeline
+            .wait_for_completion(Duration::from_secs(5))
+            .expect("pipeline 应当在超时前完成所有请求");
         assert!(path.exists());
         assert!(path.metadata().unwrap().len() > 0);
         let output = std::fs::read_to_string(&path).expect("应能回读刚写出的 VTU");
@@ -1044,9 +1087,25 @@ mod tests {
                 .unwrap();
         }
 
-        assert!(pipeline.wait_for_completion(Duration::from_secs(10)));
+        pipeline
+            .wait_for_completion(Duration::from_secs(10))
+            .expect("pipeline 应当在测试时限内排空队列");
         let elapsed = start.elapsed();
         assert!(elapsed < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_wait_for_completion_timeout_is_explicit() {
+        let pipeline = IoPipeline::new();
+        pipeline.pending_count.store(1, Ordering::SeqCst);
+
+        let result = pipeline.wait_for_completion(Duration::from_millis(20));
+        match result {
+            Err(crate::error::IoError::PipelineFailed { stage, .. }) => {
+                assert_eq!(stage, "wait_for_completion");
+            }
+            other => panic!("expected explicit timeout error, got {other:?}"),
+        }
     }
 
     #[cfg(not(unix))]
