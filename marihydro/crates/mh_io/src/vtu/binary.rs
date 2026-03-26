@@ -5,10 +5,19 @@
 //! - AppendedData：base64 编码，用于 <DataArray format="appended">
 //! - 支持 f32/f64 混合精度
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use std::io::{self, Write};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use mh_runtime::RuntimeScalar;
 use serde_json;
+use std::io::{self, Write};
+
+fn serialize_boundary_names(names: &[String]) -> io::Result<String> {
+    serde_json::to_string(names).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("boundary_names 序列化失败: {err}"),
+        )
+    })
+}
 
 /// 二进制编码器
 pub struct BinaryEncoder {
@@ -40,9 +49,10 @@ impl BinaryEncoder {
 
     /// 编码 f64 数组（小端字节序）
     pub fn encode_f64(&mut self, data: &[f64]) -> io::Result<usize> {
-        let byte_len = data.len().checked_mul(8).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow")
-        })?;
+        let byte_len = data
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow"))?;
         let offset = self.encode_header(byte_len)?;
         for &val in data {
             self.buffer.extend_from_slice(&val.to_le_bytes());
@@ -55,9 +65,10 @@ impl BinaryEncoder {
     /// 用于大规模模拟场景，可再减少50%存储空间
     #[allow(dead_code)]
     pub fn encode_f32(&mut self, data: &[f32]) -> io::Result<usize> {
-        let byte_len = data.len().checked_mul(4).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow")
-        })?;
+        let byte_len = data
+            .len()
+            .checked_mul(4)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow"))?;
         let offset = self.encode_header(byte_len)?;
         for &val in data {
             self.buffer.extend_from_slice(&val.to_le_bytes());
@@ -67,9 +78,10 @@ impl BinaryEncoder {
 
     /// 编码 i32 数组（小端字节序）
     pub fn encode_i32(&mut self, data: &[i32]) -> io::Result<usize> {
-        let byte_len = data.len().checked_mul(4).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow")
-        })?;
+        let byte_len = data
+            .len()
+            .checked_mul(4)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VTU data size overflow"))?;
         let offset = self.encode_header(byte_len)?;
         for &val in data {
             self.buffer.extend_from_slice(&val.to_le_bytes());
@@ -127,16 +139,23 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
         writeln!(
             writer,
             r#"      <DataArray type="Int32" Name="boundary_faces" format="ascii">{} </DataArray>"#,
-            faces.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            faces
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
         )?;
         writeln!(
             writer,
             r#"      <DataArray type="Int32" Name="boundary_ids" format="ascii">{} </DataArray>"#,
-            ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+            ids.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
         )?;
     }
     if let Some(names) = &mesh.boundary_names {
-        let serialized = serde_json::to_string(names).unwrap_or_else(|_| "[]".into());
+        let serialized = serialize_boundary_names(names)?;
         writeln!(
             writer,
             r#"      <DataArray type="String" Name="boundary_names" NumberOfTuples="1" format="ascii">{}</DataArray>"#,
@@ -270,8 +289,7 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
             writeln!(
                 writer,
                 r#"        <DataArray type="Float64" Name="{}" format="appended" offset="{}"/>"#,
-                name,
-                offset
+                name, offset
             )?;
         }
     }
@@ -290,6 +308,18 @@ pub fn write_vtu_binary<W: Write, S: RuntimeScalar>(
 mod tests {
     use super::*;
     use crate::snapshot::{MeshSnapshot, StateSnapshot};
+
+    fn sample_mesh_with_boundary_names() -> MeshSnapshot<f64> {
+        MeshSnapshot::<f64>::from_mesh_data(
+            4,
+            1,
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            vec![vec![0, 1, 2, 3]],
+            vec![1.0],
+            vec![0.0],
+        )
+        .with_boundaries(vec![0], vec![7], vec!["open-sea".to_string()])
+    }
 
     #[test]
     fn test_binary_encoder_f64() {
@@ -315,19 +345,9 @@ mod tests {
 
     #[test]
     fn test_binary_vtu_output() {
-        let mesh = MeshSnapshot::<f64>::from_mesh_data(
-            4, 1,
-            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
-            vec![vec![0, 1, 2, 3]],
-            vec![1.0],
-            vec![0.0],
-        );
+        let mesh = sample_mesh_with_boundary_names();
 
-        let state = StateSnapshot::<f64>::from_state_data(
-            vec![1.0],
-            vec![0.1],
-            vec![0.0],
-        );
+        let state = StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.1], vec![0.0]);
 
         let mut output = Vec::new();
         write_vtu_binary(&mut output, &mesh, &state, 0.0).unwrap();
@@ -336,5 +356,14 @@ mod tests {
         assert!(output_str.contains("<VTKFile"));
         assert!(output_str.contains("format=\"appended\""));
         assert!(output_str.contains("<AppendedData"));
+        assert!(output_str.contains(r#"["open-sea"]"#));
+    }
+
+    #[test]
+    fn test_serialize_boundary_names_json() {
+        let names = vec!["open-sea".to_string(), "river-inlet".to_string()];
+        let serialized =
+            serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
+        assert_eq!(serialized, r#"["open-sea","river-inlet"]"#);
     }
 }

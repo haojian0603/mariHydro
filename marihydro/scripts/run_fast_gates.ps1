@@ -47,6 +47,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_data_contracts.ps1"
     }
 
+    Invoke-Step -Name "export metadata contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_export_metadata_contracts.ps1"
+    }
+
     Invoke-Step -Name "import contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }

@@ -85,6 +85,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.525: export metadata contract guard
+    Write-Host "=== Phase 0.525: export metadata contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_export_metadata_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "export metadata contracts must pass"
+    } else {
+        Write-Host "[OK] export metadata contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

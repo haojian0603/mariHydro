@@ -9,6 +9,7 @@
 //! IO 管道使用独立的工作线程处理文件写入请求，主线程只需提交请求即可继续计算。
 //! 支持背压控制与写入超时，当待处理请求过多或操作超时时会返回错误。
 
+use serde_json;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -17,10 +18,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use serde_json;
 
-use crate::snapshot::{MeshSnapshot, StateSnapshot};
 use crate::checkpoint::Checkpoint;
+use crate::snapshot::{MeshSnapshot, StateSnapshot};
 use crate::vtu::binary::write_vtu_binary;
 
 // ============================================================
@@ -28,7 +28,7 @@ use crate::vtu::binary::write_vtu_binary;
 // ============================================================
 
 /// IO 管道内部错误（不对外暴露）
-/// 
+///
 /// ## 架构说明
 /// - `Io`: 当前主要使用路径（所有 IO 操作）
 /// - `Serialization`: 预留：二进制 VTU 序列化失败
@@ -87,6 +87,11 @@ impl PipelineError {
 /// IO 管道内部操作结果
 type PipelineResult<T> = Result<T, PipelineError>;
 
+fn serialize_boundary_names(names: &[String]) -> PipelineResult<String> {
+    serde_json::to_string(names)
+        .map_err(|err| PipelineError::Serialization(format!("boundary_names 序列化失败: {err}")))
+}
+
 // ============================================================
 // 输出请求
 // ============================================================
@@ -121,10 +126,7 @@ pub enum OutputRequest {
         entries: Vec<PvdEntry>,
     },
     /// 写入原始数据
-    WriteRaw {
-        path: PathBuf,
-        data: Vec<u8>,
-    },
+    WriteRaw { path: PathBuf, data: Vec<u8> },
     /// 刷新所有待处理请求
     Flush { ack: Sender<()> },
     /// 关闭管道
@@ -229,7 +231,13 @@ impl IoPipeline {
         let worker = thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
-                Self::worker_loop(receiver, pending_clone, stats_clone, shutdown_clone, timeout_ms);
+                Self::worker_loop(
+                    receiver,
+                    pending_clone,
+                    stats_clone,
+                    shutdown_clone,
+                    timeout_ms,
+                );
             })
             .expect("无法创建 IO 工作线程");
 
@@ -252,7 +260,7 @@ impl IoPipeline {
     }
 
     /// 原子地检查并增加待处理计数（修复 TOCTOU 竞争条件）
-    /// 
+    ///
     /// 使用 compare_exchange 确保检查和增加操作是原子的，
     /// 避免多线程并发时的竞争条件。
     fn try_increment_pending(&self) -> Result<usize, crate::error::IoError> {
@@ -261,17 +269,17 @@ impl IoPipeline {
             let new_count = self.pending_count.fetch_add(1, Ordering::SeqCst) + 1;
             return Ok(new_count);
         }
-        
+
         loop {
             let current = self.pending_count.load(Ordering::SeqCst);
-            
+
             if current >= self.config.max_pending {
                 return Err(crate::error::IoError::PipelineFailed {
                     stage: "submit".to_string(),
                     message: format!("队列已满 ({}/{})", current, self.config.max_pending),
                 });
             }
-            
+
             // 原子 CAS 操作：仅当当前值未变时才增加
             match self.pending_count.compare_exchange(
                 current,
@@ -296,7 +304,7 @@ impl IoPipeline {
 
         // 使用原子操作安全地增加计数（修复 TOCTOU）
         let new_count = self.try_increment_pending()?;
-        
+
         // 更新统计信息（使用毒化恢复）
         {
             let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
@@ -310,16 +318,14 @@ impl IoPipeline {
             }
         }
 
-        self.sender
-            .send(request)
-            .map_err(|_| {
-                // 发送失败时回滚计数
-                self.pending_count.fetch_sub(1, Ordering::SeqCst);
-                crate::error::IoError::PipelineFailed {
-                    stage: "submit".to_string(),
-                    message: "管道已关闭".to_string(),
-                }
-            })
+        self.sender.send(request).map_err(|_| {
+            // 发送失败时回滚计数
+            self.pending_count.fetch_sub(1, Ordering::SeqCst);
+            crate::error::IoError::PipelineFailed {
+                stage: "submit".to_string(),
+                message: "管道已关闭".to_string(),
+            }
+        })
     }
 
     /// 提交 VTU ASCII 写入
@@ -373,7 +379,11 @@ impl IoPipeline {
     }
 
     /// 提交 PVD 写入
-    pub fn write_pvd(&self, path: impl Into<PathBuf>, entries: Vec<PvdEntry>) -> crate::error::IoResult<()> {
+    pub fn write_pvd(
+        &self,
+        path: impl Into<PathBuf>,
+        entries: Vec<PvdEntry>,
+    ) -> crate::error::IoResult<()> {
         self.submit(OutputRequest::WritePvd {
             path: path.into(),
             entries,
@@ -412,10 +422,13 @@ impl IoPipeline {
 
     /// 获取统计信息
     pub fn stats(&self) -> PipelineStats {
-        self.stats.lock().unwrap_or_else(|poisoned| {
-            // 警告：PipelineStats mutex 被毒化，正在恢复
-            poisoned.into_inner()
-        }).clone()
+        self.stats
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                // 警告：PipelineStats mutex 被毒化，正在恢复
+                poisoned.into_inner()
+            })
+            .clone()
     }
 
     /// 显式关闭管道
@@ -482,8 +495,8 @@ impl IoPipeline {
             }
 
             let start = Instant::now();
-            let mut result = Self::process_request(&request)
-                .map_err(|e| e.into_io_error("process_request"));
+            let mut result =
+                Self::process_request(&request).map_err(|e| e.into_io_error("process_request"));
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             if write_timeout_ms > 0 && elapsed_ms as u64 > write_timeout_ms {
                 if result.is_ok() {
@@ -491,8 +504,10 @@ impl IoPipeline {
                         "[mh_io::pipeline] 写入超时警告: elapsed_ms={elapsed_ms:.2}, limit_ms={write_timeout_ms}"
                     );
                 } else {
-                    result = Err(PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
-                        .into_io_error("process_request"));
+                    result = Err(
+                        PipelineError::Timeout(Duration::from_millis(write_timeout_ms))
+                            .into_io_error("process_request"),
+                    );
                 }
             }
 
@@ -528,13 +543,25 @@ impl IoPipeline {
     /// 处理单个请求
     fn process_request(request: &OutputRequest) -> PipelineResult<()> {
         match request {
-            OutputRequest::WriteVtuAscii { path, mesh_data, state_data, time } => {
-                Self::write_vtu_ascii_impl(path, mesh_data, state_data, *time)
-            }
-            OutputRequest::WriteVtuBinary { path, mesh_data, state_data, time } => {
-                Self::write_vtu_binary_impl(path, mesh_data, state_data, *time)
-            }
-            OutputRequest::WriteCheckpoint { path, state_data, mesh_snapshot, time, step } => {
+            OutputRequest::WriteVtuAscii {
+                path,
+                mesh_data,
+                state_data,
+                time,
+            } => Self::write_vtu_ascii_impl(path, mesh_data, state_data, *time),
+            OutputRequest::WriteVtuBinary {
+                path,
+                mesh_data,
+                state_data,
+                time,
+            } => Self::write_vtu_binary_impl(path, mesh_data, state_data, *time),
+            OutputRequest::WriteCheckpoint {
+                path,
+                state_data,
+                mesh_snapshot,
+                time,
+                step,
+            } => {
                 Self::write_checkpoint_impl(path, state_data, mesh_snapshot.as_ref(), *time, *step)
             }
             OutputRequest::WritePvd { path, entries } => Self::write_pvd_impl(path, entries),
@@ -558,10 +585,15 @@ impl IoPipeline {
         state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
-        mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
-        state.validate().map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
+        mesh.validate()
+            .map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
+        state
+            .validate()
+            .map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
         if mesh.n_cells != state.h.len() {
-            return Err(PipelineError::Serialization("mesh/state length mismatch".into()));
+            return Err(PipelineError::Serialization(
+                "mesh/state length mismatch".into(),
+            ));
         }
 
         if let Some(parent) = path.parent() {
@@ -598,7 +630,11 @@ impl IoPipeline {
             writeln!(
                 writer,
                 "          {}",
-                faces.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+                faces
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             )?;
             writeln!(writer, r#"        </DataArray>"#)?;
             writeln!(
@@ -608,12 +644,15 @@ impl IoPipeline {
             writeln!(
                 writer,
                 "          {}",
-                ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+                ids.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             )?;
             writeln!(writer, r#"        </DataArray>"#)?;
         }
         if let Some(names) = &mesh.boundary_names {
-            let serialized = serde_json::to_string(names).unwrap_or_else(|_| "[]".into());
+            let serialized = serialize_boundary_names(names)?;
             writeln!(
                 writer,
                 r#"        <DataArray type="String" Name="boundary_names" NumberOfTuples="1" format="ascii">"#
@@ -756,10 +795,15 @@ impl IoPipeline {
         state: &StateSnapshot<f64>,
         time: f64,
     ) -> PipelineResult<()> {
-        mesh.validate().map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
-        state.validate().map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
+        mesh.validate()
+            .map_err(|e| PipelineError::Serialization(format!("网格验证失败: {}", e)))?;
+        state
+            .validate()
+            .map_err(|e| PipelineError::Serialization(format!("状态验证失败: {}", e)))?;
         if mesh.n_cells != state.h.len() {
-            return Err(PipelineError::Serialization("mesh/state length mismatch".into()));
+            return Err(PipelineError::Serialization(
+                "mesh/state length mismatch".into(),
+            ));
         }
 
         if let Some(parent) = path.parent() {
@@ -850,6 +894,22 @@ mod tests {
     use super::*;
     use crate::snapshot::{MeshSnapshot, StateSnapshot};
 
+    fn sample_mesh_with_boundary_names() -> MeshSnapshot<f64> {
+        MeshSnapshot::<f64>::from_mesh_data(
+            4,
+            1,
+            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            vec![vec![0, 1, 2, 3]],
+            vec![1.0],
+            vec![0.0],
+        )
+        .with_boundaries(vec![0], vec![7], vec!["open-sea".to_string()])
+    }
+
+    fn sample_state() -> StateSnapshot<f64> {
+        StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.1], vec![0.0])
+    }
+
     #[test]
     fn test_pipeline_creation() {
         let pipeline = IoPipeline::new();
@@ -884,29 +944,49 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_boundary_names_json() {
+        let names = vec!["open-sea".to_string(), "river-inlet".to_string()];
+        let serialized =
+            serialize_boundary_names(&names).expect("boundary_names 序列化应当成功");
+        assert_eq!(serialized, r#"["open-sea","river-inlet"]"#);
+    }
+
+    #[test]
+    fn test_write_vtu_ascii_preserves_boundary_names_json() {
+        let temp_dir = std::env::temp_dir();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时间应晚于 Unix 纪元")
+            .as_nanos();
+        let path = temp_dir.join(format!("test_ascii_boundary_names_{unique}.vtu"));
+
+        let mesh = sample_mesh_with_boundary_names();
+        let state = sample_state();
+
+        IoPipeline::write_vtu_ascii_impl(&path, &mesh, &state, 0.0)
+            .expect("VTU ASCII 写出应当成功");
+
+        let output = std::fs::read_to_string(&path).expect("应能回读刚写出的 VTU");
+        let _ = std::fs::remove_file(&path);
+        assert!(output.contains("boundary_names"));
+        assert!(output.contains("open-sea"));
+    }
+
+    #[test]
     fn test_pipeline_binary_vtu() {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_binary.vtu");
 
-        let mesh = MeshSnapshot::<f64>::from_mesh_data(
-            4, 1,
-            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
-            vec![vec![0, 1, 2, 3]],
-            vec![1.0],
-            vec![0.0],
-        );
-
-        let state = StateSnapshot::<f64>::from_state_data(
-            vec![1.0],
-            vec![0.1],
-            vec![0.0],
-        );
+        let mesh = sample_mesh_with_boundary_names();
+        let state = sample_state();
 
         let pipeline = IoPipeline::new();
         pipeline.write_vtu_binary(&path, mesh, state, 0.0).unwrap();
         assert!(pipeline.wait_for_completion(Duration::from_secs(5)));
         assert!(path.exists());
         assert!(path.metadata().unwrap().len() > 0);
+        let output = std::fs::read_to_string(&path).expect("应能回读刚写出的 VTU");
+        assert!(output.contains(r#"["open-sea"]"#));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -918,9 +998,10 @@ mod tests {
             ..Default::default()
         };
         let pipeline = IoPipeline::with_config(config);
-        
+
         let mesh = MeshSnapshot::<f64>::from_mesh_data(
-            10000, 5000,
+            10000,
+            5000,
             vec![(0.0, 0.0); 10000],
             vec![vec![0, 1, 2, 3]; 5000],
             vec![1.0; 5000],
@@ -935,14 +1016,16 @@ mod tests {
 
         let start = Instant::now();
         for i in 0..10 {
-            pipeline.write_vtu_binary(
-                format!("/dev/full/test_{}.vtu", i),
-                mesh.clone(),
-                state.clone(),
-                i as f64,
-            ).unwrap();
+            pipeline
+                .write_vtu_binary(
+                    format!("/dev/full/test_{}.vtu", i),
+                    mesh.clone(),
+                    state.clone(),
+                    i as f64,
+                )
+                .unwrap();
         }
-        
+
         assert!(pipeline.wait_for_completion(Duration::from_secs(10)));
         let elapsed = start.elapsed();
         assert!(elapsed < Duration::from_secs(5));
