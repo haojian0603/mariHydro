@@ -1,6 +1,6 @@
 // crates/mh_io/src/import/geojson.rs
 // IO_SOURCE: RFC 7946 GeoJSON geometry model; Polygon and MultiPolygon coordinates must follow linear-ring structure.
-// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry.
+// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry, and semantic boundary/zone names must be present instead of being synthesized.
 
 //! GeoJSON 导入模块
 //!
@@ -529,8 +529,9 @@ impl GeoJsonReader {
 
     /// 获取边界条件位置
     ///
-    /// 查找包含 "bc_type" 属性的 Point 或 LineString 特征
-    pub fn boundary_conditions(&self) -> Vec<BoundaryConditionLocation> {
+    /// 查找包含 "bc_type" 属性的 Point 或 LineString 特征。
+    /// 一旦某个特征声明为边界条件，就必须显式给出语义名称。
+    pub fn boundary_conditions(&self) -> Result<Vec<BoundaryConditionLocation>, GeoJsonError> {
         let mut result = Vec::new();
 
         for feature in &self.features {
@@ -539,7 +540,13 @@ impl GeoJsonReader {
                 None => continue,
             };
 
-            let name = feature.get_string("name").unwrap_or("unnamed").to_string();
+            let name = feature.get_string("name").ok_or_else(|| {
+                GeoJsonError::MissingProperty(format!(
+                    "name for boundary-condition feature with bc_type={}",
+                    bc_type
+                ))
+            })?;
+            let name = name.to_string();
             let value = feature.get_f64("value");
 
             let location = match &feature.geometry {
@@ -557,21 +564,31 @@ impl GeoJsonReader {
             });
         }
 
-        result
+        Ok(result)
     }
 
     /// 获取区域属性（多边形）
     ///
-    /// 用于初始水深、摩擦系数等分区数据
-    pub fn zone_properties(&self) -> Vec<ZoneProperties> {
+    /// 用于初始水深、摩擦系数等分区数据。
+    /// 进入主链的区域要素必须显式给出语义名称。
+    pub fn zone_properties(&self) -> Result<Vec<ZoneProperties>, GeoJsonError> {
         let mut result = Vec::new();
 
         for feature in &self.features {
-            let name = feature.get_string("name").unwrap_or("zone").to_string();
+            let name = match &feature.geometry {
+                GeometryData::Polygon { .. } | GeometryData::MultiPolygon { .. } => {
+                    feature.get_string("name").ok_or_else(|| {
+                        GeoJsonError::MissingProperty(
+                            "name for polygon or multipolygon zone feature".to_string(),
+                        )
+                    })?
+                }
+                _ => continue,
+            };
             match &feature.geometry {
                 GeometryData::Polygon { exterior, holes } => {
                     result.push(ZoneProperties {
-                        name,
+                        name: name.to_string(),
                         exterior: exterior.clone(),
                         holes: holes.clone(),
                         properties: feature.properties.clone(),
@@ -592,7 +609,7 @@ impl GeoJsonReader {
             }
         }
 
-        result
+        Ok(result)
     }
 }
 
@@ -778,7 +795,7 @@ mod tests {
         let reader = GeoJsonReader::from_str(json).unwrap();
         assert_eq!(reader.len(), 2);
 
-        let bcs = reader.boundary_conditions();
+        let bcs = reader.boundary_conditions().unwrap();
         assert_eq!(bcs.len(), 2);
         assert_eq!(bcs[0].name, "inlet");
         assert_eq!(bcs[0].bc_type, "discharge");
@@ -799,10 +816,57 @@ mod tests {
         }"#;
 
         let reader = GeoJsonReader::from_str(json).unwrap();
-        let zones = reader.zone_properties();
+        let zones = reader.zone_properties().unwrap();
         assert_eq!(zones.len(), 1);
         assert_eq!(zones[0].name, "zone1");
         assert_eq!(zones[0].get_f64("manning_n"), Some(0.035));
+    }
+
+    #[test]
+    fn test_boundary_conditions_require_name() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [0, 0]
+                    },
+                    "properties": {"bc_type": "discharge", "value": 100}
+                }
+            ]
+        }"#;
+
+        let reader = GeoJsonReader::from_str(json).unwrap();
+        let err = reader.boundary_conditions().unwrap_err();
+        assert!(matches!(
+            err,
+            GeoJsonError::MissingProperty(msg)
+            if msg.contains("name for boundary-condition feature")
+        ));
+    }
+
+    #[test]
+    fn test_zone_properties_require_name() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+                ]
+            },
+            "properties": {"manning_n": 0.035}
+        }"#;
+
+        let reader = GeoJsonReader::from_str(json).unwrap();
+        let err = reader.zone_properties().unwrap_err();
+        assert!(matches!(
+            err,
+            GeoJsonError::MissingProperty(msg)
+            if msg.contains("polygon or multipolygon zone feature")
+        ));
     }
 
     #[test]

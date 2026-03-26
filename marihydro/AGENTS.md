@@ -18,6 +18,7 @@
 - [RULE_EXPORT_METADATA_SERIALIZATION_EXPLICIT] 导出链路里的元数据序列化不得伪装成功。像 `boundary_names`、字段名列表、属性清单这类会进入 VTU/PVD/检查点/项目文件的元数据，只要序列化失败就必须显式报错并终止写出，不能回退成 `"[]"`、`""`、空对象或其他合成占位值。
 - [RULE_METADATA_TIMESTAMPS_EXPLICIT] 检查点、快照、项目文件和其他持久化元数据里的 `created_at`、时间戳或生成时刻字段不得在系统时钟异常时回退成 `0`、Unix 纪元或其他合成占位值。要么显式失败，要么把“未知时间”编码成真实的可区分状态，不能把假时间戳写进产物。
 - [RULE_IMPORT_GEOMETRY_STRUCTURE_REQUIRED] 外部矢量导入不得在 Polygon 或 MultiPolygon 缺少外环、环点数不足、线性环未闭合时继续返回空外环或部分几何。几何结构不完整就必须显式报错，不能把坏输入折成“空面”“空洞列表”或其他伪成功结果。
+- [RULE_IMPORT_SEMANTIC_NAMES_EXPLICIT] GeoJSON 、边界条件、分区或其他带语义名称的导入要素不得在缺少 `name` 或等价语义标识时自动合成 `unnamed`、`zone` 等占位名称。一旦该要素已被识别为边界条件、分区、规划单元或其他业务实体，就必须显式报错，不能用合成名称伪装语义存在。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。

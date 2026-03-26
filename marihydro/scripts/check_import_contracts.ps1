@@ -102,10 +102,25 @@ try {
         -Pattern 'rings\.first\(\)\.cloned\(\)\.unwrap_or_default\(\)' `
         -Message "GeoJSON Polygon and MultiPolygon import must not synthesize empty exterior rings"
 
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'get_string\("name"\)\.unwrap_or\("unnamed"\)|get_string\("name"\)\.unwrap_or\("zone"\)' `
+        -Message "GeoJSON semantic boundary/zone names must not be synthesized with fallback strings"
+
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'InvalidStructure\(String\)' `
         -Message "GeoJSON importer must expose an explicit InvalidStructure error for malformed geometry"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'pub fn boundary_conditions\(&self\) -> Result<Vec<BoundaryConditionLocation>, GeoJsonError>|pub fn zone_properties\(&self\) -> Result<Vec<ZoneProperties>, GeoJsonError>' `
+        -Message "GeoJSON semantic feature extraction must return explicit Result contracts"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'test_boundary_conditions_require_name|test_zone_properties_require_name' `
+        -Message "GeoJSON importer must keep regression tests for missing semantic names"
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
