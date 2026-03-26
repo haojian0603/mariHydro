@@ -48,27 +48,33 @@ pub struct Variable {
 
 impl Variable {
     /// 计算线性索引
-    fn linear_index(&self, indices: &[usize]) -> Option<usize> {
+    fn linear_index(&self, indices: &[usize]) -> Result<usize, NetCdfError> {
         if indices.len() != self.dims.len() {
-            return None;
+            return Err(NetCdfError::InvalidIndices {
+                indices: indices.to_vec(),
+                dims: self.dims.clone(),
+            });
         }
 
         let mut idx = 0;
         let mut stride = 1;
         for (i, &dim_size) in self.dims.iter().enumerate().rev() {
             if indices[i] >= dim_size {
-                return None;
+                return Err(NetCdfError::InvalidIndices {
+                    indices: indices.to_vec(),
+                    dims: self.dims.clone(),
+                });
             }
             idx += indices[i] * stride;
             stride *= dim_size;
         }
-        Some(idx)
+        Ok(idx)
     }
 
     /// 获取指定索引的值
-    pub fn get(&self, indices: &[usize]) -> Option<f64> {
+    pub fn get(&self, indices: &[usize]) -> Result<f64, NetCdfError> {
         let idx = self.linear_index(indices)?;
-        Some(self.data[idx])
+        Ok(self.data[idx])
     }
 
     /// 获取总元素数
@@ -698,10 +704,10 @@ mod tests {
         };
 
         // 测试索引计算
-        assert_eq!(var.linear_index(&[0, 0, 0]), Some(0));
-        assert_eq!(var.linear_index(&[0, 0, 1]), Some(1));
-        assert_eq!(var.linear_index(&[0, 1, 0]), Some(4));
-        assert_eq!(var.linear_index(&[1, 0, 0]), Some(12));
+        assert_eq!(var.linear_index(&[0, 0, 0]).unwrap(), 0);
+        assert_eq!(var.linear_index(&[0, 0, 1]).unwrap(), 1);
+        assert_eq!(var.linear_index(&[0, 1, 0]).unwrap(), 4);
+        assert_eq!(var.linear_index(&[1, 0, 0]).unwrap(), 12);
     }
 
     #[test]
@@ -711,9 +717,10 @@ mod tests {
             dims: vec![2, 3, 4],
         };
 
-        assert_eq!(var.get(&[0, 0, 0]), Some(0.0));
-        assert_eq!(var.get(&[1, 2, 3]), Some(23.0));
-        assert_eq!(var.get(&[2, 0, 0]), None); // 越界
+        assert_eq!(var.get(&[0, 0, 0]).unwrap(), 0.0);
+        assert_eq!(var.get(&[1, 2, 3]).unwrap(), 23.0);
+        let err = var.get(&[2, 0, 0]).expect_err("越界索引必须失败");
+        assert!(matches!(err, NetCdfError::InvalidIndices { .. }));
     }
 
     #[cfg(not(feature = "netcdf"))]

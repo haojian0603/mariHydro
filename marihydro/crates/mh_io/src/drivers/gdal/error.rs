@@ -13,6 +13,15 @@ pub enum GdalError {
     OpenFailed(String),
     /// 波段不存在
     BandNotFound(usize),
+    /// 像元索引越界
+    PixelOutOfBounds {
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+    },
+    /// 命中 NoData 像元
+    NoDataPixel { x: usize, y: usize },
     /// 读取失败
     ReadFailed(String),
     /// 投影错误
@@ -29,6 +38,16 @@ impl fmt::Display for GdalError {
             GdalError::FileNotFound(path) => write!(f, "文件不存在: {}", path),
             GdalError::OpenFailed(msg) => write!(f, "打开 GDAL 数据集失败: {}", msg),
             GdalError::BandNotFound(idx) => write!(f, "波段不存在: {}", idx),
+            GdalError::PixelOutOfBounds {
+                x,
+                y,
+                width,
+                height,
+            } => write!(
+                f,
+                "像元索引越界: ({x}, {y}) 不在宽 {width}、高 {height} 的栅格内"
+            ),
+            GdalError::NoDataPixel { x, y } => write!(f, "像元 ({x}, {y}) 为 NoData"),
             GdalError::ReadFailed(msg) => write!(f, "读取 GDAL 数据失败: {}", msg),
             GdalError::ProjectionError(msg) => write!(f, "投影解析失败: {}", msg),
             GdalError::NotAvailable { tool, detail } => {

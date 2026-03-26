@@ -30,6 +30,7 @@
 - [RULE_IMPORT_TABULAR_SKIP_INVALID_OPT_IN] 表格型导入不得把“跳过坏行”设成默认行为。`CsvConfig`、时序表格、边界强迫表格和类似入口必须默认严格；只有调用方显式开启 `skip_invalid` 或等价开关时，才允许跳过坏行继续解析。解析错误里的来源字段也必须保留真实文件路径或显式 `<string>`，不能回退成空串。
 - [RULE_IMPORT_NULL_GEOMETRY_EXPLICIT] GeoJSON `Feature.geometry = null` 不得在导入阶段被静默丢弃、过滤或折叠成“空要素”。如果当前公开数据结构不能真实表达空几何，就必须在解析阶段显式报错，并把这种结构性失败保留到调用方。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
+- [RULE_EXTERNAL_DRIVER_INDEX_ACCESS_EXPLICIT] 外部数据驱动的公开访问器不得把越界索引、NoData 像元或维度不匹配折叠成 `Option::None`。像 `RasterBand::get`、`RasterBand::interpolate`、`Variable::get` 这类接口必须返回显式错误，并保留“越界”“NoData”“索引维度无效”等失败语义。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
 - [RULE_GEO_CONVERGENCE_EXACT_PROJECTION_FORMULA] 投影收敛角必须由目标投影本身给出真实语义：横轴墨卡托类投影走显式公式，Web Mercator 仅在定义域内按“经线保持竖直”的几何性质显式返回 `0`。主链禁止再用 `delta_lat`、有限差分北向量或其他近似扰动去推收敛角。

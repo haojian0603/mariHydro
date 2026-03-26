@@ -357,7 +357,7 @@ fn sample_variable(
     indices: &InterpolationIndices,
 ) -> Result<f64, TidalIoError> {
     let sample_at = |i: usize, j: usize| -> Result<f64, TidalIoError> {
-        let value = match dimensions {
+        match dimensions {
             dims if dims.len() == 2 && dims[0] == layout.lat_name && dims[1] == layout.lon_name => {
                 variable.get(&[j, i])
             }
@@ -384,10 +384,11 @@ fn sample_variable(
                     dimensions
                 )));
             }
-        };
-
-        value.ok_or_else(|| {
-            TidalIoError::FormatError(format!("变量 {variable_name} 的插值索引超出数据范围"))
+        }
+        .map_err(|err| {
+            TidalIoError::FormatError(format!(
+                "变量 {variable_name} 的插值索引非法: {err}"
+            ))
         })
     };
 

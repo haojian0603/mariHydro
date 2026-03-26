@@ -72,23 +72,30 @@ pub struct RasterBand {
 
 impl RasterBand {
     /// 获取指定位置的值
-    pub fn get(&self, x: usize, y: usize) -> Option<f64> {
+    pub fn get(&self, x: usize, y: usize) -> Result<f64, GdalError> {
         if x >= self.width || y >= self.height {
-            return None;
+            return Err(GdalError::PixelOutOfBounds {
+                x,
+                y,
+                width: self.width,
+                height: self.height,
+            });
         }
         let val = self.data[y * self.width + x];
         if let Some(nd) = self.nodata {
             if (val - nd).abs() < 1e-10 {
-                return None;
+                return Err(GdalError::NoDataPixel { x, y });
             }
         }
-        Some(val)
+        Ok(val)
     }
 
     /// 双线性插值
-    pub fn interpolate(&self, x: f64, y: f64) -> Option<f64> {
-        if x < 0.0 || y < 0.0 {
-            return None;
+    pub fn interpolate(&self, x: f64, y: f64) -> Result<f64, GdalError> {
+        if x < 0.0 || y < 0.0 || !x.is_finite() || !y.is_finite() {
+            return Err(GdalError::ReadFailed(format!(
+                "双线性插值坐标非法: ({x}, {y})"
+            )));
         }
 
         let x0 = x.floor() as usize;
@@ -97,7 +104,9 @@ impl RasterBand {
         let y1 = y0 + 1;
 
         if x1 >= self.width || y1 >= self.height {
-            return None;
+            return Err(GdalError::ReadFailed(format!(
+                "坐标 ({x}, {y}) 无法形成完整双线性插值邻域"
+            )));
         }
 
         let v00 = self.get(x0, y0)?;
@@ -111,7 +120,7 @@ impl RasterBand {
         let v0 = v00 * (1.0 - fx) + v10 * fx;
         let v1 = v01 * (1.0 - fx) + v11 * fx;
 
-        Some(v0 * (1.0 - fy) + v1 * fy)
+        Ok(v0 * (1.0 - fy) + v1 * fy)
     }
 }
 
@@ -499,8 +508,51 @@ mod tests {
         };
 
         // 中心点应该是 4 个角的平均值
-        let val = band.interpolate(0.5, 0.5).unwrap();
+        let val = band.interpolate(0.5, 0.5).expect("中心点双线性插值应成功");
         assert!((val - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_raster_band_get_reports_out_of_bounds() {
+        let band = RasterBand {
+            data: vec![0.0, 1.0, 2.0, 3.0],
+            width: 2,
+            height: 2,
+            nodata: None,
+        };
+
+        let err = band
+            .get(2, 0)
+            .expect_err("越界像元必须返回显式错误");
+        assert!(matches!(err, GdalError::PixelOutOfBounds { .. }));
+    }
+
+    #[test]
+    fn test_raster_band_get_reports_nodata() {
+        let band = RasterBand {
+            data: vec![-9999.0, 1.0, 2.0, 3.0],
+            width: 2,
+            height: 2,
+            nodata: Some(-9999.0),
+        };
+
+        let err = band
+            .get(0, 0)
+            .expect_err("NoData 像元必须返回显式错误");
+        assert!(matches!(err, GdalError::NoDataPixel { x: 0, y: 0 }));
+    }
+
+    #[test]
+    fn test_raster_band_interpolate_reports_out_of_bounds() {
+        let band = RasterBand {
+            data: vec![0.0, 1.0, 2.0, 3.0],
+            width: 2,
+            height: 2,
+            nodata: None,
+        };
+
+        assert!(band.interpolate(-0.1, 0.5).is_err());
+        assert!(band.interpolate(1.5, 1.5).is_err());
     }
 
     #[test]

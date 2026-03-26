@@ -15,6 +15,8 @@ pub enum NetCdfError {
     DimensionNotFound(String),
     /// 变量不存在
     VariableNotFound(String),
+    /// 变量索引非法
+    InvalidIndices { indices: Vec<usize>, dims: Vec<usize> },
     /// 读取失败
     ReadFailed(String),
     /// 属性不存在
@@ -36,6 +38,9 @@ impl fmt::Display for NetCdfError {
             NetCdfError::OpenFailed(msg) => write!(f, "打开 NetCDF 文件失败: {}", msg),
             NetCdfError::DimensionNotFound(name) => write!(f, "维度不存在 {}", name),
             NetCdfError::VariableNotFound(name) => write!(f, "变量不存在 {}", name),
+            NetCdfError::InvalidIndices { indices, dims } => {
+                write!(f, "变量索引非法: {:?} 与维度 {:?} 不匹配", indices, dims)
+            }
             NetCdfError::ReadFailed(msg) => write!(f, "读取 NetCDF 数据失败: {}", msg),
             NetCdfError::AttributeNotFound(name) => write!(f, "属性不存在: {}", name),
             NetCdfError::TimeParseError(msg) => write!(f, "时间解析失败: {}", msg),
