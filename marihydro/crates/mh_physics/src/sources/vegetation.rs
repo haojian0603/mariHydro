@@ -5,7 +5,7 @@
 //! 实现浅水方程中的植被阻力效应。
 //!
 //! PHYSICS_SOURCE: Baptist et al. (2007), Journal of Hydraulic Research, "On inducing equations for vegetation resistance"; Nepf (2012), Annual Review of Fluid Mechanics, "Flow and Transport in Regions with Aquatic Vegetation".
-//! PHYSICS_SCOPE: Implements a depth-averaged rigid-vegetation drag closure using projected frontal-area density. The current module covers rigid stems and generic bulk drag only; flexible reconfiguration, canopy-scale turbulence closure and wave-current interaction remain outside this implementation.
+//! PHYSICS_SCOPE: Implements a depth-averaged rigid-stem vegetation drag closure using projected frontal-area density. The current module covers rigid stems and generic bulk drag only; stem bending, canopy-scale turbulence closure and wave-current interaction remain outside this implementation.
 //!
 //! # 植被阻力模型
 //!
@@ -84,8 +84,8 @@ impl VegetationType {
     ///
     /// 返回 C_d * A_v [1/m]
     // ALLOW_F64: 源项计算
-    pub fn effective_drag(&self, water_depth: f64, velocity: f64) -> f64 {
-        if !water_depth.is_finite() || water_depth <= 0.0 || !velocity.is_finite() {
+    pub fn effective_drag(&self, water_depth: f64) -> f64 {
+        if !water_depth.is_finite() || water_depth <= 0.0 {
             return 0.0;
         }
         match *self {
@@ -188,8 +188,6 @@ pub struct VegetationConfig {
     pub enabled: bool,
     /// 每个单元的植被类型
     pub vegetation: Vec<VegetationType>,
-    /// 水密度 [kg/m³]
-    pub rho_water: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小水深
     pub h_min: f64, // ALLOW_F64: Layer 4 配置参数
     /// 最小流速（避免除零）
@@ -199,11 +197,10 @@ pub struct VegetationConfig {
 impl VegetationConfig {
     /// 创建新配置
     // ALLOW_F64: 物理参数
-    pub fn new(n_cells: usize, rho_water: f64) -> Self {
+    pub fn new(n_cells: usize) -> Self {
         Self {
             enabled: true,
             vegetation: vec![VegetationType::None; n_cells],
-            rho_water,
             h_min: 1e-4,
             vel_min: 1e-6,
         }
@@ -211,14 +208,16 @@ impl VegetationConfig {
 
     /// 创建默认配置
     pub fn default_config(n_cells: usize) -> Self {
-        Self::new(n_cells, 1000.0)
+        Self::new(n_cells)
     }
 
     /// 设置单元植被
     pub fn set_vegetation(&mut self, cell: usize, veg: VegetationType) {
-        if cell < self.vegetation.len() {
-            self.vegetation[cell] = veg;
-        }
+        let slot = self
+            .vegetation
+            .get_mut(cell)
+            .expect("vegetation cell index must be within configured domain");
+        *slot = veg;
     }
 
     /// 设置区域植被（所有单元相同）
@@ -256,7 +255,7 @@ impl<B: Backend> SourceTermGeneric<B> for VegetationConfig {
             .vegetation
             .get(cell)
             .copied()
-            .unwrap_or(VegetationType::None);
+            .expect("vegetation configuration must cover every computed cell");
         if matches!(veg, VegetationType::None) {
             return SourceContributionGeneric::default();
         }
@@ -310,8 +309,8 @@ pub struct VegetationSource;
 impl VegetationSource {
     /// 创建新配置
     // ALLOW_F64: 物理参数
-    pub fn new(n_cells: usize, rho_water: f64) -> VegetationConfig {
-        VegetationConfig::new(n_cells, rho_water)
+    pub fn new(n_cells: usize) -> VegetationConfig {
+        VegetationConfig::new(n_cells)
     }
 
     /// 创建默认配置
@@ -404,7 +403,7 @@ impl<B: Backend> VegetationImplicit<B> {
         self.decay_factors
             .get(cell)
             .copied()
-            .unwrap_or(B::Scalar::ONE)
+            .expect("vegetation decay factor requires a valid cell index")
     }
 }
 
@@ -431,7 +430,7 @@ mod tests {
     fn test_vegetation_type_none() {
         let veg = VegetationType::None;
         assert_eq!(veg.height(), 0.0);
-        assert_eq!(veg.effective_drag(1.0, 1.0), 0.0);
+        assert_eq!(veg.effective_drag(1.0), 0.0);
     }
 
     #[test]
@@ -461,7 +460,7 @@ mod tests {
         // 水深2m（完全淹没）
         // A_v = 0.01 * 100 * 1.0 / 2.0 = 0.5
         // C_d * A_v = 1.0 * 0.5 = 0.5
-        let drag = veg.effective_drag(2.0, 1.0);
+        let drag = veg.effective_drag(2.0);
         assert!((drag - 0.5).abs() < 1e-10);
     }
 
@@ -472,7 +471,7 @@ mod tests {
 
         // effective_height = 0.5
         // A_v = 0.01 * 100 * 0.5 / 0.5 = 1.0
-        let drag = veg.effective_drag(0.5, 1.0);
+        let drag = veg.effective_drag(0.5);
         assert!((drag - 1.0).abs() < 1e-10);
     }
 
@@ -485,14 +484,14 @@ mod tests {
 
     #[test]
     fn test_vegetation_config_creation() {
-        let config = VegetationConfig::new(10, 1000.0);
+        let config = VegetationConfig::new(10);
         assert!(config.enabled);
         assert_eq!(config.vegetation.len(), 10);
     }
 
     #[test]
     fn test_vegetation_config_uniform() {
-        let config = VegetationConfig::new(10, 1000.0)
+        let config = VegetationConfig::new(10)
             .with_uniform_vegetation(VegetationType::rigid(1.2, 0.01, 50.0, 2.0));
 
         for v in &config.vegetation {
@@ -502,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_source_compute() {
-        let mut config = VegetationConfig::new(10, 1000.0);
+        let mut config = VegetationConfig::new(10);
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
@@ -517,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_source_no_vegetation() {
-        let config = VegetationConfig::new(10, 1000.0);
+        let config = VegetationConfig::new(10);
 
         let state = create_test_state(10, 2.0, 1.0, 0.5);
         let ctx = test_context(0.0, 1.0);
@@ -530,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_source_dry_cell() {
-        let config = VegetationConfig::new(10, 1000.0)
+        let config = VegetationConfig::new(10)
             .with_uniform_vegetation(VegetationType::rigid(1.2, 0.01, 50.0, 2.0));
 
         let state = create_test_state(10, 1e-7, 0.0, 0.0);
@@ -550,14 +549,14 @@ mod tests {
 
     #[test]
     fn test_vegetation_implicit_creation() {
-        let config = VegetationConfig::new(10, 1000.0);
+        let config = VegetationConfig::new(10);
         let implicit = VegetationImplicit::new(test_backend(), config);
         assert_eq!(implicit.decay_factors.len(), 10);
     }
 
     #[test]
     fn test_vegetation_implicit_no_vegetation() {
-        let config = VegetationConfig::new(10, 1000.0);
+        let config = VegetationConfig::new(10);
         let mut implicit = VegetationImplicit::new(test_backend(), config);
 
         let state = create_test_state(10, 2.0, 1.0, 0.0);
@@ -569,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_vegetation_implicit_with_vegetation() {
-        let mut config = VegetationConfig::new(10, 1000.0);
+        let mut config = VegetationConfig::new(10);
         config.set_vegetation(0, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
         let mut implicit = VegetationImplicit::new(test_backend(), config);
 
@@ -580,5 +579,20 @@ mod tests {
         let factor = implicit.get_decay_factor(0);
         assert!(factor < 1.0);
         assert!(factor > 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "vegetation cell index must be within configured domain")]
+    fn test_set_vegetation_rejects_out_of_range_index() {
+        let mut config = VegetationConfig::new(1);
+        config.set_vegetation(2, VegetationType::rigid(1.0, 0.01, 100.0, 1.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "vegetation decay factor requires a valid cell index")]
+    fn test_get_decay_factor_rejects_out_of_range_index() {
+        let backend = test_backend();
+        let implicit = VegetationImplicit::new(backend, VegetationConfig::new(1));
+        let _ = implicit.get_decay_factor(1);
     }
 }

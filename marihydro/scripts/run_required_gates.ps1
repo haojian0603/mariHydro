@@ -95,6 +95,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_real_implementation_contracts.ps1"
     }
 
+    Invoke-Step -Name "source API semantics contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_source_semantics_contracts.ps1"
+    }
+
     Invoke-Step -Name "runtime probe contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_runtime_probe_contracts.ps1"
     }

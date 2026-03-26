@@ -33,6 +33,7 @@ try {
         "scripts/check_ai_state_contracts.ps1",
         "scripts/check_physics_provenance.ps1",
         "scripts/check_real_implementation_contracts.ps1",
+        "scripts/check_source_semantics_contracts.ps1",
         "scripts/check_runtime_allocator_contracts.ps1",
         "scripts/check_runtime_parallelism_contracts.ps1",
         "scripts/check_runtime_probe_contracts.ps1",
@@ -90,6 +91,7 @@ try {
             "[RULE_PUBLIC_SURFACE_TRUTHFUL]",
             "[RULE_CALIBRATED_AI_NAMING]",
             "[RULE_AI_STATE_CONTRACTS_EXPLICIT]",
+            "[RULE_SOURCE_API_SEMANTICS_EXPLICIT]",
             "[RULE_NO_FAKE_BACKEND_SURFACE]",
             "[RULE_GATES_STRICTER_ONLY]"
         )

@@ -414,6 +414,20 @@ try {
         }
     }
 
+    $sourceSemanticsGuard = Join-Path $ScriptDir "check_source_semantics_contracts.ps1"
+    if (-not (Test-Path $sourceSemanticsGuard)) {
+        Write-Host "[FAIL] check_source_semantics_contracts.ps1 is missing" -ForegroundColor Red
+        $errors += "check_source_semantics_contracts.ps1 must exist"
+    } else {
+        Write-Host "Checking source API semantics contracts..." -ForegroundColor Yellow
+        & powershell -ExecutionPolicy Bypass -File $sourceSemanticsGuard
+        if ($LASTEXITCODE -ne 0) {
+            $errors += "source API semantics contracts failed"
+        } else {
+            Write-Host "[OK] source API semantics contracts passed" -ForegroundColor Green
+        }
+    }
+
     $silentScalarFallbacks = @(
         Get-RustFilesFromTargets -Targets @("crates/mh_physics/src") |
             Select-String -Pattern '\bfrom_f(?:64|32)\(.*\)\.unwrap_or\(' -CaseSensitive
