@@ -589,6 +589,7 @@ impl GeoJsonReader {
                 GeometryData::Polygon { exterior, holes } => {
                     result.push(ZoneProperties {
                         name: name.to_string(),
+                        part_index: None,
                         exterior: exterior.clone(),
                         holes: holes.clone(),
                         properties: feature.properties.clone(),
@@ -596,9 +597,9 @@ impl GeoJsonReader {
                 }
                 GeometryData::MultiPolygon { polygons } => {
                     for (idx, (exterior, holes)) in polygons.iter().enumerate() {
-                        let zonename = format!("{}_{}", name, idx + 1);
                         result.push(ZoneProperties {
-                            name: zonename,
+                            name: name.to_string(),
+                            part_index: Some(idx + 1),
                             exterior: exterior.clone(),
                             holes: holes.clone(),
                             properties: feature.properties.clone(),
@@ -673,6 +674,8 @@ pub enum BcLocation {
 pub struct ZoneProperties {
     /// 名称
     pub name: String,
+    /// 多面要素拆分后的显式分片序号；单面要素为 None
+    pub part_index: Option<usize>,
     /// 外边界
     pub exterior: Vec<(f64, f64)>,
     /// 孔洞
@@ -819,7 +822,32 @@ mod tests {
         let zones = reader.zone_properties().unwrap();
         assert_eq!(zones.len(), 1);
         assert_eq!(zones[0].name, "zone1");
+        assert_eq!(zones[0].part_index, None);
         assert_eq!(zones[0].get_f64("manning_n"), Some(0.035));
+    }
+
+    #[test]
+    fn test_multipolygon_preserves_name_and_tracks_part_index() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                    [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+                    [[[3, 3], [5, 3], [5, 5], [3, 5], [3, 3]]]
+                ]
+            },
+            "properties": {"name": "zone_multi", "manning_n": 0.04}
+        }"#;
+
+        let reader = GeoJsonReader::from_str(json).unwrap();
+        let zones = reader.zone_properties().unwrap();
+        assert_eq!(zones.len(), 2);
+        assert_eq!(zones[0].name, "zone_multi");
+        assert_eq!(zones[1].name, "zone_multi");
+        assert_eq!(zones[0].part_index, Some(1));
+        assert_eq!(zones[1].part_index, Some(2));
+        assert_eq!(zones[0].get_f64("manning_n"), Some(0.04));
     }
 
     #[test]

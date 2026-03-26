@@ -107,6 +107,11 @@ try {
         -Pattern 'get_string\("name"\)\.unwrap_or\("unnamed"\)|get_string\("name"\)\.unwrap_or\("zone"\)' `
         -Message "GeoJSON semantic boundary/zone names must not be synthesized with fallback strings"
 
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'format!\(\"\\{\\}_\\{\\}\", name, idx \+ 1\)' `
+        -Message "GeoJSON multipart semantic features must not fabricate suffixed names like name_1/name_2"
+
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'InvalidStructure\(String\)' `
@@ -121,6 +126,16 @@ try {
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'test_boundary_conditions_require_name|test_zone_properties_require_name' `
         -Message "GeoJSON importer must keep regression tests for missing semantic names"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'part_index: Option<usize>' `
+        -Message "GeoJSON multipart semantic features must expose an explicit part_index field"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'test_multipolygon_preserves_name_and_tracks_part_index' `
+        -Message "GeoJSON multipart semantic features must keep regression coverage for name preservation and part indices"
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `

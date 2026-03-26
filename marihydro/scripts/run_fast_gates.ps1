@@ -55,7 +55,7 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_metadata_timestamp_contracts.ps1"
     }
 
-    Invoke-Step -Name "import contracts (geometry + semantic metadata)" -Action {
+    Invoke-Step -Name "import contracts (geometry + semantic metadata + multipart name preservation)" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }
 
