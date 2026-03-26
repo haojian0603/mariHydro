@@ -201,6 +201,10 @@ try {
         $Failed += "check_geo_geodesic_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_geo_affine_contracts.ps1" -Path (Join-Path $ScriptDir "check_geo_affine_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_geo_affine_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_import_contracts.ps1" -Path (Join-Path $ScriptDir "check_import_contracts.ps1") -Arguments @{})) {
         $Failed += "check_import_contracts.ps1"
     }
@@ -293,6 +297,7 @@ try {
     Invoke-InformationalScan -Name 'silent numeric fallback residue' -Roots @("crates/mh_geo", "crates/mh_io/src/drivers") -Pattern 'unwrap_or\(0\.0\)|unwrap_or\(0\)|unwrap_or\(Self::ZERO\)|compute_convergence_angle_checked\(x, y\)\.unwrap_or\(0\.0\)'
     Invoke-InformationalScan -Name 'geo projection sentinel residue' -Roots @("crates/mh_geo/src/projection") -Pattern 'unwrap_or\(f64::NAN\)|pub fn utm_scale_factor\(.*\) -> f64|pub fn utm_convergence_angle\(.*\) -> f64|unwrap_or\(\(0\.0, 0\.0\)\)'
     Invoke-InformationalScan -Name 'geo geodesic Option-failure residue' -Roots @("crates/mh_geo/src/geometry.rs") -Pattern 'vincenty_distance_to\(&self, other: &Self\) -> Option<f64>|vincenty_distance\(&self, other: &Self, ellipsoid: &Ellipsoid\) -> Option<f64>|return Some\(0\.0\)|Some\(s\)'
+    Invoke-InformationalScan -Name 'geo affine Option-failure residue' -Roots @("crates/mh_geo/src/transform.rs") -Pattern 'pub fn inverse\(&self\) -> Option<Self>|pub fn apply_inverse\(&self, x: f64, y: f64\) -> Option<\(f64, f64\)>|return None;'
     Invoke-InformationalScan -Name 'geo finite-difference convergence residue' -Roots @("crates/mh_geo/src") -Pattern 'delta_lat\s*=|lat\s*\+\s*delta_lat|dy\.atan2\(dx\)'
     Invoke-InformationalScan -Name 'Web Mercator domain fallback residue' -Roots @("crates/mh_geo/src/projection/web_mercator.rs") -Pattern 'lat\.clamp\(\s*-WEB_MERCATOR_MAX_LAT\s*,\s*WEB_MERCATOR_MAX_LAT\s*\)|pub fn web_mercator_resolution\(.*\) -> f64|pub fn web_mercator_scale\(.*\) -> f64|pub fn lonlat_to_tile\(.*\) -> \(u32, u32\)|pub fn tile_to_lonlat\(.*\) -> \(f64, f64\)|pub fn tile_to_bbox\(.*\) -> \(f64, f64, f64, f64\)|expect\("tile_to_lonlat returns coordinates inside Web Mercator domain"\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('

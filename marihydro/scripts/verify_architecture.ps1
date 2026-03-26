@@ -151,6 +151,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.549: geo affine contract guard
+    Write-Host "=== Phase 0.549: geo affine contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo affine contracts must pass"
+    } else {
+        Write-Host "[OK] geo affine contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

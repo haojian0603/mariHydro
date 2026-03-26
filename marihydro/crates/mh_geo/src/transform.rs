@@ -18,6 +18,7 @@
 //! ```
 
 use crate::crs::Crs;
+use crate::error::GeoError;
 use crate::projection::FastProjection;
 use mh_foundation::error::MhResult;
 
@@ -141,14 +142,16 @@ impl AffineTransform {
     }
 
     /// 计算逆变换
-    #[must_use]
-    pub fn inverse(&self) -> Option<Self> {
+    ///
+    /// # Errors
+    /// 当仿射矩阵奇异、不可逆时返回显式错误。
+    pub fn inverse(&self) -> MhResult<Self> {
         let det = self.a * self.e - self.b * self.d;
         if det.abs() < 1e-15 {
-            return None;
+            return Err(GeoError::SingularTransform.into());
         }
         let inv_det = 1.0 / det;
-        Some(Self {
+        Ok(Self {
             a: self.e * inv_det,
             b: -self.b * inv_det,
             c: (self.b * self.f - self.c * self.e) * inv_det,
@@ -159,8 +162,10 @@ impl AffineTransform {
     }
 
     /// 应用逆变换
-    #[must_use]
-    pub fn apply_inverse(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+    ///
+    /// # Errors
+    /// 当仿射矩阵奇异、不可逆时返回显式错误。
+    pub fn apply_inverse(&self, x: f64, y: f64) -> MhResult<(f64, f64)> {
         self.inverse().map(|inv| inv.apply(x, y))
     }
 
@@ -540,6 +545,34 @@ mod tests {
     }
 
     #[test]
+    fn test_affine_inverse_reports_singular_transform() {
+        let singular = AffineTransform {
+            a: 1.0,
+            b: 2.0,
+            c: 0.0,
+            d: 2.0,
+            e: 4.0,
+            f: 0.0,
+        };
+
+        let err = singular
+            .inverse()
+            .expect_err("奇异仿射矩阵必须显式报告不可逆");
+        assert!(
+            err.to_string().contains("奇异"),
+            "unexpected error text: {err}"
+        );
+
+        let err = singular
+            .apply_inverse(1.0, 2.0)
+            .expect_err("奇异仿射矩阵的逆应用必须显式失败");
+        assert!(
+            err.to_string().contains("奇异"),
+            "unexpected error text: {err}"
+        );
+    }
+
+    #[test]
     fn test_affine_compose() {
         let scale = AffineTransform::scale(2.0, 2.0);
         let translate = AffineTransform::translation(10.0, 20.0);
@@ -711,7 +744,10 @@ mod tests {
         let expected =
             crate::projection::utm_convergence_angle(116.0, 40.0, 50).expect("utm gamma failed");
 
-        assert!((angle - expected).abs() < 1e-12, "angle={angle}, expected={expected}");
+        assert!(
+            (angle - expected).abs() < 1e-12,
+            "angle={angle}, expected={expected}"
+        );
     }
 
     #[test]

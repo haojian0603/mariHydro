@@ -34,6 +34,7 @@
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
 - [RULE_GEO_CONVERGENCE_EXACT_PROJECTION_FORMULA] 投影收敛角必须由目标投影本身给出真实语义：横轴墨卡托类投影走显式公式，Web Mercator 仅在定义域内按“经线保持竖直”的几何性质显式返回 `0`。主链禁止再用 `delta_lat`、有限差分北向量或其他近似扰动去推收敛角。
 - [RULE_GEO_GEODESIC_FAILURES_EXPLICIT] 椭球测地线计算不得把非收敛、奇异点或算法失效折叠成 `Option::None`、`NaN` 或其他无语义哨兵。像 Vincenty 这类迭代算法，一旦达到迭代上限仍未收敛，就必须返回显式错误并把失败原因保留给调用方；只有真正的成功路径才能返回距离数值。
+- [RULE_GEO_AFFINE_INVERSE_EXPLICIT] 仿射变换的逆矩阵求解不得把奇异矩阵、不可逆矩阵或行列式退化状态折叠成 `Option::None`。`AffineTransform::inverse`、`apply_inverse` 这类公开接口必须返回显式错误，并保留“奇异变换不可逆”的语义，禁止让调用方通过空值猜测失败原因。
 - [RULE_WEB_MERCATOR_DOMAIN_EXPLICIT] Web Mercator 公开辅助面（经纬度转投影、投影反算、分辨率、比例尺、瓦片坐标、瓦片边界）只接受有限且位于 EPSG:3857/4326 定义域内的输入。经纬度越界、投影坐标超出 extent、tile_size=0、DPI<=0 等情况必须显式报错，不得通过纬度裁剪、内部 `expect` 或返回默认数值伪装成功。
 - [RULE_WEB_MERCATOR_TILE_INDEX_EXPLICIT] Web Mercator 的公开 tile 辅助面必须区分“tile 索引”和“tile 角点”语义。对外暴露的 `tile_to_*` 查询只接受合法 tile 索引区间 `[0, 2^zoom-1]`，越界时显式报错；仅内部角点换算才允许访问 `[0, 2^zoom]` 边界，禁止把越界 tile 直接折算成经纬度。
 - [RULE_INTERNAL_INVARIANT_DEFAULTS_FORBIDDEN] 一旦前置校验已经把内部状态约束为“非空轴”“合法年内序号”“存在末端值”等不变量，后续代码就不得再用 `unwrap_or(...)`、默认月份、默认端点或其他合成值掩盖不变量破坏。要么在前置校验阶段返回错误，要么在不变量被破坏时显式 panic/报错。
