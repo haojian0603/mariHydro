@@ -24,6 +24,7 @@
 - [RULE_IMPORT_SEMANTIC_NAMES_EXPLICIT] GeoJSON 、边界条件、分区或其他带语义名称的导入要素不得在缺少 `name` 或等价语义标识时自动合成 `unnamed`、`zone` 等占位名称。一旦该要素已被识别为边界条件、分区、规划单元或其他业务实体，就必须显式报错，不能用合成名称伪装语义存在。
 - [RULE_MULTIPART_SEMANTIC_NAMES_PRESERVED] 一旦外部语义要素已经声明了真实名称，就不得在拆分 MultiPolygon、MultiLineString 或其他 multipart 结构时合成 `name_1`、`name_2` 这类后缀名称。若业务确实需要区分分片，必须保留原始名称，并通过显式 `part_index`、`segment_index` 或等价结构另行表达分片身份。
 - [RULE_IMPORT_FEATURE_ID_EXPLICIT] 外部 GeoJSON `Feature.id` 一旦存在，就必须按 RFC 7946 可接受的真实语义显式保留。字符串和数值 ID 必须原样读入并传递；布尔值、对象、数组或其他非法 ID 类型必须立刻报错。禁止把非法 ID 吞掉、回退成空串，或在顶层 `Feature` 与 `FeatureCollection` 两条路径上丢弃 `id`。
+- [RULE_IMPORT_TABULAR_SKIP_INVALID_OPT_IN] 表格型导入不得把“跳过坏行”设成默认行为。`CsvConfig`、时序表格、边界强迫表格和类似入口必须默认严格；只有调用方显式开启 `skip_invalid` 或等价开关时，才允许跳过坏行继续解析。解析错误里的来源字段也必须保留真实文件路径或显式 `<string>`，不能回退成空串。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。

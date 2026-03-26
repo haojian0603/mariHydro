@@ -1,3 +1,7 @@
+// crates/mh_io/src/import/timeseries_csv.rs
+// IO_SOURCE: Delimited text time-series import for MariHydro boundary and forcing inputs; CsvConfig defines column mapping and invalid-row policy.
+// IO_SCOPE: Public CSV import is strict by default. Invalid rows, inconsistent column counts, and malformed numeric fields must fail unless the caller explicitly opts into skip_invalid, and parse errors must preserve an explicit source label instead of collapsing to an empty file path.
+//!
 //! CSV 时序数据导入
 //!
 //! 提供从 CSV 文件加载时间序列数据的功能，支持：
@@ -12,20 +16,14 @@
 //! use std::path::Path;
 //! use mh_io::import::timeseries_csv::{load_timeseries, CsvConfig};
 //!
-//! let config = CsvConfig {
-//!     has_header: true,
-//!     time_column: 0,
-//!     value_column: 1,
-//!     delimiter: ',',
-//!     skip_invalid: true,
-//! };
+//! let config = CsvConfig::default().with_skip_invalid(true);
 //!
 //! let (times, values) = load_timeseries(Path::new("data.csv"), &config)?;
 //! ```
 
-use std::path::Path;
-use mh_foundation::error::{MhError, MhResult};
 use crate::error::IoError;
+use mh_foundation::error::{MhError, MhResult};
+use std::path::Path;
 
 /// CSV 加载配置
 #[derive(Debug, Clone)]
@@ -55,7 +53,7 @@ impl Default for CsvConfig {
             time_column: 0,
             value_column: 1,
             delimiter: ',',
-            skip_invalid: true,
+            skip_invalid: false,
             time_scale: 1.0,
             value_scale: 1.0,
             comment_prefix: Some('#'),
@@ -106,6 +104,12 @@ impl CsvConfig {
         self.value_scale = scale;
         self
     }
+
+    /// 显式配置是否跳过无效行
+    pub fn with_skip_invalid(mut self, skip_invalid: bool) -> Self {
+        self.skip_invalid = skip_invalid;
+        self
+    }
 }
 
 /// 从 CSV 文件加载时间序列
@@ -125,11 +129,9 @@ impl CsvConfig {
 /// - 无有效数据
 /// - 严格模式下遇到无效行
 pub fn load_timeseries(path: &Path, config: &CsvConfig) -> MhResult<(Vec<f64>, Vec<f64>)> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        MhError::Io {
-            message: format!("Failed to read {}: {}", path.display(), e),
-            source: Some(e),
-        }
+    let content = std::fs::read_to_string(path).map_err(|e| MhError::Io {
+        message: format!("Failed to read {}: {}", path.display(), e),
+        source: Some(e),
     })?;
 
     parse_csv_content(&content, config, Some(path))
@@ -159,17 +161,11 @@ fn parse_csv_content(
     let mut values = Vec::new();
     let mut errors = Vec::new();
     let mut skipped_lines = 0;
+    let mut header_skipped = !config.has_header;
 
-    let path_str = path
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "<string>".to_string());
+    let path_str = source_label(path);
 
     for (line_num, line) in content.lines().enumerate() {
-        // 跳过表头
-        if config.has_header && line_num == 0 {
-            continue;
-        }
-
         // 跳过空行
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -183,6 +179,12 @@ fn parse_csv_content(
             }
         }
 
+        // 跳过第一条有效表头行
+        if !header_skipped {
+            header_skipped = true;
+            continue;
+        }
+
         // 分割列
         let parts: Vec<&str> = line.split(config.delimiter).collect();
 
@@ -190,14 +192,15 @@ fn parse_csv_content(
         if parts.len() <= max_col {
             if !config.skip_invalid {
                 return Err(IoError::ParseError {
-                    file: path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                    file: path_str.clone(),
                     line: line_num + 1,
                     message: format!(
                         "Insufficient columns: expected at least {}, got {}",
                         max_col + 1,
                         parts.len()
                     ),
-                }.into());
+                }
+                .into());
             }
             errors.push(line_num + 1);
             skipped_lines += 1;
@@ -216,13 +219,14 @@ fn parse_csv_content(
             _ => {
                 if !config.skip_invalid {
                     return Err(IoError::ParseError {
-                        file: path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                        file: path_str.clone(),
                         line: line_num + 1,
                         message: format!(
                             "Failed to parse time='{}' or value='{}'",
                             time_str, value_str
                         ),
-                    }.into());
+                    }
+                    .into());
                 }
                 errors.push(line_num + 1);
                 skipped_lines += 1;
@@ -245,6 +249,11 @@ fn parse_csv_content(
     normalize_timeseries(&path_str, &mut times, std::slice::from_mut(&mut values))?;
 
     Ok((times, values))
+}
+
+fn source_label(path: Option<&Path>) -> String {
+    path.map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<string>".to_string())
 }
 
 fn normalize_timeseries(
@@ -276,7 +285,11 @@ fn normalize_timeseries(
 
     let needs_sort = sorted_indices.iter().enumerate().any(|(i, &j)| i != j);
     if needs_sort {
-        eprintln!("INFO: {}: Sorting {} data points by time", path_str, times.len());
+        eprintln!(
+            "INFO: {}: Sorting {} data points by time",
+            path_str,
+            times.len()
+        );
         let sorted_times: Vec<_> = sorted_indices.iter().map(|&i| times[i]).collect();
         let mut sorted_values: Vec<Vec<f64>> = values
             .iter()
@@ -292,9 +305,7 @@ fn normalize_timeseries(
         if times[i] <= times[i - 1] {
             eprintln!(
                 "WARNING: {}: Duplicate time {} at index {}, removing duplicate",
-                path_str,
-                times[i],
-                i
+                path_str, times[i], i
             );
         }
     }
@@ -346,23 +357,18 @@ pub fn load_multi_column_timeseries(
     path: &Path,
     config: &CsvConfig,
 ) -> MhResult<(Vec<f64>, Vec<Vec<f64>>)> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        MhError::Io {
-            message: format!("Failed to read {}: {}", path.display(), e),
-            source: Some(e),
-        }
+    let content = std::fs::read_to_string(path).map_err(|e| MhError::Io {
+        message: format!("Failed to read {}: {}", path.display(), e),
+        source: Some(e),
     })?;
 
     let mut times = Vec::new();
     let mut all_values: Vec<Vec<f64>> = Vec::new();
     let mut n_cols = 0;
-    let path_str = path.to_string_lossy().to_string();
+    let mut header_skipped = !config.has_header;
+    let path_str = source_label(Some(path));
 
     for (line_num, line) in content.lines().enumerate() {
-        if config.has_header && line_num == 0 {
-            continue;
-        }
-
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -374,23 +380,43 @@ pub fn load_multi_column_timeseries(
             }
         }
 
+        if !header_skipped {
+            header_skipped = true;
+            continue;
+        }
+
         let parts: Vec<&str> = line.split(config.delimiter).collect();
-        
+
         if parts.len() < 2 {
             if config.skip_invalid {
                 continue;
             }
             return Err(IoError::ParseError {
-                file: path.to_string_lossy().to_string(),
+                file: path_str.clone(),
                 line: line_num + 1,
                 message: "Need at least 2 columns".into(),
-            }.into());
+            }
+            .into());
         }
 
         // 初始化列数
         if n_cols == 0 {
             n_cols = parts.len() - 1;
             all_values = vec![Vec::new(); n_cols];
+        } else if parts.len() != n_cols + 1 {
+            if config.skip_invalid {
+                continue;
+            }
+            return Err(IoError::ParseError {
+                file: path_str.clone(),
+                line: line_num + 1,
+                message: format!(
+                    "Inconsistent columns: expected {}, got {}",
+                    n_cols + 1,
+                    parts.len()
+                ),
+            }
+            .into());
         }
 
         // 解析时间
@@ -401,19 +427,20 @@ pub fn load_multi_column_timeseries(
                     continue;
                 }
                 return Err(IoError::ParseError {
-                    file: path.to_string_lossy().to_string(),
+                    file: path_str.clone(),
                     line: line_num + 1,
                     message: format!("Failed to parse time: {}", parts[0]),
-                }.into());
+                }
+                .into());
             }
         };
 
         // 解析各列值
         let mut row_values = Vec::with_capacity(n_cols);
         let mut valid = true;
-        
-        for i in 1..parts.len().min(n_cols + 1) {
-            match parts[i].trim().parse::<f64>() {
+
+        for value in parts.iter().skip(1).take(n_cols) {
+            match value.trim().parse::<f64>() {
                 Ok(v) if v.is_finite() => row_values.push(v * config.value_scale),
                 _ => {
                     valid = false;
@@ -429,10 +456,11 @@ pub fn load_multi_column_timeseries(
             }
         } else if !config.skip_invalid {
             return Err(IoError::ParseError {
-                file: path.to_string_lossy().to_string(),
+                file: path_str.clone(),
                 line: line_num + 1,
                 message: "Failed to parse values".into(),
-            }.into());
+            }
+            .into());
         }
     }
 
@@ -444,6 +472,19 @@ pub fn load_multi_column_timeseries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn write_temp_csv(content: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("mh_io_timeseries_{nanos}.csv"));
+        fs::write(&path, content).unwrap();
+        path
+    }
 
     #[test]
     fn test_parse_basic_csv() {
@@ -492,7 +533,7 @@ mod tests {
     #[test]
     fn test_skip_invalid_lines() {
         let content = "time,value\n0.0,1.0\ninvalid,line\n2.0,3.0";
-        let config = CsvConfig::default();
+        let config = CsvConfig::default().with_skip_invalid(true);
 
         let (times, values) = parse_csv_string(content, &config).unwrap();
 
@@ -501,9 +542,32 @@ mod tests {
     }
 
     #[test]
+    fn test_default_rejects_invalid_lines() {
+        let content = "time,value\n0.0,1.0\ninvalid,line\n2.0,3.0";
+
+        let err = parse_csv_string(content, &CsvConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            MhError::InvalidInput { ref message }
+            if message.contains("Failed to parse time='invalid' or value='line'")
+        ));
+    }
+
+    #[test]
+    fn test_parse_error_reports_string_source_label() {
+        let content = "time,value\nbroken,1.0";
+
+        let err = parse_csv_string(content, &CsvConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            MhError::InvalidInput { ref message } if message.contains("[<string>:2]")
+        ));
+    }
+
+    #[test]
     fn test_time_scaling() {
-        let content = "time,value\n0.0,1.0\n1.0,2.0";  // 时间单位：小时
-        let config = CsvConfig::default().with_time_scale(3600.0);  // 转换为秒
+        let content = "time,value\n0.0,1.0\n1.0,2.0"; // 时间单位：小时
+        let config = CsvConfig::default().with_time_scale(3600.0); // 转换为秒
 
         let (times, _) = parse_csv_string(content, &config).unwrap();
 
@@ -512,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_unsorted_times() {
-        let content = "time,value\n2.0,3.0\n0.0,1.0\n1.0,2.0";
+        let content = "2.0,3.0\n0.0,1.0\n1.0,2.0";
         let config = CsvConfig::no_header();
 
         let (times, values) = parse_csv_string(content, &config).unwrap();
@@ -551,5 +615,32 @@ mod tests {
         assert_eq!(times, vec![1.0, 2.0]);
         assert_eq!(values[0], vec![11.0, 20.0]);
         assert_eq!(values[1], vec![110.0, 200.0]);
+    }
+
+    #[test]
+    fn test_multi_column_default_rejects_inconsistent_columns() {
+        let path = write_temp_csv("time,a,b\n0.0,1.0,2.0\n1.0,3.0,4.0,5.0\n");
+
+        let err = load_multi_column_timeseries(&path, &CsvConfig::default()).unwrap_err();
+        let _ = fs::remove_file(&path);
+
+        assert!(matches!(
+            err,
+            MhError::InvalidInput { ref message }
+            if message.contains("Inconsistent columns: expected 3, got 4")
+        ));
+    }
+
+    #[test]
+    fn test_multi_column_skip_invalid_requires_explicit_opt_in() {
+        let path = write_temp_csv("time,a,b\n0.0,1.0,2.0\n1.0,3.0,4.0,5.0\n2.0,6.0,7.0\n");
+
+        let (times, values) =
+            load_multi_column_timeseries(&path, &CsvConfig::default().with_skip_invalid(true))
+                .unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(times, vec![0.0, 2.0]);
+        assert_eq!(values, vec![vec![1.0, 6.0], vec![2.0, 7.0]]);
     }
 }

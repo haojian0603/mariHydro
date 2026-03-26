@@ -96,6 +96,7 @@ try {
 
     Check-TagSet -RelativePath "crates/mh_io/src/import/mod.rs" -Label "import module"
     Check-TagSet -RelativePath "crates/mh_io/src/import/geojson.rs" -Label "GeoJSON importer"
+    Check-TagSet -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" -Label "CSV time-series importer"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
@@ -181,6 +182,51 @@ try {
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'must contain at least one linear ring|must contain at least 4 positions|must be closed' `
         -Message "GeoJSON importer must reject missing, underspecified, or open linear rings explicitly"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'skip_invalid:\s*true,' `
+        -Message "CSV import defaults must stay strict; skip_invalid cannot default to true"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'unwrap_or_default\(\)' `
+        -Message "CSV import parse errors must not collapse source labels into empty strings"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'parts\.len\(\)\.min\(n_cols \+ 1\)' `
+        -Message "Multi-column CSV import must not silently truncate extra columns"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'pub fn with_skip_invalid\(mut self, skip_invalid: bool\) -> Self' `
+        -Message "CSV import must require an explicit opt-in builder for skip_invalid"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'fn source_label\(path: Option<&Path>\) -> String' `
+        -Message "CSV import must keep an explicit source-label helper for parse errors"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'test_default_rejects_invalid_lines' `
+        -Message "CSV import must keep regression coverage for strict-by-default row parsing"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'test_parse_error_reports_string_source_label' `
+        -Message "CSV import must keep regression coverage for explicit <string> source labels"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'test_multi_column_default_rejects_inconsistent_columns' `
+        -Message "Multi-column CSV import must keep regression coverage for inconsistent-column rejection"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/timeseries_csv.rs" `
+        -Pattern 'test_multi_column_skip_invalid_requires_explicit_opt_in' `
+        -Message "Multi-column CSV import must keep regression coverage for explicit skip_invalid opt-in"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""
