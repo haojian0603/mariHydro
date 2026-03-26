@@ -112,6 +112,16 @@ try {
         -Pattern 'format!\(\"\\{\\}_\\{\\}\", name, idx \+ 1\)' `
         -Message "GeoJSON multipart semantic features must not fabricate suffixed names like name_1/name_2"
 
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'rf\.id\.map\(\|v\| match v|_ => String::new\(\)' `
+        -Message "GeoJSON Feature.id must not collapse invalid ids into empty strings or ad-hoc string synthesis"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'id:\s*None,' `
+        -Message "Top-level GeoJSON Feature parsing must not drop an explicit Feature.id"
+
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'InvalidStructure\(String\)' `
@@ -136,6 +146,36 @@ try {
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'test_multipolygon_preserves_name_and_tracks_part_index' `
         -Message "GeoJSON multipart semantic features must keep regression coverage for name preservation and part indices"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'fn parse_feature_id\(value: serde_json::Value\) -> Result<String, GeoJsonError>' `
+        -Message "GeoJSON importer must use an explicit Feature.id parser instead of ad-hoc fallback conversion"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'let id = rf\.id\.map\(Self::parse_feature_id\)\.transpose\(\)\?;' `
+        -Message "GeoJSON FeatureCollection path must preserve Feature.id through the explicit parser"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'id: doc\.id\.clone\(\)\.map\(Self::parse_feature_id\)\.transpose\(\)\?,' `
+        -Message "Top-level GeoJSON Feature path must preserve Feature.id through the explicit parser"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'test_feature_id_numeric_is_preserved' `
+        -Message "GeoJSON importer must keep regression coverage for numeric Feature.id preservation"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'test_feature_id_rejects_invalid_type' `
+        -Message "GeoJSON importer must keep regression coverage for invalid Feature.id rejection"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'test_top_level_feature_id_is_preserved' `
+        -Message "GeoJSON importer must keep regression coverage for top-level Feature.id preservation"
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `

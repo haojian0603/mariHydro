@@ -1,6 +1,6 @@
 // crates/mh_io/src/import/geojson.rs
 // IO_SOURCE: RFC 7946 GeoJSON geometry model; Polygon and MultiPolygon coordinates must follow linear-ring structure.
-// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry, and semantic boundary/zone names must be present instead of being synthesized.
+// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry, semantic boundary/zone names must be present instead of being synthesized, and Feature id values must remain explicit instead of being collapsed into empty strings.
 
 //! GeoJSON 导入模块
 //!
@@ -333,11 +333,7 @@ impl GeoJsonReader {
         };
 
         let properties = rf.properties.unwrap_or_default();
-        let id = rf.id.map(|v| match v {
-            serde_json::Value::String(s) => s,
-            serde_json::Value::Number(n) => n.to_string(),
-            _ => String::new(),
-        });
+        let id = rf.id.map(Self::parse_feature_id).transpose()?;
 
         Ok(Some(Feature {
             id,
@@ -356,10 +352,20 @@ impl GeoJsonReader {
         let properties = doc.properties.clone().unwrap_or_default();
 
         Ok(Some(Feature {
-            id: None,
+            id: doc.id.clone().map(Self::parse_feature_id).transpose()?,
             geometry,
             properties,
         }))
+    }
+
+    fn parse_feature_id(value: serde_json::Value) -> Result<String, GeoJsonError> {
+        match value {
+            serde_json::Value::String(s) => Ok(s),
+            serde_json::Value::Number(n) => Ok(n.to_string()),
+            _ => Err(GeoJsonError::InvalidStructure(
+                "feature id must be a string or number".to_string(),
+            )),
+        }
     }
 
     /// 解析几何
@@ -621,6 +627,8 @@ struct RawGeoJson {
     #[serde(default)]
     features: Option<Vec<RawFeature>>,
     #[serde(default)]
+    id: Option<serde_json::Value>,
+    #[serde(default)]
     geometry: Option<RawGeometry>,
     #[serde(default)]
     properties: Option<HashMap<String, PropertyValue>>,
@@ -803,6 +811,73 @@ mod tests {
         assert_eq!(bcs[0].name, "inlet");
         assert_eq!(bcs[0].bc_type, "discharge");
         assert_eq!(bcs[1].name, "outlet");
+    }
+
+    #[test]
+    fn test_feature_id_numeric_is_preserved() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": 7,
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [0, 0]
+                    },
+                    "properties": {"name": "p1"}
+                }
+            ]
+        }"#;
+
+        let reader = GeoJsonReader::from_str(json).unwrap();
+        assert_eq!(reader.features()[0].id.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn test_feature_id_rejects_invalid_type() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": {"bad": true},
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [0, 0]
+                    },
+                    "properties": {"name": "p1"}
+                }
+            ]
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("invalid feature id should fail"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("feature id must be a string or number")
+        ));
+    }
+
+    #[test]
+    fn test_top_level_feature_id_is_preserved() {
+        let json = r#"{
+            "type": "Feature",
+            "id": "feature-top",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [100.0, 0.5]
+            },
+            "properties": {
+                "name": "top_feature"
+            }
+        }"#;
+
+        let reader = GeoJsonReader::from_str(json).unwrap();
+        assert_eq!(reader.features()[0].id.as_deref(), Some("feature-top"));
     }
 
     #[test]
