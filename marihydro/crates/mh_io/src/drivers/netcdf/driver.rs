@@ -388,17 +388,38 @@ impl NetCdfDriver {
 }
 
 #[cfg(not(feature = "netcdf"))]
+fn format_cli_failure(tool: &str, stage: &str, exit_code: Option<i32>, stderr: &[u8]) -> String {
+    let status = match exit_code {
+        Some(code) => format!("退出码 {code}"),
+        None => "进程被终止".to_string(),
+    };
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("{tool} 在{stage}阶段失败（{status}，stderr 为空）")
+    } else {
+        format!("{tool} 在{stage}阶段失败（{status}）：{stderr}")
+    }
+}
+
+#[cfg(not(feature = "netcdf"))]
 fn cli_read_header(path: &Path) -> Result<CliHeader, NetCdfError> {
-    let output = Command::new(ncdump_bin())
+    let tool = ncdump_bin();
+    let output = Command::new(&tool)
         .arg("-h")
         .arg(path)
         .output()
-        .map_err(|_| NetCdfError::NotAvailable)?;
+        .map_err(|error| NetCdfError::NotAvailable {
+            tool: tool.clone(),
+            detail: error.to_string(),
+        })?;
 
     if !output.status.success() {
-        return Err(NetCdfError::OpenFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        return Err(NetCdfError::OpenFailed(format_cli_failure(
+            &tool,
+            "读取头部",
+            output.status.code(),
+            &output.stderr,
+        )));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -576,17 +597,24 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
 
 #[cfg(not(feature = "netcdf"))]
 fn cli_read_variable_data(path: &Path, name: &str) -> Result<Vec<f64>, NetCdfError> {
-    let output = Command::new(ncdump_bin())
+    let tool = ncdump_bin();
+    let output = Command::new(&tool)
         .arg("-v")
         .arg(name)
         .arg(path)
         .output()
-        .map_err(|_| NetCdfError::NotAvailable)?;
+        .map_err(|error| NetCdfError::NotAvailable {
+            tool: tool.clone(),
+            detail: error.to_string(),
+        })?;
 
     if !output.status.success() {
-        return Err(NetCdfError::ReadFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        return Err(NetCdfError::ReadFailed(format_cli_failure(
+            &tool,
+            format!("读取变量 {name}").as_str(),
+            output.status.code(),
+            &output.stderr,
+        )));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -776,6 +804,16 @@ data:
 }
 "#;
         assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_format_cli_failure_preserves_tool_and_stage() {
+        let message = format_cli_failure("ncdump-custom", "读取头部", Some(3), b"missing variable");
+        assert!(message.contains("ncdump-custom"));
+        assert!(message.contains("读取头部"));
+        assert!(message.contains("退出码 3"));
+        assert!(message.contains("missing variable"));
     }
 
     #[cfg(not(feature = "netcdf"))]

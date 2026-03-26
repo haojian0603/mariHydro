@@ -319,17 +319,38 @@ fn parse_gdalinfo_metadata(value: &serde_json::Value) -> Result<RasterMetadata, 
 }
 
 #[cfg(not(feature = "gdal"))]
+fn format_cli_failure(tool: &str, stage: &str, exit_code: Option<i32>, stderr: &[u8]) -> String {
+    let status = match exit_code {
+        Some(code) => format!("退出码 {code}"),
+        None => "进程被终止".to_string(),
+    };
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("{tool} 在{stage}阶段失败（{status}，stderr 为空）")
+    } else {
+        format!("{tool} 在{stage}阶段失败（{status}）：{stderr}")
+    }
+}
+
+#[cfg(not(feature = "gdal"))]
 fn cli_read_metadata(path: &Path) -> Result<RasterMetadata, GdalError> {
-    let output = std::process::Command::new(gdalinfo_bin())
+    let tool = gdalinfo_bin();
+    let output = std::process::Command::new(&tool)
         .arg("-json")
         .arg(path)
         .output()
-        .map_err(|_| GdalError::NotAvailable)?;
+        .map_err(|error| GdalError::NotAvailable {
+            tool: tool.clone(),
+            detail: error.to_string(),
+        })?;
 
     if !output.status.success() {
-        return Err(GdalError::OpenFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        return Err(GdalError::OpenFailed(format_cli_failure(
+            &tool,
+            "读取元数据",
+            output.status.code(),
+            &output.stderr,
+        )));
     }
 
     let value: serde_json::Value =
@@ -343,7 +364,8 @@ fn cli_read_band(
     band_idx: usize,
     meta: &RasterMetadata,
 ) -> Result<RasterBand, GdalError> {
-    let output = std::process::Command::new(gdal_translate_bin())
+    let tool = gdal_translate_bin();
+    let output = std::process::Command::new(&tool)
         .arg("-of")
         .arg("AAIGrid")
         .arg("-b")
@@ -351,12 +373,18 @@ fn cli_read_band(
         .arg(path)
         .arg("/vsistdout/")
         .output()
-        .map_err(|_| GdalError::NotAvailable)?;
+        .map_err(|error| GdalError::NotAvailable {
+            tool: tool.clone(),
+            detail: error.to_string(),
+        })?;
 
     if !output.status.success() {
-        return Err(GdalError::ReadFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        return Err(GdalError::ReadFailed(format_cli_failure(
+            &tool,
+            "导出 AAIGrid 波段",
+            output.status.code(),
+            &output.stderr,
+        )));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -408,9 +436,9 @@ fn parse_ascii_grid_band(text: &str, meta: &RasterMetadata) -> Result<RasterBand
     let mut data = Vec::with_capacity(ncols * nrows);
     for line in text.lines().skip(data_start) {
         for token in line.split_whitespace() {
-            let value = token.parse::<f64>().map_err(|_| {
-                GdalError::ReadFailed(format!("AAIGrid 栅格值无法解析: {token}"))
-            })?;
+            let value = token
+                .parse::<f64>()
+                .map_err(|_| GdalError::ReadFailed(format!("AAIGrid 栅格值无法解析: {token}")))?;
             data.push(value);
         }
     }
@@ -531,5 +559,15 @@ mod tests {
         };
         let text = "ncols 2\nnrows 2\n1 2\n3 bad\n";
         assert!(parse_ascii_grid_band(text, &meta).is_err());
+    }
+
+    #[cfg(not(feature = "gdal"))]
+    #[test]
+    fn test_format_cli_failure_preserves_tool_and_stage() {
+        let message = format_cli_failure("gdalinfo-custom", "读取元数据", Some(2), b"bad json");
+        assert!(message.contains("gdalinfo-custom"));
+        assert!(message.contains("读取元数据"));
+        assert!(message.contains("退出码 2"));
+        assert!(message.contains("bad json"));
     }
 }

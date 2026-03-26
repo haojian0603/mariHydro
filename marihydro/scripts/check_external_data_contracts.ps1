@@ -130,6 +130,16 @@ try {
         -Message "GDAL metadata parsing must not invent a synthetic single-band layout when bands are missing"
 
     Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `
+        -Pattern 'map_err\(\|_\|\s*GdalError::NotAvailable|OpenFailed\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)|ReadFailed\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)' `
+        -Message "GDAL CLI fallback must preserve tool identity, stage, and stderr context instead of collapsing failures into generic NotAvailable/OpenFailed strings"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/gdal/error.rs" `
+        -Pattern 'NotAvailable,\s*$' `
+        -Message "GDAL error surface must not use a unit NotAvailable variant that loses tool context"
+
+    Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
         -Pattern 'parse::<usize>\(\)\.ok\(\)\.unwrap_or\(0\)' `
         -Message "NetCDF header parsing must not collapse invalid dimensions to zero"
@@ -148,6 +158,16 @@ try {
         -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
         -Pattern 'CliHeader::default\(' `
         -Message "NetCDF header parsing must not start from a synthetic default header shell"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
+        -Pattern 'map_err\(\|_\|\s*NetCdfError::NotAvailable|OpenFailed\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)|ReadFailed\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)' `
+        -Message "NetCDF CLI fallback must preserve tool identity, stage, and stderr context instead of collapsing failures into generic NotAvailable/OpenFailed strings"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/error.rs" `
+        -Pattern 'NotAvailable,\s*$' `
+        -Message "NetCDF error surface must not use a unit NotAvailable variant that loses tool context"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
