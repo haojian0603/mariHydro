@@ -1,37 +1,37 @@
 // crates/mh_physics/src/adapter.rs
 
 //! 网格适配层 - 物理引擎几何接口
-//! 
+//!
 //! 提供PhysicsMesh与Backend几何抽象的桥接，支持f32/f64精度切换。
-//! 
+//!
 //! # 设计原则
-//! 
+//!
 //! 1. **类型安全强制**：所有几何查询接口必须使用Runtime索引类型（CellIndex/FaceIndex/NodeIndex）
 //! 2. **职责隔离**：杜绝usize泄露，索引转换必须在调用层显式完成
 //! 3. **Backend 泛型化**：所有几何接口使用 `B::Vector2D` 返回类型
 //! 4. **错误透明**：坐标转换失败时panic而非静默回退，确保开发期暴露精度问题
-//! 
+//!
 //! # 架构约束
-//! 
+//!
 //! - **Layer 3 (Engine)** 必须调用泛型接口
 //! - DVec2 Legacy 接口已删除
-//! 
+//!
 //! # 使用示例
-//! 
+//!
 //! ```rust,ignore
 //! use mh_physics::adapter::PhysicsMesh;
 //! use mh_runtime::{CpuBackend, CellIndex, FaceIndex};
-//! 
+//!
 //! let cell_idx = CellIndex::new(0);
 //! let normal_f32 = mesh.face_center_generic::<CpuBackend<f32>>(FaceIndex::new(0));
 //! let normal_f64 = mesh.face_center_generic::<CpuBackend<f64>>(FaceIndex::new(0));
 //! ```
 
-use mh_mesh::FrozenMesh;
+use mh_foundation::MhError;
 use mh_mesh::structured::StructuredMesh as StructuredMesh2D;
+use mh_mesh::FrozenMesh;
 use mh_runtime::{Backend, RuntimeScalar};
 use std::sync::Arc;
-use mh_foundation::MhError;
 
 // 从mh_runtime导入统一索引类型
 pub use crate::types::{CellIndex, FaceIndex, NodeIndex, INVALID_INDEX};
@@ -109,20 +109,17 @@ impl PhysicsMesh {
         self.inner.n_nodes
     }
 
-
     /// 单元数量
     #[inline]
     pub fn cell_count(&self) -> usize {
         self.inner.n_cells
     }
 
-
     /// 面数量
     #[inline]
     pub fn face_count(&self) -> usize {
         self.inner.n_faces
     }
-
 
     /// 内部面数量
     #[inline]
@@ -196,7 +193,11 @@ impl PhysicsMesh {
     /// 获取单元面积（无边界检查 - 性能敏感场景使用）
     #[inline]
     pub fn cell_area_unchecked(&self, cell: CellIndex) -> f64 {
-        debug_assert!(cell.get() < self.cell_count(), "CellIndex越界: {}", cell.get());
+        debug_assert!(
+            cell.get() < self.cell_count(),
+            "CellIndex越界: {}",
+            cell.get()
+        );
         self.inner.cell_area[cell.get()]
     }
 
@@ -207,12 +208,12 @@ impl PhysicsMesh {
         if faces.is_empty() {
             return None;
         }
-        
+
         let perimeter: f64 = faces
             .iter()
             .map(|&face_id| self.inner.face_length[face_id as usize])
             .sum();
-        
+
         if perimeter > 0.0 {
             Some(perimeter)
         } else {
@@ -223,7 +224,8 @@ impl PhysicsMesh {
     /// 获取单元的所有面索引（类型安全）
     #[inline]
     pub fn cell_faces(&self, cell: CellIndex) -> impl Iterator<Item = FaceIndex> + '_ {
-        self.inner.cell_faces(cell.get())
+        self.inner
+            .cell_faces(cell.get())
             .iter()
             .map(|&f| FaceIndex::new(f as usize))
     }
@@ -231,7 +233,8 @@ impl PhysicsMesh {
     /// 获取单元的邻居单元索引
     #[inline]
     pub fn cell_neighbors(&self, cell: CellIndex) -> impl Iterator<Item = CellIndex> + '_ {
-        self.inner.cell_neighbors(cell.get())
+        self.inner
+            .cell_neighbors(cell.get())
             .iter()
             .filter_map(|&n| {
                 if n == u32::MAX {
@@ -245,7 +248,8 @@ impl PhysicsMesh {
     /// 获取单元的节点索引
     #[inline]
     pub fn cell_nodes(&self, cell: CellIndex) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.inner.cell_nodes(cell.get())
+        self.inner
+            .cell_nodes(cell.get())
             .iter()
             .map(|&n| NodeIndex::new(n as usize))
     }
@@ -284,7 +288,11 @@ impl PhysicsMesh {
 
     /// 获取面长度（Backend 标量）
     #[inline]
-    pub fn face_length_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+    pub fn face_length_scalar<B: Backend>(
+        &self,
+        face: FaceIndex,
+        backend: &B,
+    ) -> Result<B::Scalar, MhError> {
         let idx = face.get();
         if idx >= self.face_count() {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
@@ -360,7 +368,11 @@ impl PhysicsMesh {
 
     /// 获取面左侧床面高程（Backend 标量）
     #[inline]
-    pub fn face_z_left_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+    pub fn face_z_left_scalar<B: Backend>(
+        &self,
+        face: FaceIndex,
+        backend: &B,
+    ) -> Result<B::Scalar, MhError> {
         let idx = face.get();
         if idx >= self.face_count() {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
@@ -381,7 +393,11 @@ impl PhysicsMesh {
 
     /// 获取面右侧床面高程（Backend 标量）
     #[inline]
-    pub fn face_z_right_scalar<B: Backend>(&self, face: FaceIndex, backend: &B) -> Result<B::Scalar, MhError> {
+    pub fn face_z_right_scalar<B: Backend>(
+        &self,
+        face: FaceIndex,
+        backend: &B,
+    ) -> Result<B::Scalar, MhError> {
         let idx = face.get();
         if idx >= self.face_count() {
             return Err(MhError::index_out_of_bounds("Face", idx, self.face_count()));
@@ -429,7 +445,6 @@ impl PhysicsMesh {
     // =========================================================================
     // 范围迭代器 (usize是合理的，因为Range本身就是usize)
     // =========================================================================
-
 }
 
 // ============================================================================
@@ -476,9 +491,10 @@ impl mh_io::exporters::vtu::VtuMesh for PhysicsMesh {
 mod tests {
     use super::*;
     use crate::types::CellIndex;
+    use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
     use mh_mesh::FrozenMesh;
-    use mh_runtime::Vector2D;
     use mh_runtime::CpuBackend;
+    use mh_runtime::Vector2D;
 
     #[test]
     fn test_physics_mesh_from_empty() {
@@ -495,10 +511,12 @@ mod tests {
     fn test_cell_index_usage() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         let cell_idx = CellIndex::new(0);
-        let center = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx).unwrap();
-        
+        let center = mesh
+            .cell_center_generic::<CpuBackend<f64>>(cell_idx)
+            .unwrap();
+
         assert!((center.x() - 0.5).abs() < 1e-10);
         assert!((center.y() - 0.5).abs() < 1e-10);
     }
@@ -507,10 +525,12 @@ mod tests {
     fn test_face_index_usage() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         let face_idx = FaceIndex::new(0);
-        let normal = mesh.face_normal_generic::<CpuBackend<f64>>(face_idx).unwrap();
-        
+        let normal = mesh
+            .face_normal_generic::<CpuBackend<f64>>(face_idx)
+            .unwrap();
+
         assert!((normal.x() - 1.0).abs() < 1e-10);
         assert!(normal.y().abs() < 1e-10);
     }
@@ -519,17 +539,21 @@ mod tests {
     fn test_generic_interface_f32_f64_consistency() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         let cell_idx = CellIndex::new(0);
-        
+
         // 测试f32接口
-        let center_f32 = mesh.cell_center_generic::<CpuBackend<f32>>(cell_idx).unwrap();
+        let center_f32 = mesh
+            .cell_center_generic::<CpuBackend<f32>>(cell_idx)
+            .unwrap();
         assert_eq!(std::mem::size_of_val(&center_f32.x()), 4);
-        
+
         // 测试f64接口
-        let center_f64 = mesh.cell_center_generic::<CpuBackend<f64>>(cell_idx).unwrap();
+        let center_f64 = mesh
+            .cell_center_generic::<CpuBackend<f64>>(cell_idx)
+            .unwrap();
         assert_eq!(std::mem::size_of_val(&center_f64.x()), 8);
-        
+
         // 验证结果一致性
         assert_eq!(center_f32.x() as f64, center_f64.x());
         assert_eq!(center_f32.y() as f64, center_f64.y());
@@ -543,10 +567,10 @@ mod tests {
     fn test_cell_perimeter_with_index() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         let cell_idx = CellIndex::new(0);
         let perimeter = mesh.cell_perimeter(cell_idx).unwrap();
-        
+
         assert!((perimeter - 4.0).abs() < 1e-10);
     }
 
@@ -554,10 +578,10 @@ mod tests {
     fn test_face_neighbors_iterator() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         let cell_idx = CellIndex::new(0);
         let neighbors: Vec<_> = mesh.cell_neighbors(cell_idx).collect();
-        
+
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].get(), 1);
     }
@@ -566,16 +590,34 @@ mod tests {
     fn test_invalid_index_handling() {
         let frozen = create_test_mesh();
         let mesh = PhysicsMesh::from_frozen(&frozen);
-        
+
         // 测试无效CellIndex
         let invalid_cell = CellIndex::INVALID;
         assert!(mesh.cell_area(invalid_cell).is_none());
         // debug_assert会在测试时panic
         // 生产环境由调用者保证索引有效性
-        
+
         // 测试无效FaceIndex邻居检查
         let invalid_face = FaceIndex::INVALID;
         assert!(!mesh.has_neighbor(invalid_face));
+    }
+
+    #[test]
+    fn test_from_structured_requires_explicit_bed_elevation() {
+        let mesh = StructuredMesh::new(StructuredMeshConfig::square(2, 1.0));
+        let err = PhysicsMesh::from_structured(&mesh)
+            .expect_err("structured mesh without bed elevation must fail");
+        assert!(err.to_string().contains("缺少必需网格数据"));
+    }
+
+    #[test]
+    fn test_from_structured_accepts_explicit_flat_bed() {
+        let mut mesh = StructuredMesh::new(StructuredMeshConfig::square(2, 1.0));
+        mesh.set_uniform_bed_elevation(0.0)
+            .expect("uniform flat bed should be accepted");
+        let adapted = PhysicsMesh::from_structured(&mesh)
+            .expect("structured mesh with explicit flat bed should adapt");
+        assert_eq!(adapted.cell_count(), 4);
     }
 
     // 创建测试用的FrozenMesh
@@ -636,7 +678,15 @@ mod tests {
         face_z_right.copy_from_slice(&[0.0; 7]);
         mesh.face_z_right = face_z_right;
         mesh.face_owner = vec![0, 0, 0, 0, 1, 1, 1];
-        mesh.face_neighbor = vec![1, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
+        mesh.face_neighbor = vec![
+            1,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+        ];
         mesh.face_delta_owner = vec![Point2D::new(0.0, 0.0); 7];
         mesh.face_delta_neighbor = vec![Point2D::new(0.0, 0.0); 7];
         let mut face_dist_o2n = backend.alloc(7);

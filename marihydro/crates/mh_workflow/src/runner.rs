@@ -16,23 +16,23 @@ use crate::manager::{WorkflowError, WorkflowManager};
 use crate::scheduler::{DeviceSelection, HybridScheduler};
 use crate::storage::Storage;
 use mh_foundation::MhError;
+use mh_io::{
+    checkpoint::{Checkpoint, CheckpointManager},
+    exporters::vtu::{SimpleState, VtuExporter},
+};
+use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
+use mh_physics::forcing::{
+    compute_interpolation_weights, ForcingDataError, ForcingField, InterpolationWeights,
+    SpatialInterpolation,
+};
+use mh_physics::sources::atmosphere::{WindStressConfig, WindStressRuntimeSource};
 use mh_physics::{
+    adapter::PhysicsMesh,
     engine::{ShallowWaterSolver, SolverStats, StabilityStatus},
     state::ShallowWaterState,
-    adapter::PhysicsMesh,
     Layer3Config,
 };
 use mh_physics::{BoundaryDataProvider, ExternalForcing};
-use mh_physics::forcing::{
-    ForcingDataError, ForcingField, SpatialInterpolation,
-    compute_interpolation_weights, InterpolationWeights,
-};
-use mh_physics::sources::atmosphere::{WindStressConfig, WindStressRuntimeSource};
-use mh_io::{
-    checkpoint::{Checkpoint, CheckpointManager},
-    exporters::vtu::{VtuExporter, SimpleState},
-};
-use mh_mesh::structured::{StructuredMesh, StructuredMeshConfig};
 use mh_runtime::{CpuBackend, RuntimeScalar, Vector2D};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -87,16 +87,10 @@ impl From<RunnerError> for MhError {
                 MhError::invalid_input(format!("任务已在运行: {job_id}"))
             }
             RunnerError::NotFound(job_id) => MhError::not_found(format!("任务:{job_id}")),
-            RunnerError::Computation(message) => {
-                MhError::internal(format!("计算失败: {message}"))
-            }
+            RunnerError::Computation(message) => MhError::internal(format!("计算失败: {message}")),
             RunnerError::Cancelled => MhError::internal("任务已取消".to_string()),
-            RunnerError::Timeout(secs) => {
-                MhError::internal(format!("任务超时: {secs} 秒"))
-            }
-            RunnerError::Config(message) => {
-                MhError::invalid_input(format!("配置错误: {message}"))
-            }
+            RunnerError::Timeout(secs) => MhError::internal(format!("任务超时: {secs} 秒")),
+            RunnerError::Config(message) => MhError::invalid_input(format!("配置错误: {message}")),
             RunnerError::Initialization(message) => {
                 MhError::invalid_input(format!("初始化失败: {message}"))
             }
@@ -204,10 +198,7 @@ impl RunContext {
     /// - 网格文件不存在或格式错误
     /// - 配置文件解析失败
     /// - 初始状态与网格拓扑不匹配
-    pub fn new(
-        job: &SimulationJob,
-        _runner_config: &RunnerConfig,
-    ) -> Result<Self, RunnerError> {
+    pub fn new(job: &SimulationJob, _runner_config: &RunnerConfig) -> Result<Self, RunnerError> {
         let layer4_config = load_layer4_config(&job.config.project_path)
             .map_err(|e| RunnerError::Config(format!("配置加载失败: {}", e)))?;
 
@@ -240,11 +231,8 @@ impl RunContext {
             .map_err(|e| RunnerError::Initialization(format!("初始状态创建失败: {}", e)))?;
         let state = Arc::new(RwLock::new(state));
 
-        let forcing_snapshot = load_forcing_snapshot(
-            &job.config.project_path,
-            &mesh,
-            job.config.start_time,
-        )?;
+        let forcing_snapshot =
+            load_forcing_snapshot(&job.config.project_path, &mesh, job.config.start_time)?;
         if let Some(snapshot) = &forcing_snapshot {
             tracing::info!(
                 "强迫数据采样: source={}, var={}, t={}, lon={}, lat={}, value={:?}",
@@ -563,7 +551,6 @@ impl<S: Storage> JobRunner<S> {
                 )?;
                 last_progress_time = Instant::now();
             }
-
         }
 
         tracing::info!(
@@ -631,29 +618,27 @@ impl<S: Storage> JobRunner<S> {
             state.h_slice().to_vec(),
             state.hu_slice().to_vec(),
             state.hv_slice().to_vec(),
-        ).with_bed(state.z_slice().to_vec());
+        )
+        .with_bed(state.z_slice().to_vec());
 
         // 使用try_from安全转换u64→usize，避免32位系统溢出
         let step_count = usize::try_from(context.completed_steps())
             .map_err(|_| RunnerError::Other("步数超出usize范围".to_string()))?;
 
-        let mut checkpoint = Checkpoint::new(
-            context.current_sim_time(),
-            step_count,
-            snapshot,
-        );
-        
+        let mut checkpoint = Checkpoint::new(context.current_sim_time(), step_count, snapshot);
+
         checkpoint = checkpoint
             .with_config_hash(compute_config_hash(&solver))
             .with_mesh_hash(compute_mesh_hash(&context.mesh));
 
         let checkpoint_dir = context.config.project_path.join("checkpoints");
         std::fs::create_dir_all(&checkpoint_dir)?;
-        
+
         let manager = CheckpointManager::new(checkpoint_dir, 5)
             .with_prefix(&format!("job_{}", context.job_id));
-        
-        let path = manager.save(&checkpoint)
+
+        let path = manager
+            .save(&checkpoint)
             .map_err(|e| RunnerError::Other(format!("检查点保存失败: {}", e)))?;
 
         self.manager.events().emit(WorkflowEvent::CheckpointSaved {
@@ -676,12 +661,8 @@ impl<S: Storage> JobRunner<S> {
         let state = context.state.read();
         let step = context.output_counter.fetch_add(1, Ordering::SeqCst);
 
-        let vtu_state = SimpleState::new(
-            state.h_slice(),
-            state.hu_slice(),
-            state.hv_slice(),
-        )
-        .map_err(|e| RunnerError::Other(format!("VTU状态构造失败: {}", e)))?;
+        let vtu_state = SimpleState::new(state.h_slice(), state.hu_slice(), state.hv_slice())
+            .map_err(|e| RunnerError::Other(format!("VTU状态构造失败: {}", e)))?;
 
         let output_dir = context.config.project_path.join("output");
         std::fs::create_dir_all(&output_dir)?;
@@ -689,11 +670,15 @@ impl<S: Storage> JobRunner<S> {
         let filename = format!("output_{:06}.vtu", step);
         let path = output_dir.join(&filename);
 
-        let exporter = VtuExporter::new()
-            .binary(false)
-            .h_dry(1e-6);
+        let exporter = VtuExporter::new().binary(false).h_dry(1e-6);
 
-        exporter.export(&path, &*context.mesh, &vtu_state, context.current_sim_time())
+        exporter
+            .export(
+                &path,
+                &*context.mesh,
+                &vtu_state,
+                context.current_sim_time(),
+            )
             .map_err(|e| RunnerError::Other(format!("VTU导出失败: {}", e)))?;
 
         *context.last_output_time.write() = context.current_sim_time();
@@ -733,10 +718,13 @@ fn validate_mesh_topology(mesh: &PhysicsMesh) -> Result<(), String> {
     for face_idx in 0..mesh.face_count() {
         let face = mh_runtime::FaceIndex::new(face_idx);
         let _owner = mesh.face_owner(face); // 直接返回值，不需要map_err
-        // 如果需要验证，检查owner索引是否在有效范围内
+                                            // 如果需要验证，检查owner索引是否在有效范围内
         let owner_idx = _owner.get();
         if owner_idx >= mesh.cell_count() {
-            return Err(format!("面 {} 的owner索引 {} 超出范围", face_idx, owner_idx));
+            return Err(format!(
+                "面 {} 的owner索引 {} 超出范围",
+                face_idx, owner_idx
+            ));
         }
     }
 
@@ -753,11 +741,11 @@ fn load_mesh_from_project(
         return Err("项目文件 project.mhp 不存在".to_string());
     }
 
-    let content = std::fs::read_to_string(&project_file)
-        .map_err(|e| format!("读取项目文件失败: {}", e))?;
+    let content =
+        std::fs::read_to_string(&project_file).map_err(|e| format!("读取项目文件失败: {}", e))?;
 
-    let project: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("解析项目文件失败: {}", e))?;
+    let project: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("解析项目文件失败: {}", e))?;
 
     if let Some(structured) = project.get("structured") {
         let nx = structured["nx"].as_u64().ok_or("结构化网格缺少 nx")? as usize;
@@ -785,7 +773,16 @@ fn load_mesh_from_project(
         };
         let mut mesh = StructuredMesh::new(config);
 
-        if let Some(bed) = structured.get("bed_elevation") {
+        let bed_array = structured.get("bed_elevation");
+        let uniform_bed = structured.get("uniform_bed_elevation");
+
+        if bed_array.is_some() && uniform_bed.is_some() {
+            return Err(
+                "结构化网格 bed_elevation 与 uniform_bed_elevation 不能同时提供".to_string(),
+            );
+        }
+
+        if let Some(bed) = bed_array {
             let elevation = parse_f64_array(bed)?;
             if elevation.len() != nx * ny {
                 return Err(format!(
@@ -794,7 +791,18 @@ fn load_mesh_from_project(
                     elevation.len()
                 ));
             }
-            mesh.set_bed_elevation(elevation);
+            mesh.set_bed_elevation(elevation)
+                .map_err(|e| format!("结构化网格床面高程无效: {}", e))?;
+        } else if let Some(uniform_bed) = uniform_bed {
+            let elevation = uniform_bed
+                .as_f64()
+                .ok_or("结构化网格 uniform_bed_elevation 必须是数值")?;
+            mesh.set_uniform_bed_elevation(elevation)
+                .map_err(|e| format!("结构化网格统一床面高程无效: {}", e))?;
+        } else {
+            return Err(
+                "结构化网格必须显式提供 bed_elevation 或 uniform_bed_elevation；若为平床，请显式设置 uniform_bed_elevation".to_string()
+            );
         }
 
         let frozen_mesh = mesh
@@ -821,8 +829,8 @@ fn load_mesh_from_project(
         return Err(format!("网格文件不存在: {:?}", mesh_path));
     }
 
-    let frozen_mesh = mh_mesh::io::load_mhb(&mesh_path)
-        .map_err(|e| format!("加载网格失败: {}", e))?;
+    let frozen_mesh =
+        mh_mesh::io::load_mhb(&mesh_path).map_err(|e| format!("加载网格失败: {}", e))?;
 
     Ok(PhysicsMesh::from_frozen(&frozen_mesh))
 }
@@ -835,12 +843,12 @@ fn load_layer4_config(project_path: &Path) -> Result<mh_config::SolverConfig, St
         return Ok(mh_config::SolverConfig::default());
     }
 
-    let content = std::fs::read_to_string(&config_file)
-        .map_err(|e| format!("读取配置文件失败: {}", e))?;
-    
-    let config: mh_config::SolverConfig = serde_json::from_str(&content)
-        .map_err(|e| format!("解析配置文件失败: {}", e))?;
-    
+    let content =
+        std::fs::read_to_string(&config_file).map_err(|e| format!("读取配置文件失败: {}", e))?;
+
+    let config: mh_config::SolverConfig =
+        serde_json::from_str(&content).map_err(|e| format!("解析配置文件失败: {}", e))?;
+
     Ok(config)
 }
 
@@ -965,17 +973,16 @@ fn load_forcing_snapshot(
                     }
                 })
                 .unwrap_or_else(|| {
-                    match mesh.cell_center_generic::<CpuBackend<f64>>(mh_runtime::CellIndex::new(0)) {
+                    match mesh.cell_center_generic::<CpuBackend<f64>>(mh_runtime::CellIndex::new(0))
+                    {
                         Ok(center) => (center.x(), center.y()),
                         Err(_) => (0.0, 0.0),
                     }
                 });
 
-            let reader = mh_physics::forcing::data::NetCdfReader::open(
-                project_path.join(file),
-                variable,
-            )
-            .map_err(|e| RunnerError::Initialization(format!("强迫数据读取失败: {e}")))?;
+            let reader =
+                mh_physics::forcing::data::NetCdfReader::open(project_path.join(file), variable)
+                    .map_err(|e| RunnerError::Initialization(format!("强迫数据读取失败: {e}")))?;
             let field = reader
                 .read_field_at_time(time)
                 .map_err(|e| RunnerError::Initialization(format!("强迫数据读取失败: {e}")))?;
@@ -1032,11 +1039,8 @@ fn attach_forcing_sources(
             .map_err(|e| RunnerError::Initialization(format!("风场 V 解析失败: {e}")))?;
 
         let (positions, _) = flatten_forcing_field(&series_u[0])?;
-        let weights = compute_interpolation_weights(
-            mesh,
-            SpatialInterpolation::default(),
-            &positions,
-        );
+        let weights =
+            compute_interpolation_weights(mesh, SpatialInterpolation::default(), &positions);
 
         let wind_config = std::sync::Arc::new(std::sync::RwLock::new(
             WindStressConfig::default_config(mesh.cell_count()),
@@ -1065,63 +1069,63 @@ fn create_initial_state(
     config: &SimulationConfig,
 ) -> Result<ShallowWaterState<CpuBackend<f64>>, String> {
     let backend = CpuBackend::<f64>::new();
-    
+
     let initial_file = config.project_path.join("initial_state.json");
     if initial_file.exists() {
         tracing::info!("加载初始状态文件: {:?}", initial_file);
         let content = std::fs::read_to_string(&initial_file)
             .map_err(|e| format!("读取初始状态文件失败: {}", e))?;
-        
-        let data: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("解析初始状态文件失败: {}", e))?;
-        
-        let h = parse_f64_array(&data["h"])
-            .map_err(|e| format!("解析h字段失败: {}", e))?;
-        
+
+        let data: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("解析初始状态文件失败: {}", e))?;
+
+        let h = parse_f64_array(&data["h"]).map_err(|e| format!("解析h字段失败: {}", e))?;
+
         if h.len() != mesh.cell_count() {
-            return Err(format!("初始状态h数组长度不匹配: 期望 {}, 实际 {}", mesh.cell_count(), h.len()));
+            return Err(format!(
+                "初始状态h数组长度不匹配: 期望 {}, 实际 {}",
+                mesh.cell_count(),
+                h.len()
+            ));
         }
-        
+
         let n_cells = h.len();
         let hu = parse_f64_array(&data["hu"]).unwrap_or(vec![0.0; n_cells]);
         let hv = parse_f64_array(&data["hv"]).unwrap_or(vec![0.0; n_cells]);
-        
+
         let z_bed: Vec<f64> = (0..mesh.cell_count())
             .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
             .collect();
-        
-        ShallowWaterState::<CpuBackend<f64>>::from_data(
-            backend,
-            h,
-            hu,
-            hv,
-            z_bed,
-        )
-        .map_err(|e| format!("初始状态数据无效: {}", e))
+
+        ShallowWaterState::<CpuBackend<f64>>::from_data(backend, h, hu, hv, z_bed)
+            .map_err(|e| format!("初始状态数据无效: {}", e))
     } else {
         tracing::info!("未找到初始状态文件，使用默认静水条件 (h=1.0m)");
         let z_bed: Vec<f64> = (0..mesh.cell_count())
             .map(|i| mesh.cell_z_bed(mh_runtime::CellIndex::new(i)))
             .collect();
-        Ok(ShallowWaterState::<CpuBackend<f64>>::cold_start(backend, 1.0, &z_bed))
+        Ok(ShallowWaterState::<CpuBackend<f64>>::cold_start(
+            backend, 1.0, &z_bed,
+        ))
     }
 }
 
 fn parse_f64_array(value: &serde_json::Value) -> Result<Vec<f64>, String> {
-    value.as_array()
+    value
+        .as_array()
         .ok_or("期望数组".to_string())
         .and_then(|arr| {
             arr.iter()
-                .map(|v| v.as_f64()
-                    .ok_or_else(|| format!("无效的双精度浮点数: {}", v)))
+                .map(|v| {
+                    v.as_f64()
+                        .ok_or_else(|| format!("无效的双精度浮点数: {}", v))
+                })
                 .collect()
         })
 }
 
 fn parse_f64_matrix(value: &serde_json::Value) -> Result<Vec<Vec<f64>>, ForcingDataError> {
-    let rows = value
-        .as_array()
-        .ok_or(ForcingDataError::SpatialMismatch)?;
+    let rows = value.as_array().ok_or(ForcingDataError::SpatialMismatch)?;
 
     let mut matrix = Vec::with_capacity(rows.len());
     for row in rows {
@@ -1141,7 +1145,11 @@ fn parse_inline_forcing(value: &serde_json::Value) -> Result<ForcingField, Forci
         .map_err(|_| ForcingDataError::SpatialMismatch)?;
     let lats = parse_f64_array(value.get("lats").ok_or(ForcingDataError::SpatialMismatch)?)
         .map_err(|_| ForcingDataError::SpatialMismatch)?;
-    let values = parse_f64_matrix(value.get("values").ok_or(ForcingDataError::SpatialMismatch)?)?;
+    let values = parse_f64_matrix(
+        value
+            .get("values")
+            .ok_or(ForcingDataError::SpatialMismatch)?,
+    )?;
 
     if values.len() != lats.len() {
         return Err(ForcingDataError::SpatialMismatch);
@@ -1207,7 +1215,11 @@ fn select_forcing_field(series: &[ForcingField], time: f64) -> Result<ForcingFie
         let t0 = series[i].time;
         let t1 = series[i + 1].time;
         if t0 <= time && time <= t1 {
-            let frac = if (t1 - t0).abs() < 1e-14 { 0.0 } else { (time - t0) / (t1 - t0) };
+            let frac = if (t1 - t0).abs() < 1e-14 {
+                0.0
+            } else {
+                (time - t0) / (t1 - t0)
+            };
             return blend_forcing_fields(&series[i], &series[i + 1], frac);
         }
     }
@@ -1215,19 +1227,29 @@ fn select_forcing_field(series: &[ForcingField], time: f64) -> Result<ForcingFie
     Ok(series[0].clone())
 }
 
-fn blend_forcing_fields(a: &ForcingField, b: &ForcingField, frac: f64) -> Result<ForcingField, RunnerError> {
+fn blend_forcing_fields(
+    a: &ForcingField,
+    b: &ForcingField,
+    frac: f64,
+) -> Result<ForcingField, RunnerError> {
     if a.lons != b.lons || a.lats != b.lats {
-        return Err(RunnerError::Initialization("强迫数据网格不一致".to_string()));
+        return Err(RunnerError::Initialization(
+            "强迫数据网格不一致".to_string(),
+        ));
     }
 
     if a.values.len() != b.values.len() {
-        return Err(RunnerError::Initialization("强迫数据维度不一致".to_string()));
+        return Err(RunnerError::Initialization(
+            "强迫数据维度不一致".to_string(),
+        ));
     }
 
     let mut values = Vec::with_capacity(a.values.len());
     for (row_a, row_b) in a.values.iter().zip(b.values.iter()) {
         if row_a.len() != row_b.len() {
-            return Err(RunnerError::Initialization("强迫数据列维度不一致".to_string()));
+            return Err(RunnerError::Initialization(
+                "强迫数据列维度不一致".to_string(),
+            ));
         }
         let mut row = Vec::with_capacity(row_a.len());
         for (&va, &vb) in row_a.iter().zip(row_b.iter()) {
@@ -1245,13 +1267,16 @@ fn blend_forcing_fields(a: &ForcingField, b: &ForcingField, frac: f64) -> Result
     })
 }
 
-fn parse_boundary_series(value: &serde_json::Value) -> Result<Vec<(f64, ExternalForcing)>, RunnerError> {
+fn parse_boundary_series(
+    value: &serde_json::Value,
+) -> Result<Vec<(f64, ExternalForcing)>, RunnerError> {
     let mut series = Vec::new();
     if let Some(frames) = value.get("frames").and_then(|v| v.as_array()) {
         for frame in frames {
-            let time = frame.get("time").and_then(|v| v.as_f64()).ok_or_else(|| {
-                RunnerError::Config("边界强迫缺少 time".to_string())
-            })?;
+            let time = frame
+                .get("time")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| RunnerError::Config("边界强迫缺少 time".to_string()))?;
             let eta = frame.get("eta").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let u = frame.get("u").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let v = frame.get("v").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -1273,7 +1298,9 @@ fn parse_boundary_series(value: &serde_json::Value) -> Result<Vec<(f64, External
 
 fn flatten_forcing_field(field: &ForcingField) -> Result<(Vec<(f64, f64)>, Vec<f64>), RunnerError> {
     if field.lons.is_empty() || field.lats.is_empty() {
-        return Err(RunnerError::Initialization("强迫数据经纬度为空".to_string()));
+        return Err(RunnerError::Initialization(
+            "强迫数据经纬度为空".to_string(),
+        ));
     }
     if field.values.len() != field.lats.len() {
         return Err(RunnerError::Initialization(
@@ -1285,9 +1312,10 @@ fn flatten_forcing_field(field: &ForcingField) -> Result<(Vec<(f64, f64)>, Vec<f
     let mut values = Vec::with_capacity(field.lons.len() * field.lats.len());
 
     for (j, lat) in field.lats.iter().copied().enumerate() {
-        let row = field.values.get(j).ok_or_else(|| {
-            RunnerError::Initialization("强迫数据 values 行访问失败".to_string())
-        })?;
+        let row = field
+            .values
+            .get(j)
+            .ok_or_else(|| RunnerError::Initialization("强迫数据 values 行访问失败".to_string()))?;
         if row.len() != field.lons.len() {
             return Err(RunnerError::Initialization(
                 "强迫数据经度维度与 values 列数不一致".to_string(),
@@ -1306,7 +1334,9 @@ fn flatten_forcing_field(field: &ForcingField) -> Result<(Vec<(f64, f64)>, Vec<f
     Ok((positions, values))
 }
 
-fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>, WindStressRuntimeSource>) -> u64 {
+fn compute_config_hash(
+    solver: &ShallowWaterSolver<CpuBackend<f64>, WindStressRuntimeSource>,
+) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -1332,7 +1362,11 @@ fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>, WindStressRu
     config.params.dt_max.to_bits().hash(&mut hasher);
     config.params.eta_tolerance.to_bits().hash(&mut hasher);
     config.params.flux_tolerance.to_bits().hash(&mut hasher);
-    config.params.conservation_tolerance.to_bits().hash(&mut hasher);
+    config
+        .params
+        .conservation_tolerance
+        .to_bits()
+        .hash(&mut hasher);
 
     let scheme_id: u8 = match config.scheme {
         mh_physics::NumericalScheme::FirstOrder => 0,
@@ -1390,16 +1424,16 @@ fn compute_config_hash(solver: &ShallowWaterSolver<CpuBackend<f64>, WindStressRu
 fn compute_mesh_hash(mesh: &PhysicsMesh) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     mesh.cell_count().hash(&mut hasher);
     mesh.node_count().hash(&mut hasher);
-    
+
     let total_area: f64 = (0..mesh.cell_count())
         .filter_map(|i| mesh.cell_area(mh_runtime::CellIndex::new(i)))
         .sum();
     total_area.to_bits().hash(&mut hasher);
-    
+
     hasher.finish()
 }
 
@@ -1420,21 +1454,20 @@ mod tests {
     #[test]
     fn test_run_context_creation() {
         let project_dir = tempfile::tempdir().unwrap();
-        
+
         // 创建最小有效项目结构
         let project_file = project_dir.path().join("project.mhp");
         let mesh_content = r#"{"mesh": "test.mhb"}"#;
         std::fs::write(&project_file, mesh_content).unwrap();
-        
-        let config = SimulationConfig::new(project_dir.path())
-            .with_time_range(0.0, 100.0);
+
+        let config = SimulationConfig::new(project_dir.path()).with_time_range(0.0, 100.0);
         let job = SimulationJob::new("TestJob", config);
 
         let runner = JobRunner::new(Arc::new(WorkflowManager::new(MemoryStorage::new())));
-        
+
         // 由于缺少实际网格文件，此测试主要验证错误处理路径
         let result = RunContext::new(&job, &runner.config);
-        
+
         // 期望失败，因为mesh文件不存在，但不应panic
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1451,7 +1484,7 @@ mod tests {
 
         let project_file = project_dir.path().join("project.mhp");
         let content = r#"{
-            "structured": {"nx": 2, "ny": 2, "dx": 1.0, "dy": 1.0, "origin": [0.0, 0.0]},
+            "structured": {"nx": 2, "ny": 2, "dx": 1.0, "dy": 1.0, "origin": [0.0, 0.0], "uniform_bed_elevation": 0.0},
             "forcing": {
                 "inline_wind": {
                     "u": {
@@ -1474,8 +1507,7 @@ mod tests {
         }"#;
         std::fs::write(&project_file, content).unwrap();
 
-        let config = SimulationConfig::new(project_dir.path())
-            .with_time_range(0.0, 10.0);
+        let config = SimulationConfig::new(project_dir.path()).with_time_range(0.0, 10.0);
         let job = SimulationJob::new("StructuredWithForcing", config);
         let runner = JobRunner::new(Arc::new(WorkflowManager::new(MemoryStorage::new())));
 
@@ -1487,6 +1519,29 @@ mod tests {
 
         let solver = context.solver.read();
         assert!(solver.source_count() >= 1);
+    }
+
+    #[test]
+    fn test_run_context_structured_requires_explicit_bed_semantics() {
+        let project_dir = tempfile::tempdir().unwrap();
+
+        let project_file = project_dir.path().join("project.mhp");
+        let content = r#"{
+            "structured": {"nx": 2, "ny": 2, "dx": 1.0, "dy": 1.0, "origin": [0.0, 0.0]}
+        }"#;
+        std::fs::write(&project_file, content).unwrap();
+
+        let config = SimulationConfig::new(project_dir.path()).with_time_range(0.0, 10.0);
+        let job = SimulationJob::new("StructuredMissingBed", config);
+        let runner = JobRunner::new(Arc::new(WorkflowManager::new(MemoryStorage::new())));
+
+        let err = RunContext::new(&job, &runner.config)
+            .expect_err("missing structured bed data must fail");
+        assert!(matches!(
+            err,
+            RunnerError::Initialization(ref msg)
+                if msg.contains("必须显式提供 bed_elevation 或 uniform_bed_elevation")
+        ));
     }
 
     #[test]
@@ -1682,7 +1737,11 @@ impl UniformBoundaryProvider {
             let t0 = self.times[i];
             let t1 = self.times[i + 1];
             if t0 <= time && time <= t1 {
-                let frac = if (t1 - t0).abs() < 1e-14 { 0.0 } else { (time - t0) / (t1 - t0) };
+                let frac = if (t1 - t0).abs() < 1e-14 {
+                    0.0
+                } else {
+                    (time - t0) / (t1 - t0)
+                };
                 let v0 = self.values[i];
                 let v1 = self.values[i + 1];
                 return Some(ExternalForcing::new(

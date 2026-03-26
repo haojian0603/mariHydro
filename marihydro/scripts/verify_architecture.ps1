@@ -228,6 +228,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.564: structured mesh contract guard
+    Write-Host "=== Phase 0.564: structured mesh contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mesh_structured_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "structured mesh contracts must pass"
+    } else {
+        Write-Host "[OK] structured mesh contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.565: Web Mercator contract guard
     Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"

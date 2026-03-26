@@ -55,6 +55,13 @@ pub enum MeshError {
         context: String,
     },
 
+    /// 缺少必需的网格数据
+    #[error("缺少必需网格数据: {field}, {details}")]
+    MissingRequiredData {
+        field: &'static str,
+        details: String,
+    },
+
     /// 空间查询错误
     #[error("空间查询错误: {operation}, {details}")]
     SpatialQueryError {
@@ -105,6 +112,9 @@ impl From<MeshError> for RuntimeError {
                 provided,
                 context: _,
             } => RuntimeError::size_mismatch("mesh_elements", required, provided),
+            MeshError::MissingRequiredData { field, details } => {
+                RuntimeError::validation(format!("缺少必需网格数据 [{}]: {}", field, details))
+            }
             MeshError::SpatialQueryError { operation, details } => RuntimeError::validation(
                 format!("Spatial query error [{}]: {}", operation, details),
             ),
@@ -182,6 +192,13 @@ impl MeshError {
         }
     }
 
+    pub fn missing_required_data(field: &'static str, details: impl Into<String>) -> Self {
+        Self::MissingRequiredData {
+            field,
+            details: details.into(),
+        }
+    }
+
     pub fn spatial_query_error(operation: &'static str, details: impl Into<String>) -> Self {
         Self::SpatialQueryError {
             operation,
@@ -215,6 +232,21 @@ mod tests {
         match runtime_err {
             RuntimeError::ValidationError { message } => {
                 assert!(message.contains("Spatial query error [locate_in_circle]: invalid radius"));
+            }
+            other => panic!("unexpected runtime error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_missing_required_data_conversion_to_runtime() {
+        let mesh_err = MeshError::missing_required_data(
+            "bed_elevation",
+            "structured mesh freeze requires explicit bed data",
+        );
+        let runtime_err: RuntimeError = mesh_err.into();
+        match runtime_err {
+            RuntimeError::ValidationError { message } => {
+                assert!(message.contains("缺少必需网格数据 [bed_elevation]"));
             }
             other => panic!("unexpected runtime error: {other:?}"),
         }

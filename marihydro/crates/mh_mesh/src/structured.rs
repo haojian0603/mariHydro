@@ -35,7 +35,8 @@
 //!     origin: (0.0, 0.0),
 //! };
 //!
-//! let mesh = StructuredMesh::new(config);
+//! let mut mesh = StructuredMesh::new(config);
+//! mesh.set_uniform_bed_elevation(0.0).unwrap();
 //!
 //! // 获取单元中心
 //! let (x, y) = mesh.cell_center(50, 25);
@@ -44,9 +45,9 @@
 //! let neighbors = mesh.cell_neighbors(50, 25);
 //! ```
 
-use mh_geo::{Point2D, Point3D};
 use crate::error::{MeshError, MeshResult};
 use crate::FrozenMesh;
+use mh_geo::{Point2D, Point3D};
 use mh_runtime::CpuBackend;
 
 /// 结构化网格配置
@@ -344,15 +345,11 @@ impl StructuredMesh {
     /// 获取边界单元（按方向）
     pub fn boundary_cells(&self, dir: FaceDirection) -> Vec<usize> {
         match dir {
-            FaceDirection::West => (0..self.config.ny)
-                .map(|j| self.cell_index(0, j))
-                .collect(),
+            FaceDirection::West => (0..self.config.ny).map(|j| self.cell_index(0, j)).collect(),
             FaceDirection::East => (0..self.config.ny)
                 .map(|j| self.cell_index(self.config.nx - 1, j))
                 .collect(),
-            FaceDirection::South => (0..self.config.nx)
-                .map(|i| self.cell_index(i, 0))
-                .collect(),
+            FaceDirection::South => (0..self.config.nx).map(|i| self.cell_index(i, 0)).collect(),
             FaceDirection::North => (0..self.config.nx)
                 .map(|i| self.cell_index(i, self.config.ny - 1))
                 .collect(),
@@ -394,14 +391,46 @@ impl StructuredMesh {
     }
 
     /// 设置床面高程
-    pub fn set_bed_elevation(&mut self, elevation: Vec<f64>) {
-        assert_eq!(elevation.len(), self.n_cells);
+    pub fn set_bed_elevation(&mut self, elevation: Vec<f64>) -> MeshResult<()> {
+        if elevation.len() != self.n_cells {
+            return Err(MeshError::element_count_mismatch(
+                self.n_cells,
+                elevation.len(),
+                "structured bed_elevation",
+            ));
+        }
+        if let Some((idx, value)) = elevation
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(MeshError::invalid_topology(
+                "set_bed_elevation",
+                format!("床面高程存在非有限值: idx={}, value={}", idx, value),
+            ));
+        }
         self.bed_elevation = Some(elevation);
+        Ok(())
+    }
+
+    /// 将整个结构化网格设置为统一平床高程
+    pub fn set_uniform_bed_elevation(&mut self, elevation: f64) -> MeshResult<()> {
+        if !elevation.is_finite() {
+            return Err(MeshError::invalid_topology(
+                "set_uniform_bed_elevation",
+                format!("统一床面高程必须是有限值: value={}", elevation),
+            ));
+        }
+        self.bed_elevation = Some(vec![elevation; self.n_cells]);
+        Ok(())
     }
 
     /// 获取床面高程
     pub fn bed_elevation(&self, idx: usize) -> Option<f64> {
-        self.bed_elevation.as_ref().and_then(|e| e.get(idx).copied())
+        self.bed_elevation
+            .as_ref()
+            .and_then(|e| e.get(idx).copied())
     }
 
     /// 获取覆盖范围
@@ -440,10 +469,7 @@ impl StructuredMesh {
 
         let to_u32 = |value: usize, name: &str| -> MeshResult<u32> {
             u32::try_from(value).map_err(|_| {
-                MeshError::invalid_topology(
-                    "freeze",
-                    format!("{}超过u32上限: {}", name, value),
-                )
+                MeshError::invalid_topology("freeze", format!("{}超过u32上限: {}", name, value))
             })
         };
 
@@ -464,6 +490,12 @@ impl StructuredMesh {
         let mut cell_center = Vec::with_capacity(n_cells);
         let mut cell_area = Vec::with_capacity(n_cells);
         let mut cell_z_bed = Vec::with_capacity(n_cells);
+        let bed_elevation = self.bed_elevation.as_ref().ok_or_else(|| {
+            MeshError::missing_required_data(
+                "bed_elevation",
+                "StructuredMesh::freeze 需要显式床面数据；若为平床，请先调用 set_uniform_bed_elevation",
+            )
+        })?;
         for j in 0..ny {
             for i in 0..nx {
                 cell_center.push(Point2D::new(
@@ -471,7 +503,7 @@ impl StructuredMesh {
                     oy + (j as f64 + 0.5) * dy,
                 ));
                 cell_area.push(dx * dy);
-                let bed = self.bed_elevation(i + j * nx).unwrap_or(0.0);
+                let bed = bed_elevation[i + j * nx];
                 cell_z_bed.push(bed);
             }
         }
@@ -521,8 +553,14 @@ impl StructuredMesh {
                 face_z_right.push(cell_z_bed[neighbor as usize]);
                 face_owner.push(owner);
                 face_neighbor.push(neighbor);
-                face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
-                face_delta_neighbor.push(Point2D::new(center.x - neighbor_center.x, center.y - neighbor_center.y));
+                face_delta_owner.push(Point2D::new(
+                    center.x - owner_center.x,
+                    center.y - owner_center.y,
+                ));
+                face_delta_neighbor.push(Point2D::new(
+                    center.x - neighbor_center.x,
+                    center.y - neighbor_center.y,
+                ));
                 face_dist_o2n.push(dx);
                 face_boundary_id.push(None);
             }
@@ -544,15 +582,26 @@ impl StructuredMesh {
                 face_z_right.push(cell_z_bed[neighbor as usize]);
                 face_owner.push(owner);
                 face_neighbor.push(neighbor);
-                face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
-                face_delta_neighbor.push(Point2D::new(center.x - neighbor_center.x, center.y - neighbor_center.y));
+                face_delta_owner.push(Point2D::new(
+                    center.x - owner_center.x,
+                    center.y - owner_center.y,
+                ));
+                face_delta_neighbor.push(Point2D::new(
+                    center.x - neighbor_center.x,
+                    center.y - neighbor_center.y,
+                ));
                 face_dist_o2n.push(dy);
                 face_boundary_id.push(None);
             }
         }
 
         // 边界面：南、北、西、东
-        let mut push_boundary = |center: Point2D, normal: Point3D, length: f64, owner: u32, boundary_id: u32| -> MeshResult<()> {
+        let mut push_boundary = |center: Point2D,
+                                 normal: Point3D,
+                                 length: f64,
+                                 owner: u32,
+                                 boundary_id: u32|
+         -> MeshResult<()> {
             let owner_center = cell_center[owner as usize];
             face_center.push(center);
             face_normal.push(normal);
@@ -561,7 +610,10 @@ impl StructuredMesh {
             face_z_right.push(cell_z_bed[owner as usize]);
             face_owner.push(owner);
             face_neighbor.push(u32::MAX);
-            face_delta_owner.push(Point2D::new(center.x - owner_center.x, center.y - owner_center.y));
+            face_delta_owner.push(Point2D::new(
+                center.x - owner_center.x,
+                center.y - owner_center.y,
+            ));
             face_delta_neighbor.push(Point2D::new(0.0, 0.0));
             face_dist_o2n.push(0.0);
             face_boundary_id.push(Some(boundary_id));
@@ -943,5 +995,32 @@ mod tests {
         assert_eq!(stats.n_cells, 100);
         assert_eq!(stats.n_vertices, 121);
         assert_eq!(stats.n_boundary_faces, 40);
+    }
+
+    #[test]
+    fn test_freeze_requires_explicit_bed_elevation() {
+        let mesh = StructuredMesh::new(StructuredMeshConfig::square(2, 1.0));
+        let err = mesh
+            .freeze()
+            .expect_err("freeze should reject missing bed elevation");
+        assert!(err.to_string().contains("缺少必需网格数据"));
+    }
+
+    #[test]
+    fn test_set_uniform_bed_elevation_allows_flat_bed_freeze() {
+        let mut mesh = StructuredMesh::new(StructuredMeshConfig::square(2, 1.0));
+        mesh.set_uniform_bed_elevation(0.0)
+            .expect("uniform bed should be accepted");
+        let frozen = mesh.freeze().expect("flat bed freeze should succeed");
+        assert_eq!(frozen.cell_z_bed, vec![0.0; 4]);
+    }
+
+    #[test]
+    fn test_set_bed_elevation_rejects_non_finite_value() {
+        let mut mesh = StructuredMesh::new(StructuredMeshConfig::square(2, 1.0));
+        let err = mesh
+            .set_bed_elevation(vec![0.0, 0.0, f64::NAN, 0.0])
+            .expect_err("non-finite bed elevation must be rejected");
+        assert!(err.to_string().contains("床面高程存在非有限值"));
     }
 }
