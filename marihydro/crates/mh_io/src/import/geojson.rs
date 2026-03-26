@@ -1,6 +1,6 @@
 // crates/mh_io/src/import/geojson.rs
 // IO_SOURCE: RFC 7946 GeoJSON geometry model; Polygon and MultiPolygon coordinates must follow linear-ring structure.
-// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry, semantic boundary/zone names must be present instead of being synthesized, and Feature id values must remain explicit instead of being collapsed into empty strings.
+// IO_SCOPE: Supports Point, MultiPoint, LineString, MultiLineString, Polygon, and MultiPolygon with explicit structural validation. Invalid or incomplete ring structure is rejected instead of collapsing to empty geometry, null Feature geometry is rejected instead of being silently dropped, semantic boundary/zone names must be present instead of being synthesized, and Feature id values must remain explicit instead of being collapsed into empty strings.
 
 //! GeoJSON 导入模块
 //!
@@ -300,16 +300,12 @@ impl GeoJsonReader {
             "FeatureCollection" => {
                 if let Some(raw_features) = doc.features {
                     for rf in raw_features {
-                        if let Some(f) = Self::parse_feature(rf)? {
-                            features.push(f);
-                        }
+                        features.push(Self::parse_feature(rf)?);
                     }
                 }
             }
             "Feature" => {
-                if let Some(f) = Self::parse_raw_feature(&doc)? {
-                    features.push(f);
-                }
+                features.push(Self::parse_raw_feature(&doc)?);
             }
             t => return Err(GeoJsonError::InvalidGeometry(t.to_string())),
         }
@@ -326,36 +322,44 @@ impl GeoJsonReader {
     }
 
     /// 解析单个 feature
-    fn parse_feature(rf: RawFeature) -> Result<Option<Feature>, GeoJsonError> {
+    fn parse_feature(rf: RawFeature) -> Result<Feature, GeoJsonError> {
         let geometry = match rf.geometry {
             Some(g) => Self::parse_geometry(g)?,
-            None => return Ok(None),
+            None => {
+                return Err(GeoJsonError::InvalidStructure(
+                    "Feature geometry must not be null".to_string(),
+                ));
+            }
         };
 
         let properties = rf.properties.unwrap_or_default();
         let id = rf.id.map(Self::parse_feature_id).transpose()?;
 
-        Ok(Some(Feature {
+        Ok(Feature {
             id,
             geometry,
             properties,
-        }))
+        })
     }
 
     /// 从顶层文档解析 feature（当 type == "Feature"）
-    fn parse_raw_feature(doc: &RawGeoJson) -> Result<Option<Feature>, GeoJsonError> {
+    fn parse_raw_feature(doc: &RawGeoJson) -> Result<Feature, GeoJsonError> {
         let geometry = match &doc.geometry {
             Some(g) => Self::parse_geometry(g.clone())?,
-            None => return Ok(None),
+            None => {
+                return Err(GeoJsonError::InvalidStructure(
+                    "Feature geometry must not be null".to_string(),
+                ));
+            }
         };
 
         let properties = doc.properties.clone().unwrap_or_default();
 
-        Ok(Some(Feature {
+        Ok(Feature {
             id: doc.id.clone().map(Self::parse_feature_id).transpose()?,
             geometry,
             properties,
-        }))
+        })
     }
 
     fn parse_feature_id(value: serde_json::Value) -> Result<String, GeoJsonError> {
@@ -878,6 +882,49 @@ mod tests {
 
         let reader = GeoJsonReader::from_str(json).unwrap();
         assert_eq!(reader.features()[0].id.as_deref(), Some("feature-top"));
+    }
+
+    #[test]
+    fn test_feature_collection_rejects_null_geometry() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": null,
+                    "properties": {"name": "bad"}
+                }
+            ]
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("null geometry must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("Feature geometry must not be null")
+        ));
+    }
+
+    #[test]
+    fn test_top_level_feature_rejects_null_geometry() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": null,
+            "properties": {"name": "bad-top"}
+        }"#;
+
+        let err = match GeoJsonReader::from_str(json) {
+            Ok(_) => panic!("top-level null geometry must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            GeoJsonError::InvalidStructure(msg)
+            if msg.contains("Feature geometry must not be null")
+        ));
     }
 
     #[test]

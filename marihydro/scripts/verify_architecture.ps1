@@ -130,7 +130,7 @@ try {
     Write-Host ""
 
     # Phase 0.55: import contract guard
-    Write-Host "=== Phase 0.55: import contract guard (geometry + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
+    Write-Host "=== Phase 0.55: import contract guard (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     if ($LASTEXITCODE -ne 0) {
         $errors += "import contracts must pass"

@@ -295,6 +295,7 @@ try {
     Invoke-InformationalScan -Name 'GeoJSON semantic-name fallback residue' -Roots @("crates/mh_io/src/import") -Pattern 'get_string\("name"\)\.unwrap_or\("unnamed"\)|get_string\("name"\)\.unwrap_or\("zone"\)|pub fn boundary_conditions\(&self\) -> Vec<BoundaryConditionLocation>|pub fn zone_properties\(&self\) -> Vec<ZoneProperties>'
     Invoke-InformationalScan -Name 'GeoJSON multipart semantic-name synthesis residue' -Roots @("crates/mh_io/src/import") -Pattern 'format!\(\"\\{\\}_\\{\\}\", name, idx \+ 1\)'
     Invoke-InformationalScan -Name 'GeoJSON feature-id collapse residue' -Roots @("crates/mh_io/src/import") -Pattern 'rf\.id\.map\(\|v\| match v|_ => String::new\(\)|id:\s*None,'
+    Invoke-InformationalScan -Name 'GeoJSON null-geometry drop residue' -Roots @("crates/mh_io/src/import/geojson.rs") -Pattern 'None => return Ok\(None\)'
     Invoke-InformationalScan -Name 'CSV tolerant-default residue' -Roots @("crates/mh_io/src/import/timeseries_csv.rs") -Pattern 'skip_invalid:\s*true,|unwrap_or_default\(\)|parts\.len\(\)\.min\(n_cols \+ 1\)'
     Invoke-InformationalScan -Name 'external shape fallback residue' -Roots @("crates/mh_io/src") -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1'
     Invoke-InformationalScan -Name 'external data filename heuristic residue' -Roots @("crates/mh_io/src") -Pattern 'let model = TidalModel::detect\(path\)'

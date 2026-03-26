@@ -123,6 +123,11 @@ try {
         -Pattern 'id:\s*None,' `
         -Message "Top-level GeoJSON Feature parsing must not drop an explicit Feature.id"
 
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'None => return Ok\(None\)' `
+        -Message "GeoJSON importer must not silently drop null Feature geometry"
+
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'InvalidStructure\(String\)' `
@@ -177,6 +182,11 @@ try {
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
         -Pattern 'test_top_level_feature_id_is_preserved' `
         -Message "GeoJSON importer must keep regression coverage for top-level Feature.id preservation"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/import/geojson.rs" `
+        -Pattern 'Feature geometry must not be null|test_feature_collection_rejects_null_geometry|test_top_level_feature_rejects_null_geometry' `
+        -Message "GeoJSON importer must reject null Feature geometry explicitly"
 
     Check-PatternPresent `
         -RelativePath "crates/mh_io/src/import/geojson.rs" `
