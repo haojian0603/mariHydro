@@ -107,6 +107,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.565: Web Mercator contract guard
+    Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "Web Mercator contracts must pass"
+    } else {
+        Write-Host "[OK] Web Mercator contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.57: IO invariant contract guard
     Write-Host "=== Phase 0.57: IO invariant contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_invariant_contracts.ps1"

@@ -193,6 +193,10 @@ try {
         $Failed += "check_geo_projection_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_web_mercator_contracts.ps1" -Path (Join-Path $ScriptDir "check_web_mercator_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_web_mercator_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_io_invariant_contracts.ps1" -Path (Join-Path $ScriptDir "check_io_invariant_contracts.ps1") -Arguments @{})) {
         $Failed += "check_io_invariant_contracts.ps1"
     }
@@ -272,6 +276,7 @@ try {
     Invoke-InformationalScan -Name 'formula regression residue' -Roots @("crates/mh_physics") -Pattern 'let f = \(d_star - 1\.0\) / 99\.0|let f = \(d_star - d_star_1\) / cfg\(99\.0\)|self\.longitudinal \* cos_theta\.abs\(\) \+ self\.transverse \* sin_theta|\bDietrichSettling\b'
     Invoke-InformationalScan -Name 'silent numeric fallback residue' -Roots @("crates/mh_geo", "crates/mh_io/src/drivers") -Pattern 'unwrap_or\(0\.0\)|unwrap_or\(0\)|unwrap_or\(Self::ZERO\)|compute_convergence_angle_checked\(x, y\)\.unwrap_or\(0\.0\)'
     Invoke-InformationalScan -Name 'geo projection sentinel residue' -Roots @("crates/mh_geo/src/projection") -Pattern 'unwrap_or\(f64::NAN\)|pub fn utm_scale_factor\(.*\) -> f64|pub fn utm_convergence_angle\(.*\) -> f64|unwrap_or\(\(0\.0, 0\.0\)\)'
+    Invoke-InformationalScan -Name 'Web Mercator domain fallback residue' -Roots @("crates/mh_geo/src/projection/web_mercator.rs") -Pattern 'lat\.clamp\(\s*-WEB_MERCATOR_MAX_LAT\s*,\s*WEB_MERCATOR_MAX_LAT\s*\)|pub fn web_mercator_resolution\(.*\) -> f64|pub fn web_mercator_scale\(.*\) -> f64|pub fn lonlat_to_tile\(.*\) -> \(u32, u32\)|pub fn tile_to_bbox\(.*\) -> \(f64, f64, f64, f64\)|expect\("tile_to_lonlat returns coordinates inside Web Mercator domain"\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('
     Invoke-InformationalScan -Name 'external shape fallback residue' -Roots @("crates/mh_io/src") -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1'
     Invoke-InformationalScan -Name 'external data filename heuristic residue' -Roots @("crates/mh_io/src") -Pattern 'let model = TidalModel::detect\(path\)'

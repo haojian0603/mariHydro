@@ -67,6 +67,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_projection_contracts.ps1"
     }
 
+    Invoke-Step -Name "Web Mercator contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
+    }
+
     Invoke-Step -Name "IO invariant contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_invariant_contracts.ps1"
     }

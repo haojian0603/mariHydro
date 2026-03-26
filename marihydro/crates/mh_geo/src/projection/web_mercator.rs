@@ -10,7 +10,7 @@
 //! **不建议用于物理计算**，仅用于可视化和底图对齐。
 
 use crate::ellipsoid::Ellipsoid;
-use mh_foundation::error::MhResult;
+use mh_foundation::error::{MhError, MhResult};
 use std::f64::consts::PI;
 
 /// Web Mercator 使用的地球半径（等于 WGS84 长半轴）
@@ -19,12 +19,69 @@ pub const WEB_MERCATOR_RADIUS: f64 = Ellipsoid::WGS84.a;
 /// Web Mercator 最大纬度 (度)
 ///
 /// 对应 y = ±20037508.34... 米
-pub const WEB_MERCATOR_MAX_LAT: f64 = 85.051_128_779;
+pub const WEB_MERCATOR_MAX_LAT: f64 = 85.051_128_779_806_6;
 
 /// Web Mercator 世界范围 (米)
 ///
 /// x, y 的范围都是 [-20037508.34, 20037508.34]
 pub const WEB_MERCATOR_MAX_EXTENT: f64 = PI * WEB_MERCATOR_RADIUS;
+
+fn validate_geographic_input(lon: f64, lat: f64) -> MhResult<()> {
+    if !lon.is_finite() || !lat.is_finite() {
+        return Err(MhError::invalid_input(
+            "Web Mercator geographic inputs must be finite",
+        ));
+    }
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(MhError::invalid_input(format!(
+            "longitude {lon} out of Web Mercator domain (-180, 180)"
+        )));
+    }
+    if !(-WEB_MERCATOR_MAX_LAT..=WEB_MERCATOR_MAX_LAT).contains(&lat) {
+        return Err(MhError::invalid_input(format!(
+            "latitude {lat} out of Web Mercator domain (-{WEB_MERCATOR_MAX_LAT}, {WEB_MERCATOR_MAX_LAT})"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_projected_input(x: f64, y: f64) -> MhResult<()> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err(MhError::invalid_input(
+            "Web Mercator projected inputs must be finite",
+        ));
+    }
+    if !(-WEB_MERCATOR_MAX_EXTENT..=WEB_MERCATOR_MAX_EXTENT).contains(&x) {
+        return Err(MhError::invalid_input(format!(
+            "projected x {x} out of Web Mercator extent (-{WEB_MERCATOR_MAX_EXTENT}, {WEB_MERCATOR_MAX_EXTENT})"
+        )));
+    }
+    if !(-WEB_MERCATOR_MAX_EXTENT..=WEB_MERCATOR_MAX_EXTENT).contains(&y) {
+        return Err(MhError::invalid_input(format!(
+            "projected y {y} out of Web Mercator extent (-{WEB_MERCATOR_MAX_EXTENT}, {WEB_MERCATOR_MAX_EXTENT})"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_resolution_input(lat: f64, tile_size: u32) -> MhResult<()> {
+    if !lat.is_finite() {
+        return Err(MhError::invalid_input(
+            "Web Mercator latitude must be finite when computing resolution",
+        ));
+    }
+    if !(-WEB_MERCATOR_MAX_LAT..=WEB_MERCATOR_MAX_LAT).contains(&lat) {
+        return Err(MhError::invalid_input(format!(
+            "resolution latitude {lat} out of Web Mercator domain (-{WEB_MERCATOR_MAX_LAT}, {WEB_MERCATOR_MAX_LAT})"
+        )));
+    }
+    if tile_size == 0 {
+        return Err(MhError::invalid_input(
+            "tile_size must be greater than zero",
+        ));
+    }
+    Ok(())
+}
 
 /// 地理坐标 -> Web Mercator
 ///
@@ -36,10 +93,9 @@ pub const WEB_MERCATOR_MAX_EXTENT: f64 = PI * WEB_MERCATOR_RADIUS;
 /// (x, y) Web Mercator 坐标 (米)
 ///
 /// # Errors
-/// 此函数不会返回错误，纬度会被自动裁剪到有效范围
-#[allow(clippy::unnecessary_wraps)]
+/// 经度、纬度必须有限且落在 Web Mercator 定义域内；越界时显式报错，不做裁剪
 pub fn geographic_to_web_mercator(lon: f64, lat: f64) -> MhResult<(f64, f64)> {
-    let lat = lat.clamp(-WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT);
+    validate_geographic_input(lon, lat)?;
 
     let x = WEB_MERCATOR_RADIUS * lon.to_radians();
     let lat_rad = lat.to_radians();
@@ -58,9 +114,10 @@ pub fn geographic_to_web_mercator(lon: f64, lat: f64) -> MhResult<(f64, f64)> {
 /// (longitude, latitude) 经度和纬度 (度)
 ///
 /// # Errors
-/// 此函数不会返回错误
-#[allow(clippy::unnecessary_wraps)]
+/// 投影坐标必须有限且落在 EPSG:3857 的有效 extent 内；越界时显式报错
 pub fn web_mercator_to_geographic(x: f64, y: f64) -> MhResult<(f64, f64)> {
+    validate_projected_input(x, y)?;
+
     let lon = (x / WEB_MERCATOR_RADIUS).to_degrees();
     let lat = (2.0 * (y / WEB_MERCATOR_RADIUS).exp().atan() - PI / 2.0).to_degrees();
 
@@ -75,12 +132,16 @@ pub fn web_mercator_to_geographic(x: f64, y: f64) -> MhResult<(f64, f64)> {
 /// - `lat`: 纬度 (度)
 /// - `zoom`: 缩放级别 (0-22)
 /// - `tile_size`: 瓦片像素大小（通常为 256）
-#[must_use]
-pub fn web_mercator_resolution(lat: f64, zoom: u8, tile_size: u32) -> f64 {
+///
+/// # Errors
+/// 纬度越界、输入非有限或 tile_size 为 0 时显式报错
+pub fn web_mercator_resolution(lat: f64, zoom: u8, tile_size: u32) -> MhResult<f64> {
+    validate_resolution_input(lat, tile_size)?;
+
     let lat_rad = lat.to_radians();
     let circumference = 2.0 * PI * WEB_MERCATOR_RADIUS * lat_rad.cos();
     let total_pixels = f64::from(tile_size) * 2.0_f64.powi(i32::from(zoom));
-    circumference / total_pixels
+    Ok(circumference / total_pixels)
 }
 
 /// 计算 Web Mercator 比例尺分母
@@ -92,11 +153,18 @@ pub fn web_mercator_resolution(lat: f64, zoom: u8, tile_size: u32) -> f64 {
 /// - `lat`: 纬度 (度)
 /// - `zoom`: 缩放级别
 /// - `dpi`: 屏幕 DPI（通常为 96）
-#[must_use]
-pub fn web_mercator_scale(lat: f64, zoom: u8, dpi: f64) -> f64 {
-    let resolution = web_mercator_resolution(lat, zoom, 256);
+///
+/// # Errors
+/// 纬度越界、输入非有限或 DPI 非正时显式报错
+pub fn web_mercator_scale(lat: f64, zoom: u8, dpi: f64) -> MhResult<f64> {
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err(MhError::invalid_input(
+            "dpi must be finite and greater than zero",
+        ));
+    }
+    let resolution = web_mercator_resolution(lat, zoom, 256)?;
     // 1 inch = 0.0254 m
-    resolution * dpi / 0.0254
+    Ok(resolution * dpi / 0.0254)
 }
 
 /// 经纬度 -> 瓦片坐标
@@ -107,15 +175,19 @@ pub fn web_mercator_scale(lat: f64, zoom: u8, dpi: f64) -> f64 {
 /// - `lon`: 经度 (度)
 /// - `lat`: 纬度 (度)
 /// - `zoom`: 缩放级别
-#[must_use]
-pub fn lonlat_to_tile(lon: f64, lat: f64, zoom: u8) -> (u32, u32) {
+///
+/// # Errors
+/// 经纬度越界或输入非有限时显式报错
+pub fn lonlat_to_tile(lon: f64, lat: f64, zoom: u8) -> MhResult<(u32, u32)> {
+    validate_geographic_input(lon, lat)?;
+
     let n = 2.0_f64.powi(i32::from(zoom));
     let x = ((lon + 180.0) / 360.0 * n).floor() as u32;
 
     let lat_rad = lat.to_radians();
     let y = ((1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI) / 2.0 * n).floor() as u32;
 
-    (x, y)
+    Ok((x, y))
 }
 
 /// 瓦片坐标 -> 瓦片左上角经纬度
@@ -136,17 +208,17 @@ pub fn tile_to_lonlat(x: u32, y: u32, zoom: u8) -> (f64, f64) {
 /// 瓦片范围 -> 边界框 (Web Mercator 坐标)
 ///
 /// 返回瓦片的 (`min_x`, `min_y`, `max_x`, `max_y`)
-#[must_use]
-pub fn tile_to_bbox(x: u32, y: u32, zoom: u8) -> (f64, f64, f64, f64) {
+///
+/// # Errors
+/// 若瓦片边界转换出的经纬度无法映射到合法 Web Mercator 坐标，则显式报错
+pub fn tile_to_bbox(x: u32, y: u32, zoom: u8) -> MhResult<(f64, f64, f64, f64)> {
     let (lon_min, lat_max) = tile_to_lonlat(x, y, zoom);
     let (lon_max, lat_min) = tile_to_lonlat(x + 1, y + 1, zoom);
 
-    let (x_min, y_min) = geographic_to_web_mercator(lon_min, lat_min)
-        .expect("tile_to_lonlat returns coordinates inside Web Mercator domain");
-    let (x_max, y_max) = geographic_to_web_mercator(lon_max, lat_max)
-        .expect("tile_to_lonlat returns coordinates inside Web Mercator domain");
+    let (x_min, y_min) = geographic_to_web_mercator(lon_min, lat_min)?;
+    let (x_max, y_max) = geographic_to_web_mercator(lon_max, lat_max)?;
 
-    (x_min, y_min, x_max, y_max)
+    Ok((x_min, y_min, x_max, y_max))
 }
 
 // ============================================================================
@@ -178,11 +250,13 @@ mod tests {
     }
 
     #[test]
-    fn test_web_mercator_clamp_latitude() {
-        // 超出范围的纬度应被裁剪
-        let (_, y1) = geographic_to_web_mercator(0.0, 90.0).expect("high lat");
-        let (_, y2) = geographic_to_web_mercator(0.0, WEB_MERCATOR_MAX_LAT).expect("max lat");
-        assert!((y1 - y2).abs() < 1e-6);
+    fn test_web_mercator_rejects_out_of_range_latitude() {
+        assert!(geographic_to_web_mercator(0.0, 90.0).is_err());
+    }
+
+    #[test]
+    fn test_web_mercator_to_geographic_rejects_out_of_extent() {
+        assert!(web_mercator_to_geographic(WEB_MERCATOR_MAX_EXTENT + 1.0, 0.0).is_err());
     }
 
     #[test]
@@ -212,7 +286,7 @@ mod tests {
         let lat = 40.0;
         let zoom = 10;
 
-        let (tile_x, tile_y) = lonlat_to_tile(lon, lat, zoom);
+        let (tile_x, tile_y) = lonlat_to_tile(lon, lat, zoom).expect("tile conversion");
 
         // 验证瓦片坐标在合理范围
         let max_tile = 2_u32.pow(u32::from(zoom));
@@ -228,23 +302,33 @@ mod tests {
     #[test]
     fn test_resolution() {
         // 赤道处 zoom=0 的分辨率
-        let res = web_mercator_resolution(0.0, 0, 256);
+        let res = web_mercator_resolution(0.0, 0, 256).expect("resolution");
         // 应该接近 156543 米/像素
         assert!((res - 156543.0).abs() < 10.0);
 
         // 北京纬度 zoom=0
-        let res_beijing = web_mercator_resolution(40.0, 0, 256);
+        let res_beijing = web_mercator_resolution(40.0, 0, 256).expect("beijing resolution");
         // 应该小于赤道
         assert!(res_beijing < res);
     }
 
     #[test]
     fn test_tile_bbox() {
-        let (x_min, y_min, x_max, y_max) = tile_to_bbox(0, 0, 0);
+        let (x_min, y_min, x_max, y_max) = tile_to_bbox(0, 0, 0).expect("tile bbox");
 
         // zoom=0 应该覆盖整个世界
         assert!((x_min + WEB_MERCATOR_MAX_EXTENT).abs() < 1000.0);
         assert!((x_max - WEB_MERCATOR_MAX_EXTENT).abs() < 1000.0);
         assert!(y_max > y_min);
+    }
+
+    #[test]
+    fn test_web_mercator_resolution_rejects_invalid_latitude() {
+        assert!(web_mercator_resolution(90.0, 0, 256).is_err());
+    }
+
+    #[test]
+    fn test_web_mercator_scale_rejects_nonpositive_dpi() {
+        assert!(web_mercator_scale(40.0, 10, 0.0).is_err());
     }
 }
