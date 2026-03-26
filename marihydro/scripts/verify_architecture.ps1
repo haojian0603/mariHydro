@@ -107,6 +107,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.54: checkpoint metadata contract guard
+    Write-Host "=== Phase 0.54: checkpoint metadata contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_checkpoint_metadata_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "checkpoint metadata contracts must pass"
+    } else {
+        Write-Host "[OK] checkpoint metadata contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

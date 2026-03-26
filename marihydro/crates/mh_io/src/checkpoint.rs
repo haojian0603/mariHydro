@@ -4,14 +4,15 @@
 //!
 //! 支持模拟中断后续算，提供二进制格式的状态保存与恢复。
 //!
-//! # 文件格式 (v2)
+//! # 文件格式 (v3)
 //!
 //! ```text
 //! [魔数: 4 bytes] "MHCK"
 //! [版本: u32]
 //! [时间: f64]
 //! [步数: u64]
-//! [配置哈希: u64]
+//! [标志位: u8] bit0=配置哈希存在, bit1=网格哈希存在
+//! [配置哈希: u64] (可选)
 //! [创建时间: u64]
 //! [单元数: u64]
 //! [h 数据: n_cells * f64]
@@ -19,9 +20,11 @@
 //! [hv 数据: n_cells * f64]
 //! [有底床标志: u8]
 //! [z 数据: n_cells * f64] (可选)
-//! [网格哈希: u64]
-//! [CRC32: u32] (v2 新增)
+//! [网格哈希: u64] (可选)
+//! [CRC32: u32]
 //! ```
+//!
+//! v2 文件仍可读取，但缺失元数据会按旧格式解析为 `None`，不会再伪装成 `0`。
 //!
 //! # 使用示例
 //!
@@ -70,8 +73,12 @@ pub enum CheckpointError {
     Checksum { expected: u32, found: u32 },
     /// 配置哈希不匹配
     ConfigMismatch { expected: u64, found: u64 },
+    /// 配置哈希缺失
+    MissingConfigHash { expected: u64 },
     /// 网格哈希不匹配
     MeshHashMismatch { expected: u64, found: u64 },
+    /// 网格哈希缺失
+    MissingMeshHash { expected: u64 },
     /// 数据损坏
     Corrupted(String),
 }
@@ -106,8 +113,14 @@ impl std::fmt::Display for CheckpointError {
             CheckpointError::ConfigMismatch { expected, found } => {
                 write!(f, "配置哈希不匹配: 期望 {}, 实际 {}", expected, found)
             }
+            CheckpointError::MissingConfigHash { expected } => {
+                write!(f, "配置哈希缺失: 期望 {}", expected)
+            }
             CheckpointError::MeshHashMismatch { expected, found } => {
                 write!(f, "网格哈希不匹配: 期望 {}, 实际 {}", expected, found)
+            }
+            CheckpointError::MissingMeshHash { expected } => {
+                write!(f, "网格哈希缺失: 期望 {}", expected)
             }
             CheckpointError::Corrupted(msg) => write!(f, "数据损坏: {}", msg),
         }
@@ -137,13 +150,16 @@ fn current_unix_timestamp() -> u64 {
 // ============================================================
 
 /// 检查点文件格式版本
-const CHECKPOINT_VERSION: u32 = 2;
+const CHECKPOINT_VERSION: u32 = 3;
 
 /// 检查点魔数
 const CHECKPOINT_MAGIC: &[u8; 4] = b"MHCK";
 
 /// 最大支持的文件版本
-const MAX_SUPPORTED_VERSION: u32 = 2;
+const MAX_SUPPORTED_VERSION: u32 = 3;
+
+const FLAG_CONFIG_HASH_PRESENT: u8 = 0b0000_0001;
+const FLAG_MESH_HASH_PRESENT: u8 = 0b0000_0010;
 
 // ============================================================
 // 检查点数据
@@ -164,8 +180,8 @@ pub struct CheckpointHeader {
     pub created_at: u64,
     /// 单元数
     pub n_cells: usize,
-    /// 网格哈希
-    pub mesh_hash: u64,
+    /// 网格哈希（仅读取头部时未知）
+    pub mesh_hash: Option<u64>,
 }
 
 /// 检查点数据
@@ -184,7 +200,7 @@ pub struct Checkpoint {
     /// 创建时间戳
     pub created_at: u64,
     /// 网格哈希（用于兼容性检查）
-    pub mesh_hash: u64,
+    pub mesh_hash: Option<u64>,
 }
 
 /// 检查点加载校验选项
@@ -218,7 +234,7 @@ impl Checkpoint {
             state,
             config_hash: None,
             created_at: current_unix_timestamp(),
-            mesh_hash: 0,
+            mesh_hash: None,
         }
     }
 
@@ -230,13 +246,13 @@ impl Checkpoint {
 
     /// 设置网格哈希
     pub fn with_mesh_hash(mut self, hash: u64) -> Self {
-        self.mesh_hash = hash;
+        self.mesh_hash = Some(hash);
         self
     }
 
     /// 从网格快照计算哈希
     pub fn with_mesh_snapshot(mut self, mesh: &MeshSnapshot<f64>) -> Self {
-        self.mesh_hash = mesh.compute_hash();
+        self.mesh_hash = Some(mesh.compute_hash());
         self
     }
 
@@ -274,9 +290,12 @@ impl Checkpoint {
             write_crc!(&self.version.to_le_bytes());
             write_crc!(&self.time.to_le_bytes());
             write_crc!(&(self.step as u64).to_le_bytes());
-
-            let hash = self.config_hash.unwrap_or(0);
-            write_crc!(&hash.to_le_bytes());
+            let flags = (u8::from(self.config_hash.is_some()) * FLAG_CONFIG_HASH_PRESENT)
+                | (u8::from(self.mesh_hash.is_some()) * FLAG_MESH_HASH_PRESENT);
+            write_crc!(&[flags]);
+            if let Some(hash) = self.config_hash {
+                write_crc!(&hash.to_le_bytes());
+            }
             write_crc!(&self.created_at.to_le_bytes());
 
             let n_cells = self.state.n_cells();
@@ -300,7 +319,9 @@ impl Checkpoint {
                 }
             }
 
-            write_crc!(&self.mesh_hash.to_le_bytes());
+            if let Some(mesh_hash) = self.mesh_hash {
+                write_crc!(&mesh_hash.to_le_bytes());
+            }
 
             let crc = hasher.finalize();
             writer.write_all(&crc.to_le_bytes())?;
@@ -396,9 +417,22 @@ impl Checkpoint {
 
         read_exact_crc(&mut buf8)?;
         let step = u64::from_le_bytes(buf8) as usize;
-
-        read_exact_crc(&mut buf8)?;
-        let config_hash = u64::from_le_bytes(buf8);
+        let (flags, config_hash) = if version >= 3 {
+            let mut flag_buf = [0u8; 1];
+            read_exact_crc(&mut flag_buf)?;
+            let flags = flag_buf[0];
+            let config_hash = if flags & FLAG_CONFIG_HASH_PRESENT != 0 {
+                read_exact_crc(&mut buf8)?;
+                Some(u64::from_le_bytes(buf8))
+            } else {
+                None
+            };
+            (flags, config_hash)
+        } else {
+            read_exact_crc(&mut buf8)?;
+            let raw = u64::from_le_bytes(buf8);
+            (0, (raw != 0).then_some(raw))
+        };
 
         read_exact_crc(&mut buf8)?;
         let created_at = u64::from_le_bytes(buf8);
@@ -409,6 +443,19 @@ impl Checkpoint {
             .checked_mul(8 * 3)
             .and_then(|v| v.checked_add(1))
             .ok_or_else(|| CheckpointError::Format("n_cells 溢出".into()))?;
+        let min_payload = if version >= 3 {
+            if flags & FLAG_MESH_HASH_PRESENT != 0 {
+                min_payload
+                    .checked_add(8)
+                    .ok_or_else(|| CheckpointError::Format("checkpoint payload overflow".into()))?
+            } else {
+                min_payload
+            }
+        } else {
+            min_payload
+                .checked_add(8)
+                .ok_or_else(|| CheckpointError::Format("checkpoint payload overflow".into()))?
+        };
         if bytes_read.get() + min_payload > data_len {
             return Err(CheckpointError::Format("文件太小".into()));
         }
@@ -445,13 +492,22 @@ impl Checkpoint {
             None
         };
 
-        let mut mesh_hash = 0u64;
-        if bytes_read.get() + 8 <= data_len {
+        let mesh_hash = if version >= 3 {
+            if flags & FLAG_MESH_HASH_PRESENT != 0 {
+                read_exact_crc(&mut buf8)?;
+                Some(u64::from_le_bytes(buf8))
+            } else {
+                None
+            }
+        } else if bytes_read.get() + 8 <= data_len {
             read_exact_crc(&mut buf8)?;
-            mesh_hash = u64::from_le_bytes(buf8);
+            let raw = u64::from_le_bytes(buf8);
+            (raw != 0).then_some(raw)
         } else if version >= 2 {
             return Err(CheckpointError::Format("缺少网格哈希".into()));
-        }
+        } else {
+            None
+        };
 
         if bytes_read.get() < data_len {
             let mut remaining = data_len - bytes_read.get();
@@ -501,11 +557,7 @@ impl Checkpoint {
             time,
             step,
             state,
-            config_hash: if config_hash != 0 {
-                Some(config_hash)
-            } else {
-                None
-            },
+            config_hash,
             created_at,
             mesh_hash,
         };
@@ -523,18 +575,21 @@ impl Checkpoint {
                     return Err(CheckpointError::ConfigMismatch { expected, found });
                 }
                 None if options.strict => {
-                    return Err(CheckpointError::ConfigMismatch { expected, found: 0 });
+                    return Err(CheckpointError::MissingConfigHash { expected });
                 }
                 _ => {}
             }
         }
 
         if let Some(expected) = options.expected_mesh_hash {
-            if self.mesh_hash != expected && (options.strict || self.mesh_hash != 0) {
-                return Err(CheckpointError::MeshHashMismatch {
-                    expected,
-                    found: self.mesh_hash,
-                });
+            match self.mesh_hash {
+                Some(found) if found != expected => {
+                    return Err(CheckpointError::MeshHashMismatch { expected, found });
+                }
+                None if options.strict => {
+                    return Err(CheckpointError::MissingMeshHash { expected });
+                }
+                _ => {}
             }
         }
 
@@ -584,10 +639,26 @@ impl Checkpoint {
         let step = u64::from_le_bytes(buf) as usize;
 
         // 配置哈希
-        reader
-            .read_exact(&mut buf)
-            .map_err(|e| CheckpointError::io_with_path(path, e))?;
-        let config_hash = u64::from_le_bytes(buf);
+        let config_hash = if version >= 3 {
+            let mut flag_buf = [0u8; 1];
+            reader
+                .read_exact(&mut flag_buf)
+                .map_err(|e| CheckpointError::io_with_path(path, e))?;
+            if flag_buf[0] & FLAG_CONFIG_HASH_PRESENT != 0 {
+                reader
+                    .read_exact(&mut buf)
+                    .map_err(|e| CheckpointError::io_with_path(path, e))?;
+                Some(u64::from_le_bytes(buf))
+            } else {
+                None
+            }
+        } else {
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| CheckpointError::io_with_path(path, e))?;
+            let raw = u64::from_le_bytes(buf);
+            (raw != 0).then_some(raw)
+        };
 
         // 创建时间
         reader
@@ -605,14 +676,10 @@ impl Checkpoint {
             version,
             time,
             step,
-            config_hash: if config_hash != 0 {
-                Some(config_hash)
-            } else {
-                None
-            },
+            config_hash,
             created_at,
             n_cells,
-            mesh_hash: 0, // 需要读取完整文件才能获取
+            mesh_hash: None, // 只读取头部时不遍历完整 payload，网格哈希保持未知
         })
     }
 
@@ -733,9 +800,14 @@ impl CheckpointManager {
             let path = entry.path();
 
             if path.extension().is_some_and(|ext| ext == "mhck") {
-                if let Ok(header) = Checkpoint::read_header(&path) {
-                    results.push((path, header));
-                }
+                let header = Checkpoint::read_header(&path).map_err(|err| {
+                    CheckpointError::Corrupted(format!(
+                        "检查点目录中存在无效文件 {}: {}",
+                        path.display(),
+                        err
+                    ))
+                })?;
+                results.push((path, header));
             }
         }
 
@@ -793,6 +865,7 @@ mod tests {
         assert_eq!(checkpoint.step, 100);
         assert_eq!(checkpoint.state.n_cells(), 3);
         assert!(checkpoint.created_at > 0);
+        assert!(checkpoint.mesh_hash.is_none());
     }
 
     #[test]
@@ -811,6 +884,7 @@ mod tests {
         assert_eq!(loaded.state.n_cells(), 3);
         assert!((loaded.state.h[0] - 1.0).abs() < 1e-10);
         assert_eq!(loaded.config_hash, Some(12345));
+        assert!(loaded.mesh_hash.is_none());
 
         // 清理
         let _ = std::fs::remove_file(&path);
@@ -856,7 +930,7 @@ mod tests {
         };
         let loaded = Checkpoint::load_with_options(&path, options).unwrap();
         assert_eq!(loaded.config_hash, Some(111));
-        assert_eq!(loaded.mesh_hash, 222);
+        assert_eq!(loaded.mesh_hash, Some(222));
 
         let bad_options = CheckpointLoadOptions {
             expected_config_hash: Some(999),
@@ -865,6 +939,45 @@ mod tests {
         };
         let err = Checkpoint::load_with_options(&path, bad_options).unwrap_err();
         assert!(matches!(err, CheckpointError::ConfigMismatch { .. }));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_checkpoint_strict_mode_rejects_missing_hash_metadata() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_checkpoint_missing_hashes.mhck");
+
+        let checkpoint = Checkpoint::new(1.0, 1, create_test_state());
+        checkpoint.save(&path).unwrap();
+
+        let config_err = Checkpoint::load_with_options(
+            &path,
+            CheckpointLoadOptions {
+                expected_config_hash: Some(123),
+                expected_mesh_hash: None,
+                strict: true,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            config_err,
+            CheckpointError::MissingConfigHash { expected: 123 }
+        ));
+
+        let mesh_err = Checkpoint::load_with_options(
+            &path,
+            CheckpointLoadOptions {
+                expected_config_hash: None,
+                expected_mesh_hash: Some(456),
+                strict: true,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            mesh_err,
+            CheckpointError::MissingMeshHash { expected: 456 }
+        ));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -884,9 +997,24 @@ mod tests {
         assert_eq!(header.step, 250);
         assert_eq!(header.n_cells, 3);
         assert!(header.created_at > 0);
+        assert!(header.mesh_hash.is_none());
 
         // 清理
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_list_checkpoints_rejects_invalid_header() {
+        let temp_dir = std::env::temp_dir().join("mh_io_invalid_checkpoint_catalog");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("broken.mhck"), b"not-a-checkpoint").unwrap();
+
+        let manager = CheckpointManager::new(&temp_dir, 5);
+        let err = manager.list_checkpoints().unwrap_err();
+        assert!(matches!(err, CheckpointError::Corrupted(_)));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
