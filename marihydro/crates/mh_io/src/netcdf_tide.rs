@@ -65,11 +65,10 @@ impl TidalModel {
     /// 该逻辑只用于路径不存在时的内部错误分流，以及 TPXO 文件的提示性元数据。
     /// 真实打开路径时，主入口必须优先依据实际文件类型、目录结构和布局校验结果分发读取器。
     fn infer_from_path_hint(path: &Path) -> Self {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return Self::Unknown;
+        };
+        let name = name.to_lowercase();
 
         if name.contains("tpxo9") {
             Self::Tpxo9
@@ -205,6 +204,44 @@ const FES_CONSTITUENTS: &[&str] = &[
     "s2", "s4", "sa", "ssa", "t2",
 ];
 
+fn is_netcdf_path(path: &Path) -> bool {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => ext.eq_ignore_ascii_case("nc"),
+        None => false,
+    }
+}
+
+fn nearly_equal(lhs: f64, rhs: f64) -> bool {
+    let scale = lhs.abs().max(rhs.abs()).max(1.0);
+    (lhs - rhs).abs() <= 1.0e-9 * scale
+}
+
+fn grids_match(lhs: &TidalGrid, rhs: &TidalGrid) -> bool {
+    lhs.n_lon == rhs.n_lon
+        && lhs.n_lat == rhs.n_lat
+        && nearly_equal(lhs.lon_range.0, rhs.lon_range.0)
+        && nearly_equal(lhs.lon_range.1, rhs.lon_range.1)
+        && nearly_equal(lhs.lat_range.0, rhs.lat_range.0)
+        && nearly_equal(lhs.lat_range.1, rhs.lat_range.1)
+        && nearly_equal(lhs.lon_resolution, rhs.lon_resolution)
+        && nearly_equal(lhs.lat_resolution, rhs.lat_resolution)
+}
+
+fn register_unique_constituent_file(
+    files: &mut HashMap<String, PathBuf>,
+    constituent: String,
+    path: PathBuf,
+) -> Result<(), TidalIoError> {
+    if let Some(existing) = files.insert(constituent.clone(), path.clone()) {
+        return Err(TidalIoError::FormatError(format!(
+            "目录中分潮 {constituent} 出现重复文件: {} 与 {}",
+            existing.display(),
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn wrap_longitude_to_range(lon: f64, range: (f64, f64)) -> Option<f64> {
     if !lon.is_finite() || !range.0.is_finite() || !range.1.is_finite() || range.1 <= range.0 {
         return None;
@@ -286,9 +323,7 @@ fn detect_regular_grid(
 
 fn axis_bounds(values: &[f64], axis_name: &str) -> Result<(f64, f64), TidalIoError> {
     let first = values.first().copied().ok_or_else(|| {
-        TidalIoError::FormatError(format!(
-            "坐标轴 {axis_name} 为空，无法构建规则网格范围"
-        ))
+        TidalIoError::FormatError(format!("坐标轴 {axis_name} 为空，无法构建规则网格范围"))
     })?;
     let last = values.last().copied().ok_or_else(|| {
         TidalIoError::FormatError(format!(
@@ -615,12 +650,7 @@ impl Fes2014Reader {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            let is_netcdf = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("nc"))
-                .unwrap_or(false);
-            if !is_netcdf {
+            if !is_netcdf_path(&path) {
                 continue;
             }
 
@@ -628,20 +658,34 @@ impl Fes2014Reader {
                 continue;
             };
 
-            let driver = match NetCdfDriver::open(&path) {
-                Ok(driver) => driver,
-                Err(_) => continue,
-            };
+            let driver = NetCdfDriver::open(&path).map_err(|err| {
+                TidalIoError::FormatError(format!(
+                    "FES2014 分潮文件 {} 无法按受支持的 NetCDF 布局打开: {err}",
+                    path.display()
+                ))
+            })?;
             if !FES_HEIGHT_COMPONENTS.iter().any(|(amp_name, phase_name)| {
                 driver.has_variable(amp_name) && driver.has_variable(phase_name)
             }) {
-                continue;
+                return Err(TidalIoError::FormatError(format!(
+                    "FES2014 分潮文件 {} 缺少受支持的高度变量对 {:?}",
+                    path.display(),
+                    FES_HEIGHT_COMPONENTS
+                )));
             }
 
-            if grid.is_none() {
-                grid = Some(detect_regular_grid(&driver, FES_COORD_CANDIDATES)?.1);
+            let detected_grid = detect_regular_grid(&driver, FES_COORD_CANDIDATES)?.1;
+            if let Some(existing_grid) = &grid {
+                if !grids_match(existing_grid, &detected_grid) {
+                    return Err(TidalIoError::FormatError(format!(
+                        "FES2014 目录中的分潮文件 {} 与已加载文件网格不一致",
+                        path.display()
+                    )));
+                }
+            } else {
+                grid = Some(detected_grid);
             }
-            files.entry(constituent).or_insert(path);
+            register_unique_constituent_file(&mut files, constituent, path)?;
         }
 
         let mut constituents = files.keys().cloned().collect::<Vec<_>>();
@@ -745,25 +789,20 @@ impl TidalDataReader for Fes2014Reader {
 pub fn open_tidal_data(path: impl AsRef<Path>) -> Result<Box<dyn TidalDataReader>, TidalIoError> {
     let path = path.as_ref();
 
-    if path.exists() {
-        if path.is_dir() {
-            return Ok(Box::new(Fes2014Reader::open(path)?));
-        }
-        if path.is_file() {
-            return Ok(Box::new(TpxoReader::open(path)?));
-        }
-        return Err(TidalIoError::Unsupported(format!(
-            "不支持的潮汐数据路径类型: {}",
-            path.display()
-        )));
+    if !path.exists() {
+        return Err(TidalIoError::FileNotFound(path.to_path_buf()));
     }
 
-    match TidalModel::infer_from_path_hint(path) {
-        TidalModel::Fes2014 => Ok(Box::new(Fes2014Reader::open(path)?)),
-        TidalModel::Tpxo9 | TidalModel::TpxoLocal | TidalModel::Unknown => {
-            Ok(Box::new(TpxoReader::open(path)?))
-        }
+    if path.is_dir() {
+        return Ok(Box::new(Fes2014Reader::open(path)?));
     }
+    if path.is_file() {
+        return Ok(Box::new(TpxoReader::open(path)?));
+    }
+    Err(TidalIoError::Unsupported(format!(
+        "不支持的潮汐数据路径类型: {}",
+        path.display()
+    )))
 }
 
 // ============================================================================
@@ -961,6 +1000,52 @@ mod tests {
     }
 
     #[test]
+    fn test_is_netcdf_path_requires_real_extension() {
+        assert!(is_netcdf_path(Path::new("m2.nc")));
+        assert!(is_netcdf_path(Path::new("M2.NC")));
+        assert!(!is_netcdf_path(Path::new("m2")));
+        assert!(!is_netcdf_path(Path::new("m2.txt")));
+    }
+
+    #[test]
+    fn test_register_unique_constituent_file_rejects_duplicates() {
+        let mut files = HashMap::new();
+        register_unique_constituent_file(
+            &mut files,
+            "m2".to_string(),
+            PathBuf::from("m2_first.nc"),
+        )
+        .unwrap();
+
+        let err = register_unique_constituent_file(
+            &mut files,
+            "m2".to_string(),
+            PathBuf::from("m2_second.nc"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, TidalIoError::FormatError(_)));
+    }
+
+    #[test]
+    fn test_grids_match_rejects_resolution_drift() {
+        let lhs = TidalGrid {
+            lon_range: (0.0, 360.0),
+            lat_range: (-90.0, 90.0),
+            lon_resolution: 1.0,
+            lat_resolution: 1.0,
+            n_lon: 361,
+            n_lat: 181,
+        };
+        let rhs = TidalGrid {
+            lon_resolution: 0.5,
+            ..lhs.clone()
+        };
+
+        assert!(!grids_match(&lhs, &rhs));
+    }
+
+    #[test]
     fn test_complex_components_to_amplitude_phase() {
         let (amp, phase) = complex_components_to_amplitude_phase(0.0, -2.0);
         assert!((amp - 2.0).abs() < 1.0e-12);
@@ -982,10 +1067,7 @@ mod tests {
 
     #[test]
     fn test_open_tidal_data_existing_directory_uses_directory_reader() {
-        let base = std::env::temp_dir().join(format!(
-            "mh_io_tide_dir_{}",
-            std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("mh_io_tide_dir_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
@@ -1000,10 +1082,7 @@ mod tests {
 
     #[test]
     fn test_open_tidal_data_existing_file_uses_file_reader() {
-        let path = std::env::temp_dir().join(format!(
-            "mh_io_tide_file_{}.nc",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("mh_io_tide_file_{}.nc", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, b"not a netcdf file").unwrap();
 

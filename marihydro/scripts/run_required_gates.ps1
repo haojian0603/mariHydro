@@ -55,7 +55,7 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_repo_contracts.ps1"
     }
 
-    Invoke-Step -Name "external data contracts" -Action {
+    Invoke-Step -Name "external data contracts (layout truth + matched-layout validation)" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_data_contracts.ps1"
     }
 

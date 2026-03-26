@@ -263,7 +263,7 @@ pub struct NetCdfDriver {
 }
 
 #[cfg(not(feature = "netcdf"))]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct CliHeader {
     dimensions: Vec<Dimension>,
     variables: Vec<VariableInfo>,
@@ -407,9 +407,12 @@ fn cli_read_header(path: &Path) -> Result<CliHeader, NetCdfError> {
 
 #[cfg(not(feature = "netcdf"))]
 fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
-    let mut header = CliHeader::default();
+    let mut dimensions = Vec::new();
+    let mut variables = Vec::new();
+    let mut global_attrs = Vec::new();
     let mut in_dimensions = false;
     let mut in_variables = false;
+    let mut saw_variables_section = false;
     for line in text.lines() {
         let raw = line.trim();
         if raw.starts_with("dimensions:") {
@@ -420,6 +423,7 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
         if raw.starts_with("variables:") {
             in_dimensions = false;
             in_variables = true;
+            saw_variables_section = true;
             continue;
         }
         if raw.starts_with("data:") {
@@ -463,7 +467,7 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                     })?;
                     (len, false)
                 };
-                header.dimensions.push(Dimension {
+                dimensions.push(Dimension {
                     name,
                     len,
                     is_unlimited: unlimited,
@@ -478,19 +482,14 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
             }
 
             if raw.contains('(') && raw.ends_with(';') && !raw.contains(":") {
-                // 变量声明行：dtype name(dim, dim, ...)
                 let cleaned = raw.trim_end_matches(';').trim();
                 let space = cleaned.find(' ').ok_or_else(|| {
-                    NetCdfError::ReadFailed(format!(
-                        "ncdump 变量声明缺少类型与名称分隔: {cleaned}"
-                    ))
+                    NetCdfError::ReadFailed(format!("ncdump 变量声明缺少类型与名称分隔: {cleaned}"))
                 })?;
                 let dtype = cleaned[..space].trim().to_string();
                 let rest = cleaned[space + 1..].trim();
                 let lparen = rest.find('(').ok_or_else(|| {
-                    NetCdfError::ReadFailed(format!(
-                        "ncdump 变量声明缺少维度列表起始符号: {rest}"
-                    ))
+                    NetCdfError::ReadFailed(format!("ncdump 变量声明缺少维度列表起始符号: {rest}"))
                 })?;
                 let name = rest[..lparen].trim().to_string();
                 if name.is_empty() {
@@ -504,7 +503,7 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>();
-                header.variables.push(VariableInfo {
+                variables.push(VariableInfo {
                     name,
                     dimensions: dims,
                     dtype,
@@ -513,11 +512,8 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                     units: None,
                 });
             } else if raw.starts_with(":") {
-                // 全局属性
                 let eq = raw.find('=').ok_or_else(|| {
-                    NetCdfError::ReadFailed(format!(
-                        "ncdump 全局属性缺少赋值符号: {raw}"
-                    ))
+                    NetCdfError::ReadFailed(format!("ncdump 全局属性缺少赋值符号: {raw}"))
                 })?;
                 let key = raw[1..eq].trim().to_string();
                 if key.is_empty() {
@@ -526,13 +522,10 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                     )));
                 }
                 let val = raw[eq + 1..].trim().trim_end_matches(';').trim();
-                header.global_attrs.push((key, trim_quotes(val)));
+                global_attrs.push((key, trim_quotes(val)));
             } else if raw.contains(":") {
-                // 变量属性
                 let (var, rest) = raw.split_once(':').ok_or_else(|| {
-                    NetCdfError::ReadFailed(format!(
-                        "ncdump 变量属性缺少变量名前缀: {raw}"
-                    ))
+                    NetCdfError::ReadFailed(format!("ncdump 变量属性缺少变量名前缀: {raw}"))
                 })?;
                 let var = var.trim();
                 if var.is_empty() {
@@ -542,9 +535,7 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                 }
                 let rest = rest.trim();
                 let eq = rest.find('=').ok_or_else(|| {
-                    NetCdfError::ReadFailed(format!(
-                        "ncdump 变量属性缺少赋值符号: {raw}"
-                    ))
+                    NetCdfError::ReadFailed(format!("ncdump 变量属性缺少赋值符号: {raw}"))
                 })?;
                 let key = rest[..eq].trim();
                 if key.is_empty() {
@@ -553,7 +544,7 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
                     )));
                 }
                 let val = rest[eq + 1..].trim().trim_end_matches(';');
-                if let Some(info) = header.variables.iter_mut().find(|v| v.name == var) {
+                if let Some(info) = variables.iter_mut().find(|v| v.name == var) {
                     match key {
                         "standard_name" => info.standard_name = Some(trim_quotes(val)),
                         "long_name" => info.long_name = Some(trim_quotes(val)),
@@ -565,7 +556,22 @@ fn parse_ncdump_header(text: &str) -> Result<CliHeader, NetCdfError> {
         }
     }
 
-    Ok(header)
+    if !saw_variables_section {
+        return Err(NetCdfError::ReadFailed(
+            "ncdump 头缺少 variables: 段".to_string(),
+        ));
+    }
+    if variables.is_empty() {
+        return Err(NetCdfError::ReadFailed(
+            "ncdump 头未声明任何变量".to_string(),
+        ));
+    }
+
+    Ok(CliHeader {
+        dimensions,
+        variables,
+        global_attrs,
+    })
 }
 
 #[cfg(not(feature = "netcdf"))]
@@ -738,6 +744,34 @@ dimensions:
 variables:
     float h(lon);
     :title "demo";
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_missing_variables_section() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = 3 ;
+data:
+}
+"#;
+        assert!(parse_ncdump_header(text).is_err());
+    }
+
+    #[cfg(not(feature = "netcdf"))]
+    #[test]
+    fn test_parse_ncdump_header_rejects_empty_variables_section() {
+        let text = r#"
+netcdf sample {
+dimensions:
+    lon = 3 ;
+variables:
+
 data:
 }
 "#;

@@ -75,7 +75,7 @@ try {
     Write-Host ""
 
     # Phase 0.5: external data contract guard
-    Write-Host "=== Phase 0.5: external data contract guard ===" -ForegroundColor Cyan
+    Write-Host "=== Phase 0.5: external data contract guard (layout truth + matched-layout validation) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_data_contracts.ps1"
     if ($LASTEXITCODE -ne 0) {
         $errors += "external data contracts must pass"

@@ -12,9 +12,11 @@
 - [RULE_EXTERNAL_LAYOUT_TRUTHFUL] 高风险外部数据读取模块必须在模块头部写明 `IO_SOURCE:` 与 `IO_SCOPE:`，并把已接线布局、变量约定和失败语义说清楚。公开入口只允许暴露真实支持的文件布局；布局不符、字段不符或驱动不可用时只能显式报错，不能模糊兜底。
 - [RULE_EXTERNAL_PARTIAL_PARSE_FORBIDDEN] 外部数据驱动不得“部分解析成功”。头部、元数据、时间轴或数值载荷中只要出现无法解释的字段或 token，就必须整体报错；禁止只提取能读的部分、静默跳过坏 token、默认补齐其余值，再把结果当成成功读取。
 - [RULE_EXTERNAL_DISPATCH_BY_LAYOUT] 公开外部数据入口在路径已存在时，必须优先根据真实文件类型、目录结构、变量布局和元数据来分发读取器；不得仅凭文件名关键字、扩展名猜测模型类型，再把猜测当成主链行为。
+- [RULE_EXTERNAL_MATCHED_LAYOUT_MUST_VALIDATE] 一旦目录扫描、文件名或上游元数据已经把某个外部文件识别为“受支持布局候选”，后续驱动打开、变量对校验、坐标网格校验和分潮去重都必须完整通过；任一环节失败都要立即报错，不得 `continue` 跳过坏文件后继续拼装部分结果。
 - [RULE_NO_TOLERANT_PUBLIC_PARSERS] 公开解析入口不得暴露 `*_or_default`、`*_or_zero`、`*_or_identity` 这类“失败时伪成功”的主链接口。对外部格式、时间、坐标和投影元数据，失败就返回错误；只有降级本身具有真实业务语义时，才允许显式命名的降级函数存在。
 - [RULE_NO_PUBLIC_HEURISTIC_DETECTORS] 仅靠文件名、扩展名或关键字猜模型类型的逻辑，只能作为模块内部提示，不得作为公开 API、公开 trait 语义或对外承诺的“检测器”。公开入口必须以真实布局、目录结构和元数据校验为准。
 - [RULE_EXTERNAL_METADATA_STRUCTURE_REQUIRED] 外部数据驱动必须把必须存在的结构段当成硬约束，例如 `bands` 数组、变量声明、属性赋值和时间元数据。缺失这些结构时只能报错，不能回退成空数组、空字符串、默认单元、默认波段数，或跳过坏行继续解析。
+- [RULE_NETCDF_HEADER_VARIABLES_REQUIRED] `ncdump -h` 的 CLI 回退头解析必须至少拿到真实的 `variables:` 段和至少一个变量声明，不能靠空 `CliHeader`、默认结构体或“只有 dimensions 没有 variables”的半头信息继续冒充可读 NetCDF。
 - [RULE_EXPORT_METADATA_SERIALIZATION_EXPLICIT] 导出链路里的元数据序列化不得伪装成功。像 `boundary_names`、字段名列表、属性清单这类会进入 VTU/PVD/检查点/项目文件的元数据，只要序列化失败就必须显式报错并终止写出，不能回退成 `"[]"`、`""`、空对象或其他合成占位值。
 - [RULE_METADATA_TIMESTAMPS_EXPLICIT] 检查点、快照、项目文件和其他持久化元数据里的 `created_at`、时间戳或生成时刻字段不得在系统时钟异常时回退成 `0`、Unix 纪元或其他合成占位值。要么显式失败，要么把“未知时间”编码成真实的可区分状态，不能把假时间戳写进产物。
 - [RULE_IMPORT_GEOMETRY_STRUCTURE_REQUIRED] 外部矢量导入不得在 Polygon 或 MultiPolygon 缺少外环、环点数不足、线性环未闭合时继续返回空外环或部分几何。几何结构不完整就必须显式报错，不能把坏输入折成“空面”“空洞列表”或其他伪成功结果。

@@ -91,6 +91,11 @@ try {
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'match TidalModel::infer_from_path_hint\(path\)' `
+        -Message "tide reader open entrypoint must not route missing paths through heuristic model hints"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
         -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1' `
         -Message "tide reader must not guess leading singleton axes from synthetic default dimensions"
 
@@ -98,6 +103,16 @@ try {
         -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
         -Pattern 'pub fn detect\(path: &Path\)' `
         -Message "tide reader must not expose a public filename-heuristic model detector"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'let driver = match NetCdfDriver::open\(&path\)|Err\(_\)\s*=>\s*continue|files\.entry\(constituent\)\.or_insert\(path\)' `
+        -Message "FES directory scanning must not silently skip unreadable matched files or merge duplicate constituents"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'unwrap_or\(\"\"\)|unwrap_or\(false\)' `
+        -Message "tide reader path classification must not hide malformed filenames or extensions behind empty-string/bool fallbacks"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `
@@ -128,6 +143,11 @@ try {
         -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
         -Pattern 'parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\(' `
         -Message "NetCDF header parsing must not skip malformed variable declarations or attributes by filling empty placeholders"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/drivers/netcdf/driver.rs" `
+        -Pattern 'CliHeader::default\(' `
+        -Message "NetCDF header parsing must not start from a synthetic default header shell"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/netcdf/time.rs" `
