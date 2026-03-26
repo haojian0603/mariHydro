@@ -384,20 +384,9 @@ impl GeoTransformer {
             .source_proj
             .inverse(x, y)
             .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
-
-        let delta_lat = 1e-5;
-        let (px, py) = self
-            .target_proj
-            .forward(lon, lat)
-            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
-        let (px_n, py_n) = self
-            .target_proj
-            .forward(lon, lat + delta_lat)
-            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))?;
-
-        let dx = px_n - px;
-        let dy = py_n - py;
-        Ok(dy.atan2(dx))
+        self.target_proj
+            .convergence_angle(lon, lat)
+            .map_err(|e| mh_foundation::error::MhError::invalid_input(e.to_string()))
     }
 
     /// 旋转矢量以补偿投影收敛角
@@ -710,5 +699,30 @@ mod tests {
                 .contains("convergence angle is only defined for projected target CRS"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_projected_target_convergence_angle_matches_exact_tm_formula() {
+        let transformer =
+            GeoTransformer::from_epsg(4326, 32650).expect("create transformer failed");
+        let angle = transformer
+            .compute_convergence_angle(116.0, 40.0)
+            .expect("convergence angle failed");
+        let expected =
+            crate::projection::utm_convergence_angle(116.0, 40.0, 50).expect("utm gamma failed");
+
+        assert!((angle - expected).abs() < 1e-12, "angle={angle}, expected={expected}");
+    }
+
+    #[test]
+    fn test_web_mercator_target_convergence_angle_is_explicit_zero() {
+        let source = Crs::from_epsg(4326).expect("source crs failed");
+        let target = Crs::from_epsg(3857).expect("target crs failed");
+        let transformer = GeoTransformer::new(&source, &target).expect("transformer failed");
+
+        let angle = transformer
+            .compute_convergence_angle(116.0, 40.0)
+            .expect("Web Mercator convergence angle failed");
+        assert_eq!(angle, 0.0);
     }
 }

@@ -75,10 +75,30 @@ try {
         -Pattern 'convergence angle is only defined for projected target CRS' `
         -Message "geo convergence helpers must emit an explicit projected-target error"
 
+    Check-PatternAbsentRaw `
+        -RelativePath "crates/mh_geo/src/transform.rs" `
+        -Pattern 'delta_lat\s*=|lat\s*\+\s*delta_lat|dy\.atan2\(dx\)' `
+        -Message "geo convergence helpers must not use finite-difference north vectors in mainline"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_geo/src/projection/traits.rs" `
+        -Pattern 'pub fn convergence_angle\(&self, lon: f64, lat: f64\) -> MhResult<f64>' `
+        -Message "FastProjection must expose an explicit convergence-angle contract"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_geo/src/projection/traits.rs" `
+        -Pattern 'transverse_mercator::convergence_angle\(params, lon, lat\)|web_mercator::web_mercator_convergence_angle\(lon, lat\)' `
+        -Message "FastProjection convergence-angle dispatch must use projection-owned semantics"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_geo/src/projection/web_mercator.rs" `
+        -Pattern 'pub fn web_mercator_convergence_angle\(lon: f64, lat: f64\) -> MhResult<f64>' `
+        -Message "Web Mercator must declare its explicit zero-convergence helper"
+
     Check-PatternPresent `
         -RelativePath "crates/mh_geo/src/transform.rs" `
-        -Pattern 'test_geographic_target_convergence_angle_requires_projected_target|test_geographic_target_rotate_vector_requires_projected_target' `
-        -Message "geo convergence helpers must keep regression coverage for geographic target rejection"
+        -Pattern 'test_geographic_target_convergence_angle_requires_projected_target|test_geographic_target_rotate_vector_requires_projected_target|test_projected_target_convergence_angle_matches_exact_tm_formula|test_web_mercator_target_convergence_angle_is_explicit_zero' `
+        -Message "geo convergence helpers must keep regression coverage for explicit target semantics"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""

@@ -48,7 +48,10 @@ pub trait MapProjection: Send + Sync {
 
     /// 批量正向投影
     fn forward_batch(&self, points: &[(f64, f64)]) -> MhResult<Vec<(f64, f64)>> {
-        points.iter().map(|&(lon, lat)| self.forward(lon, lat)).collect()
+        points
+            .iter()
+            .map(|&(lon, lat)| self.forward(lon, lat))
+            .collect()
     }
 
     /// 批量逆向投影
@@ -177,9 +180,7 @@ impl FastProjection {
 
         match self {
             Self::Geographic(_) => Ok((lon, lat)),
-            Self::TransverseMercator(params) => {
-                transverse_mercator::forward(params, lon, lat)
-            }
+            Self::TransverseMercator(params) => transverse_mercator::forward(params, lon, lat),
             Self::WebMercator => web_mercator::geographic_to_web_mercator(lon, lat),
         }
     }
@@ -191,10 +192,27 @@ impl FastProjection {
 
         match self {
             Self::Geographic(_) => Ok((x, y)),
-            Self::TransverseMercator(params) => {
-                transverse_mercator::inverse(params, x, y)
-            }
+            Self::TransverseMercator(params) => transverse_mercator::inverse(params, x, y),
             Self::WebMercator => web_mercator::web_mercator_to_geographic(x, y),
+        }
+    }
+
+    /// 计算投影收敛角
+    ///
+    /// # Errors
+    /// 仅投影坐标系定义收敛角；地理坐标系查询会显式报错。
+    pub fn convergence_angle(&self, lon: f64, lat: f64) -> MhResult<f64> {
+        use super::transverse_mercator;
+        use super::web_mercator;
+
+        match self {
+            Self::Geographic(_) => Err(mh_foundation::error::MhError::invalid_input(
+                "convergence angle is only defined for projected target CRS",
+            )),
+            Self::TransverseMercator(params) => {
+                transverse_mercator::convergence_angle(params, lon, lat)
+            }
+            Self::WebMercator => web_mercator::web_mercator_convergence_angle(lon, lat),
         }
     }
 
@@ -222,6 +240,7 @@ impl FastProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ellipsoid::Ellipsoid;
 
     #[test]
     fn test_utm_params() {
@@ -249,5 +268,26 @@ mod tests {
     fn test_gk6_params() {
         let params = TransverseMercatorParams::gauss_kruger_6(20);
         assert!((params.central_meridian - 117.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fast_projection_geographic_convergence_angle_rejected() {
+        let projection = FastProjection::Geographic(Ellipsoid::WGS84);
+        let err = projection
+            .convergence_angle(116.0, 40.0)
+            .expect_err("geographic projection must reject convergence-angle queries");
+        assert!(
+            err.to_string()
+                .contains("convergence angle is only defined for projected target CRS"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_fast_projection_web_mercator_convergence_angle_zero() {
+        let angle = FastProjection::WebMercator
+            .convergence_angle(116.0, 40.0)
+            .expect("Web Mercator convergence angle failed");
+        assert_eq!(angle, 0.0);
     }
 }

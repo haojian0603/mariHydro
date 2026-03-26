@@ -124,6 +124,18 @@ pub fn web_mercator_to_geographic(x: f64, y: f64) -> MhResult<(f64, f64)> {
     Ok((lon, lat))
 }
 
+/// 计算 Web Mercator 子午线收敛角
+///
+/// Web Mercator 保持经线为竖直直线，因此只要输入经纬度位于定义域内，
+/// 网格北与真北重合，收敛角恒为 0。
+///
+/// # Errors
+/// 经纬度必须位于 Web Mercator 定义域内；越界时显式报错。
+pub fn web_mercator_convergence_angle(lon: f64, lat: f64) -> MhResult<f64> {
+    validate_geographic_input(lon, lat)?;
+    Ok(0.0)
+}
+
 /// 计算 Web Mercator 分辨率
 ///
 /// 返回在指定纬度和缩放级别下，每像素对应的米数
@@ -330,5 +342,16 @@ mod tests {
     #[test]
     fn test_web_mercator_scale_rejects_nonpositive_dpi() {
         assert!(web_mercator_scale(40.0, 10, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_web_mercator_convergence_angle_is_zero() {
+        let angle = web_mercator_convergence_angle(116.0, 40.0).expect("convergence angle failed");
+        assert_eq!(angle, 0.0);
+    }
+
+    #[test]
+    fn test_web_mercator_convergence_angle_rejects_invalid_latitude() {
+        assert!(web_mercator_convergence_angle(0.0, 90.0).is_err());
     }
 }

@@ -21,6 +21,7 @@
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
+- [RULE_GEO_CONVERGENCE_EXACT_PROJECTION_FORMULA] 投影收敛角必须由目标投影本身给出真实语义：横轴墨卡托类投影走显式公式，Web Mercator 仅在定义域内按“经线保持竖直”的几何性质显式返回 `0`。主链禁止再用 `delta_lat`、有限差分北向量或其他近似扰动去推收敛角。
 - [RULE_WEB_MERCATOR_DOMAIN_EXPLICIT] Web Mercator 公开辅助面（经纬度转投影、投影反算、分辨率、比例尺、瓦片坐标、瓦片边界）只接受有限且位于 EPSG:3857/4326 定义域内的输入。经纬度越界、投影坐标超出 extent、tile_size=0、DPI<=0 等情况必须显式报错，不得通过纬度裁剪、内部 `expect` 或返回默认数值伪装成功。
 - [RULE_INTERNAL_INVARIANT_DEFAULTS_FORBIDDEN] 一旦前置校验已经把内部状态约束为“非空轴”“合法年内序号”“存在末端值”等不变量，后续代码就不得再用 `unwrap_or(...)`、默认月份、默认端点或其他合成值掩盖不变量破坏。要么在前置校验阶段返回错误，要么在不变量被破坏时显式 panic/报错。
 - [RULE_RUNTIME_SYSTEM_PROBES_EXPLICIT] 运行时硬件和系统探测不得伪造常量结果。读取 `/proc`、`sysfs`、Win32 系统信息或线程拓扑失败时，要么显式报错，要么明确落到“未知”状态；不能把 `8GB/4GB`、空字符串、空 CPU 列表或 `0` 解析值当成真实探测结果。
