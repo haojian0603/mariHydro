@@ -20,7 +20,10 @@
 //! let results = index.query_range(&bbox);
 //! ```
 
-use crate::geometry::Point2D;
+use crate::{
+    error::{GeoError, GeoResult},
+    geometry::Point2D,
+};
 use rstar::{RTree, RTreeObject, AABB};
 
 /// 边界框
@@ -189,10 +192,7 @@ impl<T: Clone> SpatialIndex<T> {
     /// 查询范围内的点
     #[must_use]
     pub fn query_range(&self, bbox: &BoundingBox) -> Vec<(&Point2D, &T)> {
-        let envelope = AABB::from_corners(
-            [bbox.min_x, bbox.min_y],
-            [bbox.max_x, bbox.max_y],
-        );
+        let envelope = AABB::from_corners([bbox.min_x, bbox.min_y], [bbox.max_x, bbox.max_y]);
         self.tree
             .locate_in_envelope(&envelope)
             .map(|entry| (&entry.point, &entry.data))
@@ -210,18 +210,41 @@ impl<T: Clone> SpatialIndex<T> {
     }
 
     /// 查询指定距离内的点
-    #[must_use]
-    pub fn query_within_distance(&self, point: &Point2D, distance: f64) -> Vec<(&Point2D, &T)> {
+    pub fn query_within_distance(
+        &self,
+        point: &Point2D,
+        distance: f64,
+    ) -> GeoResult<Vec<(&Point2D, &T)>> {
+        if !distance.is_finite() || distance < 0.0 {
+            return Err(GeoError::spatial_index_error(
+                "query_within_distance",
+                "distance must be finite and non-negative",
+            ));
+        }
+
         let dist_squared = distance * distance;
-        self.tree
-            .nearest_neighbor_iter(&[point.x, point.y])
-            .take_while(|entry| {
+        let envelope = AABB::from_corners(
+            [point.x - distance, point.y - distance],
+            [point.x + distance, point.y + distance],
+        );
+
+        let mut results: Vec<_> = self
+            .tree
+            .locate_in_envelope(&envelope)
+            .filter_map(|entry| {
                 let dx = entry.point.x - point.x;
                 let dy = entry.point.y - point.y;
-                dx * dx + dy * dy <= dist_squared
+                let distance_2 = dx * dx + dy * dy;
+                (distance_2 <= dist_squared).then_some((distance_2, &entry.point, &entry.data))
             })
-            .map(|entry| (&entry.point, &entry.data))
-            .collect()
+            .collect();
+
+        results.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+        Ok(results
+            .into_iter()
+            .map(|(_, point, data)| (point, data))
+            .collect())
     }
 
     /// 返回索引中的点数量
@@ -315,8 +338,58 @@ mod tests {
         index.insert(Point2D::new(5.0, 0.0), 2);
         index.insert(Point2D::new(100.0, 0.0), 3);
 
-        let results = index.query_within_distance(&Point2D::new(0.0, 0.0), 10.0);
+        let results = index
+            .query_within_distance(&Point2D::new(0.0, 0.0), 10.0)
+            .unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_spatial_index_within_distance_sorts_by_exact_distance() {
+        let mut index: SpatialIndex<u32> = SpatialIndex::new();
+
+        index.insert(Point2D::new(3.0, 4.0), 1);
+        index.insert(Point2D::new(1.0, 0.0), 2);
+        index.insert(Point2D::new(2.0, 0.0), 3);
+
+        let results = index
+            .query_within_distance(&Point2D::new(0.0, 0.0), 10.0)
+            .unwrap();
+
+        let ids: Vec<u32> = results.into_iter().map(|(_, id)| *id).collect();
+        assert_eq!(ids, vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn test_spatial_index_within_distance_filters_bounding_box_false_positive() {
+        let mut index: SpatialIndex<u32> = SpatialIndex::new();
+
+        index.insert(Point2D::new(6.0, 8.0), 1);
+        index.insert(Point2D::new(8.0, 8.0), 2);
+
+        let results = index
+            .query_within_distance(&Point2D::new(0.0, 0.0), 10.0)
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(*results[0].1, 1);
+    }
+
+    #[test]
+    fn test_spatial_index_within_distance_rejects_negative_radius() {
+        let index: SpatialIndex<u32> = SpatialIndex::new();
+
+        let err = index
+            .query_within_distance(&Point2D::new(0.0, 0.0), -1.0)
+            .unwrap_err();
+
+        match err {
+            GeoError::SpatialIndexError { operation, message } => {
+                assert_eq!(operation, "query_within_distance");
+                assert_eq!(message, "distance must be finite and non-negative");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

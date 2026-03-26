@@ -206,6 +206,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.562: spatial index contract guard
+    Write-Host "=== Phase 0.562: spatial index contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_spatial_index_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "spatial index contracts must pass"
+    } else {
+        Write-Host "[OK] spatial index contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.565: Web Mercator contract guard
     Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
