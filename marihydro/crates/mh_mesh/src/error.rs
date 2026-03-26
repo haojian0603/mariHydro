@@ -1,12 +1,12 @@
 // crates/mh_mesh/src/error.rs
 //! 网格处理错误类型
-//! 
+//!
 //! 包含网格拓扑、格式、质量等错误定义
 //! 所有错误可转换为 `mh_runtime::RuntimeError` 向上传播
 
-use thiserror::Error;
 use mh_foundation::MhError;
 use mh_runtime::RuntimeError;
+use thiserror::Error;
 
 /// 网格模块结果类型
 pub type MeshResult<T> = Result<T, MeshError>;
@@ -55,6 +55,13 @@ pub enum MeshError {
         context: String,
     },
 
+    /// 空间查询错误
+    #[error("空间查询错误: {operation}, {details}")]
+    SpatialQueryError {
+        operation: &'static str,
+        details: String,
+    },
+
     /// 聚合运行时错误
     #[error("运行时错误: {0}")]
     Runtime(#[from] RuntimeError),
@@ -67,18 +74,40 @@ impl From<MeshError> for RuntimeError {
             MeshError::InvalidTopology { operation, details } => {
                 RuntimeError::numerical(format!("网格拓扑错误 [{}]: {}", operation, details))
             }
-            MeshError::MeshFormatError { format, file, line, message } => {
-                RuntimeError::backend(format!("网格格式错误 [{} {}:{}]: {}", format, file, line, message))
-            }
-            MeshError::HalfEdgeCorruption { check, element_id, message } => {
-                RuntimeError::internal(format!("半边结构损坏 [{}, 元素 {}]: {}", check, element_id, message))
-            }
-            MeshError::QualityTooLow { metric, value, threshold, cell_id } => {
-                RuntimeError::validation(format!("网格质量过低 [单元 {}, {}={:.3}, 阈值={:.3}]", cell_id, metric, value, threshold))
-            }
-            MeshError::ElementCountMismatch { required, provided, context: _  } => {
-                RuntimeError::size_mismatch("mesh_elements", required, provided)
-            }
+            MeshError::MeshFormatError {
+                format,
+                file,
+                line,
+                message,
+            } => RuntimeError::backend(format!(
+                "网格格式错误 [{} {}:{}]: {}",
+                format, file, line, message
+            )),
+            MeshError::HalfEdgeCorruption {
+                check,
+                element_id,
+                message,
+            } => RuntimeError::internal(format!(
+                "半边结构损坏 [{}, 元素 {}]: {}",
+                check, element_id, message
+            )),
+            MeshError::QualityTooLow {
+                metric,
+                value,
+                threshold,
+                cell_id,
+            } => RuntimeError::validation(format!(
+                "网格质量过低 [单元 {}, {}={:.3}, 阈值={:.3}]",
+                cell_id, metric, value, threshold
+            )),
+            MeshError::ElementCountMismatch {
+                required,
+                provided,
+                context: _,
+            } => RuntimeError::size_mismatch("mesh_elements", required, provided),
+            MeshError::SpatialQueryError { operation, details } => RuntimeError::validation(
+                format!("Spatial query error [{}]: {}", operation, details),
+            ),
             MeshError::Runtime(runtime_err) => runtime_err,
         }
     }
@@ -101,7 +130,12 @@ impl MeshError {
         }
     }
 
-    pub fn mesh_format_error(format: &'static str, file: impl Into<String>, line: usize, message: impl Into<String>) -> Self {
+    pub fn mesh_format_error(
+        format: &'static str,
+        file: impl Into<String>,
+        line: usize,
+        message: impl Into<String>,
+    ) -> Self {
         Self::MeshFormatError {
             format,
             file: file.into(),
@@ -110,7 +144,11 @@ impl MeshError {
         }
     }
 
-    pub fn halfedge_corruption(check: &'static str, element_id: usize, message: impl Into<String>) -> Self {
+    pub fn halfedge_corruption(
+        check: &'static str,
+        element_id: usize,
+        message: impl Into<String>,
+    ) -> Self {
         Self::HalfEdgeCorruption {
             check,
             element_id,
@@ -118,7 +156,12 @@ impl MeshError {
         }
     }
 
-    pub fn quality_too_low(metric: &'static str, value: f64, threshold: f64, cell_id: usize) -> Self {
+    pub fn quality_too_low(
+        metric: &'static str,
+        value: f64,
+        threshold: f64,
+        cell_id: usize,
+    ) -> Self {
         Self::QualityTooLow {
             metric,
             value,
@@ -127,11 +170,22 @@ impl MeshError {
         }
     }
 
-    pub fn element_count_mismatch(required: usize, provided: usize, context: impl Into<String>) -> Self {
+    pub fn element_count_mismatch(
+        required: usize,
+        provided: usize,
+        context: impl Into<String>,
+    ) -> Self {
         Self::ElementCountMismatch {
             required,
             provided,
             context: context.into(),
+        }
+    }
+
+    pub fn spatial_query_error(operation: &'static str, details: impl Into<String>) -> Self {
+        Self::SpatialQueryError {
+            operation,
+            details: details.into(),
         }
     }
 }
@@ -152,5 +206,17 @@ mod tests {
         let mesh_err = MeshError::invalid_topology("validate", "non-manifold");
         let foundation_err: MhError = mesh_err.into();
         assert!(foundation_err.to_string().contains("网格拓扑错误"));
+    }
+
+    #[test]
+    fn test_spatial_query_error_conversion_to_runtime() {
+        let mesh_err = MeshError::spatial_query_error("locate_in_circle", "invalid radius");
+        let runtime_err: RuntimeError = mesh_err.into();
+        match runtime_err {
+            RuntimeError::ValidationError { message } => {
+                assert!(message.contains("Spatial query error [locate_in_circle]: invalid radius"));
+            }
+            other => panic!("unexpected runtime error: {other:?}"),
+        }
     }
 }

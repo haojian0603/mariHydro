@@ -34,8 +34,8 @@
 //! let loaded = MeshSpatialIndex::from_serializable(data);
 //! ```
 
+use crate::error::{MeshError, MeshResult};
 use mh_geo::Point2D;
-use crate::error::MeshError;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
 
@@ -68,9 +68,12 @@ impl CellEnvelope {
     /// 如果顶点列表为空则 panic
     pub fn new(cell_index: usize, vertices: &[Point2D]) -> Result<Self, MeshError> {
         if vertices.is_empty() {
-            return Err(MeshError::invalid_topology("spatial_index", "empty vertices"));
+            return Err(MeshError::invalid_topology(
+                "spatial_index",
+                "empty vertices",
+            ));
         }
-        
+
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
         let mut max_x = f64::MIN;
@@ -283,7 +286,10 @@ impl MeshSpatialIndex {
         for i in 0..n_cells {
             let vertices = get_cell_vertices(i);
             if vertices.is_empty() {
-                eprintln!("[mh_mesh::spatial_index] cell {} has empty vertices; skipping envelope", i);
+                eprintln!(
+                    "[mh_mesh::spatial_index] cell {} has empty vertices; skipping envelope",
+                    i
+                );
                 cell_vertices.push(vertices);
                 continue;
             }
@@ -334,22 +340,27 @@ impl MeshSpatialIndex {
     pub fn to_serializable(&self) -> SpatialIndexData {
         // 收集所有包围盒
         let envelopes: Vec<CellEnvelope> = self.tree.iter().cloned().collect();
-        
+
         // 计算全局边界
         let bounds = if !envelopes.is_empty() {
             let mut min_x = f64::MAX;
             let mut min_y = f64::MAX;
             let mut max_x = f64::MIN;
             let mut max_y = f64::MIN;
-            
+
             for env in &envelopes {
                 min_x = min_x.min(env.min_x);
                 min_y = min_y.min(env.min_y);
                 max_x = max_x.max(env.max_x);
                 max_y = max_y.max(env.max_y);
             }
-            
-            Some(SpatialBounds { min_x, min_y, max_x, max_y })
+
+            Some(SpatialBounds {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            })
         } else {
             None
         };
@@ -395,20 +406,25 @@ impl MeshSpatialIndex {
     pub fn bounds(&self) -> Option<SpatialBounds> {
         let mut iter = self.tree.iter();
         let first = iter.next()?;
-        
+
         let mut min_x = first.min_x;
         let mut min_y = first.min_y;
         let mut max_x = first.max_x;
         let mut max_y = first.max_y;
-        
+
         for env in iter {
             min_x = min_x.min(env.min_x);
             min_y = min_y.min(env.min_y);
             max_x = max_x.max(env.max_x);
             max_y = max_y.max(env.max_y);
         }
-        
-        Some(SpatialBounds { min_x, min_y, max_x, max_y })
+
+        Some(SpatialBounds {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        })
     }
 
     /// 估算序列化后的数据大小（字节）
@@ -418,10 +434,12 @@ impl MeshSpatialIndex {
         // 估算：每个包围盒约 48 字节 (5 * f64 + usize)
         // 每个顶点约 16 字节 (2 * f64)
         let envelope_size = self.n_cells * 48;
-        let vertex_size: usize = self.cell_vertices.iter()
-            .map(|v| v.len() * 16 + 8)  // +8 for Vec metadata
+        let vertex_size: usize = self
+            .cell_vertices
+            .iter()
+            .map(|v| v.len() * 16 + 8) // +8 for Vec metadata
             .sum();
-        envelope_size + vertex_size + 100  // +100 for header overhead
+        envelope_size + vertex_size + 100 // +100 for header overhead
     }
 
     /// 获取单元数量
@@ -559,46 +577,42 @@ impl MeshSpatialIndex {
     ///
     /// # 返回
     /// 与圆形相交的单元索引列表
-    pub fn locate_in_circle(&self, center_x: f64, center_y: f64, radius: f64) -> Vec<usize> {
-        // 首先用包围矩形快速筛选
-        let candidates = self.locate_in_rect(
-            center_x - radius,
-            center_y - radius,
-            center_x + radius,
-            center_y + radius,
+    pub fn locate_in_circle(
+        &self,
+        center_x: f64,
+        center_y: f64,
+        radius: f64,
+    ) -> MeshResult<Vec<usize>> {
+        if !center_x.is_finite() || !center_y.is_finite() || !radius.is_finite() || radius < 0.0 {
+            return Err(MeshError::spatial_query_error(
+                "locate_in_circle",
+                "circle center and radius must be finite, and radius must be non-negative",
+            ));
+        }
+
+        let envelope = AABB::from_corners(
+            [center_x - radius, center_y - radius],
+            [center_x + radius, center_y + radius],
         );
 
-        // 然后精确过滤：包围盒与圆相交，再用多边形判断
         let r2 = radius * radius;
-        candidates
-            .into_iter()
+        let mut hits: Vec<usize> = self
+            .tree
+            .locate_in_envelope_intersecting(&envelope)
+            .map(|env| env.cell_index)
             .filter(|&idx| {
-                if let Some(env) = self.tree.iter().find(|e| e.cell_index == idx) {
-                    // 粗略判定 AABB 与圆相交
-                    let nearest_x = center_x.clamp(env.min_x, env.max_x);
-                    let nearest_y = center_y.clamp(env.min_y, env.max_y);
-                    let dx = nearest_x - center_x;
-                    let dy = nearest_y - center_y;
-                    if dx * dx + dy * dy > r2 {
-                        return false;
-                    }
-                    // 精确多边形测试：任一顶点在圆内或包围盒中心在圆内
-                    let poly = &self.cell_vertices[idx];
-                    if poly.iter().any(|p| {
-                        let dx = p.x - center_x;
-                        let dy = p.y - center_y;
-                        dx * dx + dy * dy <= r2
-                    }) {
-                        return true;
-                    }
-                    let c = env.center();
-                    let dcx = c.x - center_x;
-                    let dcy = c.y - center_y;
-                    return dcx * dcx + dcy * dcy <= r2;
-                }
-                false
+                polygon_intersects_circle(
+                    center_x,
+                    center_y,
+                    radius,
+                    r2,
+                    &self.cell_vertices[idx],
+                    self,
+                )
             })
-            .collect()
+            .collect();
+        hits.sort_unstable();
+        Ok(hits)
     }
 
     /// 射线法判断点是否在多边形内
@@ -623,8 +637,7 @@ impl MeshSpatialIndex {
             let vj = &vertices[j];
 
             // 检查射线与边的交点
-            if ((vi.y > y) != (vj.y > y))
-                && (x < (vj.x - vi.x) * (y - vi.y) / (vj.y - vi.y) + vi.x)
+            if ((vi.y > y) != (vj.y > y)) && (x < (vj.x - vi.x) * (y - vi.y) / (vj.y - vi.y) + vi.x)
             {
                 inside = !inside;
             }
@@ -708,6 +721,41 @@ impl MeshSpatialIndex {
     pub fn cell_vertices(&self, cell: usize) -> &[Point2D] {
         &self.cell_vertices[cell]
     }
+}
+
+fn polygon_intersects_circle(
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    radius_squared: f64,
+    vertices: &[Point2D],
+    index: &MeshSpatialIndex,
+) -> bool {
+    if vertices.len() < 2 {
+        return false;
+    }
+
+    if index.point_in_polygon(center_x, center_y, vertices) {
+        return true;
+    }
+
+    if vertices.iter().any(|p| {
+        let dx = p.x - center_x;
+        let dy = p.y - center_y;
+        dx * dx + dy * dy <= radius_squared
+    }) {
+        return true;
+    }
+
+    for i in 0..vertices.len() {
+        let a = &vertices[i];
+        let b = &vertices[(i + 1) % vertices.len()];
+        if point_on_segment_tol(center_x, center_y, a, b, radius) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn point_on_segment_tol(x: f64, y: f64, a: &Point2D, b: &Point2D, tol: f64) -> bool {
@@ -847,7 +895,11 @@ mod tests {
 
         // 与左下角单元相交的矩形（完全包含单元0的bounding box）
         let cells = index.locate_in_rect(0.0, 0.0, 1.0, 1.0);
-        assert!(!cells.is_empty(), "should find at least 1 cell, found {}", cells.len());
+        assert!(
+            !cells.is_empty(),
+            "should find at least 1 cell, found {}",
+            cells.len()
+        );
         assert!(cells.contains(&0), "should contain cell 0");
     }
 
@@ -887,15 +939,48 @@ mod tests {
         assert!(index.point_in_polygon(1.0, 0.5, &triangle));
         assert!(!index.point_in_polygon(0.0, 2.0, &triangle));
     }
-
     #[test]
     fn test_locate_in_circle() {
         let index = create_test_index();
 
-        // 以 (1, 1) 为圆心，半径 1.0 的圆应该覆盖所有 4 个单元中心
-        // (单元中心分别在 (0.5, 0.5), (1.5, 0.5), (0.5, 1.5), (1.5, 1.5)，距离 (1,1) 约 0.707)
-        let cells = index.locate_in_circle(1.0, 1.0, 1.0);
-        // 由于 locate_in_circle 检查包围盒中心是否在圆内，至少应该有一些单元
-        assert!(!cells.is_empty(), "should find at least 1 cell in circle, found {}", cells.len());
+        let cells = index.locate_in_circle(1.0, 1.0, 1.0).unwrap();
+        assert_eq!(cells.len(), 4);
+        assert!(cells.contains(&0));
+        assert!(cells.contains(&1));
+        assert!(cells.contains(&2));
+        assert!(cells.contains(&3));
+    }
+
+    #[test]
+    fn test_locate_in_circle_detects_edge_only_intersection() {
+        let index = create_test_index();
+
+        let cells = index.locate_in_circle(0.5, -0.2, 0.3).unwrap();
+        assert_eq!(cells, vec![0]);
+    }
+
+    #[test]
+    fn test_locate_in_circle_rejects_invalid_radius() {
+        let index = create_test_index();
+
+        let err = index.locate_in_circle(0.0, 0.0, -1.0).unwrap_err();
+        match err {
+            MeshError::SpatialQueryError { operation, details } => {
+                assert_eq!(operation, "locate_in_circle");
+                assert_eq!(
+                    details,
+                    "circle center and radius must be finite, and radius must be non-negative"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_locate_in_circle_rejects_non_finite_center() {
+        let index = create_test_index();
+
+        let err = index.locate_in_circle(f64::NAN, 0.0, 1.0).unwrap_err();
+        assert!(matches!(err, MeshError::SpatialQueryError { .. }));
     }
 }

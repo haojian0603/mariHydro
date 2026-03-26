@@ -95,6 +95,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_spatial_index_contracts.ps1"
     }
 
+    Invoke-Step -Name "mesh spatial contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mesh_spatial_contracts.ps1"
+    }
+
     Invoke-Step -Name "Web Mercator tile/domain contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
     }

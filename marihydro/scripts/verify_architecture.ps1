@@ -217,6 +217,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.563: mesh spatial contract guard
+    Write-Host "=== Phase 0.563: mesh spatial contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mesh_spatial_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "mesh spatial contracts must pass"
+    } else {
+        Write-Host "[OK] mesh spatial contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.565: Web Mercator contract guard
     Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
