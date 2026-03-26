@@ -96,6 +96,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.53: metadata timestamp contract guard
+    Write-Host "=== Phase 0.53: metadata timestamp contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_metadata_timestamp_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "metadata timestamp contracts must pass"
+    } else {
+        Write-Host "[OK] metadata timestamp contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

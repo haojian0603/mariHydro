@@ -63,6 +63,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_export_metadata_contracts.ps1"
     }
 
+    Invoke-Step -Name "metadata timestamp contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_metadata_timestamp_contracts.ps1"
+    }
+
     Invoke-Step -Name "import contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }

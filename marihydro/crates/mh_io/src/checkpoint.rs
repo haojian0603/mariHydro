@@ -125,6 +125,13 @@ impl From<std::io::Error> for CheckpointError {
 /// 检查点操作结果
 pub type CheckpointResult<T> = Result<T, CheckpointError>;
 
+fn current_unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("系统时钟必须晚于 Unix 纪元")
+        .as_secs()
+}
+
 // ============================================================
 // 常量
 // ============================================================
@@ -210,10 +217,7 @@ impl Checkpoint {
             step,
             state,
             config_hash: None,
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            created_at: current_unix_timestamp(),
             mesh_hash: 0,
         }
     }
@@ -263,7 +267,7 @@ impl Checkpoint {
                 ($bytes:expr) => {{
                     writer.write_all($bytes)?;
                     hasher.update($bytes);
-                }}
+                }};
             }
 
             write_crc!(CHECKPOINT_MAGIC);
@@ -301,7 +305,9 @@ impl Checkpoint {
             let crc = hasher.finalize();
             writer.write_all(&crc.to_le_bytes())?;
 
-            writer.flush().map_err(|e| CheckpointError::io_with_path(&temp_path, e))?;
+            writer
+                .flush()
+                .map_err(|e| CheckpointError::io_with_path(&temp_path, e))?;
             writer
                 .get_ref()
                 .sync_all()
@@ -310,11 +316,9 @@ impl Checkpoint {
 
         // 原子重命名
         if path.exists() {
-            std::fs::remove_file(path)
-                .map_err(|e| CheckpointError::io_with_path(path, e))?;
+            std::fs::remove_file(path).map_err(|e| CheckpointError::io_with_path(path, e))?;
         }
-        std::fs::rename(&temp_path, path)
-            .map_err(|e| CheckpointError::io_with_path(path, e))?;
+        std::fs::rename(&temp_path, path).map_err(|e| CheckpointError::io_with_path(path, e))?;
 
         Ok(())
     }
@@ -325,7 +329,11 @@ impl Checkpoint {
     }
 
     /// 从文件加载并校验网格一致性
-    pub fn load_with_mesh(path: &Path, mesh: &MeshSnapshot<f64>, strict: bool) -> CheckpointResult<Self> {
+    pub fn load_with_mesh(
+        path: &Path,
+        mesh: &MeshSnapshot<f64>,
+        strict: bool,
+    ) -> CheckpointResult<Self> {
         let options = CheckpointLoadOptions {
             expected_mesh_hash: Some(mesh.compute_hash()),
             strict,
@@ -335,7 +343,10 @@ impl Checkpoint {
     }
 
     /// 从文件加载（带兼容性校验）
-    pub fn load_with_options(path: &Path, options: CheckpointLoadOptions) -> CheckpointResult<Self> {
+    pub fn load_with_options(
+        path: &Path,
+        options: CheckpointLoadOptions,
+    ) -> CheckpointResult<Self> {
         let file = File::open(path).map_err(|e| CheckpointError::io_with_path(path, e))?;
         let file_len = file
             .metadata()
@@ -639,7 +650,6 @@ fn read_f64(data: &[u8], offset: &mut usize) -> CheckpointResult<f64> {
     read_u64(data, offset).map(f64::from_bits)
 }
 
-
 // ============================================================
 // 检查点管理器
 // ============================================================
@@ -746,8 +756,7 @@ impl CheckpointManager {
         // 删除最旧的
         let to_remove = entries.len() - self.max_checkpoints;
         for (path, _) in entries.into_iter().take(to_remove) {
-            std::fs::remove_file(&path)
-                .map_err(|e| CheckpointError::io_with_path(&path, e))?;
+            std::fs::remove_file(&path).map_err(|e| CheckpointError::io_with_path(&path, e))?;
         }
 
         Ok(())
@@ -771,6 +780,11 @@ mod tests {
     }
 
     #[test]
+    fn test_current_unix_timestamp_nonzero() {
+        assert!(current_unix_timestamp() > 0);
+    }
+
+    #[test]
     fn test_checkpoint_creation() {
         let state = create_test_state();
         let checkpoint = Checkpoint::new(10.5, 100, state);
@@ -778,6 +792,7 @@ mod tests {
         assert!((checkpoint.time - 10.5).abs() < 1e-10);
         assert_eq!(checkpoint.step, 100);
         assert_eq!(checkpoint.state.n_cells(), 3);
+        assert!(checkpoint.created_at > 0);
     }
 
     #[test]
@@ -806,12 +821,9 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let path = temp_dir.join("test_checkpoint_bed.mhck");
 
-        let state = StateSnapshot::<f64>::from_state_data(
-            vec![1.0, 2.0, 3.0],
-            vec![0.0; 3],
-            vec![0.0; 3],
-        )
-        .with_bed(vec![0.5, 1.0, 1.5]);
+        let state =
+            StateSnapshot::<f64>::from_state_data(vec![1.0, 2.0, 3.0], vec![0.0; 3], vec![0.0; 3])
+                .with_bed(vec![0.5, 1.0, 1.5]);
 
         let checkpoint = Checkpoint::new(5.0, 50, state);
         checkpoint.save(&path).unwrap();
@@ -871,6 +883,7 @@ mod tests {
         assert!((header.time - 25.0).abs() < 1e-10);
         assert_eq!(header.step, 250);
         assert_eq!(header.n_cells, 3);
+        assert!(header.created_at > 0);
 
         // 清理
         let _ = std::fs::remove_file(&path);

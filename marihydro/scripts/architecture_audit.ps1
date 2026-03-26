@@ -189,6 +189,10 @@ try {
         $Failed += "check_export_metadata_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_metadata_timestamp_contracts.ps1" -Path (Join-Path $ScriptDir "check_metadata_timestamp_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_metadata_timestamp_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_import_contracts.ps1" -Path (Join-Path $ScriptDir "check_import_contracts.ps1") -Arguments @{})) {
         $Failed += "check_import_contracts.ps1"
     }
@@ -283,6 +287,7 @@ try {
     Invoke-InformationalScan -Name 'Web Mercator domain fallback residue' -Roots @("crates/mh_geo/src/projection/web_mercator.rs") -Pattern 'lat\.clamp\(\s*-WEB_MERCATOR_MAX_LAT\s*,\s*WEB_MERCATOR_MAX_LAT\s*\)|pub fn web_mercator_resolution\(.*\) -> f64|pub fn web_mercator_scale\(.*\) -> f64|pub fn lonlat_to_tile\(.*\) -> \(u32, u32\)|pub fn tile_to_bbox\(.*\) -> \(f64, f64, f64, f64\)|expect\("tile_to_lonlat returns coordinates inside Web Mercator domain"\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('
     Invoke-InformationalScan -Name 'export metadata fallback residue' -Roots @("crates/mh_io/src") -Pattern 'serde_json::to_string\(names\)\.unwrap_or_else\(\|_\| "\[\]"\.into\(\)\)|boundary_names.*\[\]|field names.*\[\]'
+    Invoke-InformationalScan -Name 'metadata timestamp fallback residue' -Roots @("crates/mh_io/src") -Pattern 'duration_since\(std::time::UNIX_EPOCH\)\s*\.map\(\|d\| d\.as_secs\(\)\)\s*\.unwrap_or\(0\)|created_at:\s*0\b'
     Invoke-InformationalScan -Name 'external shape fallback residue' -Roots @("crates/mh_io/src") -Pattern 'dims\.first\(\)\.copied\(\)\.unwrap_or_default\(\)\s*==\s*1'
     Invoke-InformationalScan -Name 'external data filename heuristic residue' -Roots @("crates/mh_io/src") -Pattern 'let model = TidalModel::detect\(path\)'
     Invoke-InformationalScan -Name 'public tolerant parser residue' -Roots @("crates/mh_io/src") -Pattern 'pub fn parse_calendar_or_default\(|pub fn detect\(path: &Path\)'

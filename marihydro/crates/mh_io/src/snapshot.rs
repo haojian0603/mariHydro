@@ -25,12 +25,19 @@
 //! let state_snap = StateSnapshot::<f64>::from_state_data(h, hu, hv);
 //! ```
 
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
-use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use mh_mesh::FrozenMeshGeneric;
-use std::hash::{Hash, Hasher};
+use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+fn current_unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("系统时钟必须晚于 Unix 纪元")
+        .as_secs()
+}
 
 // ============================================================
 // 网格快照
@@ -192,12 +199,7 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
     }
 
     /// 添加边界数据
-    pub fn with_boundaries(
-        mut self,
-        faces: Vec<u32>,
-        ids: Vec<u32>,
-        names: Vec<String>,
-    ) -> Self {
+    pub fn with_boundaries(mut self, faces: Vec<u32>, ids: Vec<u32>, names: Vec<String>) -> Self {
         self.boundary_faces = Some(faces);
         self.boundary_ids = Some(ids);
         self.boundary_names = Some(names);
@@ -407,7 +409,10 @@ impl<S: RuntimeScalar> MeshSnapshot<S> {
     }
 
     /// 精度/标量类型转换
-    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> MeshSnapshot<T> {
+    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(
+        &self,
+        backend: &B,
+    ) -> MeshSnapshot<T> {
         self.map_scalar_with(|v| backend.config_scalar(v.to_f64_lossy(), "MeshSnapshot.map_scalar"))
     }
 
@@ -530,10 +535,7 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
         self.meta = Some(StateSnapshotMeta {
             time,
             step,
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            created_at: current_unix_timestamp(),
             hash: None,
         });
         self
@@ -676,10 +678,7 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
             for (field_idx, values) in scalars.iter().enumerate() {
                 for (i, &val) in values.iter().enumerate() {
                     if !val.is_finite() {
-                        return Err(format!(
-                            "scalar[{}][{}] = {} 非有限值",
-                            field_idx, i, val
-                        ));
+                        return Err(format!("scalar[{}][{}] = {} 非有限值", field_idx, i, val));
                     }
                 }
             }
@@ -717,8 +716,13 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
     /// 精度/标量类型转换
     ///
     /// 用于在不同运行时精度之间显式转换快照，避免隐式截断。
-    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(&self, backend: &B) -> StateSnapshot<T> {
-        self.map_scalar_with(|v| backend.config_scalar(v.to_f64_lossy(), "StateSnapshot.map_scalar"))
+    pub fn map_scalar<T: RuntimeScalar, B: Backend<Scalar = T>>(
+        &self,
+        backend: &B,
+    ) -> StateSnapshot<T> {
+        self.map_scalar_with(|v| {
+            backend.config_scalar(v.to_f64_lossy(), "StateSnapshot.map_scalar")
+        })
     }
 
     /// 精度/标量类型转换（自定义映射）
@@ -776,6 +780,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_current_unix_timestamp_nonzero() {
+        assert!(current_unix_timestamp() > 0);
+    }
+
+    #[test]
     fn test_mesh_snapshot_creation() {
         let snapshot = MeshSnapshot::<f64>::from_mesh_data(
             4,
@@ -822,15 +831,22 @@ mod tests {
     }
 
     #[test]
+    fn test_state_snapshot_meta_records_real_timestamp() {
+        let snapshot =
+            StateSnapshot::<f64>::from_state_data(vec![1.0], vec![0.0], vec![0.0]).with_meta(1.0, 2);
+        let meta = snapshot.meta.expect("元数据应当存在");
+        assert_eq!(meta.time, 1.0);
+        assert_eq!(meta.step, 2);
+        assert!(meta.created_at > 0);
+    }
+
+    #[test]
     fn test_state_snapshot_with_scalar() {
-        let snapshot = StateSnapshot::<f64>::from_state_data(
-            vec![1.0, 2.0],
-            vec![0.0, 0.0],
-            vec![0.0, 0.0],
-        )
-        .with_scalar("temperature", vec![20.0, 21.0])
-        .and_then(|s| s.with_scalar("salinity", vec![35.0, 34.5]))
-        .expect("添加标量场失败");
+        let snapshot =
+            StateSnapshot::<f64>::from_state_data(vec![1.0, 2.0], vec![0.0, 0.0], vec![0.0, 0.0])
+                .with_scalar("temperature", vec![20.0, 21.0])
+                .and_then(|s| s.with_scalar("salinity", vec![35.0, 34.5]))
+                .expect("添加标量场失败");
 
         assert_eq!(snapshot.scalars.as_ref().unwrap().len(), 2);
         assert_eq!(
@@ -868,11 +884,8 @@ mod tests {
         // 内存估计应该大于 0
         assert!(mesh_snap.memory_usage() > 0);
 
-        let state_snap = StateSnapshot::<f64>::from_state_data(
-            vec![1.0; 50],
-            vec![0.0; 50],
-            vec![0.0; 50],
-        );
+        let state_snap =
+            StateSnapshot::<f64>::from_state_data(vec![1.0; 50], vec![0.0; 50], vec![0.0; 50]);
 
         assert!(state_snap.memory_usage() > 0);
     }
