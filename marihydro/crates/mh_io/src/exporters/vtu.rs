@@ -10,6 +10,7 @@
 //! - 时间序列导出 (PVD)
 //! - 支持标量和向量场
 //! - ASCII 和二进制格式
+//! - 额外标量访问失败时显式报错，不使用 `Option` 折叠失败语义
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -25,6 +26,14 @@ pub enum VtuError {
     Io(std::io::Error),
     /// 无效数据
     InvalidData(String),
+    /// 请求的附加标量不存在
+    MissingScalarField { name: String },
+    /// 附加标量索引越界
+    ScalarIndexOutOfBounds {
+        name: String,
+        idx: usize,
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for VtuError {
@@ -32,6 +41,14 @@ impl std::fmt::Display for VtuError {
         match self {
             VtuError::Io(e) => write!(f, "IO error: {}", e),
             VtuError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
+            VtuError::MissingScalarField { name } => {
+                write!(f, "Missing scalar field: {}", name)
+            }
+            VtuError::ScalarIndexOutOfBounds { name, idx, len } => write!(
+                f,
+                "Scalar index out of bounds: name={}, idx={}, len={}",
+                name, idx, len
+            ),
         }
     }
 }
@@ -608,15 +625,7 @@ impl VtuExporter {
                 let name = name.as_str();
                 let mut values = Vec::with_capacity(n_cells);
                 for i in 0..n_cells {
-                    match state.scalar(name, i) {
-                        Some(v) => values.push(v),
-                        None => {
-                            return Err(VtuError::InvalidData(format!(
-                                "标量场缺失: {} (cell={})",
-                                name, i
-                            )));
-                        }
-                    }
+                    values.push(state.scalar(name, i)?);
                 }
                 self.write_scalar_field_values(w, name, &values, precision, config.binary)?;
             }
@@ -792,9 +801,13 @@ pub trait VtuState {
     fn hu(&self, idx: usize) -> f64;
     /// Y 方向动量 [m²/s]
     fn hv(&self, idx: usize) -> f64;
-    /// 获取附加标量（可选）
-    fn scalar(&self, _name: &str, _idx: usize) -> Option<f64> {
-        None
+    /// 获取附加标量。
+    ///
+    /// 附加标量不存在、索引越界或实现者内部失败时，必须显式返回错误。
+    fn scalar(&self, name: &str, _idx: usize) -> Result<f64, VtuError> {
+        Err(VtuError::MissingScalarField {
+            name: name.to_string(),
+        })
     }
     /// 可用的标量场名称
     fn available_scalars(&self) -> Vec<String> {
@@ -974,11 +987,22 @@ impl<'a> VtuState for StateWithScalars<'a> {
         self.base.hv(idx)
     }
 
-    fn scalar(&self, name: &str, idx: usize) -> Option<f64> {
-        self.scalars
+    fn scalar(&self, name: &str, idx: usize) -> Result<f64, VtuError> {
+        let (_, data) = self
+            .scalars
             .iter()
             .find(|(n, _)| *n == name)
-            .and_then(|(_, data)| data.get(idx).copied())
+            .ok_or_else(|| VtuError::MissingScalarField {
+                name: name.to_string(),
+            })?;
+
+        data.get(idx)
+            .copied()
+            .ok_or_else(|| VtuError::ScalarIndexOutOfBounds {
+                name: name.to_string(),
+                idx,
+                len: data.len(),
+            })
     }
 
     fn available_scalars(&self) -> Vec<String> {
@@ -1042,7 +1066,26 @@ mod tests {
 
         assert_eq!(state.available_scalars(), vec!["temperature"]);
         assert!((state.scalar("temperature", 0).unwrap() - 20.0).abs() < 1e-10);
-        assert!(state.scalar("salinity", 0).is_none());
+        assert!(matches!(
+            state.scalar("salinity", 0),
+            Err(VtuError::MissingScalarField { .. })
+        ));
+    }
+
+    #[test]
+    fn test_state_with_scalars_reports_out_of_bounds() {
+        let h = vec![1.0, 2.0];
+        let hu = vec![0.0; 2];
+        let hv = vec![0.0; 2];
+        let temp = vec![20.0, 21.0];
+
+        let state = StateWithScalars::new(&h, &hu, &hv).with_scalar("temperature", &temp);
+
+        assert!(matches!(
+            state.scalar("temperature", 3),
+            Err(VtuError::ScalarIndexOutOfBounds { name, idx, len })
+                if name == "temperature" && idx == 3 && len == 2
+        ));
     }
 
     #[test]

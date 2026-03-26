@@ -182,19 +182,19 @@ impl<S: RuntimeScalar> SedimentPropertiesGeneric<S> {
 
     /// 计算沉降速度 (Van Rijn, 1984)
     fn compute_settling_velocity_f64(d: f64, s: f64, d_star: f64, physics: &PhysicalConstants) -> f64 {
-        if d_star < 1.0 {
+        let _ = d_star;
+        let g_prime = (s - 1.0) * physics.g;
+
+        if d <= 100e-6 {
             // Stokes 沉降
-            (s - 1.0) * physics.g * d * d / (18.0 * physics.nu_water)
-        } else if d_star <= 100.0 {
-            // 过渡区
-            let ws_stokes = (s - 1.0) * physics.g * d * d / (18.0 * physics.nu_water);
-            let ws_newton = 1.1 * ((s - 1.0) * physics.g * d).sqrt();
-            // 插值
-            let f = (d_star - 1.0) / 99.0;
-            ws_stokes * (1.0 - f) + ws_newton * f
+            g_prime * d * d / (18.0 * physics.nu_water)
+        } else if d <= 1000e-6 {
+            // Van Rijn 过渡区
+            let rd = d * (g_prime * d).sqrt() / physics.nu_water;
+            10.0 * physics.nu_water / d * ((1.0 + 0.01 * rd * rd).sqrt() - 1.0)
         } else {
             // Newton 沉降
-            1.1 * ((s - 1.0) * physics.g * d).sqrt()
+            1.1 * (g_prime * d).sqrt()
         }
     }
 

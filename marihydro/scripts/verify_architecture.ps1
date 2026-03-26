@@ -96,6 +96,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.518: VTU export contract guard
+    Write-Host "=== Phase 0.518: VTU export contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_vtu_export_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "VTU export contracts must pass"
+    } else {
+        Write-Host "[OK] VTU export contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.525: export metadata contract guard
     Write-Host "=== Phase 0.525: export metadata contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_export_metadata_contracts.ps1"

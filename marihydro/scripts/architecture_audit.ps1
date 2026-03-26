@@ -189,6 +189,10 @@ try {
         $Failed += "check_external_driver_access_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_vtu_export_contracts.ps1" -Path (Join-Path $ScriptDir "check_vtu_export_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_vtu_export_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_export_metadata_contracts.ps1" -Path (Join-Path $ScriptDir "check_export_metadata_contracts.ps1") -Arguments @{})) {
         $Failed += "check_export_metadata_contracts.ps1"
     }

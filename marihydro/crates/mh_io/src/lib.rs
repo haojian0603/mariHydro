@@ -4,6 +4,7 @@
 //!
 //! 提供数据输入输出功能，包括异步管道、检查点、VTU导出等。
 //! 对外部数据驱动，主链只接受“真实读取或显式报错”，不接受合成零值或默认网格。
+//! 对导出状态访问，主链只接受“显式值或显式错误”，不接受 `Option::None` 折叠失败语义。
 //!
 //! # 模块
 //!
@@ -34,7 +35,7 @@ mod vtu;
 // 重导出常用类型
 pub use drivers::{GdalDriver, GdalError, NetCdfDriver, NetCdfError, RasterMetadata};
 pub use error::{IoError, IoResult};
-pub use exporters::{VtuExporter, VtuMesh, VtuState};
+pub use exporters::{VtuError, VtuExporter, VtuMesh, VtuState};
 
 // 类型别名
 pub type Result<T> = IoResult<T>;

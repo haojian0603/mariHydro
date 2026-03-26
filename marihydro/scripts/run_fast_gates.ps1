@@ -51,6 +51,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_driver_access_contracts.ps1"
     }
 
+    Invoke-Step -Name "VTU export contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_vtu_export_contracts.ps1"
+    }
+
     Invoke-Step -Name "export metadata contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_export_metadata_contracts.ps1"
     }

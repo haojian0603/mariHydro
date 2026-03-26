@@ -16,6 +16,6 @@ pub mod settling;
 pub mod resuspension;
 pub mod transport;
 
-pub use settling::{SettlingFormula, SettlingVelocity, StokesSettling, DietrichSettling, VanRijnSettling};
+pub use settling::{SettlingFormula, SettlingVelocity, StokesSettling, VanRijnSettling};
 pub use resuspension::{ErosionFormula, ResuspensionSourceGeneric, SmithMcLean, GarciaParker};
 pub use transport::SuspendedTransport;

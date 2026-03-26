@@ -57,7 +57,7 @@ pub use suspended::{
     ErosionFormula, GarciaParker, ResuspensionSourceGeneric, SettlingFormula, SettlingVelocity,
     SmithMcLean, SuspendedTransport,
 };
-pub use suspended::{DietrichSettling, StokesSettling, VanRijnSettling};
+pub use suspended::{StokesSettling, VanRijnSettling};
 
 // 泥沙管理器
 pub use manager::{

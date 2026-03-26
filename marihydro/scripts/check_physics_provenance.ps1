@@ -12,6 +12,8 @@ $Errors = @()
 $RequiredFiles = @(
     @{ Path = "crates/mh_physics/src/waves/spectral.rs"; Description = "wave spectral model" },
     @{ Path = "crates/mh_physics/src/sediment/formulas.rs"; Description = "sediment transport formulas" },
+    @{ Path = "crates/mh_physics/src/sediment/suspended/settling.rs"; Description = "settling velocity formulas" },
+    @{ Path = "crates/mh_physics/src/tracer/diffusion.rs"; Description = "anisotropic tracer diffusion" },
     @{ Path = "crates/mh_physics/src/sources/turbulence/smagorinsky.rs"; Description = "Smagorinsky turbulence closure" }
 )
 

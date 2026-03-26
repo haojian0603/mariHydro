@@ -31,6 +31,7 @@
 - [RULE_IMPORT_NULL_GEOMETRY_EXPLICIT] GeoJSON `Feature.geometry = null` 不得在导入阶段被静默丢弃、过滤或折叠成“空要素”。如果当前公开数据结构不能真实表达空几何，就必须在解析阶段显式报错，并把这种结构性失败保留到调用方。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_EXTERNAL_DRIVER_INDEX_ACCESS_EXPLICIT] 外部数据驱动的公开访问器不得把越界索引、NoData 像元或维度不匹配折叠成 `Option::None`。像 `RasterBand::get`、`RasterBand::interpolate`、`Variable::get` 这类接口必须返回显式错误，并保留“越界”“NoData”“索引维度无效”等失败语义。
+- [RULE_EXPORT_STATE_ACCESS_EXPLICIT] 导出链公开状态访问器不得把缺字段、索引越界或实现者内部失败折叠成 `Option::None`。像 `VtuState::scalar` 这类接口必须返回显式错误，并保留“字段缺失”“索引越界”等失败语义。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
 - [RULE_GEO_CONVERGENCE_EXACT_PROJECTION_FORMULA] 投影收敛角必须由目标投影本身给出真实语义：横轴墨卡托类投影走显式公式，Web Mercator 仅在定义域内按“经线保持竖直”的几何性质显式返回 `0`。主链禁止再用 `delta_lat`、有限差分北向量或其他近似扰动去推收敛角。
@@ -74,6 +75,8 @@
 - [RULE_AI_STATE_CONTRACTS_EXPLICIT] AI 模型的训练就绪状态、序列化状态、归一化参数和输出尺寸必须显式校验。不得在模型未训练、状态损坏、保存失败、加载失败、归一化缺参或预测尺寸与物理状态不匹配时继续给出零填充、默认置信度或部分 apply 结果。
 - [RULE_SOURCE_API_SEMANTICS_EXPLICIT] 水动力源项的公开 API 不得暴露未参与实际计算的参数，也不得在单元索引越界、缺失配置或衰减系数读取失败时静默回退成“忽略设置”、“无源项”或“单位因子”。不变量被破坏时必须显式 panic 或返回错误，不能伪装成合法物理状态。
 - [RULE_NO_FAKE_BACKEND_SURFACE] 分支级不可用的后端能力不得继续保留公开模块、公开类型或状态枚举来冒充“已接入但当前不可用”。没有真实运行时，就删除公开入口，只保留底层抽象层对未来后端的中性扩展点。
+- [RULE_SETTLING_FORMULA_INPUTS_COMPLETE] 沉降速度公式必须和输入集一致。像 Dietrich 这类依赖颗粒圆度、Corey 形状因子等额外输入的关系，在状态结构未显式建模这些参数之前不得进入主链导出、自动选择或默认配置。
+- [RULE_DIFFUSION_TENSOR_PROJECTION_EXACT] 流向各向异性扩散必须按张量投影计算法向有效系数，主链只接受 `D_n = D_L cos²θ + D_T sin²θ` 这类二次投影关系；不得用 `D_L |cosθ| + D_T sinθ` 之类线性 surrogate 冒充张量投影。
 
 ## 3. CLI、配置与应用层规则
 

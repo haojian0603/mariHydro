@@ -90,6 +90,9 @@
 //! - 湍流扩散（基于涡粘度和 Schmidt 数）
 //! - 空间变化的扩散系数
 //!
+//! PHYSICS_SOURCE: Bear 1972, Dynamics of Fluids in Porous Media; Scheidegger 1961, General theory of dispersion in porous media.
+//! PHYSICS_SCOPE: 各向异性扩散主链按流向张量投影计算面法向有效扩散系数，采用 D_n = D_L cos²θ + D_T sin²θ。静水时流向未定义，当前实现退回几何平均作为数值退化处理。
+//!
 //! # 基本方程
 //!
 //! 各向同性扩散通量：
@@ -667,9 +670,10 @@ impl<B: Backend> AnisotropicDiffusionOperator<B> {
 
                         // 法向方向的流向分量
                         let cos_theta = e_x * normal_x + e_y * normal_y;
-                        let sin_theta = (B::Scalar::ONE - cos_theta * cos_theta).sqrt();
+                        let cos_sq = cos_theta * cos_theta;
+                        let sin_sq = B::Scalar::ONE - cos_sq;
 
-                        self.longitudinal * cos_theta.abs() + self.transverse * sin_theta
+                        self.longitudinal * cos_sq + self.transverse * sin_sq
                     } else {
                         // 静水时使用几何平均
                         (self.longitudinal * self.transverse).sqrt()

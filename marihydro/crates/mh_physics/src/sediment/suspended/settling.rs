@@ -4,8 +4,10 @@
 //!
 //! 提供多种沉降速度公式：
 //! - Stokes: 低雷诺数（细颗粒）
-//! - Van Rijn: 通用公式
-//! - Dietrich: 经验公式
+//! - Van Rijn: 通用分段公式
+//!
+//! PHYSICS_SOURCE: Stokes 1851, On the effect of the internal friction of fluids on the motion of pendulums; Van Rijn 1984, Sediment transport, part II: suspended load transport.
+//! PHYSICS_SCOPE: 主链当前只实现 Stokes 与 Van Rijn 沉降速度关系。Dietrich 公式需要颗粒圆度、Corey 形状因子等额外输入，当前状态结构尚未建模，因此明确不进入主链导出与自动选择。
 //!
 //! # 使用示例
 //!
@@ -46,47 +48,24 @@ pub struct SettlingVelocity<S: RuntimeScalar> {
 }
 
 impl<S: RuntimeScalar> SettlingVelocity<S> {
-    #[inline]
-    fn normalized_d_star<B: Backend<Scalar = S>>(
-        backend: &B,
-        value: S,
-    ) -> S {
-        let min_d_star = backend.config_scalar(1e-12, "SettlingVelocity.normalized_d_star");
-        if value.is_finite() && value > min_d_star {
-            value
-        } else {
-            min_d_star
-        }
-    }
-
     /// 自动选择最佳公式计算沉降速度
     pub fn auto<B: Backend<Scalar = S>>(
         backend: &B,
         props: &SedimentPropertiesGeneric<S>,
         physics: &PhysicalConstants,
     ) -> Self {
-        // 根据无量纲粒径选择公式
-        let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
-        let one = backend.config_scalar(1.0, "SettlingVelocity.auto.one");
-        let hundred = backend.config_scalar(100.0, "SettlingVelocity.auto.hundred");
-        
-        if d_star < one {
-            // 细颗粒使用 Stokes
+        let fine_limit = backend.config_scalar(100e-6, "SettlingVelocity.auto.fine_limit");
+
+        if props.d50 <= fine_limit {
+            // 细颗粒使用 Stokes，Van Rijn 在该粒径段退化到 Stokes 区。
             let formula = StokesSettling::<S>::new();
             Self {
                 ws: formula.compute(backend, props, physics),
                 formula: formula.name(),
             }
-        } else if d_star < hundred {
-            // 中等粒径使用 Van Rijn
-            let formula = VanRijnSettling::<S>::new();
-            Self {
-                ws: formula.compute(backend, props, physics),
-                formula: formula.name(),
-            }
         } else {
-            // 粗颗粒使用 Dietrich
-            let formula = DietrichSettling::<S>::new();
+            // 其余粒径统一使用 Van Rijn 分段公式，粗颗粒分支同样由该公式覆盖。
+            let formula = VanRijnSettling::<S>::new();
             Self {
                 ws: formula.compute(backend, props, physics),
                 formula: formula.name(),
@@ -163,7 +142,10 @@ impl<S: RuntimeScalar> SettlingFormula<S> for StokesSettling<S> {
 
 /// Van Rijn (1984) 沉降公式
 ///
-/// 分段公式，适用于广泛粒径范围
+/// 采用 Van Rijn (1984) 的三段关系：
+/// - D <= 100 μm: Stokes 区
+/// - 100 μm < D <= 1000 μm: 过渡区
+/// - D > 1000 μm: Newton 区
 #[derive(Debug, Clone, Copy)]
 pub struct VanRijnSettling<S: RuntimeScalar> {
     _marker: PhantomData<S>,
@@ -194,105 +176,26 @@ impl<S: RuntimeScalar> SettlingFormula<S> for VanRijnSettling<S> {
     ) -> S {
         let s = props.relative_density;
         let d = props.d50;
-        let d_star = SettlingVelocity::normalized_d_star(backend, props.dimensionless_diameter);
         let cfg = |v| backend.config_scalar(v, "VanRijnSettling.compute");
         let nu = cfg(physics.nu_water);
         let g = cfg(physics.g);
         let one = S::ONE;
-        let d_star_1 = cfg(1.0);
-        let d_star_100 = cfg(100.0);
-        
-        if d_star < d_star_1 {
+        let g_prime = (s - one) * g;
+        let fine_limit = cfg(100e-6);
+        let coarse_limit = cfg(1000e-6);
+
+        if d <= fine_limit {
             // Stokes 区
             let eighteen = cfg(18.0);
-            (s - one) * g * d * d / (eighteen * nu)
-        } else if d_star <= d_star_100 {
-            // 过渡区
-            let eighteen = cfg(18.0);
-            let ws_stokes = (s - one) * g * d * d / (eighteen * nu);
-            let ws_newton = cfg(1.1) * ((s - one) * g * d).sqrt();
-            // 线性插值
-            let f = (d_star - d_star_1) / cfg(99.0);
-            ws_stokes * (one - f) + ws_newton * f
+            g_prime * d * d / (eighteen * nu)
+        } else if d <= coarse_limit {
+            // 过渡区，使用 Van Rijn 的显式中段关系。
+            let rd = d * (g_prime * d).sqrt() / nu;
+            cfg(10.0) * nu / d * ((one + cfg(0.01) * rd * rd).sqrt() - one)
         } else {
             // Newton 区
-            cfg(1.1) * ((s - one) * g * d).sqrt()
+            cfg(1.1) * (g_prime * d).sqrt()
         }
-    }
-}
-
-/// Dietrich (1982) 经验沉降公式
-///
-/// 基于大量实验数据的经验公式
-#[derive(Debug, Clone, Copy)]
-pub struct DietrichSettling<S: RuntimeScalar> {
-    _marker: PhantomData<S>,
-}
-
-impl<S: RuntimeScalar> Default for DietrichSettling<S> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<S: RuntimeScalar> DietrichSettling<S> {
-    pub fn new() -> Self {
-        Self { _marker: PhantomData }
-    }
-}
-
-impl<S: RuntimeScalar> SettlingFormula<S> for DietrichSettling<S> {
-    fn name(&self) -> &'static str {
-        "Dietrich"
-    }
-    
-    fn compute<B: Backend<Scalar = S>>(
-        &self,
-        backend: &B,
-        props: &SedimentPropertiesGeneric<S>,
-        physics: &PhysicalConstants,
-    ) -> S {
-        let s = props.relative_density;
-        let d = props.d50;
-        let cfg = |v| backend.config_scalar(v, "DietrichSettling.compute");
-        let nu = cfg(physics.nu_water);
-        let g = cfg(physics.g);
-        let one = S::ONE;
-        
-        // 无量纲粒径
-        let d_star = SettlingVelocity::normalized_d_star(
-            backend,
-            d * ((s - one) * g / (nu * nu)).powf(one / cfg(3.0)),
-        );
-        if !d_star.is_finite() {
-            return cfg(0.0);
-        }
-        
-        // Dietrich 公式
-        let ln_d_star = d_star.ln();
-        let ln_d_star_sq = ln_d_star * ln_d_star;
-        let ln_d_star_cubed = ln_d_star_sq * ln_d_star;
-        let ln_d_star_fourth = ln_d_star_cubed * ln_d_star;
-        
-        let r1 = cfg(-3.76715)
-            + cfg(1.92944) * ln_d_star
-            - cfg(0.09815) * ln_d_star_sq
-            - cfg(0.00575) * ln_d_star_cubed
-            + cfg(0.00056) * ln_d_star_fourth;
-        let r2 = (ln_d_star - r1).exp();
-        
-        // 形状因子修正（球形）
-        let csf = cfg(1.0); // 球形 Corey 形状因子
-        let tanh_arg = one - (cfg(-0.2) * d_star).exp();
-        let r3 = cfg(0.65) - csf / cfg(2.83) * tanh_arg.tanh();
-        
-        // 修正的 W*
-        let w_star = r2 * cfg(10.0).powf(-r3);
-        
-        // 转换为有量纲速度
-        let ws = w_star * ((s - one) * g * nu).powf(one / cfg(3.0));
-        
-        ws
     }
 }
 
@@ -333,17 +236,6 @@ mod tests {
     }
     
     #[test]
-    fn test_dietrich_settling() {
-        let backend = crate::core::CpuBackend::<f64>::new();
-        let props = make_props(&backend);
-        let physics = make_physics();
-        let dietrich = DietrichSettling::<f64>::new();
-        
-        let ws = dietrich.compute(&backend, &props, &physics);
-        assert!(ws > 0.0);
-    }
-    
-    #[test]
     fn test_auto_selection() {
         let backend = crate::core::CpuBackend::<f64>::new();
         let props = make_props(&backend);
@@ -363,14 +255,24 @@ mod tests {
     
     #[test]
     fn test_fine_sand_uses_appropriate_formula() {
-        // 细砂 D* < 100
+        // 0.1 mm 位于 Stokes/Van Rijn 交界，自动选择应显式落到主链真实公式之一。
         let backend = crate::core::CpuBackend::<f64>::new();
         let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 0.1);
         let physics = make_physics();
         
         let settling = SettlingVelocity::<f64>::auto(&backend, &props, &physics);
-        // 应该使用 Van Rijn 或 Stokes
         assert!(settling.formula == "Van Rijn" || settling.formula == "Stokes");
+    }
+
+    #[test]
+    fn test_coarse_sand_uses_van_rijn_instead_of_dietrich() {
+        let backend = crate::core::CpuBackend::<f64>::new();
+        let props = SedimentPropertiesGeneric::from_d50_mm(&backend, 1.5);
+        let physics = make_physics();
+
+        let settling = SettlingVelocity::<f64>::auto(&backend, &props, &physics);
+        assert_eq!(settling.formula, "Van Rijn");
+        assert!(settling.ws > 0.0);
     }
     
     #[test]

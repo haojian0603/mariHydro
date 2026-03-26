@@ -7,6 +7,7 @@
 //! # VTU 导出
 //!
 //! VTU (VTK Unstructured Grid) 格式用于 ParaView 可视化。
+//! 额外标量字段一旦缺失、越界或实现者内部失败，主链必须显式报错。
 //!
 //! ```rust,ignore
 //! use mh_io::exporters::{VtuExporter, SimpleState};
