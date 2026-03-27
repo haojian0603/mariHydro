@@ -4,6 +4,10 @@
 //!
 //! 自定义的高性能网格二进制格式，支持字段级随机访问和压缩预留。
 //!
+//! MHB_SOURCE: MariHydro 内部冻结网格二进制格式 v1。
+//! MHB_SCOPE: 计数字段必须是单值标量载荷，偏移字段必须能在当前平台显式表示为 `usize`，
+//!            标量字段写出时只接受有限值；任一约束不满足时直接报错，禁止静默写零或伪造默认值。
+//!
 //! # 格式结构
 //!
 //! ```text
@@ -21,16 +25,16 @@
 //! +----------------+
 //! ```
 
-use super::fields::{DataType, FieldDescriptor, FieldIndex};
 #[allow(unused_imports)]
 use super::fields::Compression;
+use super::fields::{DataType, FieldDescriptor, FieldIndex};
+use crate::{FrozenMesh, FrozenMeshGeneric}; // FIX: Import from crate root
+use mh_geo::{Point2D, Point3D};
+use mh_runtime::{Backend, CpuBackend, RuntimeScalar};
+use serde_json;
+use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::fs::File;
-use crate::{FrozenMesh, FrozenMeshGeneric};  // FIX: Import from crate root
-use mh_geo::{Point2D, Point3D};
-use mh_runtime::{Backend, RuntimeScalar, CpuBackend};
-use serde_json;
 
 /// MHB 文件魔数
 pub const MHB_MAGIC: &[u8; 4] = b"MHB1";
@@ -91,7 +95,11 @@ impl MhbHeader {
         reader.read_exact(&mut buf8)?;
         let index_offset = u64::from_le_bytes(buf8);
 
-        Ok(Self { version, flags, index_offset })
+        Ok(Self {
+            version,
+            flags,
+            index_offset,
+        })
     }
 }
 
@@ -224,8 +232,8 @@ impl<W: Write + Seek> MhbWriter<W> {
         let index_offset = self.current_offset;
 
         // 写入字段索引（JSON 格式）
-        let index_json = serde_json::to_vec(&self.index)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let index_json =
+            serde_json::to_vec(&self.index).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         self.writer.write_all(&index_json)?;
 
         // 回写头部
@@ -264,7 +272,11 @@ impl<R: Read + Seek> MhbReader<R> {
         let index: FieldIndex = serde_json::from_slice(&index_data)
             .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
-        Ok(Self { reader, header, index })
+        Ok(Self {
+            reader,
+            header,
+            index,
+        })
     }
 
     /// 获取字段索引
@@ -288,7 +300,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 f64 字段
     pub fn read_f64_field(&mut self, name: &str) -> Result<Vec<f64>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype != DataType::F64 {
@@ -309,7 +323,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 f32 字段
     pub fn read_f32_field(&mut self, name: &str) -> Result<Vec<f32>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype != DataType::F32 {
@@ -330,7 +346,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 u32 字段
     pub fn read_u32_field(&mut self, name: &str) -> Result<Vec<u32>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype != DataType::U32 {
@@ -351,7 +369,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 u64 字段
     pub fn read_u64_field(&mut self, name: &str) -> Result<Vec<u64>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype != DataType::U64 {
@@ -372,7 +392,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 u8 字段
     pub fn read_u8_field(&mut self, name: &str) -> Result<Vec<u8>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype != DataType::U8 {
@@ -388,7 +410,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 Point2D 字段
     pub fn read_point2d_field(&mut self, name: &str) -> Result<Vec<Point2D>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype == DataType::F64 {
@@ -399,7 +423,10 @@ impl<R: Read + Seek> MhbReader<R> {
                 .collect());
         }
         if desc.dtype != DataType::Point2D {
-            return Err(Error::new(ErrorKind::InvalidData, "Field is not Point2D type"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Field is not Point2D type",
+            ));
         }
 
         self.reader.seek(SeekFrom::Start(desc.offset))?;
@@ -419,7 +446,9 @@ impl<R: Read + Seek> MhbReader<R> {
 
     /// 读取 Point3D 字段
     pub fn read_point3d_field(&mut self, name: &str) -> Result<Vec<Point3D>> {
-        let desc = self.index.find(name)
+        let desc = self
+            .index
+            .find(name)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Field not found: {}", name)))?;
 
         if desc.dtype == DataType::F64 {
@@ -430,7 +459,10 @@ impl<R: Read + Seek> MhbReader<R> {
                 .collect());
         }
         if desc.dtype != DataType::Point3D {
-            return Err(Error::new(ErrorKind::InvalidData, "Field is not Point3D type"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Field is not Point3D type",
+            ));
         }
 
         self.reader.seek(SeekFrom::Start(desc.offset))?;
@@ -494,18 +526,18 @@ pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
     let face_delta_neighbor = reader.read_point2d_field("face_delta_neighbor")?;
     let face_dist_o2n = read_scalar_field_f64(&mut reader, "face_dist_o2n")?;
 
-    let boundary_face_indices = read_optional_u32(&mut reader, "boundary_face_indices")?
-        .unwrap_or_else(Vec::new);
+    let boundary_face_indices =
+        read_optional_u32(&mut reader, "boundary_face_indices")?.unwrap_or_else(Vec::new);
     let face_boundary_id_raw = read_optional_u32(&mut reader, "face_boundary_id")?
         .unwrap_or_else(|| vec![u32::MAX; n_faces]);
     let boundary_names = read_boundary_names(&mut reader)?;
 
     let cell_refinement_level = read_optional_u8(&mut reader, "cell_refinement_level")?
         .unwrap_or_else(|| vec![0u8; n_cells]);
-    let cell_parent = read_optional_u32(&mut reader, "cell_parent")?
-        .unwrap_or_else(|| vec![u32::MAX; n_cells]);
-    let ghost_capacity = read_optional_u32(&mut reader, "ghost_capacity")?
-        .unwrap_or_else(|| vec![0u32; n_cells]);
+    let cell_parent =
+        read_optional_u32(&mut reader, "cell_parent")?.unwrap_or_else(|| vec![u32::MAX; n_cells]);
+    let ghost_capacity =
+        read_optional_u32(&mut reader, "ghost_capacity")?.unwrap_or_else(|| vec![0u32; n_cells]);
     let cell_original_id = read_optional_u32(&mut reader, "cell_original_id")?
         .unwrap_or_else(|| (0..n_cells as u32).collect());
     let face_original_id = read_optional_u32(&mut reader, "face_original_id")?
@@ -569,7 +601,10 @@ pub fn load_mhb(path: &Path) -> Result<FrozenMesh> {
     Ok(mesh)
 }
 
-fn write_mesh_fields<B: Backend>(mut writer: MhbWriter<File>, mesh: &FrozenMeshGeneric<B>) -> Result<()> {
+fn write_mesh_fields<B: Backend>(
+    mut writer: MhbWriter<File>,
+    mesh: &FrozenMeshGeneric<B>,
+) -> Result<()> {
     writer.write_u64_field("n_nodes", &[mesh.n_nodes as u64])?;
     writer.write_u64_field("n_cells", &[mesh.n_cells as u64])?;
     writer.write_u64_field("n_faces", &[mesh.n_faces as u64])?;
@@ -582,7 +617,11 @@ fn write_mesh_fields<B: Backend>(mut writer: MhbWriter<File>, mesh: &FrozenMeshG
 
     let cell_node_offsets: Vec<u64> = mesh.cell_node_offsets.iter().map(|&v| v as u64).collect();
     let cell_face_offsets: Vec<u64> = mesh.cell_face_offsets.iter().map(|&v| v as u64).collect();
-    let cell_neighbor_offsets: Vec<u64> = mesh.cell_neighbor_offsets.iter().map(|&v| v as u64).collect();
+    let cell_neighbor_offsets: Vec<u64> = mesh
+        .cell_neighbor_offsets
+        .iter()
+        .map(|&v| v as u64)
+        .collect();
     writer.write_u64_field("cell_node_offsets", &cell_node_offsets)?;
     writer.write_u32_field("cell_node_indices", &mesh.cell_node_indices)?;
     writer.write_u64_field("cell_face_offsets", &cell_face_offsets)?;
@@ -625,30 +664,145 @@ fn write_mesh_fields<B: Backend>(mut writer: MhbWriter<File>, mesh: &FrozenMeshG
     Ok(())
 }
 
-fn write_scalar_field<S: RuntimeScalar>(
-    writer: &mut MhbWriter<File>,
+fn invalid_mhb_field(name: &str, details: impl Into<String>) -> Error {
+    Error::new(
+        ErrorKind::InvalidData,
+        format!("MHB field {name}: {}", details.into()),
+    )
+}
+
+fn checked_f32_scalar<S: RuntimeScalar>(name: &str, index: usize, value: S) -> Result<f32> {
+    let value_f32 = value.to_f32().ok_or_else(|| {
+        invalid_mhb_field(
+            name,
+            format!("scalar value at index {index} cannot be represented as f32"),
+        )
+    })?;
+    if !value_f32.is_finite() {
+        return Err(invalid_mhb_field(
+            name,
+            format!("scalar value at index {index} is not finite"),
+        ));
+    }
+    Ok(value_f32)
+}
+
+fn checked_f64_scalar<S: RuntimeScalar>(name: &str, index: usize, value: S) -> Result<f64> {
+    let value_f64 = value.to_f64().ok_or_else(|| {
+        invalid_mhb_field(
+            name,
+            format!("scalar value at index {index} cannot be represented as f64"),
+        )
+    })?;
+    if !value_f64.is_finite() {
+        return Err(invalid_mhb_field(
+            name,
+            format!("scalar value at index {index} is not finite"),
+        ));
+    }
+    Ok(value_f64)
+}
+
+fn read_single_count_u64(name: &str, values: Vec<u64>) -> Result<usize> {
+    if values.len() != 1 {
+        return Err(invalid_mhb_field(
+            name,
+            format!(
+                "count field must contain exactly one value, found {}",
+                values.len()
+            ),
+        ));
+    }
+    usize::try_from(values[0]).map_err(|_| {
+        invalid_mhb_field(
+            name,
+            format!(
+                "count value {} does not fit usize on this target",
+                values[0]
+            ),
+        )
+    })
+}
+
+fn read_single_count_u32(name: &str, values: Vec<u32>) -> Result<usize> {
+    if values.len() != 1 {
+        return Err(invalid_mhb_field(
+            name,
+            format!(
+                "count field must contain exactly one value, found {}",
+                values.len()
+            ),
+        ));
+    }
+    usize::try_from(values[0]).map_err(|_| {
+        invalid_mhb_field(
+            name,
+            format!(
+                "count value {} does not fit usize on this target",
+                values[0]
+            ),
+        )
+    })
+}
+
+fn read_offsets_from_u64(name: &str, values: Vec<u64>) -> Result<Vec<usize>> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            usize::try_from(value).map_err(|_| {
+                invalid_mhb_field(
+                    name,
+                    format!("offset at index {index} with value {value} does not fit usize"),
+                )
+            })
+        })
+        .collect()
+}
+
+fn read_offsets_from_u32(name: &str, values: Vec<u32>) -> Result<Vec<usize>> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            usize::try_from(value).map_err(|_| {
+                invalid_mhb_field(
+                    name,
+                    format!("offset at index {index} with value {value} does not fit usize"),
+                )
+            })
+        })
+        .collect()
+}
+
+fn write_scalar_field<W: Write + Seek, S: RuntimeScalar>(
+    writer: &mut MhbWriter<W>,
     name: &str,
     data: &[S],
 ) -> Result<()> {
     if std::mem::size_of::<S>() == 4 {
-        let buf: Vec<f32> = data.iter().map(|v| v.to_f32().unwrap_or(0.0)).collect();
+        let buf: Vec<f32> = data
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, value)| checked_f32_scalar(name, index, value))
+            .collect::<Result<_>>()?;
         writer.write_f32_field(name, &buf)
     } else {
-        let buf: Vec<f64> = data.iter().map(|v| v.to_f64().unwrap_or(0.0)).collect();
+        let buf: Vec<f64> = data
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, value)| checked_f64_scalar(name, index, value))
+            .collect::<Result<_>>()?;
         writer.write_f64_field(name, &buf)
     }
 }
 
-fn read_count(reader: &mut MhbReader<File>, name: &str) -> Result<usize> {
+fn read_count<R: Read + Seek>(reader: &mut MhbReader<R>, name: &str) -> Result<usize> {
     match reader.get_field_dtype(name) {
-        Ok(DataType::U64) => {
-            let values = reader.read_u64_field(name)?;
-            Ok(values.first().copied().unwrap_or(0) as usize)
-        }
-        Ok(DataType::U32) => {
-            let values = reader.read_u32_field(name)?;
-            Ok(values.first().copied().unwrap_or(0) as usize)
-        }
+        Ok(DataType::U64) => read_single_count_u64(name, reader.read_u64_field(name)?),
+        Ok(DataType::U32) => read_single_count_u32(name, reader.read_u32_field(name)?),
         Ok(dtype) => Err(Error::new(
             ErrorKind::InvalidData,
             format!("Field {} has incompatible dtype {:?}", name, dtype),
@@ -657,18 +811,13 @@ fn read_count(reader: &mut MhbReader<File>, name: &str) -> Result<usize> {
     }
 }
 
-fn read_offsets_as_usize(reader: &mut MhbReader<File>, name: &str) -> Result<Vec<usize>> {
+fn read_offsets_as_usize<R: Read + Seek>(
+    reader: &mut MhbReader<R>,
+    name: &str,
+) -> Result<Vec<usize>> {
     match reader.get_field_dtype(name) {
-        Ok(DataType::U64) => Ok(reader
-            .read_u64_field(name)?
-            .into_iter()
-            .map(|v| v as usize)
-            .collect()),
-        Ok(DataType::U32) => Ok(reader
-            .read_u32_field(name)?
-            .into_iter()
-            .map(|v| v as usize)
-            .collect()),
+        Ok(DataType::U64) => read_offsets_from_u64(name, reader.read_u64_field(name)?),
+        Ok(DataType::U32) => read_offsets_from_u32(name, reader.read_u32_field(name)?),
         Ok(dtype) => Err(Error::new(
             ErrorKind::InvalidData,
             format!("Field {} has incompatible dtype {:?}", name, dtype),
@@ -679,7 +828,11 @@ fn read_offsets_as_usize(reader: &mut MhbReader<File>, name: &str) -> Result<Vec
 
 fn read_scalar_field_f64(reader: &mut MhbReader<File>, name: &str) -> Result<Vec<f64>> {
     match reader.get_field_dtype(name)? {
-        DataType::F32 => Ok(reader.read_f32_field(name)?.into_iter().map(|v| v as f64).collect()),
+        DataType::F32 => Ok(reader
+            .read_f32_field(name)?
+            .into_iter()
+            .map(|v| v as f64)
+            .collect()),
         DataType::F64 => reader.read_f64_field(name),
         dtype => Err(Error::new(
             ErrorKind::InvalidData,
@@ -707,8 +860,8 @@ fn read_optional_u8(reader: &mut MhbReader<File>, name: &str) -> Result<Option<V
 fn read_boundary_names(reader: &mut MhbReader<File>) -> Result<Vec<String>> {
     if reader.has_field("boundary_names") {
         let bytes = reader.read_u8_field("boundary_names")?;
-        let names: Vec<String> = serde_json::from_slice(&bytes)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let names: Vec<String> =
+            serde_json::from_slice(&bytes).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         Ok(names)
     } else {
         Ok(Vec::new())
@@ -727,7 +880,11 @@ fn compute_cell_size_stats(cell_area: &[f64]) -> (f64, f64) {
             max_area = max_area.max(area);
         }
     }
-    let min_size = if min_area.is_finite() { min_area.sqrt() } else { 0.0 };
+    let min_size = if min_area.is_finite() {
+        min_area.sqrt()
+    } else {
+        0.0
+    };
     let max_size = max_area.sqrt();
     (min_size, max_size)
 }
@@ -769,13 +926,69 @@ mod tests {
 
         // 读取
         let mut reader = MhbReader::open(Cursor::new(buf.into_inner())).unwrap();
-        
+
         assert_eq!(reader.index().len(), 2);
-        
+
         let read_f64 = reader.read_f64_field("values").unwrap();
         assert_eq!(read_f64, data_f64);
-        
+
         let read_u32 = reader.read_u32_field("indices").unwrap();
         assert_eq!(read_u32, data_u32);
+    }
+
+    fn build_reader_with_u64_field(name: &str, values: &[u64]) -> MhbReader<Cursor<Vec<u8>>> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = MhbWriter::new(cursor).unwrap();
+        writer.write_u64_field(name, values).unwrap();
+        let cursor = writer.finish().unwrap();
+        MhbReader::open(Cursor::new(cursor.into_inner())).unwrap()
+    }
+
+    #[test]
+    fn test_read_count_rejects_empty_payload() {
+        let mut reader = build_reader_with_u64_field("n_nodes", &[]);
+        let err = read_count(&mut reader, "n_nodes").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err
+            .to_string()
+            .contains("count field must contain exactly one value"));
+    }
+
+    #[test]
+    fn test_read_count_rejects_multi_value_payload() {
+        let mut reader = build_reader_with_u64_field("n_nodes", &[2, 3]);
+        let err = read_count(&mut reader, "n_nodes").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err
+            .to_string()
+            .contains("count field must contain exactly one value"));
+    }
+
+    #[test]
+    fn test_write_scalar_field_rejects_non_finite_f64() {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = MhbWriter::new(cursor).unwrap();
+        let err = write_scalar_field(&mut writer, "cell_area", &[f64::NAN]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err
+            .to_string()
+            .contains("scalar value at index 0 is not finite"));
+    }
+
+    #[test]
+    fn test_read_offsets_accept_u64_payload() {
+        let mut reader = build_reader_with_u64_field("cell_node_offsets", &[0, 3, 7]);
+        let offsets = read_offsets_as_usize(&mut reader, "cell_node_offsets").unwrap();
+        assert_eq!(offsets, vec![0, 3, 7]);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn test_read_offsets_reject_u64_overflow_on_32bit() {
+        let mut reader =
+            build_reader_with_u64_field("cell_node_offsets", &[0, u64::from(u32::MAX) + 1]);
+        let err = read_offsets_as_usize(&mut reader, "cell_node_offsets").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("does not fit usize"));
     }
 }

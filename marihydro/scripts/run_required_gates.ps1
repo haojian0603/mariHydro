@@ -115,6 +115,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mesh_structured_contracts.ps1"
     }
 
+    Invoke-Step -Name "MHB binary mesh contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mhb_contracts.ps1"
+    }
+
     Invoke-Step -Name "Web Mercator tile/domain contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
     }

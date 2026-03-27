@@ -233,6 +233,10 @@ try {
         $Failed += "check_mesh_structured_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_mhb_contracts.ps1" -Path (Join-Path $ScriptDir "check_mhb_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_mhb_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_web_mercator_contracts.ps1" -Path (Join-Path $ScriptDir "check_web_mercator_contracts.ps1") -Arguments @{})) {
         $Failed += "check_web_mercator_contracts.ps1"
     }
@@ -322,6 +326,7 @@ try {
     Invoke-InformationalScan -Name 'spatial index radius-query shortcut residue' -Roots @("crates/mh_geo/src/spatial_index.rs") -Pattern 'take_while\(\|entry\|'
     Invoke-InformationalScan -Name 'mesh circle-query heuristic residue' -Roots @("crates/mh_mesh/src/spatial_index.rs") -Pattern 'dcx \* dcx \+ dcy \* dcy <= r2'
     Invoke-InformationalScan -Name 'structured mesh bed fallback residue' -Roots @("crates/mh_mesh/src/structured.rs") -Pattern 'bed_elevation\(.*\)\.unwrap_or\(0\.0\)|bed_elevation\).*unwrap_or'
+    Invoke-InformationalScan -Name 'MHB binary fallback residue' -Roots @("crates/mh_mesh/src/io/mhb.rs") -Pattern 'to_f(?:32|64)\(\)\.unwrap_or\(0\.0\)|values\.first\(\)\.copied\(\)\.unwrap_or\(0\)|\.map\(\|v\| v as usize\)'
     Invoke-InformationalScan -Name 'Web Mercator domain fallback residue' -Roots @("crates/mh_geo/src/projection/web_mercator.rs") -Pattern 'lat\.clamp\(\s*-WEB_MERCATOR_MAX_LAT\s*,\s*WEB_MERCATOR_MAX_LAT\s*\)|pub fn web_mercator_resolution\(.*\) -> f64|pub fn web_mercator_scale\(.*\) -> f64|pub fn lonlat_to_tile\(.*\) -> \(u32, u32\)|pub fn tile_to_lonlat\(.*\) -> \(f64, f64\)|pub fn tile_to_bbox\(.*\) -> \(f64, f64, f64, f64\)|expect\("tile_to_lonlat returns coordinates inside Web Mercator domain"\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('
     Invoke-InformationalScan -Name 'external CLI context-loss residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'map_err\(\|_\|\s*(?:GdalError|NetCdfError)::NotAvailable|(?:OpenFailed|ReadFailed)\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)|NotAvailable,\s*$'

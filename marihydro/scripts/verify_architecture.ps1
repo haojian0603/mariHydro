@@ -239,6 +239,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.5645: MHB binary mesh contract guard
+    Write-Host "=== Phase 0.5645: MHB binary mesh contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_mhb_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "MHB binary mesh contracts must pass"
+    } else {
+        Write-Host "[OK] MHB binary mesh contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.565: Web Mercator contract guard
     Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"
