@@ -67,6 +67,26 @@ function Check-PatternAbsent {
     }
 }
 
+function Check-PatternPresent {
+    param(
+        [string]$RelativePath,
+        [string]$Pattern,
+        [string]$Message
+    )
+
+    $absolutePath = Join-Path $ProjectRoot $RelativePath
+    if (-not (Test-Path $absolutePath)) {
+        Add-Failure "missing required external-data file: $RelativePath"
+        return
+    }
+
+    if (Select-String -Path $absolutePath -Pattern $Pattern -Quiet) {
+        Write-Host "[OK] $Message" -ForegroundColor Green
+    } else {
+        Add-Failure $Message
+    }
+}
+
 Push-Location $ProjectRoot
 try {
     Write-Host "=== Checking external data contracts ===" -ForegroundColor Cyan
@@ -113,6 +133,31 @@ try {
         -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
         -Pattern 'unwrap_or\(\"\"\)|unwrap_or\(false\)' `
         -Message "tide reader path classification must not hide malformed filenames or extensions behind empty-string/bool fallbacks"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'pub fn interpolation_indices\(.*\) -> Option<InterpolationIndices>' `
+        -Message "tide grid interpolation must not collapse public failures into Option"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'fn wrap_longitude_to_range\(.*\) -> Option<f64>' `
+        -Message "tide longitude normalization must not erase failure causes behind Option"
+
+    Check-PatternAbsent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern '\.interpolation_indices\(lon, lat\)\s*\.ok_or\(' `
+        -Message "tide sampling must propagate explicit interpolation errors instead of rebuilding generic out-of-bounds fallbacks"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'pub fn interpolation_indices\(' `
+        -Message "tide grid interpolation must keep a public interpolation entrypoint"
+
+    Check-PatternPresent `
+        -RelativePath "crates/mh_io/src/netcdf_tide.rs" `
+        -Pattern 'Result<InterpolationIndices, TidalIoError>' `
+        -Message "tide grid interpolation must return explicit error semantics"
 
     Check-PatternAbsent `
         -RelativePath "crates/mh_io/src/drivers/gdal/driver.rs" `

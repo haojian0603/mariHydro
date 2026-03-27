@@ -101,48 +101,70 @@ pub struct TidalGrid {
 
 impl TidalGrid {
     /// 获取插值索引和权重
-    pub fn interpolation_indices(&self, lon: f64, lat: f64) -> Option<InterpolationIndices> {
+    pub fn interpolation_indices(
+        &self,
+        lon: f64,
+        lat: f64,
+    ) -> Result<InterpolationIndices, TidalIoError> {
         if !lon.is_finite() || !lat.is_finite() {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "插值坐标必须是有限值".to_string(),
+            ));
         }
         if !self.lon_range.0.is_finite()
             || !self.lon_range.1.is_finite()
             || !self.lat_range.0.is_finite()
             || !self.lat_range.1.is_finite()
         {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "潮汐网格经纬范围包含非有限值".to_string(),
+            ));
         }
         if self.lon_range.1 <= self.lon_range.0 {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "潮汐网格经度范围必须严格递增".to_string(),
+            ));
         }
         if !self.lon_resolution.is_finite() || !self.lat_resolution.is_finite() {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "潮汐网格分辨率必须是有限值".to_string(),
+            ));
         }
         if self.lon_resolution <= 0.0 || self.lat_resolution <= 0.0 {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "潮汐网格分辨率必须大于零".to_string(),
+            ));
+        }
+        if self.n_lon < 2 || self.n_lat < 2 {
+            return Err(TidalIoError::FormatError(
+                "潮汐规则网格至少需要 2x2 节点".to_string(),
+            ));
         }
 
-        let lon_normalized = wrap_longitude_to_range(lon, self.lon_range)?;
+        let lon_normalized = wrap_longitude_to_range(lon, self.lon_range)?
+            .ok_or(TidalIoError::OutOfBounds { lon, lat })?;
 
         // 检查范围
         if self.lat_range.0 > self.lat_range.1 {
-            return None;
+            return Err(TidalIoError::FormatError(
+                "潮汐网格纬度范围必须按升序给出".to_string(),
+            ));
         }
         if lat < self.lat_range.0 || lat > self.lat_range.1 {
-            return None;
+            return Err(TidalIoError::OutOfBounds { lon, lat });
         }
 
         // 计算索引
         let i_lon = ((lon_normalized - self.lon_range.0) / self.lon_resolution).floor() as isize;
         let j_lat = ((lat - self.lat_range.0) / self.lat_resolution).floor() as isize;
         if i_lon < 0 || j_lat < 0 {
-            return None;
+            return Err(TidalIoError::OutOfBounds { lon, lat });
         }
         let i_lon = i_lon as usize;
         let j_lat = j_lat as usize;
 
         if i_lon >= self.n_lon - 1 || j_lat >= self.n_lat - 1 {
-            return None;
+            return Err(TidalIoError::OutOfBounds { lon, lat });
         }
 
         // 计算权重（双线性插值）
@@ -154,7 +176,7 @@ impl TidalGrid {
         let x = x.clamp(0.0, 1.0);
         let y = y.clamp(0.0, 1.0);
 
-        Some(InterpolationIndices {
+        Ok(InterpolationIndices {
             i: [i_lon, i_lon + 1, i_lon, i_lon + 1],
             j: [j_lat, j_lat, j_lat + 1, j_lat + 1],
             weights: [(1.0 - x) * (1.0 - y), x * (1.0 - y), (1.0 - x) * y, x * y],
@@ -242,14 +264,26 @@ fn register_unique_constituent_file(
     Ok(())
 }
 
-fn wrap_longitude_to_range(lon: f64, range: (f64, f64)) -> Option<f64> {
-    if !lon.is_finite() || !range.0.is_finite() || !range.1.is_finite() || range.1 <= range.0 {
-        return None;
+fn wrap_longitude_to_range(lon: f64, range: (f64, f64)) -> Result<Option<f64>, TidalIoError> {
+    if !lon.is_finite() {
+        return Err(TidalIoError::FormatError(
+            "插值经度必须是有限值".to_string(),
+        ));
+    }
+    if !range.0.is_finite() || !range.1.is_finite() {
+        return Err(TidalIoError::FormatError(
+            "潮汐网格经度范围包含非有限值".to_string(),
+        ));
+    }
+    if range.1 <= range.0 {
+        return Err(TidalIoError::FormatError(
+            "潮汐网格经度范围必须严格递增".to_string(),
+        ));
     }
 
-    [lon, lon + 360.0, lon - 360.0]
+    Ok([lon, lon + 360.0, lon - 360.0]
         .into_iter()
-        .find(|candidate| *candidate >= range.0 && *candidate <= range.1)
+        .find(|candidate| *candidate >= range.0 && *candidate <= range.1))
 }
 
 fn infer_regular_spacing(values: &[f64], axis_name: &str) -> Result<f64, TidalIoError> {
@@ -386,9 +420,7 @@ fn sample_variable(
             }
         }
         .map_err(|err| {
-            TidalIoError::FormatError(format!(
-                "变量 {variable_name} 的插值索引非法: {err}"
-            ))
+            TidalIoError::FormatError(format!("变量 {variable_name} 的插值索引非法: {err}"))
         })
     };
 
@@ -555,10 +587,7 @@ impl TpxoReader {
         }
 
         let (layout, _) = detect_regular_grid(driver, TPXO_COORD_CANDIDATES)?;
-        let indices = self
-            .grid
-            .interpolation_indices(lon, lat)
-            .ok_or(TidalIoError::OutOfBounds { lon, lat })?;
+        let indices = self.grid.interpolation_indices(lon, lat)?;
 
         sample_complex_components(
             driver,
@@ -715,10 +744,7 @@ impl Fes2014Reader {
         lat: f64,
     ) -> Result<(f64, f64), TidalIoError> {
         let (layout, _) = detect_regular_grid(driver, FES_COORD_CANDIDATES)?;
-        let indices = self
-            .grid
-            .interpolation_indices(lon, lat)
-            .ok_or(TidalIoError::OutOfBounds { lon, lat })?;
+        let indices = self.grid.interpolation_indices(lon, lat)?;
         sample_component_pair(driver, &layout, &indices, FES_HEIGHT_COMPONENTS)
     }
 }
@@ -772,10 +798,7 @@ impl TidalDataReader for Fes2014Reader {
         let file_path = self.constituent_file(name)?;
         let driver = NetCdfDriver::open(file_path)?;
         let (layout, _) = detect_regular_grid(&driver, FES_COORD_CANDIDATES)?;
-        let indices = self
-            .grid
-            .interpolation_indices(lon, lat)
-            .ok_or(TidalIoError::OutOfBounds { lon, lat })?;
+        let indices = self.grid.interpolation_indices(lon, lat)?;
         let u = sample_component_pair(&driver, &layout, &indices, FES_U_COMPONENTS)?;
         let v = sample_component_pair(&driver, &layout, &indices, FES_V_COMPONENTS)?;
         Ok((u, v))
@@ -970,8 +993,6 @@ mod tests {
         };
 
         let indices = grid.interpolation_indices(122.5, 30.5);
-        assert!(indices.is_some());
-
         let idx = indices.unwrap();
         assert_eq!(idx.i[0], 122);
         assert_eq!(idx.j[0], 120); // 30.5 + 90 = 120.5, floor = 120
@@ -990,6 +1011,53 @@ mod tests {
 
         let wrapped = grid.interpolation_indices(-75.25, 10.5).unwrap();
         assert_eq!(wrapped.i[0], 284);
+    }
+
+    #[test]
+    fn test_grid_interpolation_rejects_out_of_bounds_query() {
+        let grid = TidalGrid {
+            lon_range: (0.0, 360.0),
+            lat_range: (-90.0, 90.0),
+            lon_resolution: 1.0,
+            lat_resolution: 1.0,
+            n_lon: 361,
+            n_lat: 181,
+        };
+
+        let err = grid.interpolation_indices(122.5, 95.0).unwrap_err();
+        assert!(matches!(err, TidalIoError::OutOfBounds { .. }));
+    }
+
+    #[test]
+    fn test_grid_interpolation_rejects_invalid_query_input() {
+        let grid = TidalGrid {
+            lon_range: (0.0, 360.0),
+            lat_range: (-90.0, 90.0),
+            lon_resolution: 1.0,
+            lat_resolution: 1.0,
+            n_lon: 361,
+            n_lat: 181,
+        };
+
+        let err = grid.interpolation_indices(f64::NAN, 10.0).unwrap_err();
+        assert!(matches!(err, TidalIoError::FormatError(_)));
+        assert!(err.to_string().contains("有限值"));
+    }
+
+    #[test]
+    fn test_grid_interpolation_rejects_invalid_grid_definition() {
+        let grid = TidalGrid {
+            lon_range: (10.0, 10.0),
+            lat_range: (-90.0, 90.0),
+            lon_resolution: 1.0,
+            lat_resolution: 1.0,
+            n_lon: 361,
+            n_lat: 181,
+        };
+
+        let err = grid.interpolation_indices(10.0, 0.0).unwrap_err();
+        assert!(matches!(err, TidalIoError::FormatError(_)));
+        assert!(err.to_string().contains("经度范围"));
     }
 
     #[test]

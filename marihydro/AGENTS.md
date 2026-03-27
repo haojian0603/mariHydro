@@ -13,6 +13,7 @@
 - [RULE_EXTERNAL_PARTIAL_PARSE_FORBIDDEN] 外部数据驱动不得“部分解析成功”。头部、元数据、时间轴或数值载荷中只要出现无法解释的字段或 token，就必须整体报错；禁止只提取能读的部分、静默跳过坏 token、默认补齐其余值，再把结果当成成功读取。
 - [RULE_EXTERNAL_DISPATCH_BY_LAYOUT] 公开外部数据入口在路径已存在时，必须优先根据真实文件类型、目录结构、变量布局和元数据来分发读取器；不得仅凭文件名关键字、扩展名猜测模型类型，再把猜测当成主链行为。
 - [RULE_EXTERNAL_MATCHED_LAYOUT_MUST_VALIDATE] 一旦目录扫描、文件名或上游元数据已经把某个外部文件识别为“受支持布局候选”，后续驱动打开、变量对校验、坐标网格校验和分潮去重都必须完整通过；任一环节失败都要立即报错，不得 `continue` 跳过坏文件后继续拼装部分结果。
+- [RULE_TIDE_GRID_INTERPOLATION_EXPLICIT] 潮汐规则网格的公开插值入口不得把非法经纬度、越界查询、无效网格范围、分辨率错误或无法归一化的经度折叠成 `None`。`TidalGrid::interpolation_indices` 这类公开接口必须返回显式错误语义，并把“网格结构错误”与“查询坐标越界”区分开来。
 - [RULE_EXTERNAL_CLI_FAILURE_CONTEXT_EXPLICIT] 外部 CLI 驱动只要已经进入真实工具调用阶段，就必须保留工具身份、调用阶段和操作系统错误上下文。不得把可执行文件缺失、进程启动失败或非零退出码统一压扁成空泛的 `NotAvailable`、`OpenFailed` 或 `ReadFailed` 字符串；错误里必须能看出是哪个工具、在哪个阶段、因为什么失败。
 - [RULE_NO_TOLERANT_PUBLIC_PARSERS] 公开解析入口不得暴露 `*_or_default`、`*_or_zero`、`*_or_identity` 这类“失败时伪成功”的主链接口。对外部格式、时间、坐标和投影元数据，失败就返回错误；只有降级本身具有真实业务语义时，才允许显式命名的降级函数存在。
 - [RULE_NO_PUBLIC_HEURISTIC_DETECTORS] 仅靠文件名、扩展名或关键字猜模型类型的逻辑，只能作为模块内部提示，不得作为公开 API、公开 trait 语义或对外承诺的“检测器”。公开入口必须以真实布局、目录结构和元数据校验为准。
