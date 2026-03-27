@@ -221,6 +221,10 @@ try {
         $Failed += "check_geo_crs_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_geo_auto_projection_contracts.ps1" -Path (Join-Path $ScriptDir "check_geo_auto_projection_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_geo_auto_projection_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_import_contracts.ps1" -Path (Join-Path $ScriptDir "check_import_contracts.ps1") -Arguments @{})) {
         $Failed += "check_import_contracts.ps1"
     }
@@ -336,6 +340,7 @@ try {
     Invoke-InformationalScan -Name 'geo affine Option-failure residue' -Roots @("crates/mh_geo/src/transform.rs") -Pattern 'pub fn inverse\(&self\) -> Option<Self>|pub fn apply_inverse\(&self, x: f64, y: f64\) -> Option<\(f64, f64\)>|return None;'
     Invoke-InformationalScan -Name 'geo ellipsoid heuristic residue' -Roots @("crates/mh_geo/src/crs.rs") -Pattern 'contains\("wgs84"\)|contains\("wgs 84"\)|contains\("cgcs2000"\)|contains\("grs80"\)|contains\("grs 80"\)|contains\("krassovsky"\)|contains\("krasovsky"\)|默认 WGS84'
     Invoke-InformationalScan -Name 'geo finite-difference convergence residue' -Roots @("crates/mh_geo/src") -Pattern 'delta_lat\s*=|lat\s*\+\s*delta_lat|dy\.atan2\(dx\)'
+    Invoke-InformationalScan -Name 'geo auto-zone clamp/default residue' -Roots @("crates/mh_geo/src") -Pattern 'return 39;|zone\.clamp\(25,\s*45\)|zone\.clamp\(13,\s*23\)|zone\.clamp\(1,\s*60\)'
     Invoke-InformationalScan -Name 'spatial index radius-query shortcut residue' -Roots @("crates/mh_geo/src/spatial_index.rs") -Pattern 'take_while\(\|entry\|'
     Invoke-InformationalScan -Name 'mesh circle-query heuristic residue' -Roots @("crates/mh_mesh/src/spatial_index.rs") -Pattern 'dcx \* dcx \+ dcy \* dcy <= r2'
     Invoke-InformationalScan -Name 'structured mesh bed fallback residue' -Roots @("crates/mh_mesh/src/structured.rs") -Pattern 'bed_elevation\(.*\)\.unwrap_or\(0\.0\)|bed_elevation\).*unwrap_or'

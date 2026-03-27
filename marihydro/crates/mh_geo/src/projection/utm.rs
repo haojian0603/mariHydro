@@ -23,6 +23,7 @@
 
 use super::traits::TransverseMercatorParams;
 use super::transverse_mercator;
+use crate::error::{GeoError, GeoResult};
 use mh_foundation::error::{MhError, MhResult};
 
 /// UTM 比例因子
@@ -96,10 +97,14 @@ pub fn utm_to_geographic(x: f64, y: f64, zone: u8, north: bool) -> MhResult<(f64
 ///
 /// # Returns
 /// UTM 带号 (1-60)
-#[must_use]
-pub fn auto_utm_zone(lon: f64) -> u8 {
+pub fn auto_utm_zone(lon: f64) -> GeoResult<u8> {
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(GeoError::coordinate_out_of_range(
+            "经度", lon, -180.0, 180.0,
+        ));
+    }
     let zone = ((lon + 180.0) / 6.0).floor() as i32 + 1;
-    zone.clamp(1, 60) as u8
+    Ok(zone as u8)
 }
 
 /// 获取 UTM 带的中央子午线
@@ -205,11 +210,17 @@ mod tests {
 
     #[test]
     fn test_auto_utm_zone() {
-        assert_eq!(auto_utm_zone(116.0), 50);
-        assert_eq!(auto_utm_zone(-122.0), 10);
-        assert_eq!(auto_utm_zone(0.0), 31);
-        assert_eq!(auto_utm_zone(-180.0), 1);
-        assert_eq!(auto_utm_zone(180.0), 60);
+        assert_eq!(auto_utm_zone(116.0).expect("116E"), 50);
+        assert_eq!(auto_utm_zone(-122.0).expect("122W"), 10);
+        assert_eq!(auto_utm_zone(0.0).expect("0E"), 31);
+        assert_eq!(auto_utm_zone(-180.0).expect("west edge"), 1);
+        assert_eq!(auto_utm_zone(180.0).expect("east edge"), 61);
+    }
+
+    #[test]
+    fn test_auto_utm_zone_rejects_invalid_longitude() {
+        assert!(auto_utm_zone(f64::NAN).is_err());
+        assert!(auto_utm_zone(181.0).is_err());
     }
 
     #[test]
@@ -320,7 +331,7 @@ mod tests {
 
         for (lon, lat) in TEST_POINTS {
             // 跳过超出带号范围的点
-            let expected_zone = auto_utm_zone(*lon);
+            let expected_zone = auto_utm_zone(*lon).expect("expected zone");
             if expected_zone != zone {
                 continue;
             }
@@ -349,16 +360,14 @@ mod tests {
         assert!((k - 0.9996).abs() < 0.0001, "k = {k}");
 
         // 偏离中央子午线，比例因子应该增大
-        let k_offset =
-            utm_scale_factor(120.0, 40.0, 50).expect("utm scale factor offset failed");
+        let k_offset = utm_scale_factor(120.0, 40.0, 50).expect("utm scale factor offset failed");
         assert!(k_offset > k, "k_offset = {k_offset}");
     }
 
     #[test]
     fn test_utm_convergence_angle() {
         // 中央子午线上收敛角应接近 0
-        let gamma =
-            utm_convergence_angle(117.0, 40.0, 50).expect("utm convergence angle failed");
+        let gamma = utm_convergence_angle(117.0, 40.0, 50).expect("utm convergence angle failed");
         assert!(gamma.abs() < 0.001, "gamma = {gamma}");
     }
 

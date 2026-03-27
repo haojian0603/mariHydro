@@ -45,7 +45,7 @@ pub use web_mercator::*;
 
 use crate::ellipsoid::Ellipsoid;
 use crate::error::{GeoError, GeoResult};
-use mh_foundation::error::MhResult;
+use mh_foundation::error::{MhError, MhResult};
 
 // ============================================================================
 // 投影类型定义
@@ -162,29 +162,32 @@ impl ProjectionType {
     }
 
     /// 自动从经纬度确定 UTM 区域
-    #[must_use]
-    pub fn auto_utm(lon: f64, lat: f64) -> Self {
+    pub fn auto_utm(lon: f64, lat: f64) -> GeoResult<Self> {
+        if !(-180.0..=180.0).contains(&lon) {
+            return Err(GeoError::coordinate_out_of_range(
+                "经度", lon, -180.0, 180.0,
+            ));
+        }
+        if !(-80.0..=84.0).contains(&lat) {
+            return Err(GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
+        }
         let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
-        let zone = zone.clamp(1, 60);
-        Self::Utm {
+        Ok(Self::Utm {
             zone,
             north: lat >= 0.0,
-        }
+        })
     }
 
     /// 自动从经度确定高斯-克吕格 3度带
-    #[must_use]
-    pub fn auto_gk3(lon: f64) -> Self {
-        let zone = auto_gk3_zone(lon);
-        Self::GaussKruger3 { zone }
+    pub fn auto_gk3(lon: f64) -> GeoResult<Self> {
+        let zone = auto_gk3_zone(lon)?;
+        Ok(Self::GaussKruger3 { zone })
     }
 
     /// 自动从经度确定高斯-克吕格 6度带
-    #[must_use]
-    pub fn auto_gk6(lon: f64) -> Self {
-        let zone = ((lon + 3.0) / 6.0).floor() as u8 + 1;
-        let zone = zone.clamp(13, 23);
-        Self::GaussKruger6 { zone }
+    pub fn auto_gk6(lon: f64) -> GeoResult<Self> {
+        let zone = auto_gk6_zone(lon)?;
+        Ok(Self::GaussKruger6 { zone })
     }
 
     /// 转换为快速投影枚举（用于性能关键路径）
@@ -357,8 +360,7 @@ pub fn wgs84_to_auto_utm(lon: f64, lat: f64) -> MhResult<(f64, f64, u8, bool)> {
     if !(-80.0..=84.0).contains(&lat) {
         return Err(GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0).into());
     }
-    let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
-    let zone = zone.clamp(1, 60);
+    let zone = auto_utm_zone(lon).map_err(|err| MhError::invalid_input(err.to_string()))?;
     let north = lat >= 0.0;
     let (x, y) = geographic_to_utm(lon, lat, zone, north)?;
     Ok((x, y, zone, north))
@@ -446,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_auto_utm() {
-        let proj_type = ProjectionType::auto_utm(116.0, 40.0);
+        let proj_type = ProjectionType::auto_utm(116.0, 40.0).expect("116E 40N");
         assert_eq!(
             proj_type,
             ProjectionType::Utm {
@@ -455,7 +457,7 @@ mod tests {
             }
         );
 
-        let proj_type = ProjectionType::auto_utm(-122.0, 37.0);
+        let proj_type = ProjectionType::auto_utm(-122.0, 37.0).expect("122W 37N");
         assert_eq!(
             proj_type,
             ProjectionType::Utm {
@@ -467,8 +469,16 @@ mod tests {
 
     #[test]
     fn test_auto_gk3() {
-        let proj_type = ProjectionType::auto_gk3(117.0);
+        let proj_type = ProjectionType::auto_gk3(117.0).expect("117E");
         assert_eq!(proj_type, ProjectionType::GaussKruger3 { zone: 39 });
+    }
+
+    #[test]
+    fn test_auto_projection_helpers_reject_invalid_inputs() {
+        assert!(ProjectionType::auto_utm(181.0, 40.0).is_err());
+        assert!(ProjectionType::auto_utm(116.0, 90.0).is_err());
+        assert!(ProjectionType::auto_gk3(70.0).is_err());
+        assert!(ProjectionType::auto_gk6(f64::NAN).is_err());
     }
 
     #[test]

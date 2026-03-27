@@ -562,8 +562,8 @@ pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
         )));
     }
     // 中国区域使用 CGCS2000 高斯-克吕格
-    if (73.0..=135.0).contains(&lon) && (3.0..=54.0).contains(&lat) {
-        let zone = auto_gk3_zone(lon);
+    if (73.5..136.5).contains(&lon) && (3.0..=54.0).contains(&lat) {
+        let zone = auto_gk3_zone(lon).map_err(|err| MhError::invalid_input(err.to_string()))?;
         let code = 4534 + u32::from(zone - 25);
         Crs::from_epsg(code)
     } else {

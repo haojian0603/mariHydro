@@ -25,6 +25,7 @@
 use super::traits::TransverseMercatorParams;
 use super::transverse_mercator;
 use crate::ellipsoid::Ellipsoid;
+use crate::error::{GeoError, GeoResult};
 use mh_foundation::error::MhResult;
 
 /// 地理坐标 -> 高斯-克吕格
@@ -63,13 +64,8 @@ pub fn geographic_to_gauss_kruger(lon: f64, lat: f64, central_lon: f64) -> MhRes
 /// # Errors
 /// 此函数不会返回错误（除非坐标极端异常）
 pub fn gauss_kruger_to_geographic(x: f64, y: f64, central_lon: f64) -> MhResult<(f64, f64)> {
-    let params = TransverseMercatorParams::custom(
-        Ellipsoid::CGCS2000,
-        central_lon,
-        1.0,
-        500_000.0,
-        0.0,
-    );
+    let params =
+        TransverseMercatorParams::custom(Ellipsoid::CGCS2000, central_lon, 1.0, 500_000.0, 0.0);
     transverse_mercator::inverse(&params, x, y)
 }
 
@@ -81,29 +77,15 @@ pub fn geographic_to_gauss_kruger_wgs84(
     lat: f64,
     central_lon: f64,
 ) -> MhResult<(f64, f64)> {
-    let params = TransverseMercatorParams::custom(
-        Ellipsoid::WGS84,
-        central_lon,
-        1.0,
-        500_000.0,
-        0.0,
-    );
+    let params =
+        TransverseMercatorParams::custom(Ellipsoid::WGS84, central_lon, 1.0, 500_000.0, 0.0);
     transverse_mercator::forward(&params, lon, lat)
 }
 
 /// 使用 WGS84 椭球体的高斯-克吕格逆向转换
-pub fn gauss_kruger_to_geographic_wgs84(
-    x: f64,
-    y: f64,
-    central_lon: f64,
-) -> MhResult<(f64, f64)> {
-    let params = TransverseMercatorParams::custom(
-        Ellipsoid::WGS84,
-        central_lon,
-        1.0,
-        500_000.0,
-        0.0,
-    );
+pub fn gauss_kruger_to_geographic_wgs84(x: f64, y: f64, central_lon: f64) -> MhResult<(f64, f64)> {
+    let params =
+        TransverseMercatorParams::custom(Ellipsoid::WGS84, central_lon, 1.0, 500_000.0, 0.0);
     transverse_mercator::inverse(&params, x, y)
 }
 
@@ -124,23 +106,30 @@ pub fn gk6_central_meridian(zone: u8) -> f64 {
 }
 
 /// 从经度计算 3度带带号
-#[must_use]
-pub fn auto_gk3_zone(lon: f64) -> u8 {
-    if !lon.is_finite() {
-        return 39;
+pub fn auto_gk3_zone(lon: f64) -> GeoResult<u8> {
+    if !lon.is_finite() || !(73.5..136.5).contains(&lon) {
+        return Err(GeoError::projection_failed(
+            "自动三度带带号",
+            format!("3 度带自动分区只支持 73.5 <= lon < 136.5，收到 {lon}"),
+        ));
     }
-    // 以 1.5° 为分界，保证带号稳定性与中央子午线匹配
+    // 以 1.5 度为分界，保证带号与中央子午线稳定匹配。
     let zone = ((lon + 1.5) / 3.0).floor() as i32;
-    zone.clamp(25, 45) as u8
+    Ok(zone as u8)
 }
 
 /// 从经度计算 6度带带号
-#[must_use]
-pub fn auto_gk6_zone(lon: f64) -> u8 {
-    // 6度带带号：中央子午线 = zone * 6 - 3
-    // 反推：zone = (lon + 3) / 6，向最近整数取整
+pub fn auto_gk6_zone(lon: f64) -> GeoResult<u8> {
+    if !lon.is_finite() || !(72.0..138.0).contains(&lon) {
+        return Err(GeoError::projection_failed(
+            "自动六度带带号",
+            format!("6 度带自动分区只支持 72.0 <= lon < 138.0，收到 {lon}"),
+        ));
+    }
+    // 六度带中央子午线满足 zone * 6 - 3。
+    // 这里按最近中央子午线选带号，而不是把非法经度夹逼到边界带。
     let zone = ((lon + 3.0) / 6.0).round() as i32;
-    zone.clamp(13, 23) as u8
+    Ok(zone as u8)
 }
 
 /// 3度带高斯-克吕格正向转换
@@ -199,10 +188,7 @@ mod tests {
 
         let (x, _y) = geographic_to_gauss_kruger(lon, lat, central_lon).expect("to GK");
 
-        assert!(
-            (x - 500_000.0).abs() < 1.0,
-            "x should be near 500000: {x}"
-        );
+        assert!((x - 500_000.0).abs() < 1.0, "x should be near 500000: {x}");
     }
 
     #[test]
@@ -221,9 +207,9 @@ mod tests {
 
     #[test]
     fn test_gk3_zone_functions() {
-        assert_eq!(auto_gk3_zone(117.0), 39);
-        assert_eq!(auto_gk3_zone(116.0), 39);
-        assert_eq!(auto_gk3_zone(120.0), 40);
+        assert_eq!(auto_gk3_zone(117.0).expect("117E"), 39);
+        assert_eq!(auto_gk3_zone(116.0).expect("116E"), 39);
+        assert_eq!(auto_gk3_zone(120.0).expect("120E"), 40);
 
         assert!((gk3_central_meridian(39) - 117.0).abs() < 1e-10);
     }
@@ -234,11 +220,19 @@ mod tests {
         // 带号计算: zone = floor((lon + 3) / 6) + 1
         // zone = floor((117 + 3) / 6) + 1 = floor(20) + 1 = 21
         // 但中央子午线 117° 对应 zone = 20 (cm = 20*6 - 3 = 117)
-        assert_eq!(auto_gk6_zone(117.0), 20);
-        assert_eq!(auto_gk6_zone(120.0), 21);
-        assert_eq!(auto_gk6_zone(114.0), 20);
+        assert_eq!(auto_gk6_zone(117.0).expect("117E"), 20);
+        assert_eq!(auto_gk6_zone(120.0).expect("120E"), 21);
+        assert_eq!(auto_gk6_zone(114.0).expect("114E"), 20);
 
         assert!((gk6_central_meridian(20) - 117.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_gk_zone_functions_reject_invalid_longitude() {
+        assert!(auto_gk3_zone(f64::NAN).is_err());
+        assert!(auto_gk3_zone(70.0).is_err());
+        assert!(auto_gk6_zone(f64::INFINITY).is_err());
+        assert!(auto_gk6_zone(140.0).is_err());
     }
 
     #[test]
@@ -288,11 +282,11 @@ mod tests {
     #[test]
     fn test_gauss_kruger_precision() {
         let test_cases = [
-            (117.0, 39.0, 117.0),    // 中央子午线
-            (116.0, 39.0, 117.0),    // 偏离1度
-            (118.0, 39.0, 117.0),    // 偏离1度
-            (117.0, 0.0, 117.0),     // 赤道
-            (117.0, 60.0, 117.0),    // 高纬度
+            (117.0, 39.0, 117.0), // 中央子午线
+            (116.0, 39.0, 117.0), // 偏离1度
+            (118.0, 39.0, 117.0), // 偏离1度
+            (117.0, 0.0, 117.0),  // 赤道
+            (117.0, 60.0, 117.0), // 高纬度
         ];
 
         for (lon, lat, cm) in test_cases {
