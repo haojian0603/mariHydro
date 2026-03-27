@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
+$Crs = Join-Path $ProjectRoot "crates/mh_geo/src/crs.rs"
 $ProjectionMod = Join-Path $ProjectRoot "crates/mh_geo/src/projection/mod.rs"
 $GaussKruger = Join-Path $ProjectRoot "crates/mh_geo/src/projection/gauss_kruger.rs"
 $Utm = Join-Path $ProjectRoot "crates/mh_geo/src/projection/utm.rs"
@@ -56,6 +57,12 @@ try {
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'auto_utm_zone\(lon\)\?' -Message "ProjectionType::auto_utm must delegate UTM band selection to the explicit auto_utm_zone helper"
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'test_auto_utm_maps_antimeridian_to_zone_60' -Message "ProjectionType::auto_utm must keep antimeridian regression coverage"
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'auto_utm_zone\(lon\)\.map_err\(' -Message "wgs84_to_auto_utm must reuse explicit auto_utm_zone error semantics"
+    Assert-PatternPresent -Path $Crs -Pattern 'use crate::projection::\{auto_gk3_zone, auto_utm_zone\};' -Message "CrsDefinition must import the shared auto_utm_zone helper"
+    Assert-PatternPresent -Path $Crs -Pattern 'let zone = auto_utm_zone\(lon\)\?;' -Message "CrsDefinition::auto_utm_checked must delegate to the shared auto_utm_zone helper"
+    Assert-PatternPresent -Path $Crs -Pattern 'auto_utm_zone\(lon\)\.map_err\(\|err\| MhError::invalid_input\(err\.to_string\(\)\)\)\?;' -Message "auto_projected_crs must reuse explicit auto_utm_zone error semantics"
+    Assert-PatternPresent -Path $Crs -Pattern 'test_auto_utm_maps_antimeridian_to_zone_60' -Message "CrsDefinition::auto_utm must keep antimeridian regression coverage"
+    Assert-PatternPresent -Path $Crs -Pattern 'test_auto_projected_crs_maps_antimeridian_to_zone_60' -Message "auto_projected_crs must keep antimeridian regression coverage"
+    Assert-PatternAbsent -Path $Crs -Pattern '\(\(lon \+ 180\.0\) / 6\.0\)\.floor\(\) as u8 \+ 1' -Message "CRS entrypoints must not duplicate the raw UTM zone formula"
 
     Assert-PatternPresent -Path $GaussKruger -Pattern 'pub fn auto_gk3_zone\(lon: f64\) -> GeoResult<u8>' -Message "auto_gk3_zone must return GeoResult<u8>"
     Assert-PatternPresent -Path $GaussKruger -Pattern 'pub fn auto_gk6_zone\(lon: f64\) -> GeoResult<u8>' -Message "auto_gk6_zone must return GeoResult<u8>"

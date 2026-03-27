@@ -18,7 +18,7 @@
 //! ```
 
 use crate::ellipsoid::Ellipsoid;
-use crate::projection::auto_gk3_zone;
+use crate::projection::{auto_gk3_zone, auto_utm_zone};
 use crate::projection::{FastProjection, ProjectionType};
 use mh_foundation::error::{MhError, MhResult};
 use serde::{Deserialize, Serialize};
@@ -127,11 +127,7 @@ impl CrsDefinition {
                 "纬度", lat, -80.0, 84.0,
             ));
         }
-        let zone = if lon == 180.0 {
-            60
-        } else {
-            ((lon + 180.0) / 6.0).floor() as u8 + 1
-        };
+        let zone = auto_utm_zone(lon)?;
         let north = lat >= 0.0;
         Self::utm_zone_checked(zone, north)
     }
@@ -568,13 +564,7 @@ pub fn auto_projected_crs(lon: f64, lat: f64) -> MhResult<Crs> {
         Crs::from_epsg(code)
     } else {
         // 其他区域使用 UTM
-        let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
-        if !(1..=60).contains(&zone) {
-            return Err(MhError::invalid_input(format!(
-                "UTM 带号超出范围: {} (期望 1..=60)",
-                zone
-            )));
-        }
+        let zone = auto_utm_zone(lon).map_err(|err| MhError::invalid_input(err.to_string()))?;
         Crs::utm(zone, lat >= 0.0)
     }
 }
@@ -612,6 +602,12 @@ mod tests {
         // 南半球
         let utm_south = CrsDefinition::auto_utm(116.0, -35.0).unwrap();
         assert_eq!(utm_south.epsg_code(), Some(32750));
+    }
+
+    #[test]
+    fn test_auto_utm_maps_antimeridian_to_zone_60() {
+        let utm = CrsDefinition::auto_utm(180.0, 10.0).unwrap();
+        assert_eq!(utm.epsg_code(), Some(32660));
     }
 
     #[test]
@@ -698,5 +694,11 @@ mod tests {
         // 纽约 - 应该选择 UTM
         let crs_ny = auto_projected_crs(-74.0, 40.7).unwrap();
         assert!(crs_ny.is_projected());
+    }
+
+    #[test]
+    fn test_auto_projected_crs_maps_antimeridian_to_zone_60() {
+        let crs = auto_projected_crs(180.0, 10.0).unwrap();
+        assert_eq!(crs.epsg(), Some(32660));
     }
 }

@@ -39,6 +39,7 @@
 - [RULE_GEO_CONVERGENCE_REQUIRES_PROJECTED_TARGET] 收敛角和基于收敛角的矢量旋转补偿只对投影目标 CRS 有定义。目标 CRS 仍是地理坐标时，公开入口必须显式报错，不能返回 `0` 角度把“未定义”伪装成“无旋转”。
 - [RULE_GEO_CONVERGENCE_EXACT_PROJECTION_FORMULA] 投影收敛角必须由目标投影本身给出真实语义：横轴墨卡托类投影走显式公式，Web Mercator 仅在定义域内按“经线保持竖直”的几何性质显式返回 `0`。主链禁止再用 `delta_lat`、有限差分北向量或其他近似扰动去推收敛角。
 - [RULE_GEO_AUTO_ZONE_DOMAIN_EXPLICIT] Automatic UTM and Gauss-Kruger zone helpers must validate finite longitude/latitude and supported domain explicitly. No `clamp`, no synthetic default zone, and no “nearest valid zone” fallback in public APIs. If an antimeridian edge is supported, the code must map it deliberately with an explicit branch instead of relying on overflow-prone formulas.
+- [RULE_GEO_AUTO_ZONE_SINGLE_SOURCE_OF_TRUTH] Higher-level CRS helpers must not duplicate automatic zone formulas. Public CRS entrypoints such as `CrsDefinition::auto_utm*`, `auto_projected_crs`, and equivalent helpers must delegate to the shared checked zone helper so that domain checks and antimeridian semantics stay identical across the mainline.
 - [RULE_SPATIAL_RADIUS_QUERY_EXACT] 空间索引的半径查询必须按“候选包围盒 + 精确距离过滤”实现，并且对负半径、非有限半径显式报错。禁止依赖 `nearest_neighbor_iter(...).take_while(...)` 这类顺序副作用，把最近邻遍历伪装成真实范围查询。
 - [RULE_MESH_CIRCLE_QUERY_EXACT] 网格空间索引的圆形查询必须按真实的“单元多边形与圆相交”语义实现，并且对非有限圆心、非有限半径和负半径显式报错。禁止再用包围盒中心点、代表点或“命中一些单元即可”的启发式近似冒充精确查询。
 - [RULE_STRUCTURED_BED_ELEVATION_EXPLICIT] 结构化网格不得把缺失的床面高程解释成 `0.0` 或默认平床。`StructuredMesh::freeze` 只能冻结已显式提供的 `bed_elevation` 或显式声明的 `uniform_bed_elevation`；缺失时必须立即报错，不能伪造平床地形。
