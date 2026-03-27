@@ -3,7 +3,7 @@
 //!
 //! 包含投影转换、坐标系统、几何计算相关的错误。
 //! 所有错误可转换为 `mh_foundation::MhError` 向上传播。
-//! 
+//!
 //! # 错误分类
 //!
 //! - **配置错误**：EPSG代码不支持、CRS定义无效
@@ -12,8 +12,8 @@
 //! - **几何错误**：空间索引操作失败
 //! - **基础错误**：IO错误（来自Foundation）
 
-use thiserror::Error;
 use mh_foundation::MhError;
+use thiserror::Error;
 
 /// Geo 模块结果类型
 pub type GeoResult<T> = Result<T, GeoError>;
@@ -92,6 +92,13 @@ pub enum GeoError {
     #[error("Vincenty 公式迭代不收敛")]
     VincentyNotConverged,
 
+    /// 零长度向量不能归一化
+    #[error("零长度向量无法归一化: {vector_type}")]
+    ZeroLengthVector {
+        /// 发生归一化失败的向量类型
+        vector_type: &'static str,
+    },
+
     /// 空间索引操作失败
     #[error("空间索引错误: {operation} - {message}")]
     SpatialIndexError {
@@ -125,23 +132,26 @@ impl From<GeoError> for MhError {
     fn from(err: GeoError) -> Self {
         match err {
             GeoError::UnsupportedEpsg { code, supported } => {
-                MhError::invalid_input(format!(
-                    "不支持的EPSG代码 {code}。支持的代码: {supported}"
-                ))
+                MhError::invalid_input(format!("不支持的EPSG代码 {code}。支持的代码: {supported}"))
             }
-            GeoError::CoordinateOutOfRange { coord_type, value, min, max } => {
-                MhError::invalid_input(format!(
-                    "{coord_type} 超出范围: {value:.6} (允许范围: {min} 到 {max})"
-                ))
-            }
+            GeoError::CoordinateOutOfRange {
+                coord_type,
+                value,
+                min,
+                max,
+            } => MhError::invalid_input(format!(
+                "{coord_type} 超出范围: {value:.6} (允许范围: {min} 到 {max})"
+            )),
             GeoError::InvalidUtmZone { zone } => {
                 MhError::invalid_input(format!("无效的UTM带号 {zone} (允许范围: 1-60)"))
             }
-            GeoError::InvalidGaussKrugerZone { zone, min_zone, max_zone } => {
-                MhError::invalid_input(format!(
-                    "无效的高斯-克吕格带号 {zone} (允许范围: {min_zone}-{max_zone})"
-                ))
-            }
+            GeoError::InvalidGaussKrugerZone {
+                zone,
+                min_zone,
+                max_zone,
+            } => MhError::invalid_input(format!(
+                "无效的高斯-克吕格带号 {zone} (允许范围: {min_zone}-{max_zone})"
+            )),
             GeoError::ProjectionFailed { operation, message } => {
                 MhError::internal(format!("投影转换失败 [{operation}]: {message}"))
             }
@@ -157,13 +167,16 @@ impl From<GeoError> for MhError {
             GeoError::SpatialIndexError { operation, message } => {
                 MhError::internal(format!("空间索引操作失败 [{operation}]: {message}"))
             }
+            GeoError::ZeroLengthVector { vector_type } => {
+                MhError::invalid_input(format!("零长度向量无法归一化: {vector_type}"))
+            }
             GeoError::SingularTransform => {
                 MhError::invalid_input("仿射变换矩阵奇异（行列式接近零），无法求逆".to_string())
             }
             GeoError::ConvergenceAngleError { message } => {
                 MhError::internal(format!("收敛角计算失败: {message}"))
             }
-            GeoError::Foundation(err) => err,  // 直接返回包含的 MhError
+            GeoError::Foundation(err) => err, // 直接返回包含的 MhError
         }
     }
 }
@@ -254,6 +267,12 @@ impl GeoError {
             operation,
             message: message.into(),
         }
+    }
+
+    /// 创建零长度向量归一化错误
+    #[inline]
+    pub fn zero_length_vector(vector_type: &'static str) -> Self {
+        Self::ZeroLengthVector { vector_type }
     }
 
     /// 创建奇异变换错误
@@ -464,6 +483,18 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_length_vector_error() {
+        let err = GeoError::zero_length_vector("Point3D");
+        assert!(matches!(
+            &err,
+            GeoError::ZeroLengthVector { vector_type } if *vector_type == "Point3D"
+        ));
+        let msg = format!("{}", err);
+        assert!(msg.contains("零长度向量"));
+        assert!(msg.contains("Point3D"));
+    }
+
+    #[test]
     fn test_convergence_angle_error() {
         let err = GeoError::convergence_angle_error("子午线计算溢出");
         assert!(matches!(
@@ -486,7 +517,10 @@ mod tests {
     fn test_ensure_failure() {
         let result = GeoError::ensure(false, GeoError::invalid_utm_zone(99));
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GeoError::InvalidUtmZone { zone: 99 }));
+        assert!(matches!(
+            result.unwrap_err(),
+            GeoError::InvalidUtmZone { zone: 99 }
+        ));
     }
 
     #[test]
@@ -499,7 +533,10 @@ mod tests {
     fn test_check_epsg_failure() {
         let result = GeoError::check_epsg(3000, 4000, 5000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GeoError::UnsupportedEpsg { code: 3000, .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            GeoError::UnsupportedEpsg { code: 3000, .. }
+        ));
     }
 
     #[test]
@@ -537,7 +574,7 @@ mod tests {
     fn test_geo_error_to_mh_error_unsupported_epsg() {
         let geo_err = GeoError::unsupported_epsg(99999, "EPSG:4326");
         let mh_err: MhError = geo_err.into();
-        
+
         assert!(matches!(
             mh_err,
             MhError::InvalidInput { ref message }
@@ -549,7 +586,7 @@ mod tests {
     fn test_geo_error_to_mh_error_coordinate_out_of_range() {
         let geo_err = GeoError::coordinate_out_of_range("纬度", 95.5, -90.0, 90.0);
         let mh_err: MhError = geo_err.into();
-        
+
         assert!(matches!(
             mh_err,
             MhError::InvalidInput { ref message }
@@ -561,7 +598,7 @@ mod tests {
     fn test_geo_error_to_mh_error_projection_failed() {
         let geo_err = GeoError::projection_failed("逆向投影", "迭代发散");
         let mh_err: MhError = geo_err.into();
-        
+
         assert!(matches!(
             mh_err,
             MhError::Internal { ref message }
@@ -578,11 +615,11 @@ mod tests {
             GeoError::geometry_computation_failed("计算", "错误"),
             GeoError::convergence_angle_error("失败"),
         ];
-        
+
         for geo_err in variants {
             let mh_err: MhError = geo_err.into();
             match mh_err {
-                MhError::Internal { .. } => {},
+                MhError::Internal { .. } => {}
                 _ => unreachable!("应转换为Internal类型"),
             }
         }
@@ -596,13 +633,14 @@ mod tests {
             GeoError::coordinate_out_of_range("test", 1.0, 0.0, 2.0),
             GeoError::invalid_utm_zone(99),
             GeoError::invalid_gauss_kruger_zone(99, 1, 23),
+            GeoError::zero_length_vector("Point2D"),
             GeoError::singular_transform(),
         ];
-        
+
         for geo_err in variants {
             let mh_err: MhError = geo_err.into();
             match mh_err {
-                MhError::InvalidInput { .. } => {},
+                MhError::InvalidInput { .. } => {}
                 _ => unreachable!("应转换为InvalidInput类型"),
             }
         }

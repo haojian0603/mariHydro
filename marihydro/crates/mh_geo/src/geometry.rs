@@ -168,32 +168,18 @@ impl Point3D {
 
     /// 归一化向量
     ///
-    /// 如果向量长度接近零，返回 None
+    /// 如果向量长度接近零，返回显式错误
     #[inline]
-    #[must_use]
-    pub fn normalize(&self) -> Option<Self> {
+    pub fn normalize(&self) -> GeoResult<Self> {
         let len = self.length();
         if len < 1e-14 {
-            None
+            Err(GeoError::zero_length_vector("Point3D"))
         } else {
-            Some(Self {
+            Ok(Self {
                 x: self.x / len,
                 y: self.y / len,
                 z: self.z / len,
             })
-        }
-    }
-
-    /// 强制归一化向量
-    ///
-    /// 如果向量长度接近零，返回零向量
-    #[inline]
-    #[must_use]
-    pub fn normalize_or_zero(&self) -> Self {
-        if let Some(normalized) = self.normalize() {
-            normalized
-        } else {
-            Self::ZERO
         }
     }
 
@@ -706,28 +692,18 @@ impl Point2D {
     }
 
     /// 归一化向量
+    ///
+    /// 如果向量长度接近零，返回显式错误
     #[inline]
-    #[must_use]
-    pub fn normalize(&self) -> Option<Self> {
+    pub fn normalize(&self) -> GeoResult<Self> {
         let len = self.length();
         if len < 1e-14 {
-            None
+            Err(GeoError::zero_length_vector("Point2D"))
         } else {
-            Some(Self {
+            Ok(Self {
                 x: self.x / len,
                 y: self.y / len,
             })
-        }
-    }
-
-    /// 强制归一化向量
-    #[inline]
-    #[must_use]
-    pub fn normalize_or_zero(&self) -> Self {
-        if let Some(normalized) = self.normalize() {
-            normalized
-        } else {
-            Self::ZERO
         }
     }
 
@@ -1063,8 +1039,18 @@ mod tests {
     }
 
     #[test]
-    fn test_point3d_normalize_or_zero_for_zero_vector() {
-        let normalized = Point3D::ZERO.normalize_or_zero();
-        assert_eq!(normalized, Point3D::ZERO);
+    fn test_point3d_normalize_reports_zero_length_vector() {
+        let err = Point3D::ZERO
+            .normalize()
+            .expect_err("零向量归一化必须显式失败");
+        assert!(matches!(err, GeoError::ZeroLengthVector { vector_type } if vector_type == "Point3D"));
+    }
+
+    #[test]
+    fn test_point2d_normalize_reports_zero_length_vector() {
+        let err = Point2D::ZERO
+            .normalize()
+            .expect_err("零向量归一化必须显式失败");
+        assert!(matches!(err, GeoError::ZeroLengthVector { vector_type } if vector_type == "Point2D"));
     }
 }

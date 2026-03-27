@@ -95,6 +95,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_geodesic_contracts.ps1"
     }
 
+    Invoke-Step -Name "geo vector contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_vector_contracts.ps1"
+    }
+
     Invoke-Step -Name "geo affine contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"
     }

@@ -184,6 +184,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.5485: geo vector contract guard
+    Write-Host "=== Phase 0.5485: geo vector contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_vector_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo vector contracts must pass"
+    } else {
+        Write-Host "[OK] geo vector contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.549: geo affine contract guard
     Write-Host "=== Phase 0.549: geo affine contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"
