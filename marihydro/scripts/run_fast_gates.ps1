@@ -47,6 +47,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_data_contracts.ps1"
     }
 
+    Invoke-Step -Name "driver metadata contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_driver_metadata_contracts.ps1"
+    }
+
     Invoke-Step -Name "external driver access contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_driver_access_contracts.ps1"
     }

@@ -185,6 +185,10 @@ try {
         $Failed += "check_external_data_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_driver_metadata_contracts.ps1" -Path (Join-Path $ScriptDir "check_driver_metadata_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_driver_metadata_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_external_driver_access_contracts.ps1" -Path (Join-Path $ScriptDir "check_external_driver_access_contracts.ps1") -Arguments @{})) {
         $Failed += "check_external_driver_access_contracts.ps1"
     }
@@ -334,6 +338,7 @@ try {
     Invoke-InformationalScan -Name 'GMSH parser fallback residue' -Roots @("crates/mh_mesh/src/io/gmsh.rs") -Pattern 'parse::<usize>\(\)\.unwrap_or\(0\)|parts\[3\]\.parse\(\)\.unwrap_or\(0\)|filter_map\(\|s\| s\.parse\(\)\.ok\(\)\)'
     Invoke-InformationalScan -Name 'Web Mercator domain fallback residue' -Roots @("crates/mh_geo/src/projection/web_mercator.rs") -Pattern 'lat\.clamp\(\s*-WEB_MERCATOR_MAX_LAT\s*,\s*WEB_MERCATOR_MAX_LAT\s*\)|pub fn web_mercator_resolution\(.*\) -> f64|pub fn web_mercator_scale\(.*\) -> f64|pub fn lonlat_to_tile\(.*\) -> \(u32, u32\)|pub fn tile_to_lonlat\(.*\) -> \(f64, f64\)|pub fn tile_to_bbox\(.*\) -> \(f64, f64, f64, f64\)|expect\("tile_to_lonlat returns coordinates inside Web Mercator domain"\)'
     Invoke-InformationalScan -Name 'external data partial-parse residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'token\.parse::<f64>\(\)\.ok\(\)|and_then\(\|v\| v\.parse\(\)\.ok\(\)|_ => 30|unwrap_or\(&empty_bands\)|bands\.len\(\)\.max\(1\)|parts\.next\(\)\.unwrap_or\(\"\"\)|if let Some\(space\) = cleaned\.find\('
+    Invoke-InformationalScan -Name 'driver metadata fallback residue' -Roots @("crates/mh_io/src/drivers/gdal/driver.rs","crates/mh_io/src/drivers/netcdf/driver.rs") -Pattern 'dataset\.projection\(\)\.ok\(\)|dataset\.rasterband\(1\)\.ok\(\)|attribute\("standard_name"\)\s*\.and_then\(\|a\| a\.value\(\)\.ok\(\)|attribute\("long_name"\)\s*\.and_then\(\|a\| a\.value\(\)\.ok\(\)|attribute\("units"\)\s*\.and_then\(\|a\| a\.value\(\)\.ok\(\)|other => Ok\(format!\("\{:\?\}", other\)\)'
     Invoke-InformationalScan -Name 'external CLI context-loss residue' -Roots @("crates/mh_io/src/drivers") -Pattern 'map_err\(\|_\|\s*(?:GdalError|NetCdfError)::NotAvailable|(?:OpenFailed|ReadFailed)\(\s*String::from_utf8_lossy\(&output\.stderr\)\.to_string\(\)\s*\)|NotAvailable,\s*$'
     Invoke-InformationalScan -Name 'export metadata fallback residue' -Roots @("crates/mh_io/src") -Pattern 'serde_json::to_string\(names\)\.unwrap_or_else\(\|_\| "\[\]"\.into\(\)\)|boundary_names.*\[\]|field names.*\[\]'
     Invoke-InformationalScan -Name 'metadata timestamp fallback residue' -Roots @("crates/mh_io/src") -Pattern 'duration_since\(std::time::UNIX_EPOCH\)\s*\.map\(\|d\| d\.as_secs\(\)\)\s*\.unwrap_or\(0\)|created_at:\s*0\b'

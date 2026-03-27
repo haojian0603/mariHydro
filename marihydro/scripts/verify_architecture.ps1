@@ -85,6 +85,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.506: driver metadata contract guard
+    Write-Host "=== Phase 0.506: driver metadata contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_driver_metadata_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "driver metadata contracts must pass"
+    } else {
+        Write-Host "[OK] driver metadata contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.5125: external driver access contract guard
     Write-Host "=== Phase 0.5125: external driver access contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_external_driver_access_contracts.ps1"

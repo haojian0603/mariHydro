@@ -31,6 +31,7 @@
 - [RULE_IMPORT_NULL_GEOMETRY_EXPLICIT] GeoJSON `Feature.geometry = null` 不得在导入阶段被静默丢弃、过滤或折叠成“空要素”。如果当前公开数据结构不能真实表达空几何，就必须在解析阶段显式报错，并把这种结构性失败保留到调用方。
 - [RULE_EXTERNAL_SHAPE_METADATA_EXPLICIT] 外部数组、网格和变量的维度信息必须显式匹配。不得用 `unwrap_or_default()`、缺省 `0/1` 或隐式单例轴去猜测 shape；维度缺失、轴顺序不符或前导维长度不合法时只能报错。
 - [RULE_EXTERNAL_DRIVER_INDEX_ACCESS_EXPLICIT] 外部数据驱动的公开访问器不得把越界索引、NoData 像元或维度不匹配折叠成 `Option::None`。像 `RasterBand::get`、`RasterBand::interpolate`、`Variable::get` 这类接口必须返回显式错误，并保留“越界”“NoData”“索引维度无效”等失败语义。
+- [RULE_DRIVER_METADATA_TRUTHFUL] 外部驱动允许“元数据缺失”作为真实 `None` 保留，但绝不允许把“元数据读取失败”“首波段句柄损坏”“属性值存在但类型错误/解码失败”伪装成缺失。只要驱动已经成功打开对象，后续元数据读取失败就必须显式报错。
 - [RULE_EXPORT_STATE_ACCESS_EXPLICIT] 导出链公开状态访问器不得把缺字段、索引越界或实现者内部失败折叠成 `Option::None`。像 `VtuState::scalar` 这类接口必须返回显式错误，并保留“字段缺失”“索引越界”等失败语义。
 - [RULE_EXPORT_STATE_SHAPE_EXPLICIT] 导出链状态构造器不得接受长度不一致的数组切片并把失败拖到导出阶段。像 `SimpleState::new`、`StateWithScalars::new`、`with_scalar` 这类入口必须在构造期显式校验 shape，不允许后续靠 panic 或越界访问暴露错误。
 - [RULE_GEO_PROJECTION_ERRORS_EXPLICIT] 地理投影主链上的辅助量计算（比例因子、收敛角、瓦片边界等）不得用 `NaN`、`0`、`(0,0)` 之类的数值哨兵伪装失败。若计算依赖可失败的正反投影步骤，公开辅助函数就必须返回错误；若理论上不应失败，则必须把“不可能失败”的前提写清楚，而不是留静默回退。

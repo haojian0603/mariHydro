@@ -9,6 +9,41 @@ use super::error::NetCdfError;
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(any(feature = "netcdf", test))]
+#[derive(Debug, Clone)]
+enum MetadataStringValue {
+    Missing,
+    String(String),
+    WrongType(String),
+    ReadFailed(String),
+}
+
+#[cfg(any(feature = "netcdf", test))]
+fn resolve_optional_string_metadata(
+    label: &str,
+    value: MetadataStringValue,
+) -> Result<Option<String>, NetCdfError> {
+    match value {
+        MetadataStringValue::Missing => Ok(None),
+        MetadataStringValue::String(text) => Ok(Some(text)),
+        MetadataStringValue::WrongType(actual) => Err(NetCdfError::UnsupportedLayout(format!(
+            "{label} 必须是字符串，实际为 {actual}"
+        ))),
+        MetadataStringValue::ReadFailed(detail) => Err(NetCdfError::ReadFailed(detail)),
+    }
+}
+
+#[cfg(any(feature = "netcdf", test))]
+fn resolve_required_string_metadata(
+    label: &str,
+    value: MetadataStringValue,
+) -> Result<String, NetCdfError> {
+    match resolve_optional_string_metadata(label, value)? {
+        Some(text) => Ok(text),
+        None => Err(NetCdfError::AttributeNotFound(label.to_string())),
+    }
+}
+
 /// 维度信息
 #[derive(Debug, Clone)]
 pub struct Dimension {
@@ -96,6 +131,38 @@ pub struct NetCdfDriver {
 
 #[cfg(feature = "netcdf")]
 impl NetCdfDriver {
+    fn read_optional_string_attribute(
+        var: &netcdf::Variable,
+        field: &str,
+    ) -> Result<Option<String>, NetCdfError> {
+        let label = format!("变量 {} 的属性 {}", var.name(), field);
+        let value = match var.attribute(field) {
+            Some(attr) => match attr.value() {
+                Ok(netcdf::AttrValue::Str(text)) => MetadataStringValue::String(text.to_string()),
+                Ok(other) => MetadataStringValue::WrongType(format!("{other:?}")),
+                Err(err) => MetadataStringValue::ReadFailed(format!("{label} 读取失败: {err}")),
+            },
+            None => MetadataStringValue::Missing,
+        };
+        resolve_optional_string_metadata(&label, value)
+    }
+
+    fn read_required_string_global_attribute(
+        file: &netcdf::File,
+        field: &str,
+    ) -> Result<String, NetCdfError> {
+        let label = format!("全局属性 {}", field);
+        let value = match file.attribute(field) {
+            Some(attr) => match attr.value() {
+                Ok(netcdf::AttrValue::Str(text)) => MetadataStringValue::String(text.to_string()),
+                Ok(other) => MetadataStringValue::WrongType(format!("{other:?}")),
+                Err(err) => MetadataStringValue::ReadFailed(format!("{label} 读取失败: {err}")),
+            },
+            None => MetadataStringValue::Missing,
+        };
+        resolve_required_string_metadata(&label, value)
+    }
+
     /// 打开 NetCDF 文件
     pub fn open(path: impl AsRef<Path>) -> Result<Self, NetCdfError> {
         let path = path.as_ref();
@@ -163,29 +230,12 @@ impl NetCdfDriver {
                     name: v.name().to_string(),
                     dimensions: dims,
                     dtype: format!("{:?}", v.vartype()),
-                    standard_name: v
-                        .attribute("standard_name")
-                        .and_then(|a| a.value().ok())
-                        .and_then(|v| match v {
-                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                            _ => None,
-                        }),
-                    long_name: v
-                        .attribute("long_name")
-                        .and_then(|a| a.value().ok())
-                        .and_then(|v| match v {
-                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                            _ => None,
-                        }),
-                    units: v.attribute("units").and_then(|a| a.value().ok()).and_then(
-                        |v| match v {
-                            netcdf::AttrValue::Str(s) => Some(s.to_string()),
-                            _ => None,
-                        },
-                    ),
+                    standard_name: Self::read_optional_string_attribute(&v, "standard_name")?,
+                    long_name: Self::read_optional_string_attribute(&v, "long_name")?,
+                    units: Self::read_optional_string_attribute(&v, "units")?,
                 }
             })
-            .collect();
+            .collect::<Result<Vec<_>, NetCdfError>>()?;
         Ok(vars)
     }
 
@@ -249,15 +299,7 @@ impl NetCdfDriver {
 
     /// 获取全局属性
     pub fn global_attribute(&self, name: &str) -> Result<String, NetCdfError> {
-        let attr = self
-            .file
-            .attribute(name)
-            .ok_or_else(|| NetCdfError::AttributeNotFound(name.to_string()))?;
-
-        match attr.value()? {
-            netcdf::AttrValue::Str(s) => Ok(s.to_string()),
-            other => Ok(format!("{:?}", other)),
-        }
+        Self::read_required_string_global_attribute(&self.file, name)
     }
 }
 
@@ -821,6 +863,51 @@ data:
         assert!(message.contains("读取头部"));
         assert!(message.contains("退出码 3"));
         assert!(message.contains("missing variable"));
+    }
+
+    #[test]
+    fn test_resolve_optional_string_metadata_accepts_missing() {
+        let value =
+            resolve_optional_string_metadata("变量 h 的属性 units", MetadataStringValue::Missing)
+                .expect("缺失的可选字符串属性应保留为 None");
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_resolve_optional_string_metadata_accepts_string() {
+        let value = resolve_optional_string_metadata(
+            "variable h attribute units",
+            MetadataStringValue::String("m".to_string()),
+        )
+        .expect("string metadata must keep original value");
+        assert_eq!(value.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn test_resolve_optional_string_metadata_rejects_wrong_type() {
+        let err = resolve_optional_string_metadata(
+            "变量 h 的属性 units",
+            MetadataStringValue::WrongType("Int(1)".to_string()),
+        )
+        .expect_err("非字符串属性必须显式报错");
+        assert!(matches!(err, NetCdfError::UnsupportedLayout(_)));
+    }
+
+    #[test]
+    fn test_resolve_required_string_metadata_rejects_missing() {
+        let err = resolve_required_string_metadata("全局属性 title", MetadataStringValue::Missing)
+            .expect_err("缺失的必需字符串属性必须显式报错");
+        assert!(matches!(err, NetCdfError::AttributeNotFound(_)));
+    }
+
+    #[test]
+    fn test_resolve_required_string_metadata_rejects_read_failure() {
+        let err = resolve_required_string_metadata(
+            "全局属性 title",
+            MetadataStringValue::ReadFailed("属性载荷解码失败".to_string()),
+        )
+        .expect_err("属性读取失败必须显式报错");
+        assert!(matches!(err, NetCdfError::ReadFailed(_)));
     }
 
     #[cfg(not(feature = "netcdf"))]

@@ -57,6 +57,37 @@ impl RasterMetadata {
     }
 }
 
+#[cfg(any(feature = "gdal", test))]
+fn projection_metadata_result(
+    projection: Result<String, GdalError>,
+) -> Result<Option<String>, GdalError> {
+    projection.map(|wkt| {
+        let trimmed = wkt.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[cfg(any(feature = "gdal", test))]
+fn first_band_nodata_metadata(
+    band_count: usize,
+    first_band_nodata: Result<Option<f64>, GdalError>,
+) -> Result<Option<f64>, GdalError> {
+    if band_count == 0 {
+        return Ok(None);
+    }
+
+    match first_band_nodata? {
+        Some(value) if !value.is_finite() => Err(GdalError::ReadFailed(
+            "首波段 NoData 元数据必须是有限值".to_string(),
+        )),
+        other => Ok(other),
+    }
+}
+
 /// 栅格波段数据
 #[derive(Debug, Clone)]
 pub struct RasterBand {
@@ -146,13 +177,23 @@ impl GdalDriver {
         let (width, height) = dataset.raster_size();
         let band_count = dataset.raster_count();
         let geo_transform = dataset.geo_transform()?;
-        let projection = dataset.projection().ok();
+        let projection = projection_metadata_result(
+            dataset
+                .projection()
+                .map_err(|e| GdalError::ProjectionError(format!("读取数据集投影失败: {e}"))),
+        )?;
 
-        let nodata = if band_count > 0 {
-            dataset.rasterband(1).ok().and_then(|b| b.no_data_value())
-        } else {
-            None
-        };
+        let nodata = first_band_nodata_metadata(
+            band_count,
+            if band_count > 0 {
+                dataset
+                    .rasterband(1)
+                    .map_err(|e| GdalError::ReadFailed(format!("读取首波段元数据失败: {e}")))
+                    .map(|band| band.no_data_value())
+            } else {
+                Ok(None)
+            },
+        )?;
 
         let metadata = RasterMetadata {
             width,
@@ -521,9 +562,7 @@ mod tests {
             nodata: None,
         };
 
-        let err = band
-            .get(2, 0)
-            .expect_err("越界像元必须返回显式错误");
+        let err = band.get(2, 0).expect_err("越界像元必须返回显式错误");
         assert!(matches!(err, GdalError::PixelOutOfBounds { .. }));
     }
 
@@ -536,9 +575,7 @@ mod tests {
             nodata: Some(-9999.0),
         };
 
-        let err = band
-            .get(0, 0)
-            .expect_err("NoData 像元必须返回显式错误");
+        let err = band.get(0, 0).expect_err("NoData 像元必须返回显式错误");
         assert!(matches!(err, GdalError::NoDataPixel { x: 0, y: 0 }));
     }
 
@@ -581,6 +618,29 @@ mod tests {
             "bands": []
         });
         assert!(parse_gdalinfo_metadata(&value).is_err());
+    }
+
+    #[test]
+    fn test_projection_metadata_result_rejects_projection_query_failure() {
+        let err =
+            projection_metadata_result(Err(GdalError::ProjectionError("投影句柄损坏".to_string())))
+                .expect_err("投影查询失败必须显式报错");
+        assert!(matches!(err, GdalError::ProjectionError(_)));
+    }
+
+    #[test]
+    fn test_first_band_nodata_metadata_rejects_first_band_failure() {
+        let err =
+            first_band_nodata_metadata(1, Err(GdalError::ReadFailed("首波段不可读".to_string())))
+                .expect_err("首波段元数据读取失败必须显式报错");
+        assert!(matches!(err, GdalError::ReadFailed(_)));
+    }
+
+    #[test]
+    fn test_first_band_nodata_metadata_rejects_non_finite_value() {
+        let err = first_band_nodata_metadata(1, Ok(Some(f64::NAN)))
+            .expect_err("非有限 NoData 元数据必须显式报错");
+        assert!(matches!(err, GdalError::ReadFailed(_)));
     }
 
     #[cfg(not(feature = "gdal"))]
