@@ -151,13 +151,12 @@ impl ProjectionType {
     }
 
     /// 获取中央子午线
-    #[must_use]
-    pub fn central_meridian(&self) -> Option<f64> {
+    pub fn central_meridian(&self) -> GeoResult<Option<f64>> {
         match self {
-            Self::Geographic { .. } | Self::WebMercator => None,
-            Self::Utm { zone, .. } => Some(f64::from(*zone) * 6.0 - 183.0),
-            Self::GaussKruger3 { zone } => Some(f64::from(*zone) * 3.0),
-            Self::GaussKruger6 { zone } => Some(f64::from(*zone) * 6.0 - 3.0),
+            Self::Geographic { .. } | Self::WebMercator => Ok(None),
+            Self::Utm { zone, .. } => utm_central_meridian(*zone).map(Some),
+            Self::GaussKruger3 { zone } => gk3_central_meridian(*zone).map(Some),
+            Self::GaussKruger6 { zone } => gk6_central_meridian(*zone).map(Some),
         }
     }
 
@@ -431,6 +430,29 @@ mod tests {
             .to_epsg(),
             Some(32650)
         );
+    }
+
+    #[test]
+    fn test_projection_type_central_meridian_reports_invalid_zone() {
+        let err = ProjectionType::Utm {
+            zone: 0,
+            north: true,
+        }
+        .central_meridian()
+        .expect_err("invalid UTM zone must fail");
+        assert!(matches!(err, GeoError::InvalidUtmZone { zone: 0 }));
+
+        let err = ProjectionType::GaussKruger3 { zone: 24 }
+            .central_meridian()
+            .expect_err("invalid GK3 zone must fail");
+        assert!(matches!(
+            err,
+            GeoError::InvalidGaussKrugerZone {
+                zone: 24,
+                min_zone: 25,
+                max_zone: 45
+            }
+        ));
     }
 
     #[test]

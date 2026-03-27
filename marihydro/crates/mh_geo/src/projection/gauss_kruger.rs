@@ -92,17 +92,17 @@ pub fn gauss_kruger_to_geographic_wgs84(x: f64, y: f64, central_lon: f64) -> MhR
 /// 3度带带号 -> 中央子午线
 ///
 /// 中央子午线 = 带号 × 3
-#[must_use]
-pub fn gk3_central_meridian(zone: u8) -> f64 {
-    f64::from(zone) * 3.0
+pub fn gk3_central_meridian(zone: u8) -> GeoResult<f64> {
+    GeoError::check_gauss_kruger_zone(zone, 25, 45)?;
+    Ok(f64::from(zone) * 3.0)
 }
 
 /// 6度带带号 -> 中央子午线
 ///
 /// 中央子午线 = 带号 × 6 - 3
-#[must_use]
-pub fn gk6_central_meridian(zone: u8) -> f64 {
-    f64::from(zone) * 6.0 - 3.0
+pub fn gk6_central_meridian(zone: u8) -> GeoResult<f64> {
+    GeoError::check_gauss_kruger_zone(zone, 13, 23)?;
+    Ok(f64::from(zone) * 6.0 - 3.0)
 }
 
 /// 从经度计算 3度带带号
@@ -134,25 +134,25 @@ pub fn auto_gk6_zone(lon: f64) -> GeoResult<u8> {
 
 /// 3度带高斯-克吕格正向转换
 pub fn geographic_to_gk3(lon: f64, lat: f64, zone: u8) -> MhResult<(f64, f64)> {
-    let central_lon = gk3_central_meridian(zone);
+    let central_lon = gk3_central_meridian(zone)?;
     geographic_to_gauss_kruger(lon, lat, central_lon)
 }
 
 /// 3度带高斯-克吕格逆向转换
 pub fn gk3_to_geographic(x: f64, y: f64, zone: u8) -> MhResult<(f64, f64)> {
-    let central_lon = gk3_central_meridian(zone);
+    let central_lon = gk3_central_meridian(zone)?;
     gauss_kruger_to_geographic(x, y, central_lon)
 }
 
 /// 6度带高斯-克吕格正向转换
 pub fn geographic_to_gk6(lon: f64, lat: f64, zone: u8) -> MhResult<(f64, f64)> {
-    let central_lon = gk6_central_meridian(zone);
+    let central_lon = gk6_central_meridian(zone)?;
     geographic_to_gauss_kruger(lon, lat, central_lon)
 }
 
 /// 6度带高斯-克吕格逆向转换
 pub fn gk6_to_geographic(x: f64, y: f64, zone: u8) -> MhResult<(f64, f64)> {
-    let central_lon = gk6_central_meridian(zone);
+    let central_lon = gk6_central_meridian(zone)?;
     gauss_kruger_to_geographic(x, y, central_lon)
 }
 
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(auto_gk3_zone(116.0).expect("116E"), 39);
         assert_eq!(auto_gk3_zone(120.0).expect("120E"), 40);
 
-        assert!((gk3_central_meridian(39) - 117.0).abs() < 1e-10);
+        assert!((gk3_central_meridian(39).expect("zone 39") - 117.0).abs() < 1e-10);
     }
 
     #[test]
@@ -224,7 +224,30 @@ mod tests {
         assert_eq!(auto_gk6_zone(120.0).expect("120E"), 21);
         assert_eq!(auto_gk6_zone(114.0).expect("114E"), 20);
 
-        assert!((gk6_central_meridian(20) - 117.0).abs() < 1e-10);
+        assert!((gk6_central_meridian(20).expect("zone 20") - 117.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_gauss_kruger_central_meridian_rejects_invalid_zone() {
+        let err3 = gk3_central_meridian(24).expect_err("invalid GK3 zone must fail");
+        assert!(matches!(
+            err3,
+            GeoError::InvalidGaussKrugerZone {
+                zone: 24,
+                min_zone: 25,
+                max_zone: 45
+            }
+        ));
+
+        let err6 = gk6_central_meridian(24).expect_err("invalid GK6 zone must fail");
+        assert!(matches!(
+            err6,
+            GeoError::InvalidGaussKrugerZone {
+                zone: 24,
+                min_zone: 13,
+                max_zone: 23
+            }
+        ));
     }
 
     #[test]

@@ -48,6 +48,7 @@
 - [RULE_GMSH_PARSE_EXPLICIT] GMSH 主链不得把坏版本行、坏块头、坏标签数、坏物理组编号、坏段结束标记、坏块标志位、支持单元中的错误节点个数或未知节点引用折成 `0`、空集合或静默跳过。MSH 2.x/4.x 解析只要命中结构化字段损坏，就必须立即报错并保留上下文。
 - [RULE_GEO_GEODESIC_FAILURES_EXPLICIT] 椭球测地线计算不得把非收敛、奇异点或算法失效折叠成 `Option::None`、`NaN` 或其他无语义哨兵。像 Vincenty 这类迭代算法，一旦达到迭代上限仍未收敛，就必须返回显式错误并把失败原因保留给调用方；只有真正的成功路径才能返回距离数值。
 - [RULE_GEO_VECTOR_NORMALIZATION_EXPLICIT] 几何向量归一化不得对零向量伪造成功。`Point2D::normalize`、`Point3D::normalize` 这类公开接口在长度接近零时必须返回显式错误，禁止继续暴露 `normalize_or_zero`、`Option::None` 或其他把失败伪装成零向量/空结果的公开主链语义。
+- [RULE_GEO_CENTRAL_MERIDIAN_EXPLICIT] UTM 与高斯-克吕格的中央经线 helper 不得对非法 zone 直接返回经线数值。`utm_central_meridian`、`gk3_central_meridian`、`gk6_central_meridian` 以及上层 `ProjectionType::central_meridian`、`Crs::central_meridian` 在 zone 越界时必须显式失败，禁止继续通过 `Option`、默认经线或裸公式给出伪合法结果。
 - [RULE_GEO_AFFINE_INVERSE_EXPLICIT] 仿射变换的逆矩阵求解不得把奇异矩阵、不可逆矩阵或行列式退化状态折叠成 `Option::None`。`AffineTransform::inverse`、`apply_inverse` 这类公开接口必须返回显式错误，并保留“奇异变换不可逆”的语义，禁止让调用方通过空值猜测失败原因。
 - [RULE_WEB_MERCATOR_DOMAIN_EXPLICIT] Web Mercator 公开辅助面（经纬度转投影、投影反算、分辨率、比例尺、瓦片坐标、瓦片边界）只接受有限且位于 EPSG:3857/4326 定义域内的输入。经纬度越界、投影坐标超出 extent、tile_size=0、DPI<=0 等情况必须显式报错，不得通过纬度裁剪、内部 `expect` 或返回默认数值伪装成功。
 - [RULE_WEB_MERCATOR_TILE_INDEX_EXPLICIT] Web Mercator 的公开 tile 辅助面必须区分“tile 索引”和“tile 角点”语义。对外暴露的 `tile_to_*` 查询只接受合法 tile 索引区间 `[0, 2^zoom-1]`，越界时显式报错；仅内部角点换算才允许访问 `[0, 2^zoom]` 边界，禁止把越界 tile 直接折算成经纬度。

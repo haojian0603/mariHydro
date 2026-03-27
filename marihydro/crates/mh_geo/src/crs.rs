@@ -523,11 +523,11 @@ impl Crs {
     }
 
     /// 获取中央子午线（如果是投影坐标系）
-    #[must_use]
-    pub fn central_meridian(&self) -> Option<f64> {
-        self.projection_type
-            .as_ref()
-            .and_then(super::projection::ProjectionType::central_meridian)
+    pub fn central_meridian(&self) -> MhResult<Option<f64>> {
+        match self.projection_type.as_ref() {
+            Some(projection) => projection.central_meridian().map_err(MhError::from),
+            None => Ok(None),
+        }
     }
 }
 
@@ -700,5 +700,18 @@ mod tests {
     fn test_auto_projected_crs_maps_antimeridian_to_zone_60() {
         let crs = auto_projected_crs(180.0, 10.0).unwrap();
         assert_eq!(crs.epsg(), Some(32660));
+    }
+
+    #[test]
+    fn test_crs_central_meridian_reports_invalid_projection_zone() {
+        let mut crs = Crs::wgs84();
+        crs.projection_type = Some(ProjectionType::Utm {
+            zone: 0,
+            north: true,
+        });
+        let err = crs
+            .central_meridian()
+            .expect_err("invalid embedded projection zone must fail");
+        assert!(matches!(err, MhError::InvalidInput { .. }));
     }
 }

@@ -117,9 +117,9 @@ pub fn auto_utm_zone(lon: f64) -> GeoResult<u8> {
 ///
 /// # Returns
 /// 中央子午线经度 (度)
-#[must_use]
-pub fn utm_central_meridian(zone: u8) -> f64 {
-    f64::from(zone) * 6.0 - 183.0
+pub fn utm_central_meridian(zone: u8) -> GeoResult<f64> {
+    GeoError::check_utm_zone(zone)?;
+    Ok(f64::from(zone) * 6.0 - 183.0)
 }
 
 /// 计算 UTM 投影的比例因子
@@ -233,9 +233,15 @@ mod tests {
 
     #[test]
     fn test_utm_central_meridian() {
-        assert!((utm_central_meridian(50) - 117.0).abs() < 1e-10);
-        assert!((utm_central_meridian(31) - 3.0).abs() < 1e-10);
-        assert!((utm_central_meridian(1) - (-177.0)).abs() < 1e-10);
+        assert!((utm_central_meridian(50).expect("zone 50") - 117.0).abs() < 1e-10);
+        assert!((utm_central_meridian(31).expect("zone 31") - 3.0).abs() < 1e-10);
+        assert!((utm_central_meridian(1).expect("zone 1") - (-177.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_utm_central_meridian_rejects_invalid_zone() {
+        let err = utm_central_meridian(0).expect_err("invalid UTM zone must fail");
+        assert!(matches!(err, GeoError::InvalidUtmZone { zone: 0 }));
     }
 
     /// EPSG 标准验证测试 - UTM Zone 51N
