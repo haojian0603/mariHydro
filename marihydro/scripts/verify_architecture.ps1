@@ -250,6 +250,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.5647: GMSH parser contract guard
+    Write-Host "=== Phase 0.5647: GMSH parser contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_gmsh_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "GMSH parser contracts must pass"
+    } else {
+        Write-Host "[OK] GMSH parser contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.565: Web Mercator contract guard
     Write-Host "=== Phase 0.565: Web Mercator contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_web_mercator_contracts.ps1"

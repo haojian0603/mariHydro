@@ -2,6 +2,10 @@
 //!
 //! 支持 GMSH 2.x 和 4.x 格式。
 //!
+//! GMSH_SOURCE: Gmsh MSH 2.2 / 4.1 ASCII section layout (`$MeshFormat`, `$PhysicalNames`, `$Nodes`, `$Elements`)。
+//! GMSH_SCOPE: 主链只接受结构完整、数值 token 可完整解释、且支持单元节点映射可显式建立的 GMSH 输入；
+//!             版本行、块头、标签数、物理组编号或节点引用任一处损坏时立即报错，不把坏字段折成 `0` 或静默跳过。
+//!
 //! # 示例
 //!
 //! ```ignore
@@ -118,21 +122,82 @@ impl GmshMeshData {
 pub struct GmshLoader;
 
 impl GmshLoader {
+    fn gmsh_format_error(filename: &str, message: impl Into<String>) -> MhError {
+        MeshError::mesh_format_error("gmsh", filename.to_string(), 0, message.into()).into()
+    }
+
+    fn next_required_line<I: Iterator<Item = std::io::Result<String>>>(
+        lines: &mut I,
+        filename: &str,
+        context: &str,
+    ) -> MhResult<String> {
+        match lines.next() {
+            Some(Ok(line)) => Ok(line),
+            Some(Err(err)) => Err(Self::gmsh_format_error(
+                filename,
+                format!("{context} read failed: {err}"),
+            )),
+            None => Err(Self::gmsh_format_error(
+                filename,
+                format!("missing {context}"),
+            )),
+        }
+    }
+
+    fn parse_usize_token(filename: &str, context: &str, token: &str) -> MhResult<usize> {
+        token.parse::<usize>().map_err(|_| {
+            Self::gmsh_format_error(filename, format!("{context} is not a valid usize: {token}"))
+        })
+    }
+
+    fn parse_f64_token(filename: &str, context: &str, token: &str) -> MhResult<f64> {
+        token.parse::<f64>().map_err(|_| {
+            Self::gmsh_format_error(filename, format!("{context} is not a valid f64: {token}"))
+        })
+    }
+
+    fn parse_node_index(
+        filename: &str,
+        node_map: &HashMap<usize, usize>,
+        token: &str,
+        context: &str,
+    ) -> MhResult<usize> {
+        let tag = Self::parse_usize_token(filename, context, token)?;
+        node_map.get(&tag).copied().ok_or_else(|| {
+            Self::gmsh_format_error(
+                filename,
+                format!("{context} references unknown node tag {tag}"),
+            )
+        })
+    }
+
+    fn expect_section_end<I: Iterator<Item = std::io::Result<String>>>(
+        lines: &mut I,
+        filename: &str,
+        end: &str,
+        context: &str,
+    ) -> MhResult<()> {
+        let line = Self::next_required_line(lines, filename, context)?;
+        if line.trim() == end {
+            return Ok(());
+        }
+        Err(Self::gmsh_format_error(
+            filename,
+            format!("{context} must end with {end}"),
+        ))
+    }
+
     /// 加载 GMSH 文件
     pub fn load<P: AsRef<Path>>(path: P) -> MhResult<GmshMeshData> {
         let path = path.as_ref();
-        let file = File::open(path).map_err(|e| {
-            MhError::io(format!("Cannot open {}: {}", path.display(), e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| MhError::io(format!("Cannot open {}: {}", path.display(), e)))?;
         let reader = BufReader::new(file);
         Self::load_from_reader(reader, path.to_string_lossy().to_string())
     }
 
     /// 从 reader 加载
-    pub fn load_from_reader<R: BufRead>(
-        reader: R, 
-        filename: String
-    ) -> MhResult<GmshMeshData> {
+    pub fn load_from_reader<R: BufRead>(reader: R, filename: String) -> MhResult<GmshMeshData> {
         let mut lines = reader.lines();
         let mut nodes = Vec::new();
         let mut nodes_z = Vec::new();
@@ -147,17 +212,21 @@ impl GmshLoader {
         while let Some(Ok(line)) = lines.next() {
             match line.trim() {
                 "$MeshFormat" => {
-                    if let Some(Ok(fmt)) = lines.next() {
-                        version = fmt
-                            .split_whitespace()
-                            .next()
-                            .and_then(|s| s.parse::<f64>().ok())
-                            .unwrap_or(2.0) as i32;
-                    }
+                    let fmt = Self::next_required_line(&mut lines, &filename, "mesh format line")?;
+                    let version_token = fmt.split_whitespace().next().ok_or_else(|| {
+                        Self::gmsh_format_error(&filename, "missing mesh format version token")
+                    })?;
+                    let parsed_version = version_token.parse::<f64>().map_err(|_| {
+                        Self::gmsh_format_error(
+                            &filename,
+                            format!("mesh format version is invalid: {version_token}"),
+                        )
+                    })?;
+                    version = parsed_version as i32;
                     Self::skip_to(&mut lines, "$EndMeshFormat");
                 }
                 "$PhysicalNames" => {
-                    physical_names = Self::parse_physical_names(&mut lines)?;
+                    physical_names = Self::parse_physical_names(&mut lines, &filename)?;
                 }
                 "$Nodes" => {
                     let (xy, z, map) = if version >= 4 {
@@ -188,7 +257,8 @@ impl GmshLoader {
                 file: filename.clone(),
                 line: 0,
                 message: "No nodes in GMSH file".to_string(),
-            }.into());
+            }
+            .into());
         }
         if cells.is_empty() {
             return Err(ME::MeshFormatError {
@@ -196,7 +266,8 @@ impl GmshLoader {
                 file: filename.clone(),
                 line: 0,
                 message: "No cells in GMSH file".to_string(),
-            }.into());
+            }
+            .into());
         }
 
         Ok(GmshMeshData {
@@ -220,74 +291,84 @@ impl GmshLoader {
     /// 解析物理名称
     fn parse_physical_names<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
+        filename: &str,
     ) -> MhResult<HashMap<usize, String>> {
         let mut m = HashMap::new();
-        lines.next();
+        let count_line = Self::next_required_line(lines, filename, "physical name count")?;
+        let n = Self::parse_usize_token(filename, "physical name count", count_line.trim())?;
 
-        while let Some(Ok(l)) = lines.next() {
-            let t = l.trim();
-            if t == "$EndPhysicalNames" {
-                break;
+        for index in 0..n {
+            let line =
+                Self::next_required_line(lines, filename, &format!("physical name entry {index}"))?;
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("physical name entry {index} is incomplete"),
+                ));
             }
-
-            let parts: Vec<&str> = t.split_whitespace().collect();
-            if parts.len() >= 3 {
-                if let Ok(tag) = parts[1].parse::<usize>() {
-                    let name = parts[2..]
-                        .join(" ")
-                        .trim_matches('"')
-                        .to_lowercase();
-                    m.insert(tag, name);
-                }
+            let tag =
+                Self::parse_usize_token(filename, &format!("physical name tag {index}"), parts[1])?;
+            let name = parts[2..].join(" ").trim_matches('"').to_lowercase();
+            if name.is_empty() {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("physical name entry {index} has empty semantic name"),
+                ));
             }
+            m.insert(tag, name);
         }
+        Self::expect_section_end(
+            lines,
+            filename,
+            "$EndPhysicalNames",
+            "physical name section",
+        )?;
         Ok(m)
     }
 
     /// 解析节点 (v2 格式)
     fn parse_nodes_v2<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
-        _filename: &str,
+        filename: &str,
     ) -> MhResult<(Vec<Point2D>, Vec<f64>, HashMap<usize, usize>)> {
         let mut xy = Vec::new();
         let mut z = Vec::new();
         let mut m = HashMap::new();
 
-        if let Some(Ok(c)) = lines.next() {
-            if let Ok(n) = c.trim().parse::<usize>() {
-                xy.reserve(n);
-                z.reserve(n);
-                m.reserve(n);
-            }
-        }
+        let count_line = Self::next_required_line(lines, filename, "node count")?;
+        let n = Self::parse_usize_token(filename, "node count", count_line.trim())?;
+        xy.reserve(n);
+        z.reserve(n);
+        m.reserve(n);
 
-        while let Some(Ok(l)) = lines.next() {
-            let t = l.trim();
-            if t == "$EndNodes" {
-                break;
+        for index in 0..n {
+            let line = Self::next_required_line(lines, filename, &format!("node entry {index}"))?;
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 4 {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("node entry {index} is incomplete"),
+                ));
             }
 
-            let parts: Vec<&str> = t.split_whitespace().collect();
-            if parts.len() >= 4 {
-                if let (Ok(tag), Ok(xv), Ok(yv), Ok(zv)) = (
-                    parts[0].parse(),
-                    parts[1].parse(),
-                    parts[2].parse(),
-                    parts[3].parse(),
-                ) {
-                    m.insert(tag, xy.len());
-                    xy.push(Point2D::new(xv, yv));
-                    z.push(zv);
-                }
-            }
+            let tag = Self::parse_usize_token(filename, &format!("node tag {index}"), parts[0])?;
+            let xv = Self::parse_f64_token(filename, &format!("node x {index}"), parts[1])?;
+            let yv = Self::parse_f64_token(filename, &format!("node y {index}"), parts[2])?;
+            let zv = Self::parse_f64_token(filename, &format!("node z {index}"), parts[3])?;
+
+            m.insert(tag, xy.len());
+            xy.push(Point2D::new(xv, yv));
+            z.push(zv);
         }
+        Self::expect_section_end(lines, filename, "$EndNodes", "node section")?;
         Ok((xy, z, m))
     }
 
     /// 解析节点 (v4 格式)
     fn parse_nodes_v4<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
-        _filename: &str,
+        filename: &str,
     ) -> MhResult<(Vec<Point2D>, Vec<f64>, HashMap<usize, usize>)> {
         let mut xy = Vec::new();
         let mut z = Vec::new();
@@ -295,82 +376,110 @@ impl GmshLoader {
 
         let header = match lines.next() {
             Some(Ok(h)) => h,
-            _ => {
-                return Err(MeshError::MeshFormatError {
-                    format: "gmsh",
-                    file: "".to_string(),
-                    line: 0,
-                    message: "Missing node header".to_string(),
-                }.into());
-            }
+            _ => return Err(Self::gmsh_format_error(filename, "missing node header")),
         };
 
-        let parts: Vec<usize> = header
-            .split_whitespace()
-            .filter_map(|s| s.parse().ok())
-            .collect();
-
-        if parts.len() < 4 {
-            return Err(MeshError::MeshFormatError {
-                format: "gmsh",
-                file: "".to_string(),
-                line: 0,
-                message: "Bad node header".to_string(),
-            }.into());
+        let header_parts: Vec<&str> = header.split_whitespace().collect();
+        if header_parts.len() < 4 {
+            return Err(Self::gmsh_format_error(filename, "bad node header"));
         }
 
-        let (num_blocks, total) = (parts[0], parts[1]);
+        let num_blocks =
+            Self::parse_usize_token(filename, "node header block count", header_parts[0])?;
+        let total = Self::parse_usize_token(filename, "node header total count", header_parts[1])?;
         xy.reserve(total);
         z.reserve(total);
         m.reserve(total);
 
-        for _ in 0..num_blocks {
-            let bh = match lines.next() {
-                Some(Ok(b)) => b,
-                _ => {
-                    return Err(MeshError::MeshFormatError {
-                        format: "gmsh",
-                        file: "".to_string(),
-                        line: 0,
-                        message: "Missing block".to_string(),
-                    }.into());
-                }
-            };
-            let bh: Vec<usize> = bh
-                .split_whitespace()
-                .filter_map(|s| s.parse().ok())
-                .collect();
-
-            if bh.len() < 4 {
-                continue;
+        for block_index in 0..num_blocks {
+            let block_header = Self::next_required_line(
+                lines,
+                filename,
+                &format!("node block header {block_index}"),
+            )?;
+            let block_parts: Vec<&str> = block_header.split_whitespace().collect();
+            if block_parts.len() < 4 {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("node block header {block_index} is incomplete"),
+                ));
             }
-            let n = bh[3];
+            let _entity_dim = Self::parse_usize_token(
+                filename,
+                &format!("node block entity dimension {block_index}"),
+                block_parts[0],
+            )?;
+            let _entity_tag = Self::parse_usize_token(
+                filename,
+                &format!("node block entity tag {block_index}"),
+                block_parts[1],
+            )?;
+            let parametric = Self::parse_usize_token(
+                filename,
+                &format!("node block parametric flag {block_index}"),
+                block_parts[2],
+            )?;
+            if parametric > 1 {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("node block parametric flag {block_index} must be 0 or 1"),
+                ));
+            }
+            let n = Self::parse_usize_token(
+                filename,
+                &format!("node block size {block_index}"),
+                block_parts[3],
+            )?;
 
             let mut tags = Vec::with_capacity(n);
-            for _ in 0..n {
-                if let Some(Ok(tl)) = lines.next() {
-                    if let Ok(t) = tl.trim().parse::<usize>() {
-                        tags.push(t);
-                    }
-                }
+            for tag_index in 0..n {
+                let line = Self::next_required_line(
+                    lines,
+                    filename,
+                    &format!("node block {block_index} tag {tag_index}"),
+                )?;
+                tags.push(Self::parse_usize_token(
+                    filename,
+                    &format!("node block {block_index} tag {tag_index}"),
+                    line.trim(),
+                )?);
             }
 
-            for tag in tags {
-                if let Some(Ok(cl)) = lines.next() {
-                    let c: Vec<f64> = cl
-                        .split_whitespace()
-                        .filter_map(|s| s.parse().ok())
-                        .collect();
-                    if c.len() >= 3 {
-                        m.insert(tag, xy.len());
-                        xy.push(Point2D::new(c[0], c[1]));
-                        z.push(c[2]);
-                    }
+            for (coord_index, tag) in tags.into_iter().enumerate() {
+                let line = Self::next_required_line(
+                    lines,
+                    filename,
+                    &format!("node block {block_index} coordinate {coord_index}"),
+                )?;
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 3 {
+                    return Err(Self::gmsh_format_error(
+                        filename,
+                        format!("node block {block_index} coordinate {coord_index} is incomplete"),
+                    ));
                 }
+                let x = Self::parse_f64_token(
+                    filename,
+                    &format!("node block {block_index} x {coord_index}"),
+                    parts[0],
+                )?;
+                let y = Self::parse_f64_token(
+                    filename,
+                    &format!("node block {block_index} y {coord_index}"),
+                    parts[1],
+                )?;
+                let z_value = Self::parse_f64_token(
+                    filename,
+                    &format!("node block {block_index} z {coord_index}"),
+                    parts[2],
+                )?;
+                m.insert(tag, xy.len());
+                xy.push(Point2D::new(x, y));
+                z.push(z_value);
             }
         }
 
-        Self::skip_to(lines, "$EndNodes");
+        Self::expect_section_end(lines, filename, "$EndNodes", "node section")?;
         Ok((xy, z, m))
     }
 
@@ -378,28 +487,50 @@ impl GmshLoader {
     fn parse_elements_v2<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
         nm: &HashMap<usize, usize>,
-        _filename: &str,
+        filename: &str,
     ) -> MhResult<(Vec<Vec<usize>>, Vec<(usize, Vec<usize>)>)> {
         let mut cells = Vec::new();
         let mut edges = Vec::new();
 
-        lines.next();
+        let count_line = Self::next_required_line(lines, filename, "element count")?;
+        let n_elements = Self::parse_usize_token(filename, "element count", count_line.trim())?;
 
-        while let Some(Ok(l)) = lines.next() {
-            let t = l.trim();
-            if t == "$EndElements" {
-                break;
-            }
-
-            let parts: Vec<&str> = t.split_whitespace().collect();
+        for element_index in 0..n_elements {
+            let line = Self::next_required_line(
+                lines,
+                filename,
+                &format!("element entry {element_index}"),
+            )?;
+            let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() < 4 {
-                continue;
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("element entry {element_index} is incomplete"),
+                ));
             }
 
-            let elem_type = parts[1].parse::<usize>().unwrap_or(0);
-            let n_tags = parts[2].parse::<usize>().unwrap_or(0);
+            let elem_type = Self::parse_usize_token(
+                filename,
+                &format!("element type {element_index}"),
+                parts[1],
+            )?;
+            let n_tags = Self::parse_usize_token(
+                filename,
+                &format!("element tag count {element_index}"),
+                parts[2],
+            )?;
+            if parts.len() < 3 + n_tags {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("element entry {element_index} has fewer tag fields than declared"),
+                ));
+            }
             let tag = if n_tags > 0 {
-                parts[3].parse().unwrap_or(0)
+                Self::parse_usize_token(
+                    filename,
+                    &format!("element physical tag {element_index}"),
+                    parts[3],
+                )?
             } else {
                 0
             };
@@ -407,44 +538,84 @@ impl GmshLoader {
 
             match elem_type {
                 1 => {
-                    if parts.len() >= start + 2 {
-                        let ns: Option<Vec<usize>> = parts[start..]
+                    if parts.len() == start + 2 {
+                        let ns = parts[start..]
                             .iter()
                             .take(2)
-                            .map(|s| s.parse().ok().and_then(|t| nm.get(&t).copied()))
-                            .collect();
-                        if let Some(ns) = ns {
-                            edges.push((tag, ns));
-                        }
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("edge node {element_index}:{offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        edges.push((tag, ns));
+                    } else {
+                        return Err(Self::gmsh_format_error(
+                            filename,
+                            format!(
+                                "edge element {element_index} must contain exactly 2 node tags"
+                            ),
+                        ));
                     }
                 }
                 2 => {
-                    if parts.len() >= start + 3 {
-                        let ns: Option<Vec<usize>> = parts[start..]
+                    if parts.len() == start + 3 {
+                        let ns = parts[start..]
                             .iter()
                             .take(3)
-                            .map(|s| s.parse().ok().and_then(|t| nm.get(&t).copied()))
-                            .collect();
-                        if let Some(ns) = ns {
-                            cells.push(ns);
-                        }
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("triangle node {element_index}:{offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        cells.push(ns);
+                    } else {
+                        return Err(Self::gmsh_format_error(
+                            filename,
+                            format!(
+                                "triangle element {element_index} must contain exactly 3 node tags"
+                            ),
+                        ));
                     }
                 }
                 3 => {
-                    if parts.len() >= start + 4 {
-                        let ns: Option<Vec<usize>> = parts[start..]
+                    if parts.len() == start + 4 {
+                        let ns = parts[start..]
                             .iter()
                             .take(4)
-                            .map(|s| s.parse().ok().and_then(|t| nm.get(&t).copied()))
-                            .collect();
-                        if let Some(ns) = ns {
-                            cells.push(ns);
-                        }
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("quad node {element_index}:{offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        cells.push(ns);
+                    } else {
+                        return Err(Self::gmsh_format_error(
+                            filename,
+                            format!(
+                                "quad element {element_index} must contain exactly 4 node tags"
+                            ),
+                        ));
                     }
                 }
                 _ => {}
             }
         }
+        Self::expect_section_end(lines, filename, "$EndElements", "element section")?;
         Ok((cells, edges))
     }
 
@@ -452,118 +623,154 @@ impl GmshLoader {
     fn parse_elements_v4<I: Iterator<Item = std::io::Result<String>>>(
         lines: &mut I,
         nm: &HashMap<usize, usize>,
-        _filename: &str,
+        filename: &str,
     ) -> MhResult<(Vec<Vec<usize>>, Vec<(usize, Vec<usize>)>)> {
         let mut cells = Vec::new();
         let mut edges = Vec::new();
 
         let header = match lines.next() {
             Some(Ok(h)) => h,
-            _ => {
-                return Err(MeshError::MeshFormatError {
-                    format: "gmsh",
-                    file: "".to_string(),
-                    line: 0,
-                    message: "Missing element header".to_string(),
-                }.into());
-            }
+            _ => return Err(Self::gmsh_format_error(filename, "missing element header")),
         };
 
-        let parts: Vec<usize> = header
-            .split_whitespace()
-            .filter_map(|s| s.parse().ok())
-            .collect();
-
-        if parts.len() < 4 {
-            return Err(MeshError::MeshFormatError {
-                format: "gmsh",
-                file: "".to_string(),
-                line: 0,
-                message: "Bad element header".to_string(),
-            }.into());
+        let header_parts: Vec<&str> = header.split_whitespace().collect();
+        if header_parts.len() < 4 {
+            return Err(Self::gmsh_format_error(filename, "bad element header"));
         }
 
-        let num_blocks = parts[0];
+        let num_blocks =
+            Self::parse_usize_token(filename, "element header block count", header_parts[0])?;
 
-        for _ in 0..num_blocks {
-            let bh = match lines.next() {
-                Some(Ok(b)) => b,
-                _ => {
-                    return Err(MeshError::MeshFormatError {
-                        format: "gmsh",
-                        file: "".to_string(),
-                        line: 0,
-                        message: "Missing block".to_string(),
-                    }.into());
-                }
-            };
-            let bh: Vec<usize> = bh
-                .split_whitespace()
-                .filter_map(|s| s.parse().ok())
-                .collect();
-
-            if bh.len() < 4 {
-                continue;
+        for block_index in 0..num_blocks {
+            let block_header = Self::next_required_line(
+                lines,
+                filename,
+                &format!("element block header {block_index}"),
+            )?;
+            let block_parts: Vec<&str> = block_header.split_whitespace().collect();
+            if block_parts.len() < 4 {
+                return Err(Self::gmsh_format_error(
+                    filename,
+                    format!("element block header {block_index} is incomplete"),
+                ));
             }
+            let _entity_dim = Self::parse_usize_token(
+                filename,
+                &format!("element block entity dimension {block_index}"),
+                block_parts[0],
+            )?;
 
-            let (etag, elem_type, n_elems) = (bh[1], bh[2], bh[3]);
+            let etag = Self::parse_usize_token(
+                filename,
+                &format!("element block tag {block_index}"),
+                block_parts[1],
+            )?;
+            let elem_type = Self::parse_usize_token(
+                filename,
+                &format!("element block type {block_index}"),
+                block_parts[2],
+            )?;
+            let n_elems = Self::parse_usize_token(
+                filename,
+                &format!("element block count {block_index}"),
+                block_parts[3],
+            )?;
 
-            for _ in 0..n_elems {
-                if let Some(Ok(el)) = lines.next() {
-                    let p: Vec<usize> = el
-                        .split_whitespace()
-                        .filter_map(|s| s.parse().ok())
-                        .collect();
-                    if p.is_empty() {
-                        continue;
+            for element_index in 0..n_elems {
+                let line = Self::next_required_line(
+                    lines,
+                    filename,
+                    &format!("element block {block_index} item {element_index}"),
+                )?;
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.is_empty() {
+                    return Err(Self::gmsh_format_error(
+                        filename,
+                        format!("element block {block_index} item {element_index} is empty"),
+                    ));
+                }
+
+                let node_tags = &parts[1..];
+
+                match elem_type {
+                    1 => {
+                        if node_tags.len() != 2 {
+                            return Err(Self::gmsh_format_error(
+                                filename,
+                                format!(
+                                    "edge block {block_index} item {element_index} must contain exactly 2 node tags"
+                                ),
+                            ));
+                        }
+                        let ns = node_tags
+                            .iter()
+                            .take(2)
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("edge block {block_index} item {element_index} node {offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        edges.push((etag, ns));
                     }
-
-                    let node_tags = &p[1..];
-
-                    match elem_type {
-                        1 => {
-                            if node_tags.len() >= 2 {
-                                let ns: Option<Vec<usize>> = node_tags
-                                    .iter()
-                                    .take(2)
-                                    .map(|&t| nm.get(&t).copied())
-                                    .collect();
-                                if let Some(ns) = ns {
-                                    edges.push((etag, ns));
-                                }
-                            }
+                    2 => {
+                        if node_tags.len() != 3 {
+                            return Err(Self::gmsh_format_error(
+                                filename,
+                                format!(
+                                    "triangle block {block_index} item {element_index} must contain exactly 3 node tags"
+                                ),
+                            ));
                         }
-                        2 => {
-                            if node_tags.len() >= 3 {
-                                let ns: Option<Vec<usize>> = node_tags
-                                    .iter()
-                                    .take(3)
-                                    .map(|&t| nm.get(&t).copied())
-                                    .collect();
-                                if let Some(ns) = ns {
-                                    cells.push(ns);
-                                }
-                            }
-                        }
-                        3 => {
-                            if node_tags.len() >= 4 {
-                                let ns: Option<Vec<usize>> = node_tags
-                                    .iter()
-                                    .take(4)
-                                    .map(|&t| nm.get(&t).copied())
-                                    .collect();
-                                if let Some(ns) = ns {
-                                    cells.push(ns);
-                                }
-                            }
-                        }
-                        _ => {}
+                        let ns = node_tags
+                            .iter()
+                            .take(3)
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("triangle block {block_index} item {element_index} node {offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        cells.push(ns);
                     }
+                    3 => {
+                        if node_tags.len() != 4 {
+                            return Err(Self::gmsh_format_error(
+                                filename,
+                                format!(
+                                    "quad block {block_index} item {element_index} must contain exactly 4 node tags"
+                                ),
+                            ));
+                        }
+                        let ns = node_tags
+                            .iter()
+                            .take(4)
+                            .enumerate()
+                            .map(|(offset, token)| {
+                                Self::parse_node_index(
+                                    filename,
+                                    nm,
+                                    token,
+                                    &format!("quad block {block_index} item {element_index} node {offset}"),
+                                )
+                            })
+                            .collect::<MhResult<Vec<_>>>()?;
+                        cells.push(ns);
+                    }
+                    _ => {}
                 }
             }
         }
 
-        Self::skip_to(lines, "$EndElements");
+        Self::expect_section_end(lines, filename, "$EndElements", "element section")?;
         Ok((cells, edges))
     }
 }
@@ -574,9 +781,8 @@ pub struct GmshWriter;
 impl GmshWriter {
     /// 将网格数据写入 GMSH 文件
     pub fn write<P: AsRef<Path>>(path: P, data: &GmshMeshData) -> MhResult<()> {
-        let file = File::create(path.as_ref()).map_err(|e| {
-            MhError::io(format!("Cannot create file: {}", e))
-        })?;
+        let file = File::create(path.as_ref())
+            .map_err(|e| MhError::io(format!("Cannot create file: {}", e)))?;
         let mut writer = BufWriter::new(file);
         Self::write_to(&mut writer, data)
     }
@@ -603,8 +809,7 @@ impl GmshWriter {
         let mut elem_id = 1;
 
         for (tag, nodes) in &data.boundary_edges {
-            write!(writer, "{} 1 2 {} 0", elem_id, tag)
-                .map_err(|e| MhError::io(e.to_string()))?;
+            write!(writer, "{} 1 2 {} 0", elem_id, tag).map_err(|e| MhError::io(e.to_string()))?;
             for n in nodes {
                 write!(writer, " {}", n + 1).map_err(|e| MhError::io(e.to_string()))?;
             }
@@ -649,6 +854,81 @@ $Elements
 $EndElements
 "#;
 
+    const BAD_MSH_V2_ELEMENT_TAG_COUNT: &str = r#"$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+3
+1 0.0 0.0 0.0
+2 1.0 0.0 0.0
+3 0.5 1.0 0.0
+$EndNodes
+$Elements
+1
+1 2 bad 0 0 1 2 3
+$EndElements
+"#;
+
+    const BAD_MSH_V4_NODE_BLOCK: &str = r#"$MeshFormat
+4.1 0 8
+$EndMeshFormat
+$Nodes
+1 3 1 3
+2 1 bad 3
+1
+2
+3
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.5 1.0 0.0
+$EndNodes
+$Elements
+1 1 1 1
+2 2 1 1
+1 1 2 3
+$EndElements
+"#;
+
+    const BAD_MSH_V4_UNKNOWN_NODE_REF: &str = r#"$MeshFormat
+4.1 0 8
+$EndMeshFormat
+$Nodes
+1 3 1 3
+2 1 0 3
+1
+2
+3
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.5 1.0 0.0
+$EndNodes
+$Elements
+1 1 1 1
+2 2 2 1
+1 1 2 99
+$EndElements
+"#;
+
+    const BAD_MSH_V4_EXTRA_EDGE_NODE: &str = r#"$MeshFormat
+4.1 0 8
+$EndMeshFormat
+$Nodes
+1 3 1 3
+2 1 0 3
+1
+2
+3
+0.0 0.0 0.0
+1.0 0.0 0.0
+0.5 1.0 0.0
+$EndNodes
+$Elements
+1 1 1 1
+2 2 1 1
+1 1 2 3
+$EndElements
+"#;
+
     #[test]
     fn test_load_v2() {
         let cursor = Cursor::new(SIMPLE_MSH_V2);
@@ -662,9 +942,15 @@ $EndElements
     #[test]
     fn test_boundary_kind() {
         assert_eq!(BoundaryKind::from_name("wall_left"), BoundaryKind::Wall);
-        assert_eq!(BoundaryKind::from_name("river_inlet"), BoundaryKind::RiverInflow);
+        assert_eq!(
+            BoundaryKind::from_name("river_inlet"),
+            BoundaryKind::RiverInflow
+        );
         assert_eq!(BoundaryKind::from_name("open_sea"), BoundaryKind::OpenSea);
-        assert_eq!(BoundaryKind::from_name("outlet_right"), BoundaryKind::Outflow);
+        assert_eq!(
+            BoundaryKind::from_name("outlet_right"),
+            BoundaryKind::Outflow
+        );
     }
 
     #[test]
@@ -689,5 +975,39 @@ $EndElements
 
         assert_eq!(loaded.n_nodes(), original.n_nodes());
         assert_eq!(loaded.n_cells(), original.n_cells());
+    }
+
+    #[test]
+    fn test_load_v2_rejects_invalid_tag_count_token() {
+        let cursor = Cursor::new(BAD_MSH_V2_ELEMENT_TAG_COUNT);
+        let err = GmshLoader::load_from_reader(cursor, "bad_v2.msh".to_string()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("element tag count 0 is not a valid usize"));
+    }
+
+    #[test]
+    fn test_load_v4_rejects_invalid_node_block_header() {
+        let cursor = Cursor::new(BAD_MSH_V4_NODE_BLOCK);
+        let err = GmshLoader::load_from_reader(cursor, "bad_v4_nodes.msh".to_string()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("node block parametric flag 0 is not a valid usize"));
+    }
+
+    #[test]
+    fn test_load_v4_rejects_unknown_node_reference() {
+        let cursor = Cursor::new(BAD_MSH_V4_UNKNOWN_NODE_REF);
+        let err =
+            GmshLoader::load_from_reader(cursor, "bad_v4_elements.msh".to_string()).unwrap_err();
+        assert!(err.to_string().contains("references unknown node tag 99"));
+    }
+
+    #[test]
+    fn test_load_v4_rejects_extra_edge_node_tags() {
+        let cursor = Cursor::new(BAD_MSH_V4_EXTRA_EDGE_NODE);
+        let err =
+            GmshLoader::load_from_reader(cursor, "bad_v4_extra_edge.msh".to_string()).unwrap_err();
+        assert!(err.to_string().contains("must contain exactly 2 node tags"));
     }
 }
