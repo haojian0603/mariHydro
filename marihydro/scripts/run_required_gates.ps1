@@ -103,6 +103,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_central_meridian_contracts.ps1"
     }
 
+    Invoke-Step -Name "geo ellipsoid EPSG contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_ellipsoid_epsg_contracts.ps1"
+    }
+
     Invoke-Step -Name "geo affine contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"
     }

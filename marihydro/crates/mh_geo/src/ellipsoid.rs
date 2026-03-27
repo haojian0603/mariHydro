@@ -13,6 +13,7 @@
 //! println!("第一偏心率平方: {}", wgs84.e2());
 //! ```
 
+use crate::error::{GeoError, GeoResult};
 use serde::{Deserialize, Serialize};
 
 /// 地球椭球体
@@ -92,15 +93,17 @@ impl Ellipsoid {
     }
 
     /// 从 EPSG 椭球体代码获取
-    #[must_use]
-    pub fn from_epsg(code: u32) -> Option<Self> {
+    pub fn from_epsg(code: u32) -> GeoResult<Self> {
         match code {
-            7030 => Some(Self::WGS84),
-            7019 => Some(Self::GRS80),
-            1024 => Some(Self::CGCS2000),
-            7024 => Some(Self::KRASSOVSKY),
-            7022 => Some(Self::INTERNATIONAL_1924),
-            _ => None,
+            7030 => Ok(Self::WGS84),
+            7019 => Ok(Self::GRS80),
+            1024 => Ok(Self::CGCS2000),
+            7024 => Ok(Self::KRASSOVSKY),
+            7022 => Ok(Self::INTERNATIONAL_1924),
+            _ => Err(GeoError::unsupported_epsg(
+                code,
+                "EPSG:7030, EPSG:7019, EPSG:1024, EPSG:7024, EPSG:7022",
+            )),
         }
     }
 
@@ -375,9 +378,9 @@ mod tests {
 
     #[test]
     fn test_from_epsg() {
-        assert_eq!(Ellipsoid::from_epsg(7030), Some(Ellipsoid::WGS84));
-        assert_eq!(Ellipsoid::from_epsg(7019), Some(Ellipsoid::GRS80));
-        assert_eq!(Ellipsoid::from_epsg(9999), None);
+        assert_eq!(Ellipsoid::from_epsg(7030).expect("WGS84"), Ellipsoid::WGS84);
+        assert_eq!(Ellipsoid::from_epsg(7019).expect("GRS80"), Ellipsoid::GRS80);
+        assert!(Ellipsoid::from_epsg(9999).is_err());
     }
 
     #[test]

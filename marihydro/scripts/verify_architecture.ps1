@@ -206,6 +206,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.5489: geo ellipsoid EPSG contract guard
+    Write-Host "=== Phase 0.5489: geo ellipsoid EPSG contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_ellipsoid_epsg_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo ellipsoid EPSG contracts must pass"
+    } else {
+        Write-Host "[OK] geo ellipsoid EPSG contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.549: geo affine contract guard
     Write-Host "=== Phase 0.549: geo affine contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"

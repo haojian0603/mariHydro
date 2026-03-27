@@ -221,6 +221,10 @@ try {
         $Failed += "check_geo_central_meridian_contracts.ps1"
     }
 
+    if (-not (Invoke-GuardStep -Name "check_geo_ellipsoid_epsg_contracts.ps1" -Path (Join-Path $ScriptDir "check_geo_ellipsoid_epsg_contracts.ps1") -Arguments @{})) {
+        $Failed += "check_geo_ellipsoid_epsg_contracts.ps1"
+    }
+
     if (-not (Invoke-GuardStep -Name "check_geo_affine_contracts.ps1" -Path (Join-Path $ScriptDir "check_geo_affine_contracts.ps1") -Arguments @{})) {
         $Failed += "check_geo_affine_contracts.ps1"
     }
@@ -340,6 +344,9 @@ try {
     if (-not (Invoke-FailingScan -Name "geo central meridian fallback residue" -Roots @("crates/mh_geo/src/projection/utm.rs", "crates/mh_geo/src/projection/gauss_kruger.rs", "crates/mh_geo/src/projection/mod.rs", "crates/mh_geo/src/crs.rs") -Pattern 'pub fn utm_central_meridian\(zone: u8\) -> f64|pub fn gk3_central_meridian\(zone: u8\) -> f64|pub fn gk6_central_meridian\(zone: u8\) -> f64|pub fn central_meridian\(&self\) -> Option<f64>')) {
         $Failed += "geo central meridian fallback residue"
     }
+    if (-not (Invoke-FailingScan -Name "geo ellipsoid EPSG Option-fallback residue" -Roots @("crates/mh_geo/src/ellipsoid.rs", "crates/mh_geo/src/crs.rs") -Pattern 'pub fn from_epsg\(code: u32\) -> Option<Self>|if let Some\(ellipsoid\) = Ellipsoid::from_epsg\(code\)')) {
+        $Failed += "geo ellipsoid EPSG Option-fallback residue"
+    }
 
     Write-Host ""
     Write-Host "=== Advisory scans ===" -ForegroundColor Cyan
@@ -353,6 +360,7 @@ try {
     Invoke-InformationalScan -Name 'geo geodesic Option-failure residue' -Roots @("crates/mh_geo/src/geometry.rs") -Pattern 'vincenty_distance_to\(&self, other: &Self\) -> Option<f64>|vincenty_distance\(&self, other: &Self, ellipsoid: &Ellipsoid\) -> Option<f64>|return Some\(0\.0\)|Some\(s\)'
     Invoke-InformationalScan -Name 'geo vector normalization fallback residue' -Roots @("crates/mh_geo/src/geometry.rs") -Pattern 'pub fn normalize\(&self\) -> Option<Self>|pub fn normalize_or_zero\(&self\) -> Self'
     Invoke-InformationalScan -Name 'geo central meridian fallback residue' -Roots @("crates/mh_geo/src/projection/utm.rs", "crates/mh_geo/src/projection/gauss_kruger.rs", "crates/mh_geo/src/projection/mod.rs", "crates/mh_geo/src/crs.rs") -Pattern 'pub fn utm_central_meridian\(zone: u8\) -> f64|pub fn gk3_central_meridian\(zone: u8\) -> f64|pub fn gk6_central_meridian\(zone: u8\) -> f64|pub fn central_meridian\(&self\) -> Option<f64>'
+    Invoke-InformationalScan -Name 'geo ellipsoid EPSG Option-fallback residue' -Roots @("crates/mh_geo/src/ellipsoid.rs", "crates/mh_geo/src/crs.rs") -Pattern 'pub fn from_epsg\(code: u32\) -> Option<Self>|if let Some\(ellipsoid\) = Ellipsoid::from_epsg\(code\)'
     Invoke-InformationalScan -Name 'geo affine Option-failure residue' -Roots @("crates/mh_geo/src/transform.rs") -Pattern 'pub fn inverse\(&self\) -> Option<Self>|pub fn apply_inverse\(&self, x: f64, y: f64\) -> Option<\(f64, f64\)>|return None;'
     Invoke-InformationalScan -Name 'geo ellipsoid heuristic residue' -Roots @("crates/mh_geo/src/crs.rs") -Pattern 'contains\("wgs84"\)|contains\("wgs 84"\)|contains\("cgcs2000"\)|contains\("grs80"\)|contains\("grs 80"\)|contains\("krassovsky"\)|contains\("krasovsky"\)|默认 WGS84'
     Invoke-InformationalScan -Name 'geo finite-difference convergence residue' -Roots @("crates/mh_geo/src") -Pattern 'delta_lat\s*=|lat\s*\+\s*delta_lat|dy\.atan2\(dx\)'

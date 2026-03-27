@@ -356,7 +356,7 @@ impl ResolvedCrs {
                 // 北京54
                 4214 => return Ok(Ellipsoid::KRASSOVSKY),
                 _ => {
-                    if let Some(ellipsoid) = Ellipsoid::from_epsg(code) {
+                    if let Ok(ellipsoid) = Ellipsoid::from_epsg(code) {
                         return Ok(ellipsoid);
                     }
                 }
