@@ -18,8 +18,8 @@
 //! ```
 
 use crate::ellipsoid::Ellipsoid;
-use crate::projection::{FastProjection, ProjectionType};
 use crate::projection::auto_gk3_zone;
+use crate::projection::{FastProjection, ProjectionType};
 use mh_foundation::error::{MhError, MhResult};
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +40,6 @@ pub enum CrsStrategy {
     /// 强制使用 WGS84
     ForceWGS84,
 }
-
 
 // ============================================================================
 // CRS 定义类型
@@ -114,13 +113,19 @@ impl CrsDefinition {
     /// 从坐标自动计算 UTM 区域（带范围检查）
     pub fn auto_utm_checked(lon: f64, lat: f64) -> crate::error::GeoResult<Self> {
         if !(-180.0..=180.0).contains(&lon) {
-            return Err(crate::error::GeoError::coordinate_out_of_range("经度", lon, -180.0, 180.0));
+            return Err(crate::error::GeoError::coordinate_out_of_range(
+                "经度", lon, -180.0, 180.0,
+            ));
         }
         if !(-90.0..=90.0).contains(&lat) {
-            return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -90.0, 90.0));
+            return Err(crate::error::GeoError::coordinate_out_of_range(
+                "纬度", lat, -90.0, 90.0,
+            ));
         }
         if !(-80.0..=84.0).contains(&lat) {
-            return Err(crate::error::GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
+            return Err(crate::error::GeoError::coordinate_out_of_range(
+                "纬度", lat, -80.0, 84.0,
+            ));
         }
         let zone = if lon == 180.0 {
             60
@@ -225,7 +230,7 @@ impl ResolvedCrs {
         } else {
             "metre".to_string()
         };
-        let ellipsoid = Self::detect_ellipsoid(definition, epsg);
+        let ellipsoid = Self::detect_ellipsoid(definition, epsg)?;
         let description = epsg.and_then(Self::epsg_description);
 
         Ok(Self {
@@ -279,34 +284,100 @@ impl ResolvedCrs {
             || lower.contains("geographic")
     }
 
-    /// 检测椭球体
-    fn detect_ellipsoid(def: &str, epsg: Option<u32>) -> Ellipsoid {
-        // 根据 EPSG 代码判断
-        if let Some(code) = epsg {
-            match code {
-                // WGS84 相关
-                4326 | 32601..=32660 | 32701..=32760 | 3857 => return Ellipsoid::WGS84,
-                // CGCS2000 相关
-                4490 | 4502..=4554 => return Ellipsoid::CGCS2000,
-                // 北京54
-                4214 => return Ellipsoid::KRASSOVSKY,
+    fn normalized_ellipsoid_label(label: &str) -> String {
+        label
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect()
+    }
+
+    fn ellipsoid_from_normalized_label(label: &str) -> Option<Ellipsoid> {
+        match label {
+            "wgs84" | "wgs1984" => Some(Ellipsoid::WGS84),
+            "cgcs2000" => Some(Ellipsoid::CGCS2000),
+            "grs80" | "grs1980" => Some(Ellipsoid::GRS80),
+            "krass" | "krassovsky" | "krassovsky1940" | "krasovsky" | "krasovsky1940" => {
+                Some(Ellipsoid::KRASSOVSKY)
+            }
+            "international1924" | "hayford1924" => Some(Ellipsoid::INTERNATIONAL_1924),
+            _ => None,
+        }
+    }
+
+    fn detect_proj_ellipsoid(def: &str) -> Option<Ellipsoid> {
+        for token in def.split_whitespace() {
+            let token = token.strip_prefix('+').unwrap_or(token);
+            let Some((key, value)) = token.split_once('=') else {
+                continue;
+            };
+
+            let key = key.to_ascii_lowercase();
+            if key == "datum" || key == "ellps" {
+                let normalized = Self::normalized_ellipsoid_label(value);
+                if let Some(ellipsoid) = Self::ellipsoid_from_normalized_label(&normalized) {
+                    return Some(ellipsoid);
+                }
+            }
+        }
+        None
+    }
+
+    fn detect_wkt_ellipsoid(def: &str) -> Option<Ellipsoid> {
+        let mut in_quote = false;
+        let mut current = String::new();
+
+        for ch in def.chars() {
+            match ch {
+                '"' => {
+                    if in_quote {
+                        let normalized = Self::normalized_ellipsoid_label(&current);
+                        if let Some(ellipsoid) = Self::ellipsoid_from_normalized_label(&normalized)
+                        {
+                            return Some(ellipsoid);
+                        }
+                        current.clear();
+                    }
+                    in_quote = !in_quote;
+                }
+                _ if in_quote => current.push(ch),
                 _ => {}
             }
         }
 
-        // 从字符串检测
-        let lower = def.to_lowercase();
-        if lower.contains("wgs84") || lower.contains("wgs 84") {
-            Ellipsoid::WGS84
-        } else if lower.contains("cgcs2000") || lower.contains("grs80") || lower.contains("grs 80")
-        {
-            Ellipsoid::CGCS2000
-        } else if lower.contains("krassovsky") || lower.contains("krasovsky") {
-            Ellipsoid::KRASSOVSKY
-        } else {
-            // 默认 WGS84
-            Ellipsoid::WGS84
+        None
+    }
+
+    /// 检测椭球体
+    fn detect_ellipsoid(def: &str, epsg: Option<u32>) -> MhResult<Ellipsoid> {
+        // 根据 EPSG 代码判断
+        if let Some(code) = epsg {
+            match code {
+                // WGS84 相关
+                4326 | 32601..=32660 | 32701..=32760 | 3857 => return Ok(Ellipsoid::WGS84),
+                // CGCS2000 相关
+                4490 | 4502..=4554 => return Ok(Ellipsoid::CGCS2000),
+                // 北京54
+                4214 => return Ok(Ellipsoid::KRASSOVSKY),
+                _ => {
+                    if let Some(ellipsoid) = Ellipsoid::from_epsg(code) {
+                        return Ok(ellipsoid);
+                    }
+                }
+            }
         }
+
+        if let Some(ellipsoid) = Self::detect_proj_ellipsoid(def) {
+            return Ok(ellipsoid);
+        }
+
+        if let Some(ellipsoid) = Self::detect_wkt_ellipsoid(def) {
+            return Ok(ellipsoid);
+        }
+
+        Err(MhError::invalid_input(format!(
+            "unable to resolve ellipsoid from CRS definition: {def}"
+        )))
     }
 
     /// 是否为投影坐标系（米）
@@ -458,7 +529,9 @@ impl Crs {
     /// 获取中央子午线（如果是投影坐标系）
     #[must_use]
     pub fn central_meridian(&self) -> Option<f64> {
-        self.projection_type.as_ref().and_then(super::projection::ProjectionType::central_meridian)
+        self.projection_type
+            .as_ref()
+            .and_then(super::projection::ProjectionType::central_meridian)
     }
 }
 
@@ -593,6 +666,27 @@ mod tests {
 
         let utm = Crs::from_epsg(32650).expect("UTM");
         assert_eq!(utm.ellipsoid().a, Ellipsoid::WGS84.a);
+
+        let grs80 = Crs::new(
+            "+proj=tmerc +lat_0=0 +lon_0=117 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs",
+        )
+        .expect("GRS80");
+        assert_eq!(*grs80.ellipsoid(), Ellipsoid::GRS80);
+
+        let wgs84 = Crs::new(
+            r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]]]"#,
+        )
+        .expect("WKT WGS84");
+        assert_eq!(*wgs84.ellipsoid(), Ellipsoid::WGS84);
+    }
+
+    #[test]
+    fn test_ellipsoid_detection_rejects_custom_identifier_suffix() {
+        let err = Crs::new("+proj=longlat +datum=wgs84_custom +no_defs")
+            .expect_err("custom identifier suffix must not be treated as a trusted ellipsoid");
+        assert!(err
+            .to_string()
+            .contains("unable to resolve ellipsoid from CRS definition"));
     }
 
     #[test]

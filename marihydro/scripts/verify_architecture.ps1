@@ -195,6 +195,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.5495: geo CRS contract guard
+    Write-Host "=== Phase 0.5495: geo CRS contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_crs_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "geo CRS contracts must pass"
+    } else {
+        Write-Host "[OK] geo CRS contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.55: import contract guard
     Write-Host "=== Phase 0.55: import contract guard (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default) ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"

@@ -99,6 +99,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_affine_contracts.ps1"
     }
 
+    Invoke-Step -Name "geo CRS contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_crs_contracts.ps1"
+    }
+
     Invoke-Step -Name "import contracts (geometry + null-feature rejection + semantic metadata + multipart name preservation + feature id semantics + CSV strict default)" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_import_contracts.ps1"
     }
