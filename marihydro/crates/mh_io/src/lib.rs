@@ -14,7 +14,8 @@
 //! - `infra`: 基础设施 (配置、日志、时间)
 //! - `import`: 数据导入
 //! - `pipeline`: 异步 IO 管道
-//! - `snapshot`: 网格和状态快照
+//! - `snapshot`: 网格和状态快照；空状态快照的统计请求必须显式失败，不能伪装成零统计量
+//!   Empty snapshot statistics must fail explicitly.
 //! - `checkpoint`: 检查点保存/恢复
 
 pub mod drivers;

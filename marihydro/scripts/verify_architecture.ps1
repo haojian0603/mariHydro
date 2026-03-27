@@ -162,6 +162,17 @@ try {
 
     Write-Host ""
 
+    # Phase 0.546: IO snapshot contract guard
+    Write-Host "=== Phase 0.546: IO snapshot contract guard ===" -ForegroundColor Cyan
+    powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_snapshot_contracts.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        $errors += "IO snapshot contracts must pass"
+    } else {
+        Write-Host "[OK] IO snapshot contracts passed" -ForegroundColor Green
+    }
+
+    Write-Host ""
+
     # Phase 0.547: IO pipeline shutdown contract guard
     Write-Host "=== Phase 0.547: IO pipeline shutdown contract guard ===" -ForegroundColor Cyan
     powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_pipeline_shutdown_contracts.ps1"

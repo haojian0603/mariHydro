@@ -25,6 +25,7 @@
 //! let state_snap = StateSnapshot::<f64>::from_state_data(h, hu, hv);
 //! ```
 
+use crate::error::{IoError, IoResult};
 use mh_mesh::FrozenMeshGeneric;
 use mh_runtime::{Backend, DeviceBuffer, RuntimeScalar};
 use serde::de::DeserializeOwned;
@@ -693,10 +694,15 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
     }
 
     /// 计算统计信息
-    pub fn statistics(&self) -> StateStatistics {
+    ///
+    /// # Errors
+    /// 空快照不允许伪装成零统计量。
+    pub fn statistics(&self) -> IoResult<StateStatistics> {
         let n = self.h.len();
         if n == 0 {
-            return StateStatistics::default();
+            return Err(IoError::MissingRequiredData {
+                context: "empty state snapshot cannot produce statistics".to_string(),
+            });
         }
 
         let h_sum: f64 = self.h.iter().map(|&v| v.to_f64_lossy()).sum();
@@ -711,12 +717,12 @@ impl<S: RuntimeScalar> StateSnapshot<S> {
             .map(|&v| v.to_f64_lossy())
             .fold(f64::NEG_INFINITY, f64::max);
 
-        StateStatistics {
+        Ok(StateStatistics {
             n_cells: n,
             h_min,
             h_max,
             h_mean: h_sum / n as f64,
-        }
+        })
     }
 
     /// 精度/标量类型转换
@@ -765,7 +771,7 @@ impl<S: RuntimeScalar> Default for StateSnapshot<S> {
 }
 
 /// 状态统计信息
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StateStatistics {
     /// 单元数
     pub n_cells: usize,
@@ -916,11 +922,18 @@ mod tests {
             vec![0.0; 4],
         );
 
-        let stats = snapshot.statistics();
+        let stats = snapshot.statistics().expect("statistics");
         assert_eq!(stats.n_cells, 4);
         assert!((stats.h_min - 1.0).abs() < 1e-10);
         assert!((stats.h_max - 4.0).abs() < 1e-10);
         assert!((stats.h_mean - 2.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_state_statistics_rejects_empty_snapshot() {
+        let snapshot = StateSnapshot::<f64>::empty();
+        let err = snapshot.statistics().expect_err("empty snapshot must fail");
+        assert!(matches!(err, IoError::MissingRequiredData { .. }));
     }
 
     #[test]

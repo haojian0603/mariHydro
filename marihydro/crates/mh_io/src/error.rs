@@ -4,8 +4,8 @@
 //! 提供 IO 模块的统一错误枚举，支持通过 thiserror 自动转换底层错误。
 //! 所有错误最终可转换为 MhError 以实现跨层错误传递。
 
-use thiserror::Error;
 use mh_foundation::MhError;
+use thiserror::Error;
 
 /// IO 模块结果类型别名
 pub type IoResult<T> = Result<T, IoError>;
@@ -37,6 +37,10 @@ pub enum IoError {
     #[error("投影信息缺失: 文件 {file}")]
     MissingProjection { file: String },
 
+    /// 缺少必需数据
+    #[error("缺少必需数据: {context}")]
+    MissingRequiredData { context: String },
+
     /// 数据类型不匹配
     #[error("数据类型不匹配: 期望 {expected}, 实际 {actual}, 变量 {variable}")]
     DataTypeMismatch {
@@ -47,17 +51,11 @@ pub enum IoError {
 
     /// 检查点损坏
     #[error("检查点损坏: {checkpoint}, 原因: {reason}")]
-    CheckpointCorruption {
-        checkpoint: String,
-        reason: String,
-    },
+    CheckpointCorruption { checkpoint: String, reason: String },
 
     /// 管道处理失败
     #[error("管道处理失败: 阶段 {stage}, {message}")]
-    PipelineFailed {
-        stage: String,
-        message: String,
-    },
+    PipelineFailed { stage: String, message: String },
 
     /// 解析错误
     #[error("文件解析错误: {file}:{line} - {message}")]
@@ -89,6 +87,9 @@ impl From<IoError> for MhError {
             IoError::MissingProjection { file } => {
                 MhError::invalid_input(format!("投影信息缺失: {file}"))
             }
+            IoError::MissingRequiredData { context } => {
+                MhError::invalid_input(format!("缺少必需数据: {context}"))
+            }
             IoError::DataTypeMismatch { expected, actual, variable } => {
                 MhError::invalid_input(format!(
                     "数据类型不匹配 (变量 {variable}: 期望 {expected}, 实际 {actual})"
@@ -111,24 +112,18 @@ impl From<IoError> for MhError {
 impl From<crate::pipeline::PipelineError> for IoError {
     fn from(err: crate::pipeline::PipelineError) -> Self {
         match err {
-            crate::pipeline::PipelineError::Io(e) => {
-                IoError::PipelineFailed {
-                    stage: "pipeline".to_string(),
-                    message: format!("IO 错误: {}", e),
-                }
-            }
-            crate::pipeline::PipelineError::Serialization(msg) => {
-                IoError::PipelineFailed {
-                    stage: "serialization".to_string(),
-                    message: format!("序列化失败: {}", msg),
-                }
-            }
-            crate::pipeline::PipelineError::Timeout(dur) => {
-                IoError::PipelineFailed {
-                    stage: "timeout".to_string(),
-                    message: format!("操作超时: {:?}", dur),
-                }
-            }
+            crate::pipeline::PipelineError::Io(e) => IoError::PipelineFailed {
+                stage: "pipeline".to_string(),
+                message: format!("IO 错误: {}", e),
+            },
+            crate::pipeline::PipelineError::Serialization(msg) => IoError::PipelineFailed {
+                stage: "serialization".to_string(),
+                message: format!("序列化失败: {}", msg),
+            },
+            crate::pipeline::PipelineError::Timeout(dur) => IoError::PipelineFailed {
+                stage: "timeout".to_string(),
+                message: format!("操作超时: {:?}", dur),
+            },
         }
     }
 }

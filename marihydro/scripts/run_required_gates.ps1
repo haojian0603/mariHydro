@@ -87,6 +87,10 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_snapshot_boundary_contracts.ps1"
     }
 
+    Invoke-Step -Name "IO snapshot contracts" -Action {
+        powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_io_snapshot_contracts.ps1"
+    }
+
     Invoke-Step -Name "IO pipeline shutdown contracts" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_pipeline_shutdown_contracts.ps1"
     }
