@@ -103,6 +103,9 @@ pub fn auto_utm_zone(lon: f64) -> GeoResult<u8> {
             "经度", lon, -180.0, 180.0,
         ));
     }
+    if lon == 180.0 {
+        return Ok(60);
+    }
     let zone = ((lon + 180.0) / 6.0).floor() as i32 + 1;
     Ok(zone as u8)
 }
@@ -214,13 +217,18 @@ mod tests {
         assert_eq!(auto_utm_zone(-122.0).expect("122W"), 10);
         assert_eq!(auto_utm_zone(0.0).expect("0E"), 31);
         assert_eq!(auto_utm_zone(-180.0).expect("west edge"), 1);
-        assert_eq!(auto_utm_zone(180.0).expect("east edge"), 61);
+        assert_eq!(auto_utm_zone(180.0).expect("east edge"), 60);
     }
 
     #[test]
     fn test_auto_utm_zone_rejects_invalid_longitude() {
         assert!(auto_utm_zone(f64::NAN).is_err());
         assert!(auto_utm_zone(181.0).is_err());
+    }
+
+    #[test]
+    fn test_auto_utm_zone_maps_antimeridian_to_zone_60() {
+        assert_eq!(auto_utm_zone(180.0).expect("east edge"), 60);
     }
 
     #[test]

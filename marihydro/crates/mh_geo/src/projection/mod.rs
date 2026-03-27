@@ -171,7 +171,7 @@ impl ProjectionType {
         if !(-80.0..=84.0).contains(&lat) {
             return Err(GeoError::coordinate_out_of_range("纬度", lat, -80.0, 84.0));
         }
-        let zone = ((lon + 180.0) / 6.0).floor() as u8 + 1;
+        let zone = auto_utm_zone(lon)?;
         Ok(Self::Utm {
             zone,
             north: lat >= 0.0,
@@ -479,6 +479,18 @@ mod tests {
         assert!(ProjectionType::auto_utm(116.0, 90.0).is_err());
         assert!(ProjectionType::auto_gk3(70.0).is_err());
         assert!(ProjectionType::auto_gk6(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_auto_utm_maps_antimeridian_to_zone_60() {
+        let proj_type = ProjectionType::auto_utm(180.0, 10.0).expect("180E 10N");
+        assert_eq!(
+            proj_type,
+            ProjectionType::Utm {
+                zone: 60,
+                north: true,
+            }
+        );
     }
 
     #[test]

@@ -53,6 +53,8 @@ try {
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'pub fn auto_gk6\(lon: f64\) -> GeoResult<Self>' -Message "ProjectionType::auto_gk6 must return GeoResult<Self>"
     Assert-PatternAbsent -Path $ProjectionMod -Pattern 'zone\s*=\s*zone\.clamp\(1,\s*60\)|zone\s*=\s*zone\.clamp\(13,\s*23\)' -Message "ProjectionType auto helpers must not clamp fabricated zones"
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'test_auto_projection_helpers_reject_invalid_inputs' -Message "ProjectionType auto helpers must keep invalid-input regression coverage"
+    Assert-PatternPresent -Path $ProjectionMod -Pattern 'auto_utm_zone\(lon\)\?' -Message "ProjectionType::auto_utm must delegate UTM band selection to the explicit auto_utm_zone helper"
+    Assert-PatternPresent -Path $ProjectionMod -Pattern 'test_auto_utm_maps_antimeridian_to_zone_60' -Message "ProjectionType::auto_utm must keep antimeridian regression coverage"
     Assert-PatternPresent -Path $ProjectionMod -Pattern 'auto_utm_zone\(lon\)\.map_err\(' -Message "wgs84_to_auto_utm must reuse explicit auto_utm_zone error semantics"
 
     Assert-PatternPresent -Path $GaussKruger -Pattern 'pub fn auto_gk3_zone\(lon: f64\) -> GeoResult<u8>' -Message "auto_gk3_zone must return GeoResult<u8>"
@@ -62,7 +64,10 @@ try {
 
     Assert-PatternPresent -Path $Utm -Pattern 'pub fn auto_utm_zone\(lon: f64\) -> GeoResult<u8>' -Message "auto_utm_zone must return GeoResult<u8>"
     Assert-PatternAbsent -Path $Utm -Pattern 'zone\.clamp\(1,\s*60\)' -Message "auto_utm_zone must not clamp fabricated zones"
+    Assert-PatternPresent -Path $Utm -Pattern 'if lon == 180\.0 \{' -Message "auto_utm_zone must branch explicitly on the east antimeridian"
+    Assert-PatternPresent -Path $Utm -Pattern 'return Ok\(60\);' -Message "auto_utm_zone must map the east antimeridian to zone 60 explicitly"
     Assert-PatternPresent -Path $Utm -Pattern 'test_auto_utm_zone_rejects_invalid_longitude' -Message "auto_utm_zone must keep invalid-longitude regression coverage"
+    Assert-PatternPresent -Path $Utm -Pattern 'test_auto_utm_zone_maps_antimeridian_to_zone_60' -Message "auto_utm_zone must keep antimeridian regression coverage"
 
     if ($Errors.Count -eq 0) {
         Write-Host ""

@@ -103,7 +103,7 @@ try {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_crs_contracts.ps1"
     }
 
-    Invoke-Step -Name "geo auto projection contracts" -Action {
+    Invoke-Step -Name "geo auto projection contracts (domain + antimeridian semantics)" -Action {
         powershell -ExecutionPolicy Bypass -File "$ScriptDir/check_geo_auto_projection_contracts.ps1"
     }
 

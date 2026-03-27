@@ -634,6 +634,14 @@ mod tests {
     }
 
     #[test]
+    fn test_wgs84_to_auto_utm_maps_antimeridian_to_zone_60() {
+        let (_x, _y, zone, north) =
+            conversions::wgs84_to_auto_utm(180.0, 10.0).expect("auto utm failed");
+        assert_eq!(zone, 60);
+        assert!(north);
+    }
+
+    #[test]
     fn test_affine_gdal_format() {
         let gt = [100.0, 1.0, 0.0, 200.0, 0.0, -1.0];
         let affine = AffineTransform::from_gdal_geotransform(gt);
